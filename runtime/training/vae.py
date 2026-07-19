@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import math
 import sys
-import importlib
 from pathlib import Path
 
 import torch
@@ -24,7 +23,6 @@ import torch
 from training.model_loading import (
     _load_safetensors_state_dict,
     _load_weights_best_effort,
-    load_module_from_path,
 )
 
 
@@ -327,130 +325,10 @@ def _cosine_blend_mask(h: int, w: int, *, fade: int, device) -> torch.Tensor:
     return mask_2d[None, None, None, :, :]
 
 
-def ensure_models_namespace(repo_root):
-    """确保 models 命名空间可用。"""
-    repo_root = Path(repo_root)
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    if str(repo_root.parent) not in sys.path:
-        sys.path.insert(0, str(repo_root.parent))
-
-
-def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: bool = True):
-    """加载 Anima transformer 模型。
-
-    `flash_attn=False` 显式禁用 flash_attn fast path（attention_backend=xformers/none
-    时由 caller 传入），让 caller 完全决定 attention 实现 —— PR #17 那版默认
-    fn(True) 强制开 flash_attn 不让用户关，与 cfg.attention_backend 解耦不彻底。
-    """
-    from safetensors import safe_open
-
-    ensure_models_namespace(repo_root)
-
-    # 加载模型类
-    cosmos_modeling = load_module_from_path(
-        "cosmos_predict2_modeling",
-        repo_root / "cosmos_predict2_modeling.py",
-    )
-    anima_modeling = load_module_from_path(
-        "anima_modeling",
-        repo_root / "anima_modeling.py",
-    )
-    Anima = anima_modeling.Anima
-
-    # attention backend 全局开关：新模型代码用 set_attention_backend() 一次性清掉
-    # 未选中的 fast path；旧 standalone 副本仍 fallback 到 set_flash_attn_enabled()。
-    flash_enabled = False
-    flash_modules = [cosmos_modeling, anima_modeling]
-    for module_name in (
-        "modeling.cosmos_predict2_modeling", "modeling.anima_modeling",
-        "models.cosmos_predict2_modeling", "models.anima_modeling",  # 兼容外部 checkout
-    ):
-        try:
-            flash_modules.append(importlib.import_module(module_name))
-        except Exception:
-            pass
-    for module in flash_modules:
-        set_backend = getattr(module, "set_attention_backend", None)
-        if set_backend is not None:
-            try:
-                effective = str(set_backend("flash_attn" if flash_attn else "none"))
-                flash_enabled = (effective == "flash_attn") or flash_enabled
-                continue
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("attention backend 设置失败，继续走 SDPA fallback: %s", exc)
-                continue
-        fn = getattr(module, "set_flash_attn_enabled", None)
-        if fn is None:
-            continue
-        try:
-            flash_enabled = bool(fn(flash_attn)) or flash_enabled
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("flash_attn 启用失败，继续走 SDPA fallback: %s", exc)
-    if flash_enabled:
-        logger.info("flash_attn 启用（训练 + sample 走 fast path）")
-    else:
-        logger.info("flash_attn 关闭（attention_backend=%s 或包未安装）",
-                    "flash_attn" if flash_attn else "non-flash")
-
-    # 从 checkpoint 推断配置
-    with safe_open(transformer_path, framework="pt", device="cpu") as f:
-        for k in f.keys():
-            if k.endswith("x_embedder.proj.1.weight"):
-                w = f.get_tensor(k)
-                break
-
-    in_channels = (w.shape[1] // 4) - 1  # concat_padding_mask=True
-    model_channels = w.shape[0]
-
-    if model_channels == 2048:
-        num_blocks, num_heads = 28, 16
-    elif model_channels == 5120:
-        num_blocks, num_heads = 36, 40
-    else:
-        raise RuntimeError(f"未知的 model_channels={model_channels}")
-
-    config = dict(
-        max_img_h=1024, max_img_w=1024, max_frames=128,
-        in_channels=in_channels, out_channels=16,
-        patch_spatial=2, patch_temporal=1,
-        concat_padding_mask=True,
-        model_channels=model_channels,
-        num_blocks=num_blocks, num_heads=num_heads,
-        crossattn_emb_channels=1024,
-        pos_emb_cls="rope3d", pos_emb_learnable=True,
-        pos_emb_interpolation="crop",
-        use_adaln_lora=True, adaln_lora_dim=256,
-        rope_h_extrapolation_ratio=4.0 if in_channels == 16 else 3.0,
-        rope_w_extrapolation_ratio=4.0 if in_channels == 16 else 3.0,
-        rope_t_extrapolation_ratio=1.0,
-    )
-
-    model = Anima(**config)
-
-    # 加载权重
-    sd = _load_safetensors_state_dict(Path(transformer_path))
-    info = _load_weights_best_effort(model, sd, label="Transformer")
-
-    # 如果 checkpoint 中完全没有 llm_adapter 权重，随机初始化会把 cross-attn 条件搞乱，直接禁用更安全
-    has_llm_adapter = any("llm_adapter" in k for k in sd.keys())
-    if not has_llm_adapter and hasattr(model, "llm_adapter"):
-        try:
-            model.llm_adapter = None
-            logger.warning("检测到 checkpoint 不包含 llm_adapter 权重：已禁用 llm_adapter（回退为直接使用 Qwen embeddings）")
-        except Exception:
-            pass
-    model = model.to(device=device, dtype=dtype)
-    model.requires_grad_(False)
-
-    logger.info(f"Anima 模型加载完成: {model_channels}ch, {num_blocks} blocks")
-    return model
-
-
 def load_vae(vae_path, device, dtype, repo_root, *, tiling: str = "auto"):
     """加载 VAE。``tiling`` 透传给 VAEWrapper（auto/on/off）。"""
-    wan_vae = load_module_from_path("wan_vae", repo_root / "wan" / "vae2_1.py")
-    WanVAE = wan_vae.WanVAE_
+    # 正常 import（exec-load 退役，多模型 PR-2a）；repo_root 参数保留但不再使用
+    from modeling.wan.vae2_1 import WanVAE_ as WanVAE
 
     cfg = dict(
         dim=96, z_dim=16, dim_mult=[1, 2, 4, 4],
@@ -476,49 +354,3 @@ def load_vae(vae_path, device, dtype, repo_root, *, tiling: str = "auto"):
 
     logger.info("VAE 加载完成")
     return VAEWrapper(model, mean, std, tiling=tiling)
-
-
-def load_text_encoders(
-    qwen_path,
-    t5_tokenizer_path,
-    device,
-    dtype,
-    *,
-    comfy_qwen: bool = False,
-    t5_fast: bool = False,
-):
-    """加载文本编码器（Qwen + T5）。"""
-    from transformers import AutoModelForCausalLM, AutoTokenizer, T5Tokenizer, T5TokenizerFast
-
-    # Qwen
-    qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
-    if comfy_qwen:
-        from training.comfy_qwen import load_comfy_qwen3_encoder
-
-        qwen_model = load_comfy_qwen3_encoder(qwen_path, device=device, dtype=dtype)
-    else:
-        qwen_model = AutoModelForCausalLM.from_pretrained(
-            qwen_path, torch_dtype=dtype, trust_remote_code=True
-        ).to(device).eval().requires_grad_(False)
-
-    # T5 tokenizer
-    t5_cls = T5TokenizerFast if t5_fast else T5Tokenizer
-    if t5_tokenizer_path and Path(t5_tokenizer_path).exists():
-        t5_tokenizer = t5_cls.from_pretrained(t5_tokenizer_path)
-    else:
-        logger.warning(
-            "T5 tokenizer 本地目录缺失（t5_tokenizer_path=%s），"
-            "开始从 Hugging Face 下载 google/t5-v1_1-xxl",
-            t5_tokenizer_path or "未配置",
-        )
-        try:
-            t5_tokenizer = t5_cls.from_pretrained("google/t5-v1_1-xxl")
-        except Exception as e:
-            raise RuntimeError(
-                f"T5 tokenizer 下载失败（google/t5-v1_1-xxl）：{type(e).__name__}: {e}\n"
-                f"请检查网络后重试；或在 Studio 设置页下载 t5_tokenizer 模型，"
-                f"并确认 t5_tokenizer_path（当前值：{t5_tokenizer_path or '未配置'}）指向该目录。"
-            ) from e
-
-    logger.info("文本编码器加载完成")
-    return qwen_model, qwen_tokenizer, t5_tokenizer

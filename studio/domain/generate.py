@@ -10,9 +10,32 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .common import AttentionBackend
+from .common import FAMILY_SAMPLING, AttentionBackend
 from .lora import LoraEntry
 from .xy_matrix import XYMatrixSpec, _check_axis_values
+
+
+def validate_sampling_for_family(
+    family: str, sampler_name: str, scheduler: str,
+) -> None:
+    """generate / reg_ai 的 sampler 按族严格校验（多模型 P4-4）。
+
+    与训练 config 不同，这两份 config 是每任务临时 JSON——没有 legacy 语料，
+    不需要 grandfather：越族值直接报错 + 可操作文案（两族 sample_image 都在
+    入口对白名单外的值 raise，这里提前到 422）。
+    """
+    allowed = FAMILY_SAMPLING.get(family)
+    if allowed is None:
+        return  # 未知族由 model_family 的 Literal 校验报错
+    for label, value, kind in (
+        ("sampler_name", sampler_name, "samplers"),
+        ("scheduler", scheduler, "schedulers"),
+    ):
+        if value not in allowed[kind]:
+            raise ValueError(
+                f"{label}='{value}' 不适用于 model_family='{family}'"
+                f"（该族可用：{'、'.join(allowed[kind])}）"
+            )
 
 
 class GenerateConfig(BaseModel):
@@ -23,6 +46,12 @@ class GenerateConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    # 模型族（服务端从请求填充；daemon 按此派发加载与采样栈）
+    model_family: Literal["anima", "krea2"] = Field("anima")
+    # 蒸馏推理底模（Krea2 Turbo：8 步 / guidance 0 / mu 固定 1.15）。
+    # 服务端按 catalog variant purpose 检测官方 Turbo 路径后注入
+    distilled: bool = Field(False)
 
     # 模型路径（服务端从 secrets 填充）
     transformer_path: str = Field("models/diffusion_models/anima-base-v1.0.safetensors")
@@ -40,7 +69,7 @@ class GenerateConfig(BaseModel):
     height: int = Field(1024, ge=256, le=4096)
     steps: int = Field(25, ge=1, le=150)
     cfg_scale: float = Field(4.0, ge=0.0, le=20.0)
-    sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = Field("er_sde")
+    sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = Field("er_sde")
     scheduler: Literal["simple", "sgm_uniform"] = Field("simple")
     count: int = Field(1, ge=1, le=32, description="每个 prompt 生成张数")
     seed: int = Field(0, description="随机种子（0=随机）")
@@ -74,6 +103,24 @@ class GenerateConfig(BaseModel):
         "flash_attn",
         description="Attention backend：none（SDPA）/ xformers / flash_attn",
     )
+    vram_policy: Literal["auto", "save_vram", "performance"] = Field(
+        "auto",
+        description="显存策略（krea2 生效）：auto=按空闲显存决定文本编码器与 DiT 是否让位（推荐）；"
+                    "save_vram=强制顺序化，峰值最低（16GB 卡可跑 fp8）、每图多几秒 CPU↔GPU 搬运；"
+                    "performance=全部常驻显存，峰值最高、零搬运",
+    )
+    ram_guard: bool = Field(
+        True,
+        description="内存/显存水位保护：加载大模型前按权重文件实际大小预算系统内存与 GPU 空闲显存，"
+                    "任一不足时中止并报错（含其他进程占用显存的情形）；"
+                    "关闭后资源不足时加载会继续，可能触发整机换页卡顿",
+    )
+
+    @model_validator(mode="after")
+    def _validate_sampler_family(self) -> "GenerateConfig":
+        validate_sampling_for_family(
+            self.model_family, self.sampler_name, self.scheduler)
+        return self
 
     @model_validator(mode="after")
     def _validate_xy(self) -> "GenerateConfig":

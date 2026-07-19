@@ -20,10 +20,13 @@ import sys
 import torch
 import torch.nn.functional as F
 
-from training.text_encoding import (
+from training.families.anima import ANIMA_SPEC
+from training.families.anima.text_encoding import (
     build_comfy_anima_conditioning_inputs,
     encode_qwen,
 )
+
+_ANIMA_LATENT = ANIMA_SPEC.latent
 
 
 logger = logging.getLogger(__name__)
@@ -48,11 +51,9 @@ def _set_model_xformers_enabled(model, enabled: bool) -> bool:
         for cls in type(model).__mro__
         if getattr(cls, "__module__", None)
     }
-    module_names.update({
-        "modeling.cosmos_predict2_modeling",
-        "models.cosmos_predict2_modeling",  # 兼容外部 diffusion-pipe checkout
-        "cosmos_predict2_modeling",
-    })
+    # exec-load 退役后模块身份唯一（多模型 PR-2a）；真名兜底覆盖「model 是
+    # wrapper/dummy、MRO 不含模型模块」的调用方
+    module_names.add("modeling.anima.cosmos_predict2_modeling")
 
     was_enabled = False
     for module_name in sorted(module_names):
@@ -229,13 +230,15 @@ def _prepare_comfy_ksampler_txt2img_latent(
 ) -> torch.Tensor:
     """Build the same empty latent shape path as the target Comfy workflow."""
     latent = torch.zeros(
-        (1, 4, height // 8, width // 8),
+        # (1, 4, ...) 是 ResolutionMaster workflow parity（4ch 空 latent → repeat 补齐），
+        # 4 不是本模型的 latent 通道数，保持字面量
+        (1, 4, height // _ANIMA_LATENT.spatial_stride, width // _ANIMA_LATENT.spatial_stride),
         device=device,
         dtype=torch.float32,
     )
     return _fix_comfy_empty_latent_channels(
         latent,
-        latent_channels=16,
+        latent_channels=_ANIMA_LATENT.channels,
         latent_dimensions=3,
     )
 
@@ -329,7 +332,8 @@ def sample_image(
         raise e
 
     # sigmas（对齐 ComfyUI supported_models.Anima: shift=3.0, multiplier=1.0）
-    lat_h, lat_w = height // 8, width // 8
+    lat_h = height // _ANIMA_LATENT.spatial_stride
+    lat_w = width // _ANIMA_LATENT.spatial_stride
     _scheduler_builders = {
         "simple": _flow_sigmas_simple,
         "sgm_uniform": _flow_sigmas_sgm_uniform,

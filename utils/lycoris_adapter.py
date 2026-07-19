@@ -24,7 +24,6 @@ import torch.nn as nn
 from safetensors.torch import save_file
 from safetensors import safe_open
 
-from utils.lokr_preset import apply as apply_anima_preset
 from utils.lycoris_patch import apply_lokr_device_patch
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 _LOKR_PATCH_STATUS = apply_lokr_device_patch()
 
 
-class AnimaLycorisAdapter:
+class LycorisAdapter:
     """对 LycorisNetwork 的等价封装，对外接口对齐原 LoRAInjector。
 
     对比原 LoRAInjector：
@@ -47,6 +46,8 @@ class AnimaLycorisAdapter:
 
     def __init__(
         self,
+        *,
+        preset: dict | None = None,
         algo: str = "lokr",
         rank: int = 32,
         alpha: float = 16.0,
@@ -60,6 +61,8 @@ class AnimaLycorisAdapter:
         tlora_min_rank: int = 8,
         tlora_alpha_rank_scale: float = 1.0,
     ):
+        # 族知识（target/exclude/前缀）由调用方注入，见 families/<fam>/preset.py
+        self._preset = preset
         self.algo = algo
         self.rank = rank
         self.alpha = alpha
@@ -92,7 +95,12 @@ class AnimaLycorisAdapter:
         """注入 lycoris 适配器到模型。"""
         from lycoris import LycorisNetwork
 
-        apply_anima_preset(LycorisNetwork)
+        if self._preset is None:
+            raise ValueError(
+                "LycorisAdapter 需要显式传入 preset（族知识不再内置，"
+                "见 runtime/training/families/<fam>/preset.py）"
+            )
+        LycorisNetwork.apply_preset(self._preset)
 
         # algo 名映射：anima_train 用 'lora'/'tlora'，lycoris 用 'locon'（with conv 关闭即等价 lora）
         net_module = self.algo
@@ -363,7 +371,6 @@ class AnimaLycorisAdapter:
         ss_args: dict[str, Any] = {
             "algo": self.algo,
             "factor": self.factor,
-            "preset": "anima_full",
             "dropout": self.dropout,
             "rank_dropout": self.rank_dropout,
             "module_dropout": self.module_dropout,
@@ -372,6 +379,9 @@ class AnimaLycorisAdapter:
         }
         if self.lora_reg_dims:
             ss_args["lora_reg_dims"] = self.lora_reg_dims
+        # 多模型 D13：族标记（phases/models 注入 family.lora_metadata()）；
+        # 无标记的存量产物读取侧 grandfather 为 anima
+        ss_args.update(getattr(self, "metadata_extra", None) or {})
         meta = {
             "ss_network_dim": str(self.rank),
             "ss_network_alpha": str(self.alpha),
@@ -540,3 +550,7 @@ def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:
         logger.info("[lora_reg_dims] applied rank overrides to %d modules", changed)
     if skipped:
         logger.info("[lora_reg_dims] skipped %d modules (full-matrix or unsupported)", skipped)
+
+
+# 兼容别名（更名于多模型 PR-2b；引用点逐步切换后删除）
+AnimaLycorisAdapter = LycorisAdapter

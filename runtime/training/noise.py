@@ -17,6 +17,28 @@ import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 
+def noise_params_from_args(args) -> tuple[float, int, float]:
+    """按 noise_enhancement_type 分派生效的噪声增强参数 → (offset, iters, discount)。
+
+    schema 是「type 单选 + 两组参数」;历史实现直接读原始参数值、type 在
+    runtime 侧零参与 —— 两组参数同时非零时 offset 与 pyramid 静默叠加(设计
+    文档 §10.1 审计 #3)。yaml/CLI 主路径的互斥由 migrate_noise_enhancement_type
+    在配置层清零(R1 后 trainer 同走该路径);本函数是 runtime 纵深防御,兜住
+    绕过配置构造的 args 来源(pause snapshot 旧格式 / 程序内手构 namespace),
+    并让「type 才是开关」的契约在消费端成立。loop 标准路径与 navit 打包路径
+    共用本函数,勿再直接读 args.noise_offset / pyramid_*。
+    """
+    ne_type = str(getattr(args, "noise_enhancement_type", "none") or "none")
+    offset = (
+        float(getattr(args, "noise_offset", 0.0) or 0.0) if ne_type == "offset" else 0.0
+    )
+    iters = (
+        int(getattr(args, "pyramid_noise_iters", 0) or 0) if ne_type == "pyramid" else 0
+    )
+    discount = float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35)
+    return offset, iters, discount
+
+
 def make_noise(
     latents: torch.Tensor,
     noise_offset: float = 0.0,

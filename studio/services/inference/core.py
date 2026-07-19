@@ -70,6 +70,12 @@ class LoRAMeta:
     weight_decompose: bool = False
     rs_lora: bool = False
     lora_reg_dims: Optional[dict[str, int]] = None
+    #: 产物所属模型族（D13 标记）；无标记的存量产物 grandfather 为 anima
+    model_family: str = "anima"
+    #: model_family 是否来自显式 metadata 标记。外部生态文件（civitai /
+    #: musubi / comfy 系）不带我们的标记——grandfather 值只用于展示，
+    #: 跨族硬拒绝只对显式标记生效，无标记靠注入/merge 的键匹配兜底。
+    family_explicit: bool = False
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
@@ -146,7 +152,75 @@ def read_lora_meta(path: str) -> LoRAMeta:
         weight_decompose=weight_decompose,
         rs_lora=rs_lora,
         lora_reg_dims=lora_reg_dims,
+        model_family=str(ss_args.get("model_family") or "anima"),
+        family_explicit=bool(ss_args.get("model_family")),
     )
+
+
+_PEFT_LORA_PREFIX = "diffusion_model."
+_PEFT_SUFFIX_MAP = {
+    "lora_A.weight": "lora_down.weight",
+    "lora_B.weight": "lora_up.weight",
+    "alpha": "alpha",
+}
+
+
+def _normalize_peft_lora_sd(
+    sd: dict,
+) -> Optional[tuple[dict, int, Optional[dict[str, int]]]]:
+    """PEFT/comfy 键格式（civitai 生态）归一到 kohya/lycoris 约定。
+
+    ``diffusion_model.{点分层名}.lora_A/lora_B`` → ``lora_unet_{下划线层名}.
+    lora_down/lora_up.weight``；无 alpha 键 = comfy 缩放 1.0 语义 → 补
+    per-layer ``alpha = rank``（alpha/rank 式 loader 得 1.0，数值一致）；
+    rank 从 lora_A 张量形状推断（此类文件无 ss_* metadata，header 读不到），
+    混秩层进 lora_reg_dims。返回 (归一 sd, max_rank, reg_dims)；非纯 PEFT
+    形态返回 None（kohya/lycoris 文件原样走）。
+    """
+    import torch  # noqa: PLC0415
+
+    if not sd or not all(key.startswith(_PEFT_LORA_PREFIX) for key in sd):
+        return None
+    grouped: dict[str, dict[str, Any]] = {}
+    for key, tensor in sd.items():
+        rest = key[len(_PEFT_LORA_PREFIX):]
+        for peft_suffix, kohya_suffix in _PEFT_SUFFIX_MAP.items():
+            if rest.endswith("." + peft_suffix):
+                layer = rest[: -len(peft_suffix) - 1]
+                grouped.setdefault(layer, {})[kohya_suffix] = tensor
+                break
+        else:
+            if rest.endswith(".dora_scale"):
+                raise ValueError(
+                    "PEFT 形态的 DoRA LoRA 不支持（dora_scale 非线性）；"
+                    "请改用 kohya 格式导出的版本。"
+                )
+            raise ValueError(f"无法识别的 PEFT LoRA 键：{key}")
+
+    normalized: dict[str, Any] = {}
+    ranks: dict[str, int] = {}
+    for layer, tensors in grouped.items():
+        down = tensors.get("lora_down.weight")
+        up = tensors.get("lora_up.weight")
+        if down is None or up is None:
+            raise ValueError(f"PEFT LoRA 层缺 lora_A/lora_B 对：{layer}")
+        rank = int(down.shape[0])
+        ranks[layer] = rank
+        prefix = f"lora_unet_{layer.replace('.', '_')}"
+        normalized[f"{prefix}.lora_down.weight"] = down
+        normalized[f"{prefix}.lora_up.weight"] = up
+        alpha = tensors.get("alpha")
+        normalized[f"{prefix}.alpha"] = (
+            alpha if alpha is not None else torch.tensor(float(rank))
+        )
+
+    max_rank = max(ranks.values())
+    reg_dims = {
+        f"lora_unet_{layer.replace('.', '_')}": rank
+        for layer, rank in ranks.items()
+        if rank != max_rank
+    } or None
+    return normalized, max_rank, reg_dims
 
 
 def apply_loras(
@@ -154,6 +228,7 @@ def apply_loras(
     specs: Sequence[LoRASpec],
     device: str,
     dtype: Any,
+    family_id: str = "anima",
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
@@ -172,6 +247,17 @@ def apply_loras(
 
     from utils.lycoris_adapter import AnimaLycorisAdapter
 
+    # fp8 量化底模走 ComfyUI merge 语义（dequant → 加 delta → stochastic
+    # rounding 回写，seed=层名 CRC32）——lycoris hook 直接注入 fp8 权重会因
+    # dtype 崩或产生与 Comfy 不一致的数值。目前只有 krea2 loader 会产出
+    # fp8 权重（Anima loader 拒绝 fp8）。
+    fp8_merge = False
+    if specs:
+        from training.families.krea2.quant_fp8 import model_has_fp8_layers  # noqa: PLC0415
+
+        fp8_merge = model_has_fp8_layers(model)
+
+    merge_sources: list[tuple[dict, float, str]] = []
     adapters: list[Any] = []
     for spec in specs:
         path = spec.path or ""
@@ -180,14 +266,59 @@ def apply_loras(
             continue
 
         meta = read_lora_meta(path)
+        # 跨族 fail-fast（A5，与训练侧 resume_lora 检查同款）：krea2 LoRA 配
+        # anima 底模（或反之）用错 preset 注入 = 键全 miss 的静默坏结果。
+        # 只对**显式标记**硬拒——外部生态文件（civitai/musubi/comfy 系）没有
+        # 我们的 model_family 标记，grandfather 值不可作拒绝依据；无标记文件
+        # 放行，由下方注入/merge 的键匹配兜底（全 miss 报错，不静默）。
+        if meta.family_explicit and meta.model_family != family_id:
+            raise ValueError(
+                f"LoRA 跨模型族被拒绝：{Path(path).name} 属于 "
+                f"'{meta.model_family}'，当前底模族为 '{family_id}'。"
+                f"请换用同族 LoRA 或切换底模。"
+            )
+        sd_raw: dict = {}
+        with safe_open(str(path), framework="pt", device="cpu") as f:
+            for k in f.keys():
+                sd_raw[k] = f.get_tensor(k)
+
+        # 外部生态 PEFT 键格式归一（civitai 常见）：转 kohya 键 + 从张量
+        # 形状推断 rank/reg_dims（这类文件零 ss_* metadata，meta 里的
+        # rank=32 只是回退默认，碰运气不可用）
+        rank, alpha, algo = meta.rank, meta.alpha, meta.algo
+        reg_dims = meta.lora_reg_dims
+        peft = _normalize_peft_lora_sd(sd_raw)
+        if peft is not None:
+            sd_raw, rank, reg_dims = peft
+            alpha = float(rank)   # per-layer alpha 已补进 sd，全局值仅建网用
+            algo = "lora"         # PEFT 双矩阵 = plain LoRA
+
+        if fp8_merge:
+            # merge 是权重级线性操作，只认 per-layer alpha/dim 缩放。
+            # rs_lora 产物无需特判：lycoris 保存时把 √rank 校正烘进
+            # per-layer alpha 键（register_buffer("alpha", α·dim/√dim)，
+            # locon/loha/lokr 同款），标准 alpha/dim merge 得到的正是
+            # α/√rank——与 bf16 注入路径（建网 scale=α/√r）数值一致。
+            # DoRA（列范数归一化，非线性）merge 需要 comfy
+            # weight_decompose 语义，尚未实现，保持拒绝。
+            if meta.weight_decompose:
+                raise ValueError(
+                    f"fp8 量化底模不支持挂载 DoRA（weight_decompose）训练的 "
+                    f"LoRA：{Path(path).name}。请改用 bf16 版本底模。"
+                )
+            merge_sources.append((sd_raw, float(spec.scale), Path(path).name))
+            continue
+        from training.families import get_family  # noqa: PLC0415
+
         adapter = AnimaLycorisAdapter(
-            algo=meta.algo,
-            rank=meta.rank,
-            alpha=meta.alpha,
+            preset=get_family(family_id).lora_preset(),
+            algo=algo,
+            rank=rank,
+            alpha=alpha,
             factor=meta.factor,
             weight_decompose=meta.weight_decompose,
             rs_lora=meta.rs_lora,
-            lora_reg_dims=meta.lora_reg_dims,
+            lora_reg_dims=reg_dims,
         )
         adapter.inject(model)
         if adapter.network is not None:
@@ -199,21 +330,33 @@ def apply_loras(
                 if hasattr(lora, "multiplier"):
                     lora.multiplier = float(spec.scale)
 
-        sd: dict = {}
-        with safe_open(str(path), framework="pt", device="cpu") as f:
-            for k in f.keys():
-                sd[k] = f.get_tensor(k).to(device=device, dtype=dtype)
+        sd = {k: v.to(device=device, dtype=dtype) for k, v in sd_raw.items()}
 
         result = adapter.load_state_dict(sd, strict=False)
         missing = len(getattr(result, "missing_keys", []) or [])
         unexpected = len(getattr(result, "unexpected_keys", []) or [])
+        if sd and unexpected >= len(sd):
+            # 键全部没被 LoRA 网络吃掉 = 异族文件或本路径不支持的键格式
+            # （无标记文件放行后的内容匹配兜底，防静默出无 LoRA 效果的图）
+            raise ValueError(
+                f"LoRA 与当前底模不匹配：{Path(path).name} 的键全部无法对应"
+                f"（可能属于其他模型族，或是本路径尚不支持的键格式）。"
+            )
         logger.info(
             f"已加载 LoRA: {Path(path).name} "
-            f"(algo={meta.algo}, rank={meta.rank}, alpha={meta.alpha}, "
+            f"(algo={algo}, rank={rank}, alpha={alpha}, "
             f"scale={spec.scale}; missing={missing}, unexpected={unexpected})"
         )
         adapters.append(adapter)
 
+    if merge_sources:
+        from training.families.krea2.lora_fp8_merge import (  # noqa: PLC0415
+            merge_loras_into_fp8_model,
+        )
+
+        # 单个句柄对应全部 LoRA（merge 一次完成）；daemon 换 LoRA / 变
+        # scale 时 detach() 从备份还原后重 merge
+        return [merge_loras_into_fp8_model(model, merge_sources)]
     return adapters
 
 

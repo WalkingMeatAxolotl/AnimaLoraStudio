@@ -16,6 +16,7 @@ import yaml
 from pydantic import ValidationError
 
 from ...domain.config_prune import prune_inactive_fields
+from ...domain.config_rules import apply_disable_rule_fixes
 from ...domain.migrations import RETIRED_MONITOR_KEYS
 from ...paths import REPO_ROOT, USER_PRESETS_DIR
 from ...schema import TrainingConfig
@@ -174,8 +175,14 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
 
     defaults = TrainingConfig()
     defaulted: list[str] = []
-    # loop bound = data fields + 1 extra round for the InfoNoise compat shim
-    # below (which doesn't consume a field-level slot).
+    # disable_when 规则修复（刀 2 / R2 v2）：钉值/禁值违反按规则修（修复值 =
+    # disable_value，与前端 takeover 语义对齐；含 gate-first「优先关 InfoNoise
+    # 保住用户在 loss_weighting 等的投入」——历史 InfoNoise 专用垫片的泛化）。
+    # 先于逐字段回退跑：规则违反在 pydantic 里是 model-level 错（loc=()），
+    # 逐字段回退定位不到。
+    data, rule_fixed = apply_disable_rule_fixes(data, TrainingConfig)
+    defaulted.extend(rule_fixed)
+
     max_rounds = len(data) + 1
     for _ in range(max_rounds):
         try:
@@ -186,15 +193,8 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
                 e["loc"][0] for e in exc.errors() if e.get("loc")
             }
             if not bad_fields:
-                # Model-level validator (loc=()) — for the InfoNoise mutex set
-                # (4 _validate_infonoise_*_exclusive), prefer to disable InfoNoise
-                # and preserve the user's investment in loss_weighting / loss_type /
-                # timestep_schedule_shift / noise_enhancement_type. Frontend shows
-                # this as a compat banner via defaulted_fields.
-                if data.get("infonoise_enabled") is True:
-                    data["infonoise_enabled"] = False
-                    defaulted.append("infonoise_enabled")
-                    continue
+                # 剩余 model-level 错 = §6.4 保留手写的校验（区间 / navit 前置），
+                # 无声明式修复策略 —— 按产品语义直接拒绝。
                 raise PresetError(
                     f"Preset validation failed: {exc}",
                     code="preset.invalid",
@@ -254,6 +254,25 @@ def read_preset_with_warnings(
     return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
 
 
+def render_config_yaml(dumped: dict[str, Any]) -> str:
+    """裁剪后 config dict → yaml 文本。落盘(write_preset / write_version_config)
+    与预览端点(POST /api/schema/preview-yaml)共用的唯一序列化出口 ——
+    R4「预览物理一致」的依据,序列化参数只此一处。"""
+    return yaml.safe_dump(
+        dumped, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+
+
+def preview_config_yaml_text(raw: dict[str, Any]) -> str:
+    """当前表单 config → 与保存后落盘文件完全同路径的 yaml 文本(R4)。
+
+    tolerant 语义与保存一致:修复 / 裁剪后的样子就是「点保存后文件的样子」。
+    纯计算不落盘。
+    """
+    cfg, _, _ = _tolerant_validate(raw)
+    return render_config_yaml(prune_inactive_fields(cfg.model_dump(mode="python")))
+
+
 def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> Path:
     """先校验后写盘；任何未知字段或类型不匹配都会拒绝。
 
@@ -276,10 +295,7 @@ def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> P
         _absolutize_model_paths(cfg.model_dump(mode="python"))
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(dumped, allow_unicode=True, sort_keys=False, default_flow_style=False),
-        encoding="utf-8",
-    )
+    path.write_text(render_config_yaml(dumped), encoding="utf-8")
     return path
 
 

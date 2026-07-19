@@ -63,16 +63,26 @@ def _make_fake_img(tmp: Path):
 
 
 def _mock_sample_image(records: list, fake_img):
-    """sample_image 替身：记录每次入参 + 返回伪图。"""
+    """family.sample_image 替身：记录每次入参 + 返回伪图。
+
+    P4-4 起 CLI 经 family.sample_image(model, vae, text, prompt, **kw) 派发，
+    prompt 是第 4 个位置参数。"""
     def _stub(*args, **kwargs):
         records.append({
             "steps": kwargs.get("steps"),
             "cfg_scale": kwargs.get("cfg_scale"),
             "sampler_name": kwargs.get("sampler_name"),
-            "prompt": kwargs.get("prompt"),
+            "prompt": args[3] if len(args) > 3 else kwargs.get("prompt"),
         })
         return fake_img
     return _stub
+
+
+def _stub_family(sample_fn):
+    """duck-typed ModelFamily 替身：只带 sample_image。"""
+    fam = types.SimpleNamespace()
+    fam.sample_image = sample_fn
+    return fam
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +172,7 @@ def test_run_xy_matrix_x_only_no_y(gen_module, tmp_path, monkeypatch) -> None:
     """y=None 退化成 1×N（一行）。"""
     fake_img = _make_fake_img(tmp_path)
     records: list[dict] = []
-    monkeypatch.setattr(gen_module._T, "sample_image", _mock_sample_image(records, fake_img))
+    family = _stub_family(_mock_sample_image(records, fake_img))
 
     monitor_calls: list[dict] = []
     def fake_monitor(**kw):
@@ -177,7 +187,7 @@ def test_run_xy_matrix_x_only_no_y(gen_module, tmp_path, monkeypatch) -> None:
         base_steps=25, base_cfg_scale=4.0, base_sampler="er_sde",
         scheduler="simple",
         height=1024, width=1024,
-        model=None, vae=None, qwen_model=None, qwen_tok=None, t5_tok=None,
+        family=family, model=None, vae=None, text=None,
         device="cpu", dtype=None,
         output_dir=tmp_path,
         update_monitor=fake_monitor,
@@ -204,7 +214,7 @@ def test_run_xy_matrix_2d_traversal_order(gen_module, tmp_path, monkeypatch) -> 
     """2×3 网格按 (yi 外, xi 内) 遍历 = 6 cells。"""
     fake_img = _make_fake_img(tmp_path)
     records: list[dict] = []
-    monkeypatch.setattr(gen_module._T, "sample_image", _mock_sample_image(records, fake_img))
+    family = _stub_family(_mock_sample_image(records, fake_img))
 
     gen_module._run_xy_matrix(
         xy_matrix={
@@ -217,7 +227,7 @@ def test_run_xy_matrix_2d_traversal_order(gen_module, tmp_path, monkeypatch) -> 
         base_steps=25, base_cfg_scale=4.0, base_sampler="er_sde",
         scheduler="simple",
         height=512, width=512,
-        model=None, vae=None, qwen_model=None, qwen_tok=None, t5_tok=None,
+        family=family, model=None, vae=None, text=None,
         device="cpu", dtype=None,
         output_dir=tmp_path,
         update_monitor=None,
@@ -236,10 +246,7 @@ def test_run_xy_matrix_2d_traversal_order(gen_module, tmp_path, monkeypatch) -> 
 def test_run_xy_matrix_lora_scale_resets_each_cell(gen_module, tmp_path, monkeypatch) -> None:
     """每个 cell 进入前 multiplier 重置到 base_scale，再按 axis 值改。"""
     fake_img = _make_fake_img(tmp_path)
-    monkeypatch.setattr(
-        gen_module._T, "sample_image",
-        lambda *a, **k: fake_img,
-    )
+    family = _stub_family(lambda *a, **k: fake_img)
 
     fake_network = MagicMock()
     fake_network.loras = []
@@ -269,7 +276,7 @@ def test_run_xy_matrix_lora_scale_resets_each_cell(gen_module, tmp_path, monkeyp
         base_steps=25, base_cfg_scale=4.0, base_sampler="er_sde",
         scheduler="simple",
         height=512, width=512,
-        model=None, vae=None, qwen_model=None, qwen_tok=None, t5_tok=None,
+        family=family, model=None, vae=None, text=None,
         device="cpu", dtype=None,
         output_dir=tmp_path,
         update_monitor=None,
@@ -288,7 +295,7 @@ def test_run_xy_matrix_lora_scale_resets_each_cell(gen_module, tmp_path, monkeyp
 def test_run_xy_matrix_seed_axis_overrides_base(gen_module, tmp_path, monkeypatch) -> None:
     """axis=seed 时，cell 文件名用 axis 值而非 base_seed。"""
     fake_img = _make_fake_img(tmp_path)
-    monkeypatch.setattr(gen_module._T, "sample_image", lambda *a, **k: fake_img)
+    family = _stub_family(lambda *a, **k: fake_img)
 
     gen_module._run_xy_matrix(
         xy_matrix={"x": {"axis": "seed", "values": [100, 200, 300]}, "y": None},
@@ -298,7 +305,7 @@ def test_run_xy_matrix_seed_axis_overrides_base(gen_module, tmp_path, monkeypatc
         base_steps=25, base_cfg_scale=4.0, base_sampler="er_sde",
         scheduler="simple",
         height=512, width=512,
-        model=None, vae=None, qwen_model=None, qwen_tok=None, t5_tok=None,
+        family=family, model=None, vae=None, text=None,
         device="cpu", dtype=None,
         output_dir=tmp_path,
         update_monitor=None,
@@ -316,7 +323,7 @@ def test_run_xy_matrix_seed_axis_overrides_base(gen_module, tmp_path, monkeypatc
 def test_run_xy_matrix_zero_seed_randomizes_once(gen_module, tmp_path, monkeypatch) -> None:
     """base_seed=0 → 随机一次后所有 cell 共享。"""
     fake_img = _make_fake_img(tmp_path)
-    monkeypatch.setattr(gen_module._T, "sample_image", lambda *a, **k: fake_img)
+    family = _stub_family(lambda *a, **k: fake_img)
     # 固定 random.randint 返回值便于断言
     monkeypatch.setattr(gen_module.random, "randint", lambda a, b: 12345)
 
@@ -328,7 +335,7 @@ def test_run_xy_matrix_zero_seed_randomizes_once(gen_module, tmp_path, monkeypat
         base_steps=25, base_cfg_scale=4.0, base_sampler="er_sde",
         scheduler="simple",
         height=512, width=512,
-        model=None, vae=None, qwen_model=None, qwen_tok=None, t5_tok=None,
+        family=family, model=None, vae=None, text=None,
         device="cpu", dtype=None,
         output_dir=tmp_path,
         update_monitor=None,
@@ -350,7 +357,7 @@ def test_run_xy_matrix_skips_failing_cell(gen_module, tmp_path, monkeypatch) -> 
             raise RuntimeError("CUDA OOM 模拟")
         return fake_img
 
-    monkeypatch.setattr(gen_module._T, "sample_image", flaky_sample_image)
+    family = _stub_family(flaky_sample_image)
 
     gen_module._run_xy_matrix(
         xy_matrix={"x": {"axis": "steps", "values": [10, 20, 30]}, "y": None},
@@ -360,7 +367,7 @@ def test_run_xy_matrix_skips_failing_cell(gen_module, tmp_path, monkeypatch) -> 
         base_steps=25, base_cfg_scale=4.0, base_sampler="er_sde",
         scheduler="simple",
         height=512, width=512,
-        model=None, vae=None, qwen_model=None, qwen_tok=None, t5_tok=None,
+        family=family, model=None, vae=None, text=None,
         device="cpu", dtype=None,
         output_dir=tmp_path,
         update_monitor=None,

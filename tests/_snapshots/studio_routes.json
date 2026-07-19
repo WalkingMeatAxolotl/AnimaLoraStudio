@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 201,
+  "count": 204,
   "routes": [
     {
       "path": "/",
@@ -226,6 +226,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/generate/token_count",
+      "methods": [
+        "POST"
+      ],
+      "name": "count_prompt_tokens",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/generate/{task_id}",
       "methods": [
         "GET"
@@ -274,6 +282,22 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/model-sources/{domain}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_model_source",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/model-sources/{domain}",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_model_source",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/models-root/info",
       "methods": [
         "GET"
@@ -298,19 +322,11 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/models/anima/custom",
+      "path": "/api/models/asset",
       "methods": [
         "DELETE"
       ],
-      "name": "remove_custom_anima",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/models/anima/custom",
-      "methods": [
-        "POST"
-      ],
-      "name": "add_custom_anima",
+      "name": "delete_model_asset",
       "type": "APIRoute"
     },
     {
@@ -327,6 +343,14 @@
         "POST"
       ],
       "name": "start_model_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/family-switch",
+      "methods": [
+        "POST"
+      ],
+      "name": "switch_model_family",
       "type": "APIRoute"
     },
     {
@@ -1306,6 +1330,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/schema/preview-yaml",
+      "methods": [
+        "POST"
+      ],
+      "name": "preview_config_yaml_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/secrets",
       "methods": [
         "GET"
@@ -1511,14 +1543,6 @@
         "GET"
       ],
       "name": "torch_status",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/upscalers/download_custom",
-      "methods": [
-        "POST"
-      ],
-      "name": "start_upscaler_custom_download",
       "type": "APIRoute"
     },
     {

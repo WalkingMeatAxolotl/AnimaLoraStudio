@@ -17,10 +17,14 @@ from PIL import Image
 
 from runtime.anima_daemon import (
     _PREVIEW_TARGET_PX,
-    _WAN21_LATENT_RGB_BIAS,
-    _WAN21_LATENT_RGB_FACTORS,
     _decode_latent2rgb_preview,
+    _preview_latent_spec,
 )
+
+# 投影系数单一来源在 families/latent_spaces.py（P4-4 起 daemon 按当前族 spec
+# 取，未加载时回退 Wan21 共享空间——本测试即该回退路径）。
+_WAN21_LATENT_RGB_FACTORS = [list(r) for r in _preview_latent_spec().rgb_factors]
+_WAN21_LATENT_RGB_BIAS = list(_preview_latent_spec().rgb_bias)
 
 
 def test_wan21_factors_shape() -> None:

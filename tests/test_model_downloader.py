@@ -403,6 +403,103 @@ def test_download_qwen3_modelscope_builds_complete_directory(
         assert (qwen_dir / f).read_text(encoding="utf-8") == f
 
 
+def test_download_krea2_main_uses_modelscope_comfy_org_mirror(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """训练源选 MS 时从 Comfy-Org/Krea-2 下载对应 bf16 单文件。"""
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    hf_calls: list[tuple[str, str, str]] = []
+    ms_calls: list[tuple[str, str, str]] = []
+
+    def fake_hf(repo_id, repo_subpath, target, *, on_log=print):
+        hf_calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"checkpoint")
+        return True
+
+    def fake_ms(repo_id, repo_subpath, target, *, on_log=print):
+        ms_calls.append((repo_id, repo_subpath, str(target)))
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+    logs: list[str] = []
+
+    assert model_downloader.download_krea2_main(
+        tmp_path, "raw", on_log=logs.append,
+    )
+    assert hf_calls == []
+    assert ms_calls == [(
+        "Comfy-Org/Krea-2",
+        "diffusion_models/krea2_raw_bf16.safetensors",
+        str(tmp_path / "diffusion_models" / "krea2-raw-bf16.safetensors"),
+    )]
+
+
+def test_download_qwen3_vl_modelscope_builds_isolated_complete_directory(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_ms(repo_id, repo_subpath, target, *, on_log=print):
+        calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(repo_subpath, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+    assert model_downloader.download_qwen3_vl(
+        tmp_path, on_log=lambda _line: None,
+    )
+
+    target_dir = tmp_path / "text_encoders" / "Qwen_Qwen3-VL-4B-Instruct"
+    assert [subpath for _, subpath, _ in calls] == model_downloader.QWEN3_VL_FILES
+    assert all(repo == model_downloader.QWEN3_VL_REPO for repo, _, _ in calls)
+    assert all((target_dir / filename).exists() for filename in model_downloader.QWEN3_VL_FILES)
+
+
+def test_trigger_routes_krea2_assets_to_async_downloaders(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[tuple[str, object]] = []
+
+    def fake_start(key, fn):
+        captured.append((key, fn))
+        return None
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_main(root, variant, *, on_log=print):
+        assert root == tmp_path
+        calls.append(("main", variant))
+        return True
+
+    def fake_text(root, *, on_log=print):
+        assert root == tmp_path
+        calls.append(("text", ""))
+        return True
+
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "studio.services.models.downloader.start_download_async", fake_start,
+    )
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_krea2_main", fake_main,
+    )
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_qwen3_vl", fake_text,
+    )
+
+    assert model_downloader.trigger("krea2_main", "raw") == "krea2_main:raw"
+    assert model_downloader.trigger("krea2_text_encoder") == "krea2_text_encoder"
+    assert [key for key, _ in captured] == [
+        "krea2_main:raw", "krea2_text_encoder",
+    ]
+    assert all(fn(lambda _line: None) for _, fn in captured)
+    assert calls == [("main", "raw"), ("text", "")]
+
+
 # ---------------------------------------------------------------------------
 # 预处理放大器
 # ---------------------------------------------------------------------------
@@ -1106,3 +1203,118 @@ def test_ensure_eval_model_uses_user_local_dir(
     got = model_downloader.ensure_eval_model("clip", str(local), tmp_path)
     assert got == local
     assert not called
+
+
+def test_delete_asset_removes_known_targets(tmp_path, monkeypatch):
+    """删除按 model_id 解析服务端 target（文件/目录两形态）；未知 id 报错。"""
+    from studio.services import models as m
+    from studio.services.models import downloader as dl
+
+    monkeypatch.setattr(dl, "models_root", lambda: tmp_path)
+
+    # 文件型：krea2_main variant
+    target = tmp_path / "diffusion_models" / "krea2-raw-fp8-scaled.safetensors"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"w")
+    m.delete_asset("krea2_main", "raw_fp8")
+    assert not target.exists()
+
+    # 目录型：fp8 TE
+    te_dir = tmp_path / "text_encoders" / "qwen3vl-4b-fp8"
+    te_dir.mkdir(parents=True)
+    (te_dir / "w.safetensors").write_bytes(b"w")
+    m.delete_asset("krea2_text_encoder_fp8")
+    assert not te_dir.exists()
+
+    # 不存在的 target：no-op 不抛
+    m.delete_asset("anima_vae")
+
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="deletion"):
+        m.delete_asset("taeflux")
+    with _pytest.raises(ValueError, match="variant"):
+        m.delete_asset("krea2_main", "bogus")
+
+
+def test_delete_asset_tagger_eval_upscaler(tmp_path, monkeypatch):
+    """打标 / eval / 放大器区的删除：目录与文件两形态 + variant 必填校验。"""
+    from pathlib import Path
+
+    from studio.services import models as m
+    from studio.services.models import downloader as dl
+    from studio.services.models.paths import CLTAGGER_VERSIONS
+
+    monkeypatch.setattr(dl, "models_root", lambda: tmp_path)
+
+    # wd14：整目录（model_id 里的 / 会被 sanitize 成 _）
+    wd_dir = tmp_path / "wd14" / "SmilingWolf_wd-eva02-large-tagger-v3"
+    wd_dir.mkdir(parents=True)
+    (wd_dir / "model.onnx").write_bytes(b"w")
+    m.delete_asset("wd14", "SmilingWolf/wd-eva02-large-tagger-v3")
+    assert not wd_dir.exists()
+
+    # cltagger：只删该版本子目录，repo 根下其他版本保留
+    label, preset = next(iter(CLTAGGER_VERSIONS.items()))
+    repo_root = tmp_path / "cltagger" / preset["model_id"].replace("/", "_")
+    version_dir = repo_root / Path(preset["model_path"]).parent
+    version_dir.mkdir(parents=True)
+    (version_dir / "model.onnx").write_bytes(b"w")
+    (repo_root / "other_version").mkdir()
+    m.delete_asset("cltagger", label)
+    assert not version_dir.exists()
+    assert (repo_root / "other_version").exists()
+
+    # eval：clip / ccip 各一个目录
+    clip_dir = tmp_path / "eval" / "clip" / "openai_clip-vit-base-patch32"
+    clip_dir.mkdir(parents=True)
+    (clip_dir / "config.json").write_text("{}", encoding="utf-8")
+    m.delete_asset("eval_clip", "openai/clip-vit-base-patch32")
+    assert not clip_dir.exists()
+
+    ccip_dir = tmp_path / "eval" / "ccip" / "ccip-caformer-24-randaug-pruned"
+    ccip_dir.mkdir(parents=True)
+    (ccip_dir / "model_feat.onnx").write_bytes(b"w")
+    m.delete_asset("eval_ccip", "ccip-caformer-24-randaug-pruned")
+    assert not ccip_dir.exists()
+
+    # upscaler：预设 label → 预设 filename；自定义文件名直接删
+    from studio.services.models.paths import DEFAULT_UPSCALER, UPSCALER_VARIANTS
+
+    up_dir = tmp_path / "upscalers"
+    up_dir.mkdir()
+    preset_file = up_dir / UPSCALER_VARIANTS[DEFAULT_UPSCALER]["filename"]
+    preset_file.write_bytes(b"w")
+    m.delete_asset("upscaler", DEFAULT_UPSCALER)
+    assert not preset_file.exists()
+
+    custom_file = up_dir / "4x-MyCustom.pth"
+    custom_file.write_bytes(b"w")
+    m.delete_asset("upscaler", "4x-MyCustom.pth")
+    assert not custom_file.exists()
+
+    import pytest as _pytest
+    for mid in ("wd14", "eval_clip", "eval_dino", "eval_ccip", "upscaler"):
+        with _pytest.raises(ValueError, match="variant"):
+            m.delete_asset(mid)
+    with _pytest.raises(ValueError, match="cltagger"):
+        m.delete_asset("cltagger", "bogus")
+    # 自定义 label 的路径穿越保护由 upscaler_target 兜底
+    with _pytest.raises(ValueError):
+        m.delete_asset("upscaler", "..\\evil.pth")
+
+
+def test_delete_asset_rejects_running_download(tmp_path, monkeypatch):
+    from studio.services import models as m
+    from studio.services.models import downloader as dl
+
+    monkeypatch.setattr(dl, "models_root", lambda: tmp_path)
+    ds = dl.DownloadStatus(key="krea2_main:raw", status="running", started_at=0, log=[])
+    with dl._LOCK:
+        dl._DOWNLOADS["krea2_main:raw"] = ds
+    try:
+        import pytest as _pytest
+        with _pytest.raises(RuntimeError, match="下载中"):
+            m.delete_asset("krea2_main", "raw")
+    finally:
+        with dl._LOCK:
+            dl._DOWNLOADS.pop("krea2_main:raw", None)

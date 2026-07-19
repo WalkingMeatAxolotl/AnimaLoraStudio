@@ -12,7 +12,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from training.sra_align import SRAAligner
+from training.families.anima.sra_align import SRAAligner
 
 
 class _IdentityBlock(nn.Module):

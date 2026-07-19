@@ -6,9 +6,9 @@ import pytest
 import torch
 
 from training import inference_samplers
-from training import sampling
-from training.sampling import sample_image
-from training.text_encoding import build_comfy_anima_conditioning_inputs, encode_qwen
+from training.families.anima import sampling
+from training.families.anima.sampling import sample_image
+from training.families.anima.text_encoding import build_comfy_anima_conditioning_inputs, encode_qwen
 
 
 class FakeTokenizer:
@@ -132,7 +132,7 @@ class RecordingBatchedDenoiseModel(RecordingAnimaModel):
 
 class XformersNaNThenFiniteModel(RecordingBatchedDenoiseModel):
     def __call__(self, x, timesteps, cross, **kwargs):
-        from modeling import cosmos_predict2_modeling as cosmos
+        from modeling.anima import cosmos_predict2_modeling as cosmos
 
         self.forward_calls.append(
             {
@@ -468,7 +468,7 @@ def test_sample_image_comfy_parity_batches_cfg_like_comfyui(monkeypatch) -> None
 
 
 def test_sample_image_retries_with_sdpa_when_xformers_outputs_nan(monkeypatch) -> None:
-    from modeling import cosmos_predict2_modeling as cosmos
+    from modeling.anima import cosmos_predict2_modeling as cosmos
 
     model = XformersNaNThenFiniteModel()
 
@@ -662,7 +662,7 @@ def test_sample_image_skips_offload_when_vae_declines(monkeypatch) -> None:
 # ---------------- tokenize_t5_comfy_literal（训练 caption 编码） ----------------
 
 def test_tokenize_t5_comfy_literal_keeps_parentheses_literal_weight_one() -> None:
-    from training.text_encoding import tokenize_t5_comfy_literal
+    from training.families.anima.text_encoding import tokenize_t5_comfy_literal
 
     caption = "ganyu (genshin impact), 1girl"
     ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption], max_length=512)
@@ -678,7 +678,7 @@ def test_tokenize_t5_comfy_literal_keeps_parentheses_literal_weight_one() -> Non
 
 
 def test_tokenize_t5_comfy_literal_differs_from_prompt_weight_parsing() -> None:
-    from training.text_encoding import tokenize_t5_comfy_literal
+    from training.families.anima.text_encoding import tokenize_t5_comfy_literal
 
     caption = "ganyu (genshin impact)"
     ids, attn, _w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption], max_length=512)
@@ -692,7 +692,7 @@ def test_tokenize_t5_comfy_literal_differs_from_prompt_weight_parsing() -> None:
 
 
 def test_tokenize_t5_comfy_literal_batch_padding_conventions() -> None:
-    from training.text_encoding import tokenize_t5_comfy_literal
+    from training.families.anima.text_encoding import tokenize_t5_comfy_literal
 
     ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), ["1girl", "a"], max_length=512)
 

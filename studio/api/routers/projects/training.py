@@ -40,7 +40,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from ...deps import _resolve_anima_model_paths
+from ...deps import _resolve_model_paths
 from ...errors import _safe_join_or_400
 from ..logs import read_task_log
 from ...responses import _thumb_response
@@ -439,8 +439,20 @@ def get_reg_caption(pid: int, vid: int, path: str) -> dict[str, Any]:
 
 @router.post("/api/projects/{pid}/versions/{vid}/reg/generate-prior")
 def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]:
-    """启动先验生成 task —— base 模型给每张 train 图的 tag 反向出对照图。"""
-    model_paths = _resolve_anima_model_paths(body.base_model)
+    """启动先验生成 task —— base 模型给每张 train 图的 tag 反向出对照图。
+
+    模型族跟随该 version 的训练配置（先验生成是 version 级操作，不是请求级
+    选择）：无 config 或未声明时按 anima。
+    """
+    project, ver = _project_and_version_or_404(pid, vid)
+    family = "anima"
+    if version_config.has_version_config(project, ver):
+        try:
+            vc = version_config.read_version_config(project, ver)
+            family = str(vc.get("model_family") or "anima")
+        except version_config.VersionConfigError:
+            pass  # 坏 config 不阻塞先验生成，按 anima 兜底
+    model_paths = _resolve_model_paths(body.base_model, family=family)
     _, _, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(
@@ -456,9 +468,12 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
     rdir = _reg_dir(vdir)
     rdir.mkdir(parents=True, exist_ok=True)
 
+    from ....domain.common import FAMILY_SAMPLING
     from ....services.runtime.xformers import detect_attention_backend
+    sampling = FAMILY_SAMPLING[family]
     cfg = RegAiConfig(
         **model_paths,
+        model_family=family,
         train_dir=str(train),
         reg_dir=str(rdir),
         excluded_tags=list(body.excluded_tags),
@@ -467,8 +482,8 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
         height=body.height,
         steps=body.steps,
         cfg_scale=body.cfg_scale,
-        sampler_name=body.sampler_name,
-        scheduler=body.scheduler,
+        sampler_name=body.sampler_name or sampling["samplers"][0],
+        scheduler=body.scheduler or sampling["schedulers"][0],
         seed=body.seed,
         incremental=body.incremental,
         mixed_precision=body.mixed_precision,
@@ -649,16 +664,19 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
     """
     project, ver = _project_and_version_or_404(pid, vid)
     psf = sorted(version_config.PROJECT_SPECIFIC_FIELDS)
-    psd = {
-        **version_config.project_specific_overrides(project, ver),
-        **model_downloader.default_paths_for_new_version(),
-    }
+
+    def _psd(family: str) -> dict[str, Any]:
+        return {
+            **version_config.project_specific_overrides(project, ver),
+            **model_downloader.default_paths_for_new_version(family=family),
+        }
+
     if not version_config.has_version_config(project, ver):
         return {
             "has_config": False,
             "config": None,
             "project_specific_fields": psf,
-            "project_specific_defaults": psd,
+            "project_specific_defaults": _psd("anima"),
         }
     try:
         cfg, dropped, defaulted = version_config.read_version_config_with_warnings(project, ver)
@@ -668,6 +686,8 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
             code="version.config_invalid", details={"reason": str(exc)},
             http_status=422,
         ) from exc
+    # 路径 hint 跟随 version 已声明的族（krea2 版本不该收到 anima 路径预填）
+    psd = _psd(str(cfg.get("model_family") or "anima"))
     return {
         "has_config": True,
         "config": cfg,
@@ -799,6 +819,17 @@ def enqueue_version_training(
             code="version.config_missing", http_status=400,
         )
     cfg_path = version_config.version_config_path(project, ver)
+    # auto_sync_paths=ON：入队时把全局模型路径同步落盘——trainer 子进程
+    # 直接读 yaml（不经 studio 读取面的 overlay），全局 selected /
+    # selected_te 切换后训练必须用当前值（Train 页字段锁定并承诺
+    # 「自动 · 全局设置」）。OFF 时 read 不 overlay，写回幂等。
+    try:
+        synced = version_config.read_version_config(project, ver)
+        version_config.write_version_config(
+            project, ver, synced, force_project_overrides=True,
+        )
+    except version_config.VersionConfigError:
+        pass  # 坏 config 由下游校验报错，不在此处中断
     scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:

@@ -16,7 +16,7 @@
 import type { LoraEntry, XYAxisType } from '../../../api/client'
 import type { DatasetPick } from './PromptFromDatasetPicker'
 import {
-  DEFAULT_SAMPLER, DEFAULT_SCHEDULER, SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
+  SAMPLER_OPTIONS_BY_FAMILY, SCHEDULER_OPTIONS_BY_FAMILY,
   type SamplerName, type SchedulerName,
 } from './types'
 import type { XYAxisDraft } from './xy'
@@ -56,6 +56,8 @@ export interface GenerateParamsSnapshot {
   schema_version: number
   /** 当时的 mode；回填时按 mode 决定灌 singleLoras 还是 xyLoras + xDraft/yDraft */
   mode: 'single' | 'xy' | 'compare'
+  /** 当时的模型族（多模型 P4-4）；老快照无此字段 → anima */
+  model_family?: 'anima' | 'krea2'
   /** prefs.prompts 原文（未与 datasetPick.tags 合并） */
   prompts: string[]
   negative_prompt: string
@@ -69,6 +71,9 @@ export interface GenerateParamsSnapshot {
   /** 当时选用的底模（官方 variant key 或本地 custom 路径）；null/缺省 = 跟随
    *  设置页默认底模。老快照无此字段，回填到 null（沿用默认）。 */
   base_model?: string | null
+  /** 当时选用的文本编码器 variant（krea2）：'bf16' | 'fp8'；缺省 = 当时
+   *  的默认。展示用；老快照无此字段。 */
+  text_encoder?: 'bf16' | 'fp8'
   /** xy 模式下 daemon 端强制 1，仅 single 有意义 */
   count: number
   seed: number
@@ -141,6 +146,8 @@ export type SnapshotLoraResolver = (snap: SnapshotLora) => Promise<LoraEntry>
  */
 export interface AppliedSnapshot {
   mode: 'single' | 'xy'  // compare 视图回填映射到 xy
+  /** 当时的模型族；老快照缺省 anima */
+  modelFamily: 'anima' | 'krea2'
   prompts: string[]
   negPrompt: string
   width: number
@@ -176,12 +183,18 @@ function mergeTagsIntoFirstPrompt(prompts: string[], tags: string[]): string[] {
 }
 
 /** 快照里的 sampler/scheduler 归并到合法值 —— 老快照缺字段、或外部 PNG 带了
- *  本程序不支持的值（如 euler）时回退默认，而不是把非法值灌进 prefs。 */
-function coerceSampler(v: string | undefined): SamplerName {
-  return (SAMPLER_OPTIONS as readonly string[]).includes(v ?? '') ? (v as SamplerName) : DEFAULT_SAMPLER
+ *  本程序不支持的值时按族回退默认，而不是把非法值灌进 prefs。 */
+function coerceSampler(v: string | undefined, family: 'anima' | 'krea2'): SamplerName {
+  const allowed = SAMPLER_OPTIONS_BY_FAMILY[family] as readonly string[]
+  return allowed.includes(v ?? '')
+    ? (v as SamplerName)
+    : (allowed[0] as SamplerName)
 }
-function coerceScheduler(v: string | undefined): SchedulerName {
-  return (SCHEDULER_OPTIONS as readonly string[]).includes(v ?? '') ? (v as SchedulerName) : DEFAULT_SCHEDULER
+function coerceScheduler(v: string | undefined, family: 'anima' | 'krea2'): SchedulerName {
+  const allowed = SCHEDULER_OPTIONS_BY_FAMILY[family] as readonly string[]
+  return allowed.includes(v ?? '')
+    ? (v as SchedulerName)
+    : (allowed[0] as SchedulerName)
 }
 
 export async function applySnapshot(
@@ -206,16 +219,19 @@ export async function applySnapshot(
     datasetPick = null
   }
 
+  const family: 'anima' | 'krea2' =
+    snap.model_family === 'krea2' ? 'krea2' : 'anima'
   const applied: AppliedSnapshot = {
     mode,
+    modelFamily: family,
     prompts,
     negPrompt: snap.negative_prompt,
     width: snap.width,
     height: snap.height,
     steps: snap.steps,
     cfgScale: snap.cfg_scale,
-    samplerName: coerceSampler(snap.sampler_name),
-    scheduler: coerceScheduler(snap.scheduler),
+    samplerName: coerceSampler(snap.sampler_name, family),
+    scheduler: coerceScheduler(snap.scheduler, family),
     count: snap.count,
     seed: snap.seed,
     baseModel: snap.base_model ?? null,

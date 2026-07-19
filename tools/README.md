@@ -30,12 +30,16 @@ python tools/select_torch_index.py     # 检测到 → 输出 URL；否则静默
 ## 模型 / 环境 setup
 
 ### `download_models.py`
-下载 Anima 训练所需的全部模型 + tokenizer（CLI 薄壳，逻辑在 `studio.services.model_downloader`，跟 Studio 设置页 UI 共用）。
+下载 Anima / Krea 2 训练所需模型 + tokenizer（CLI 薄壳，逻辑在 `studio.services.model_downloader`，跟 Studio 设置页 UI 共用）。
 
 ```
 python tools/download_models.py
+python tools/download_models.py --family krea2
+python tools/download_models.py --family krea2 --variant turbo
+python tools/download_models.py --family krea2 --variant raw_fp8    # 官方 fp8（turbo_fp8 同理）
 python tools/download_models.py --variant preview3-base
-python tools/download_models.py --no-mirror              # 不走 ModelScope 镜像
+python tools/download_models.py --no-mirror              # 强制 HF 官方源
+python tools/download_models.py --modelscope             # 走魔搭社区（ModelScope）
 python tools/download_models.py --skip-main --skip-vae
 python tools/download_models.py --output /data/anima
 ```
@@ -53,7 +57,7 @@ python tools/install_flash_attn.py --force    # 已装也重装
 退出码：0 成功 / 1 安装失败 / 2 环境不支持。
 
 ### `validate_local_models.py`
-离线验证本地模型可正常加载（设 `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`，分别测 T5 tokenizer / Qwen tokenizer + model）。默认从 `tools/models/` 找权重。
+离线验证本地模型可正常加载（设 `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`，分别测 T5 tokenizer / Qwen tokenizer + model；Anima 族口径，Krea 2 的 Qwen3-VL 不在覆盖内）。默认从 `tools/models/` 找权重。
 
 ```
 python tools/validate_local_models.py

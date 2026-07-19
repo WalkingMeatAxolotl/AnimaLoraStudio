@@ -32,6 +32,11 @@
   --accent-soft:   #fbe8de;
   --accent-fg:     #ffffff;
 
+  /* 列表选中行高亮（候选卡 / LLM 预设列表等 radio 行）。亮色跟随 accent
+   * 系原值；暗色单独调暗降饱和（accent-soft 的徽章/焦点环用途不受影响）。 */
+  --row-selected-bg:     var(--accent-soft);
+  --row-selected-border: var(--accent);
+
   --ok:    #2d7a4f;
   --ok-soft: #d6ebde;
   --warn:  #b97a16;
@@ -113,6 +118,10 @@
   --accent-hover:  #f78a5e;
   --accent-soft:   #3a1f12;
   --accent-fg:     #15140f;
+
+  /* 选中行在暗色下压暗降饱和：亮橙边框太扎眼（用户反馈），底色掺灰。 */
+  --row-selected-bg:     #2c211a;
+  --row-selected-border: #8a563b;
 
   --ok: #5fc78c;       --ok-soft: #1a3328;
   --warn: #e0a23a;     --warn-soft: #3a2a10;
@@ -261,6 +270,48 @@ select option:checked {
 .dot-err { background: var(--err); }
 .dot-running { background: var(--accent); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* pill radio — 互斥选项组（更新通道 / 显示设置的语言·主题·密度等）。
+ * 原 version-section.css 的 .vs-channel-radio 泛化为通用类。
+ * 布局：固定 120px 等宽；圆点绝对定位钉在左端，文字相对按钮居中
+ * （左右留白对称），不随文字长短漂移。 */
+.pill-radio {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: 120ms;
+}
+.pill-radio:hover:not(.on) {
+  background: var(--bg-overlay);
+}
+.pill-radio.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.pill-radio .pill-radio-dot {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+.pill-radio.on .pill-radio-dot {
+  background: currentColor;
+}
 
 .input {
   background: var(--bg-surface);

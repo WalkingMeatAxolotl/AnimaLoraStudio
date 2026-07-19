@@ -83,7 +83,7 @@ SOAP（Vyas et al. 2024, [arxiv 2409.11321](https://arxiv.org/abs/2409.11321)）
 
 ## 选哪个
 
-- **没头绪，想稳的**：AdamW + cosine_with_warmup，跟着 Anima 默认 preset 走
+- **没头绪，想稳的**：AdamW + cosine_with_warmup，跟着默认 preset 走（两族通用）
 - **显存吃紧 + 不想动 lr**：Lion，按上面换算把 lr 降 3×
 - **省 state 显存但想保住 AdamW 式稳定收敛**：came，lr 直接用 AdamW 量级
 - **不想调 lr + 不想踩 Schedule-Free 坑**：Prodigy

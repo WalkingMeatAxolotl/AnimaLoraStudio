@@ -127,30 +127,91 @@ def test_cli_alias_overrides_default_flag() -> None:
 
 
 # ---------------------------------------------------------------------------
-# YAML 合并语义
+# YAML 合并语义（刀 1 / R1：suppress parser + namespace_from_config）
 # ---------------------------------------------------------------------------
 
 
-def test_yaml_overrides_when_value_is_default() -> None:
-    parser = bridge.build_parser(_Sample, add_config_arg=False)
-    args = parser.parse_args([])
-    # count 仍是默认 3，YAML 应当覆盖
-    bridge.merge_yaml_into_namespace(args, {"count": 99}, _Sample)
-    assert args.count == 99
+def _sparse(argv: list[str], model_cls=_Sample) -> "bridge.argparse.Namespace":
+    parser = bridge.build_parser(model_cls, add_config_arg=False, suppress_defaults=True)
+    return parser.parse_args(argv)
 
 
-def test_cli_wins_when_user_set_non_default() -> None:
-    parser = bridge.build_parser(_Sample, add_config_arg=False)
-    args = parser.parse_args(["--count", "7"])
-    bridge.merge_yaml_into_namespace(args, {"count": 99}, _Sample)
-    assert args.count == 7  # CLI 优先
+def test_suppress_parser_yields_only_explicit_keys() -> None:
+    """suppress_defaults=True 时 namespace 只含用户显式传入的键。"""
+    assert vars(_sparse([])) == {}
+    ns = _sparse(["--count", "7", "--no-enabled"])
+    assert vars(ns) == {"count": 7, "enabled": False}
+
+
+def test_yaml_fills_fields_cli_did_not_set() -> None:
+    args = _sparse([])
+    merged = bridge.namespace_from_config(args, {"count": 99}, _Sample)
+    assert merged.count == 99
+    # 未出现在 CLI / YAML 的字段落回 schema 默认
+    assert merged.name == "alpha" and merged.enabled is True
+
+
+def test_cli_wins_over_yaml() -> None:
+    args = _sparse(["--count", "7"])
+    merged = bridge.namespace_from_config(args, {"count": 99}, _Sample)
+    assert merged.count == 7  # CLI 优先
+
+
+def test_cli_explicit_default_value_still_wins() -> None:
+    """显式传「恰好等于默认值」的值也算显式 —— 旧「值==默认值」近似的盲区，
+    SUPPRESS 探测下 CLI 精确优先。"""
+    args = _sparse(["--count", "3"])  # 3 == schema 默认
+    merged = bridge.namespace_from_config(args, {"count": 99}, _Sample)
+    assert merged.count == 3
 
 
 def test_yaml_unknown_keys_ignored() -> None:
-    parser = bridge.build_parser(_Sample, add_config_arg=False)
-    args = parser.parse_args([])
-    bridge.merge_yaml_into_namespace(args, {"this_does_not_exist": 123}, _Sample)
-    assert not hasattr(args, "this_does_not_exist")
+    merged = bridge.namespace_from_config(
+        _sparse([]), {"this_does_not_exist": 123}, _Sample
+    )
+    assert not hasattr(merged, "this_does_not_exist")
+
+
+def test_non_schema_namespace_keys_pass_through() -> None:
+    """CLI-only 开关（--interactive 等非 schema 键）原样带回输出 namespace。"""
+    args = _sparse([])
+    args.interactive = True
+    args.monitor_state_file = None
+    merged = bridge.namespace_from_config(args, {"count": 5}, _Sample)
+    assert merged.interactive is True
+    assert merged.monitor_state_file is None
+    assert merged.count == 5
+
+
+def test_namespace_from_config_runs_validators() -> None:
+    """合并结果整体过 pydantic —— 互斥等非法组合 fail-fast，不再静默放行。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="loss_weighting"):
+        bridge.namespace_from_config(
+            _sparse([], TrainingConfig),
+            {"infonoise_enabled": True, "loss_weighting": "min_snr"},
+            TrainingConfig,
+        )
+
+
+def test_krea2_pruned_yaml_gets_family_defaults() -> None:
+    """shuffle_caption 拒训 bug 的回归测试（docs/design/config-pipeline-refactor.md §1）：
+
+    krea2 落盘 config 的 shuffle_caption 被 show_when 裁剪不落盘；trainer 加载
+    缺键必须走 FAMILY_CONFIG_DEFAULTS overlay 落回 False（krea2 语义），而不是
+    argparse 裸默认 True（anima 语义）——否则能力校验拒训。
+    """
+    from studio.domain.common import capability_violations
+    from studio.domain.config_prune import prune_inactive_fields
+
+    pruned = prune_inactive_fields(
+        TrainingConfig(model_family="krea2").model_dump(mode="python")
+    )
+    assert "shuffle_caption" not in pruned  # 前提：裁剪确实裁掉了它
+    merged = bridge.namespace_from_config(_sparse([], TrainingConfig), pruned, TrainingConfig)
+    assert merged.shuffle_caption is False
+    assert capability_violations("krea2", vars(merged)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +227,7 @@ def test_training_config_builds_without_collisions() -> None:
     assert hasattr(ns, "config")
     # 抽样字段都能解析出正确类型
     assert ns.lora_rank == 32
-    assert ns.lora_type == "lokr"
+    assert ns.lora_type == "lora"
     assert ns.cache_latents is True
     assert ns.vae_cache_batch_size == 0
     assert ns.sample_prompts == []
@@ -269,15 +330,16 @@ def test_training_config_cli_cosine_with_warmup() -> None:
 
 def test_training_config_yaml_round_trip() -> None:
     """走完 CLI → YAML 合并这一条路径，确认 yaml_dict 字段都能被读进 args。"""
-    parser = bridge.build_parser(TrainingConfig)
-    args = parser.parse_args([])
-    yaml_data = {
-        "lora_rank": 16,
-        "epochs": 3,
-        "optimizer_type": "prodigy",
-        "prodigy_d_coef": 0.5,
-    }
-    bridge.merge_yaml_into_namespace(args, yaml_data, TrainingConfig)
+    args = bridge.namespace_from_config(
+        _sparse([], TrainingConfig),
+        {
+            "lora_rank": 16,
+            "epochs": 3,
+            "optimizer_type": "prodigy",
+            "prodigy_d_coef": 0.5,
+        },
+        TrainingConfig,
+    )
     assert args.lora_rank == 16
     assert args.epochs == 3
     assert args.optimizer_type == "prodigy"
@@ -313,17 +375,18 @@ def test_training_config_cli_ppsf() -> None:
 
 def test_training_config_yaml_ppsf() -> None:
     """PPSF 字段能通过 YAML 合并到 namespace。"""
-    parser = bridge.build_parser(TrainingConfig)
-    args = parser.parse_args([])
-    yaml_data = {
-        "optimizer_type": "prodigy_plus_schedulefree",
-        "ppsf_d_coef": 0.3,
-        "ppsf_beta1": 0.9,
-        "ppsf_beta2": 0.99,
-        "ppsf_prodigy_steps": 1000,
-        "ppsf_use_stableadamw": True,
-    }
-    bridge.merge_yaml_into_namespace(args, yaml_data, TrainingConfig)
+    args = bridge.namespace_from_config(
+        _sparse([], TrainingConfig),
+        {
+            "optimizer_type": "prodigy_plus_schedulefree",
+            "ppsf_d_coef": 0.3,
+            "ppsf_beta1": 0.9,
+            "ppsf_beta2": 0.99,
+            "ppsf_prodigy_steps": 1000,
+            "ppsf_use_stableadamw": True,
+        },
+        TrainingConfig,
+    )
     assert args.optimizer_type == "prodigy_plus_schedulefree"
     assert args.ppsf_d_coef == 0.3
     assert args.ppsf_beta1 == 0.9

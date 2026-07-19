@@ -160,11 +160,16 @@ def run(ctx: TrainingContext) -> None:
                 aspect_ratio_limit=ar_limit,
                 **native_kwargs,
             )
-            ctx.reg_dataset = reg_base
-            reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
-            cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
-            weight_info = f", weight={reg_weight}" if reg_weight != 1.0 else ""
-            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
+            if len(reg_base) == 0:
+                # 空正则集不接线：包 CachedLatentDataset 会打出"所有 0 张图像已
+                # 缓存"迷惑日志，进 MergedDataset 也是纯空转。
+                logger.info(f"正则数据集为空（无有效图片），已跳过: {reg_data_dir}")
+            else:
+                ctx.reg_dataset = reg_base
+                reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
+                cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
+                weight_info = f", weight={reg_weight}" if reg_weight != 1.0 else ""
+                logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
 
     # 缓存 VAE latents（在 repeat 之前）
     ctx.use_cached = getattr(args, "cache_latents", False)
@@ -180,6 +185,7 @@ def run(ctx: TrainingContext) -> None:
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
             encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
             encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
+            label="训练集",
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
         ctx.reg_dataset = CachedLatentDataset(
@@ -189,6 +195,7 @@ def run(ctx: TrainingContext) -> None:
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
             encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
             encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
+            label="正则集",
         )
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat

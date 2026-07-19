@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 class TrainingContext:
     # ─── bootstrap_phase 填充 ───
     args: Any  # argparse.Namespace
+    family: Any = None  # ModelFamily（多模型 PR-2b；resolve_family(args) 产物）
     config_path: Optional[Path] = None
     config_dir: Optional[Path] = None
     device: str = "cpu"
@@ -45,6 +46,10 @@ class TrainingContext:
     # 时 env 不存在 → None → state_dir() fallback 到 task_unknown 子目录。
     # 注意：跟 progress bar 的 task_id 字段（line ~80）是两回事，故意起不同名字。
     lora_task_id: Optional[int] = None
+    # task 档案根（studio_data/tasks/<id>/）。bootstrap 从 --monitor-state-file
+    # 上跳两层推出；纯 CLI 没传 → None。samples/ state/ 和 prompt 文本缓存
+    # （.text-cache/）都挂在这个根下。
+    task_archive_dir: Optional[Path] = None
     # ADR 0006 Addendum 2：auto_epoch_state.pt 落 task 档案（studio_data/tasks/
     # <id>/state/）。bootstrap 从 --monitor-state-file 推出档案根后填充（跟
     # sample_dir 同一约定）；纯 CLI 没传 → None → auto_state_dir() fallback
@@ -55,9 +60,9 @@ class TrainingContext:
     repo_root: Optional[Path] = None
     model: Any = None
     vae: Any = None
-    qwen_model: Any = None
-    qwen_tok: Any = None
-    t5_tok: Any = None
+    # 文本编码器持有物（family 私有结构，Anima=(qwen_model, qwen_tok, t5_tok)；
+    # 对循环 opaque —— 多模型 PR-2b D15，替代原 qwen_model/qwen_tok/t5_tok 三字段）
+    text_stack: Any = None
     injector: Any = None
 
     # ─── dataset_phase 填充 ───
@@ -79,7 +84,7 @@ class TrainingContext:
     scheduler: Any = None
     timestep_sampler: Any = None    # training.timestep_samplers.TimestepSamplerProtocol
     loss_fn: Optional["LossProtocol"] = None
-    sra_aligner: Any = None         # training.sra_align.SRAAligner (optional)
+    sra_aligner: Any = None         # training.families.anima.sra_align.SRAAligner (optional)
 
     # ─── resume_phase 填充 ───
     global_step: int = 0

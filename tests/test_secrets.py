@@ -740,3 +740,149 @@ def test_wandb_current_preset_falls_back_when_missing(secrets_file: Path) -> Non
     s = secrets.load()
     assert s.wandb.current_preset == "default"
     assert [p.id for p in s.wandb.presets] == ["default", "team_b"]
+
+
+# ---------------------------------------------------------------------------
+# update() 与 models 读兼容键（多模型 P4-5）
+# ---------------------------------------------------------------------------
+
+
+def test_update_new_style_selected_not_clobbered_by_stale_compat(secrets_file: Path) -> None:
+    """写新结构 selected.{family} 不被 merge base 里过期的 computed 读兼容键
+    （selected_anima）覆盖——修掉 Settings 双写路径（pickAnima 写 legacy /
+    pickKrea2 写新键）的根因。"""
+    secrets.update({"models": {"selected": {"anima": "1.0", "krea2": "raw"}}})
+    updated = secrets.update({"models": {"selected": {"anima": "preview2"}}})
+    assert updated.models.selected["anima"] == "preview2"
+    # deep-merge：另一族的 selected 不丢
+    assert updated.models.selected["krea2"] == "raw"
+    # 读兼容面跟随新值
+    assert updated.models.selected_anima == "preview2"
+
+
+def test_update_incoming_legacy_key_still_wins(secrets_file: Path) -> None:
+    """老客户端仍然只发 legacy 键：真正入站的 selected_anima 照旧生效。"""
+    secrets.update({"models": {"selected": {"anima": "1.0"}}})
+    updated = secrets.update({"models": {"selected_anima": "preview3-base"}})
+    assert updated.models.selected["anima"] == "preview3-base"
+
+
+# ---------------------------------------------------------------------------
+# model_sources — 统一模型来源候选（docs/design/model-source-unification.md）
+# ---------------------------------------------------------------------------
+
+
+def test_model_sources_default_empty(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.model_sources == {}
+
+
+def test_legacy_wd14_model_ids_migrate_to_sources(secrets_file: Path) -> None:
+    """旧盘文件的非默认 model_ids 项 → download 候选（一次 load 即迁移）。"""
+    secrets_file.write_text(
+        json.dumps({"wd14": {"model_ids": [
+            *secrets.DEFAULT_WD14_MODELS, "Custom/tagger-a", "Custom/tagger-b",
+        ]}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    cands = s.model_sources["wd14"]
+    assert [(c.kind, c.repo) for c in cands] == [
+        ("download", "Custom/tagger-a"), ("download", "Custom/tagger-b"),
+    ]
+    # 兼容面重建：默认 4 项在前 + download 候选在后
+    assert list(s.wd14.model_ids) == [
+        *secrets.DEFAULT_WD14_MODELS, "Custom/tagger-a", "Custom/tagger-b",
+    ]
+
+
+def test_legacy_models_custom_migrate_to_sources(secrets_file: Path) -> None:
+    """旧盘文件的 models.custom 本地路径 → local 候选，custom 兼容面保留写盘。"""
+    secrets_file.write_text(
+        json.dumps({"models": {"custom": {"anima": ["D:/w/a.safetensors"]}}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    cands = s.model_sources["anima"]
+    assert [(c.kind, c.path) for c in cands] == [("local", "D:/w/a.safetensors")]
+    assert s.models.custom == {"anima": ["D:/w/a.safetensors"]}
+    # 写盘后旧版本仍能读到 custom（回滚安全）
+    secrets.save(s)
+    on_disk = json.loads(secrets_file.read_text(encoding="utf-8"))
+    assert on_disk["models"]["custom"] == {"anima": ["D:/w/a.safetensors"]}
+    assert on_disk["wd14"]["model_ids"] == list(secrets.DEFAULT_WD14_MODELS)
+
+
+def test_eval_custom_model_name_backfills_candidate(secrets_file: Path) -> None:
+    """eval 选中值非默认且不在候选 → 统一不变量自动补一条 download 候选。"""
+    secrets.update({"eval_metrics": {"clip_model_name": "laion/CLIP-ViT-H-14"}})
+    s = secrets.load()
+    cands = s.model_sources["eval_clip"]
+    assert [(c.kind, c.repo) for c in cands] == [("download", "laion/CLIP-ViT-H-14")]
+    # 选中值字段本身不动（兼容纪律 1）
+    assert s.eval_metrics.clip_model_name == "laion/CLIP-ViT-H-14"
+
+
+def test_local_path_selected_backfills_local_candidate(secrets_file: Path) -> None:
+    """选中值是绝对路径 → 补 local 候选而非 download。"""
+    secrets.update({"eval_metrics": {"dino_model_name": "D:/models/dino-local"}})
+    s = secrets.load()
+    cands = s.model_sources["eval_dino"]
+    assert [(c.kind, c.path) for c in cands] == [("local", "D:/models/dino-local")]
+
+
+def test_cltagger_fork_repo_backfills_candidate_with_extra(secrets_file: Path) -> None:
+    """cltagger fork repo（旧镜像覆盖用法）→ 候选带当前双文件相对路径。"""
+    secrets.update({"cltagger": {"model_id": "someone/cl_tagger_fork"}})
+    s = secrets.load()
+    cands = s.model_sources["cltagger"]
+    assert len(cands) == 1
+    assert cands[0].kind == "download"
+    assert cands[0].repo == "someone/cl_tagger_fork"
+    assert cands[0].extra == {
+        "model_path": "cl_tagger_1_02/model.onnx",
+        "tag_mapping_path": "cl_tagger_1_02/tag_mapping.json",
+    }
+
+
+def test_model_sources_update_removal_not_resurrected(secrets_file: Path) -> None:
+    """新 UI 移除候选（只 PUT model_sources）不被 merge base 的兼容重建键复活。"""
+    secrets.update({"model_sources": {"wd14": [
+        {"kind": "download", "repo": "Custom/tagger-a"},
+        {"kind": "download", "repo": "Custom/tagger-b"},
+    ]}})
+    s = secrets.update({"model_sources": {"wd14": [
+        {"kind": "download", "repo": "Custom/tagger-b"},
+    ]}})
+    assert [c.repo for c in s.model_sources["wd14"]] == ["Custom/tagger-b"]
+    assert "Custom/tagger-a" not in s.wd14.model_ids
+    # 持久化后再 load 也不复活
+    s2 = secrets.load()
+    assert [c.repo for c in s2.model_sources["wd14"]] == ["Custom/tagger-b"]
+
+
+def test_model_sources_local_candidates_survive_legacy_model_ids_put(
+    secrets_file: Path,
+) -> None:
+    """老客户端 PUT wd14.model_ids 只重建 download 集，不动 local 候选。"""
+    secrets.update({"model_sources": {"wd14": [
+        {"kind": "local", "path": "D:/models/wd14-local"},
+        {"kind": "download", "repo": "Custom/tagger-a"},
+    ]}})
+    s = secrets.update({"wd14": {"model_ids": list(secrets.DEFAULT_WD14_MODELS)}})
+    kinds = [(c.kind, c.repo or c.path) for c in s.model_sources["wd14"]]
+    assert ("local", "D:/models/wd14-local") in kinds
+    assert all(c.repo != "Custom/tagger-a" for c in s.model_sources["wd14"])
+
+
+def test_model_sources_round_trip_persistence(secrets_file: Path) -> None:
+    secrets.update({"model_sources": {"upscaler": [
+        {"kind": "download", "repo": "Kim2091/UltraSharp", "filename": "4x-UltraSharp.pth"},
+        {"kind": "local", "path": "D:/up/x.pth"},
+    ]}})
+    s = secrets.load()
+    cands = s.model_sources["upscaler"]
+    assert cands[0].kind == "download"
+    assert cands[0].filename == "4x-UltraSharp.pth"
+    assert cands[1].kind == "local"
+    assert cands[1].path == "D:/up/x.pth"

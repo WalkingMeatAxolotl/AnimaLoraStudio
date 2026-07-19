@@ -522,19 +522,19 @@ export function VersionSection() {
           type="button"
           role="radio"
           aria-checked={channelPref === 'stable'}
-          className={`vs-channel-radio${channelPref === 'stable' ? ' on' : ''}`}
+          className={`pill-radio${channelPref === 'stable' ? ' on' : ''}`}
           onClick={() => { if (channelPref !== 'stable') void handleSwitchChannel('stable') }}
         >
-          <span className="vs-channel-dot" />{t('settings.stable')}
+          <span className="pill-radio-dot" />{t('settings.stable')}
         </button>
         <button
           type="button"
           role="radio"
           aria-checked={channelPref === 'dev'}
-          className={`vs-channel-radio${channelPref === 'dev' ? ' on' : ''}`}
+          className={`pill-radio${channelPref === 'dev' ? ' on' : ''}`}
           onClick={() => { if (channelPref !== 'dev') void handleSwitchChannel('dev') }}
         >
-          <span className="vs-channel-dot" />{t('settings.devBuild')}
+          <span className="pill-radio-dot" />{t('settings.devBuild')}
         </button>
         <span className="vs-channel-hint">{t('settings.channelUiOnly')}</span>
       </div>

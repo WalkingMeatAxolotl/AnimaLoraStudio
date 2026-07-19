@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -8,7 +9,9 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors import safe_open
 from safetensors.torch import load_file
+from training.families.anima.preset import ANIMA_PRESET
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,7 +36,7 @@ def test_ortho_adapter_injects_and_saves_plain_lora(tmp_path: Path) -> None:
     from utils.ortho_adapter import OrthoLoRAAdapter
 
     model = MockDiT()
-    adapter = OrthoLoRAAdapter(rank=4, alpha=4)
+    adapter = OrthoLoRAAdapter(preset=ANIMA_PRESET, rank=4, alpha=4)
     injected = adapter.inject(model)
 
     assert len(injected) == 4
@@ -44,12 +47,20 @@ def test_ortho_adapter_injects_and_saves_plain_lora(tmp_path: Path) -> None:
     assert out.shape == x.shape
 
     path = tmp_path / "ortho.safetensors"
+    adapter.metadata_extra = {
+        "model_family": "krea2",
+        "preset": "krea2_full",
+    }
     adapter.save(path)
     sd = load_file(str(path))
 
     assert "lora_unet_q_proj.lora_down.weight" in sd
     assert "lora_unet_q_proj.lora_up.weight" in sd
     assert not any(key.endswith(".S_p") or key.endswith(".S_q") for key in sd)
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        args = json.loads(handle.metadata()["ss_network_args"])
+    assert args["model_family"] == "krea2"
+    assert args["preset"] == "krea2_full"
 
 
 def test_ortho_distilled_lora_matches_runtime_delta() -> None:
@@ -81,7 +92,7 @@ def test_ortho_tlora_mask_matches_source_formula() -> None:
     from utils.ortho_adapter import OrthoLoRAAdapter
 
     model = MockDiT(d=8)
-    adapter = OrthoLoRAAdapter(
+    adapter = OrthoLoRAAdapter(preset=ANIMA_PRESET, 
         rank=8,
         alpha=8,
         use_timestep_mask=True,
@@ -121,7 +132,7 @@ def test_tlora_builder_defaults_to_plain_lycoris_tlora() -> None:
         tlora_alpha_rank_scale=1.0,
         tlora_use_ortho=False,
     )
-    adapter = build_adapter(args)
+    adapter = build_adapter(args, preset=ANIMA_PRESET)
 
     assert isinstance(adapter, AnimaLycorisAdapter)
     assert adapter.algo == "tlora"
@@ -143,7 +154,7 @@ def test_tlora_builder_uses_ortho_timestep_mask_when_enabled() -> None:
         tlora_use_ortho=True,
     )
     model = MockDiT()
-    adapter = build_adapter(args)
+    adapter = build_adapter(args, preset=ANIMA_PRESET)
     adapter.inject(model)
 
     adapter.on_step_begin(StepContext(0, 10, 0, torch.tensor([1.0]), args))

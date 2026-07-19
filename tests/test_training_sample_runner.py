@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from training import sample_runner
+from training.families.anima import ANIMA_SPEC
 
 
 class FakeImage:
@@ -44,13 +45,16 @@ def _ctx(*, sample_negative_prompt: str = "") -> SimpleNamespace:
         sample_sampler_name="er_sde",
         sample_scheduler="simple",
     )
+    family = SimpleNamespace(
+        spec=ANIMA_SPEC,
+        sample_image=lambda *_args, **_kwargs: FakeImage(),
+    )
     return SimpleNamespace(
         args=args,
+        family=family,
         model=torch.nn.Linear(1, 1),
         vae=object(),
-        qwen_model=object(),
-        qwen_tok=object(),
-        t5_tok=object(),
+        text_stack=(object(), object(), object()),
         optimizer=object(),
         injector=FakeInjector(),
         device="cpu",
@@ -68,9 +72,8 @@ def test_run_sample_preserves_empty_negative_and_passes_seed(monkeypatch, tmp_pa
         records.append(kwargs)
         return FakeImage()
 
-    monkeypatch.setattr(sample_runner, "sample_image", fake_sample_image)
-
     ctx = _ctx(sample_negative_prompt="")
+    ctx.family.sample_image = fake_sample_image
     sample_runner.run_sample(ctx, prompt="1girl", sample_path=tmp_path / "sample.png")
 
     # 对齐 ComfyUI：空负面就是空，不注入隐式默认串
@@ -81,9 +84,8 @@ def test_run_sample_preserves_empty_negative_and_passes_seed(monkeypatch, tmp_pa
 
 def test_run_sample_clears_tlora_timestep_mask_before_sampling(monkeypatch, tmp_path) -> None:
     """#215 T-LoRA：sample 前必须清训练态 mask（merge 冲突解法的回归锚）。"""
-    monkeypatch.setattr(sample_runner, "sample_image", lambda *a, **k: FakeImage())
-
     ctx = _ctx()
+    ctx.family.sample_image = lambda *a, **k: FakeImage()
     sample_runner.run_sample(ctx, prompt="1girl", sample_path=tmp_path / "sample.png")
 
     assert ctx.injector.cleared == 1
@@ -93,9 +95,8 @@ def test_run_sample_logs_failure_and_restores_train_mode(monkeypatch, tmp_path) 
     def fail_sample_image(*_args, **_kwargs):
         raise RuntimeError("sample boom")
 
-    monkeypatch.setattr(sample_runner, "sample_image", fail_sample_image)
-
     ctx = _ctx()
+    ctx.family.sample_image = fail_sample_image
     ctx.model.train()
 
     sample_runner.run_sample(ctx, prompt="1girl", sample_path=tmp_path / "sample.png")

@@ -127,14 +127,17 @@ def run(ctx: TrainingContext) -> None:
     _validate_schedulers()
     _validate_losses()
 
-    # 加载 YAML 配置文件
+    # 加载 YAML 配置文件 + TrainingConfig 归一（刀 1 / R1）。无 yaml 的纯 CLI
+    # 路径同样要走：parse_args 的 sparse namespace 缺 schema 默认值，由
+    # apply_yaml_config 经 pydantic 构造统一补齐（迁移 / 族 overlay / 校验一并生效）
+    config = {}
     if args.config:
         logger.info(f"加载配置文件: {args.config}")
         ctx.config_path = Path(args.config).resolve()
         ctx.config_dir = ctx.config_path.parent
         config = load_yaml_config(args.config)
-        ctx.args = apply_yaml_config(args, config)
-        args = ctx.args
+    ctx.args = apply_yaml_config(args, config)
+    args = ctx.args
 
     # bridge 已为 prefer_json bool 自动产生 --prefer-json / --no-prefer-json，
     # 此处无需再做兼容处理。
@@ -155,6 +158,24 @@ def run(ctx: TrainingContext) -> None:
     if args.interactive or any(not x for x in required):
         ctx.args = prompt_for_args(args)
         args = ctx.args
+
+    # 多模型 PR-2b：族解析 fail-fast（args 定稿后、任何权重加载前；未知
+    # model_family 即死。pause snapshot 已 freeze args → 跨 pause 族一致性免费）
+    # 能力校验不再单独做（刀 1 / R1）：apply_yaml_config 的 TrainingConfig
+    # 构造已跑 _validate_family_capabilities，CLI 直达路径与 Studio 同一防线。
+    from training.families import resolve_family
+
+    ctx.family = resolve_family(args)
+
+    # 审计 #2（设计文档 §10.1）：T-LoRA rank mask 按 batch 均值 timestep 生成，
+    # batch>1 时 per-sample「高噪声低 rank」退化为批均值近似 —— 不拦（硬拦会
+    # 误伤想跑小 batch 的用户），启动期显式提示
+    if getattr(args, "lora_type", "") == "tlora" and int(getattr(args, "batch_size", 1)) > 1:
+        logger.warning(
+            "T-LoRA 与 batch_size=%s 同用：rank mask 按 batch 均值 timestep 生成，"
+            "per-sample 掩码退化为批均值近似；要获得论文行为请用 batch_size=1",
+            args.batch_size,
+        )
 
     # 触发词注入：caption 端 tag_worker 把 trigger 写为第一个 tag，这里同步
     # 注入 sample_prompt(s)，让采样图天然带 trigger。pause snapshot 已 freeze
@@ -197,12 +218,13 @@ def run(ctx: TrainingContext) -> None:
     # 没传 --monitor-state-file（纯 CLI 训练 / 兼容老版本注入路径）退回
     # output_dir/samples，samples.py 仍可在 monitor_dir 周围多候选搜回。
     _msf = getattr(args, "monitor_state_file", None)
-    ctx.sample_dir = (Path(_msf).parent.parent / "samples") if _msf else (ctx.output_dir / "samples")
+    ctx.task_archive_dir = Path(_msf).parent.parent if _msf else None
+    ctx.sample_dir = (ctx.task_archive_dir / "samples") if ctx.task_archive_dir else (ctx.output_dir / "samples")
     ctx.sample_dir.mkdir(parents=True, exist_ok=True)
     # ADR 0006 Addendum 2：auto_epoch_state.pt 同样归 task 档案 —— tasks/<id>/state/，
     # 跟 samples/ 同根。没传 --monitor-state-file（纯 CLI）→ None，
     # ctx.auto_state_dir() fallback 到 output_dir/state/task_<id>/（行为不变）。
-    ctx.task_archive_state_dir = (Path(_msf).parent.parent / "state") if _msf else None
+    ctx.task_archive_state_dir = (ctx.task_archive_dir / "state") if ctx.task_archive_dir else None
     # supervisor 启动训练时通过 env LORA_TASK_ID 注入 queue task id（ADR 0006）。
     # 用于 ctx.state_dir() 计算 per-task state 子目录；env 不存在时 fallback unknown。
     _env_tid = os.environ.get("LORA_TASK_ID")

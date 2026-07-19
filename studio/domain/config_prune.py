@@ -9,61 +9,25 @@
    trigger_word 等），默认值落盘纯属噪音；非默认值（裸 CLI 用户手写覆盖 /
    Tagging 页写入的 trigger_word）照常保留。
 
-runtime 侧的安全性：argparse parser 与默认值同样派生自 TrainingConfig
-（studio/infrastructure/argparse_bridge.py），yaml 缺失的键在
-merge_yaml_into_namespace 后落回同一份 schema 默认值，与显式写默认值等价。
+runtime 侧的安全性（config 管线刀 1 / R1 起）：trainer 加载 yaml 走与 Studio
+同一条 TrainingConfig 构造路径（argparse_bridge.namespace_from_config），缺失
+键经 pydantic 默认值 + FAMILY_CONFIG_DEFAULTS 族 overlay 补齐 —— 与保存端裁剪
+前的读回值逐字段一致。历史教训：旧 merge_yaml_into_namespace 用 argparse 裸
+默认补缺键、不走族 overlay，krea2 上被裁掉的 shuffle_caption 落回 anima 语义
+默认 True 而拒训；裁剪的安全性永远以「trainer 读回 == 保存端读回」为准。
 
 不裁 disable_when —— 命中的字段被前端 reset 到 disable_value，而
 disable_value 可能不等于字段默认值（如 Prodigy 时 lr_scheduler 被钉在
 "none"），裁掉会让 runtime 读回默认值改变行为，所以保留。
 """
-from typing import Any, Mapping
+from typing import Any
 
 from pydantic import BaseModel
 
+# 求值器已下沉 config_rules(零依赖叶子,training 的 validator 也要用,放这边
+# 会与 `config_prune → training` 成环);此处 re-export 保持既有消费方不变。
+from .config_rules import _MISSING, _js_str, eval_show_when  # noqa: F401
 from .training import TrainingConfig
-
-_MISSING = object()
-
-
-def _js_str(value: Any) -> str:
-    """JS `String(v)` 的等价物 —— show_when 比较按前端的字符串化语义。
-
-    差异点：JS 的 true/false 小写；整数值的 float 不带小数点
-    （String(1.0) === "1"，而 Python str(1.0) == "1.0"，training.py 里
-    `timestep_schedule_shift!=1` 依赖这一点）。
-    """
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if value is None:
-        return "null"
-    if value is _MISSING:
-        return "undefined"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
-
-
-def eval_show_when(expr: str | None, values: Mapping[str, Any]) -> bool:
-    """schema.ts evalShowWhen 的逐字镜像：`||` 分支 any、`&&` 合取 all、
-    `==`/`!=` 字符串比较；空表达式与解析不出的表达式都返回 True（failsafe）。"""
-    if not expr:
-        return True
-    branches = [p.strip() for p in expr.split("||") if p.strip()]
-    if len(branches) > 1:
-        return any(eval_show_when(b, values) for b in branches)
-    ands = [p.strip() for p in expr.split("&&") if p.strip()]
-    if len(ands) > 1:
-        return all(eval_show_when(c, values) for c in ands)
-    eq = expr.split("==")
-    if len(eq) == 2:
-        return _js_str(values.get(eq[0].strip(), _MISSING)) == eq[1].strip()
-    ne = expr.split("!=")
-    if len(ne) == 2:
-        return _js_str(values.get(ne[0].strip(), _MISSING)) != ne[1].strip()
-    return True
 
 
 def prune_inactive_fields(

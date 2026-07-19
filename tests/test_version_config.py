@@ -12,6 +12,17 @@ from studio.services.projects import projects, versions
 from studio.services import presets as preset_flow, version_config
 
 
+@pytest.fixture(autouse=True)
+def _fixed_selected(monkeypatch):
+    """隔离真实 secrets：多个断言硬编码官方文件名（krea2-raw-bf16 等），
+    开发机 selected 切成 raw_fp8 / custom 会让 default_paths 变值假红。"""
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "selected": {"anima": "1.0", "krea2": "raw"},
+    }))
+
+
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     dbfile = tmp_path / "studio.db"
@@ -328,6 +339,31 @@ def test_fork_with_toggle_off_respects_preset(env, monkeypatch) -> None:
     _seed_preset(env, "tpl", transformer_path=custom)
     cfg = preset_flow.fork_preset_for_version("tpl", p, v)
     assert cfg["transformer_path"] == custom
+
+
+def test_fork_krea2_preset_syncs_krea2_paths(env, monkeypatch) -> None:
+    """toggle ON + krea2 preset：路径按 preset 声明的族解析，不再覆成 anima 值。
+
+    回归保护（多模型 P4-1）：派发化之前这里无条件发 anima 路径——krea2 版本
+    一「换预设」，model_family: krea2 + anima transformer 的坏 config 就落盘了。
+    """
+    from studio.services import models as model_downloader
+    monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: True)
+    p, v = _make_pv(env)
+    # krea2 preset 必须是自洽的族内值：shuffle_caption 关（anima-only 能力）、
+    # sampler/scheduler 用族白名单值（跨族值在 P4-2 起报错而非静默改写）
+    _seed_preset(env, "tpl", model_family="krea2", shuffle_caption=False,
+                 sample_sampler_name="euler", sample_scheduler="simple",
+                 transformer_path=_custom_path())
+    cfg = preset_flow.fork_preset_for_version("tpl", p, v)
+    assert cfg["model_family"] == "krea2"
+    expected = _normalize_default(
+        model_downloader.default_paths_for_new_version(family="krea2")
+        ["transformer_path"]
+    )
+    assert _normalize_default(cfg["transformer_path"]) == expected
+    assert cfg["transformer_path"].endswith("krea2-raw-bf16.safetensors")
+    assert "Qwen_Qwen3-VL-4B-Instruct" in cfg["text_encoder_path"]
 
 
 def test_save_as_preset_toggle_on_clears_model_paths(env, monkeypatch) -> None:

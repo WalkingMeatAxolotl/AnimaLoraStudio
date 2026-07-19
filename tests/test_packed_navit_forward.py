@@ -19,8 +19,8 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("xformers")
 
-from modeling.anima_modeling import Anima
-from modeling.cosmos_predict2_modeling import set_xformers_enabled
+from modeling.anima.anima_modeling import Anima
+from modeling.anima.cosmos_predict2_modeling import set_xformers_enabled
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="needs CUDA + xformers"

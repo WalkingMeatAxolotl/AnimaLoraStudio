@@ -348,11 +348,16 @@
       },
       "sampler": {
         "erSde": "ER SDE",
-        "dpmpp3mSde": "DPM++ 3M SDE"
+        "dpmpp3mSde": "DPM++ 3M SDE",
+        "euler": "Euler"
       },
       "scheduler": {
         "simple": "Simple",
         "sgmUniform": "SGM Uniform"
+      },
+      "modelFamily": {
+        "anima": "Anima",
+        "krea2": "Krea 2"
       }
     },
     "disableHints": {
@@ -368,6 +373,7 @@
       "infonoise_enabled": "Reset noise_enhancement / loss_weighting / loss_type / schedule_shift to defaults to enable (schema mutex)"
     },
     "descriptions": {
+      "model_family": "Model family. Decides which model implementation training uses; other fields show/hide by family capability. Switching recalculates model paths and resets family-specific defaults",
       "transformer_path": "Main diffusion model weights (.safetensors)",
       "vae_path": "VAE weights (.safetensors)",
       "text_encoder_path": "Qwen text encoder directory",
@@ -386,7 +392,7 @@
       "caption_comfy_encoding": "Encode captions the ComfyUI way (same pipeline as test generation; recommended)",
       "cache_latents": "Cache VAE latents to speed up training",
       "vae_cache_batch_size": "VAE latent cache encoding batch size; 0 = follow training batch size, set to 1 if VRAM is tight",
-      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters; ortho: orthogonal parameterization, very few trainable parameters, resists overfitting, suited to small-dataset character/subject training; tlora: rank shrinks as noise increases, built to prevent overfitting in single-/few-image subject personalization",
+      "lora_type": "Adapter algorithm. lora: classic low-rank, general purpose (default); lokr: Kronecker factorization, smallest parameter count; loha: Hadamard product, higher expressiveness but more parameters; ortho: orthogonal parameterization, very few trainable parameters, resists overfitting, suited to small-dataset character/subject training; tlora: rank shrinks as noise increases, built to prevent overfitting in single-/few-image subject personalization",
       "lora_rank": "Rank: larger = more capacity but higher parameter/VRAM cost and overfit risk; smaller = leaner but underfits more easily. Common 8/16/32/64",
       "lora_alpha": "Alpha: LoRA scaling factor; larger = stronger LoRA effect. Usually equal to rank; when rs_lora is enabled, often set to √rank",
       "lokr_factor": "LoKr factorization factor: larger = stronger compression, fewer parameters; smaller = more parameters. Default 8 suits most cases",
@@ -442,7 +448,7 @@
       "noise_enhancement_type": "Noise augmentation (default none). offset adds per-sample DC bias to noise; pyramid stacks low-frequency noise at multiple scales. Both alter low-frequency components through different mechanisms; mutually exclusive to prevent stacking. LoRA training defaults to none",
       "noise_offset": "DC bias strength (0-0.2, 0=off). Shifts noise mean away from 0, giving the model exposure to extreme brightness scenes (pure black / pure white / high contrast). Typical range 0.05-0.1; below 0.05 the noise is nearly identical to baseline, above 0.1 the initial loss rises substantially",
       "pyramid_noise_iters": "Number of pyramid noise levels (0-6, 0=off). Each level injects at spatial // 2^(k+1). Effective strength is controlled by pyramid_noise_discount — iters alone determines which frequency bands are covered; layer count makes little difference when discount is low",
-      "pyramid_noise_discount": "Per-level decay coefficient (0.1-0.9). Key knob for low-frequency strength: anima normalizes overall noise std to 1, so discount sets the low-frequency share. 0.1-0.4 leaves noise close to standard Gaussian after normalization (equivalent to off); 0.5-0.7 significantly alters low-frequency structure",
+      "pyramid_noise_discount": "Per-level decay coefficient (0.1-0.9). Key knob for low-frequency strength: this implementation normalizes overall noise std to 1, so discount sets the low-frequency share. 0.1-0.4 leaves noise close to standard Gaussian after normalization (equivalent to off); 0.5-0.7 significantly alters low-frequency structure",
       "timestep_sampling": "Sampling distribution. logit_normal biases the middle (SD3/Anima default); uniform is equal probability; mode is a single-peak shift; mixed_* blends uniform with a biased end (ratio controlled by timestep_mix_low_prob)",
       "timestep_shift": "Internal distribution shift for logit-normal / mode: >1 biases the high-noise end (coarse structure), <1 biases the low-noise end (details)",
       "timestep_mix_low_prob": "Ratio of samples sent to the biased end in mixed_* modes: 0 = all uniform; typical 0.15-0.30",
@@ -514,52 +520,6 @@
     "textPlaceholder": "Comma / newline separated, auto-sync on blur",
     "sync": "Sync",
     "deleteTag": "Delete {{tag}}"
-  },
-  "llmWorkspace": {
-    "preset": "Preset",
-    "builtin": "Built-in",
-    "selectPreset": "Select preset",
-    "builtinPrefix": "Built-in · ",
-    "dirtySummary": "Modified · <count>{{n}} fields</count> differ from default",
-    "resetBuiltinTitle": "Reset this built-in preset to the program default",
-    "resetBuiltin": "↺ Reset default",
-    "saveAsTitle": "Copy the current preset fields into a new preset",
-    "saveAs": "⎘ Save as…",
-    "newPreset": "+ New Preset",
-    "deletePreset": "✕ Delete",
-    "connection": "Connection",
-    "baseUrlHelp": "May be <code>/v1</code>, <code>/chat/completions</code>, or <code>/responses</code>",
-    "fetchingModels": "Loading…",
-    "fetchModels": "Fetch from server",
-    "modelPlaceholder": "gpt-4.1-mini / qwen-vl-max / local model name",
-    "endpointStyle": "Endpoint style",
-    "testing": "Testing…",
-    "testConnection": "Test connection",
-    "advanced": "Advanced parameters",
-    "sampling": "Sampling parameters",
-    "temperatureHint": "— lower is more stable",
-    "imagePreprocess": "Image preprocessing",
-    "maxSideHint": "px · resize longest side",
-    "imageSizeHint": "Claude and similar services limit images to <limit>5 MB</limit> each. Larger images will be compressed below this value.",
-    "promptTemplate": "Prompt template",
-    "messageSummary": "{{n}} messages · drag to reorder",
-    "output": "Output",
-    "jsonCaption": "JSON caption",
-    "textCaption": "Text caption",
-    "assistTagger": "Assist tagger",
-    "assistOff": "Off",
-    "assistTaggerHelp": "Pre-tags each image with a local tagger and injects the tags into the %TAGS% placeholder in the prompt. Only takes effect when the prompt contains %TAGS%. Pre-tagging uses the WD14 / CLTagger parameters from global Settings (thresholds, blacklist, etc.).",
-    "assistNeedsTags": "Assist tagger is selected, but the prompt has no %TAGS% placeholder — it will not take effect.",
-    "responsesWarning": "⚠️ Responses endpoint only uses system + first user message; other messages are ignored",
-    "secretSavedPlaceholder": "Saved (hidden); enter a new value to overwrite",
-    "presetLabels": {
-      "styleJson": "Style LoRA JSON",
-      "generalJson": "General LoRA JSON",
-      "txtTags": "TXT tag list",
-      "joycaption": "JoyCaption (local vLLM)",
-      "assistJson": "Local tagger assist · JSON",
-      "assistText": "Local tagger assist · Text"
-    }
   },
   "llmMessages": {
     "roleHintSystem": "Instructional · usually written once",
@@ -984,7 +944,7 @@
       "startMigrate": "Start migration",
       "restartNow": "Restart now",
       "modelsRootLabel": "Models root directory",
-      "modelsRootHelp": "Holds downloaded model weights (Anima / VAE / text encoder / tokenizer / WD14, etc.); defaults to models/ in the app root. Changing the location copies existing weights into a models subdirectory of the chosen directory and takes effect immediately (no restart); the original is kept.",
+      "modelsRootHelp": "Stores downloaded model weights (Anima / Krea 2 / VAE / text encoders / tokenizers / WD14, etc.), defaulting to models/ under the app root. Changing it copies existing weights into a models/ subfolder of the chosen directory and takes effect immediately (no restart); original data is kept.",
       "modelsMigrateTitle": "Migrate models root",
       "modelsKeepOriginalNote": "Data at the original location is kept, not deleted. Takes effect immediately after copying — no restart needed.",
       "modelsDoneNote": "Switched to the new models root, effective immediately (no restart). The original data is kept; delete it yourself once verified.",
@@ -1009,7 +969,6 @@
     "downloadStarted": "Started downloading {{name}}",
     "confirmDeletePreset": "Delete preset \"{{label}}\"? This cannot be undone.",
     "confirmResetPreset": "Reset preset \"{{label}}\" to default? Your changes will be lost.",
-    "confirmRemoveLocalModel": "Remove local model \"{{name}}\"? Unregisters only; the file is not deleted.",
     "saved": "Saved",
     "saveFailed": "Save failed",
     "newPresetName": "New preset name",
@@ -1052,7 +1011,6 @@
     "fieldUserId": "User ID",
     "fieldUsername": "Username",
     "fieldAccountType": "Account type",
-    "fieldModelId": "Model ID",
     "boolEnabled": "Enabled",
     "boolDisabled": "Disabled",
     "downloadSourceHelp": "ModelScope is faster for users in China; unmapped models fall back to HuggingFace automatically.",
@@ -1105,56 +1063,47 @@
     "loadingModelCatalog": "Loading model catalog...",
     "wd14CandidateTitle": "{{name}} (candidate models)",
     "wd14CandidateHelp": "{{desc}}. Select it as the current <code>model_id</code>; download missing versions.",
-    "selectWd14ModelId": "Use as current WD14 model_id",
-    "candidateEditor": "Candidate editor (add/remove custom model_id)",
+    "addDownloadCandidate": "Add download",
+    "addLocalCandidate": "Add local file",
+    "removeCandidate": "Remove from list (keeps files)",
+    "removeCandidateShort": "Remove",
+    "localBadge": "local",
+    "candidateAdded": "Added {{name}}",
+    "candidateRemoved": "Removed from list (files kept)",
+    "selectSourceCandidate": "Use as current model",
     "clTaggerVersionTitle": "{{name}} (versions)",
     "repoHelp": "{{desc}}. Repo: <code>{{repo}}</code>",
-    "selectClTaggerVersion": "Use as current CLTagger version",
-    "clTaggerFilesAt": "files",
-    "customRepoAdvanced": "Custom repo (advanced)",
-    "trainingModelsOneClick": "Training models (one-click download)",
+    "animaModels": "Anima models",
+    "krea2Models": "Krea2 models",
     "modelsRoot": "Model root (models_root)",
     "savePathConfig": "Save path config",
     "notModified": "Not modified",
     "savePath": "Save path",
     "trainingParams": "Training parameters",
     "autoSyncPathsLabel": "Auto-configure model paths",
-    "autoSyncPathsHelp": "ON (default / most users): when forking a preset to a version, the 4 model path fields (transformer/vae/text_encoder/t5_tokenizer) are auto-overwritten from Settings; these 4 fields are disabled in preset/project pages. OFF (custom-model users): fork respects the absolute paths stored in the preset; the 4 fields become editable with a picker.",
+    "autoSyncPathsHelp": "ON (default / most users): when forking a preset to a version, the model path fields (transformer / VAE / text encoder, varying by model family) are auto-overwritten from Settings; these fields are disabled in preset/project pages. OFF (custom-model users): fork respects the absolute paths stored in the preset; the fields become editable with a picker.",
     "autoSyncPathsOn": "On · fork auto-syncs global",
     "autoSyncPathsOff": "Off · fork respects preset values",
     "defaultTransformerHelp": "The selected version becomes the default transformer for <strong>new versions</strong>.",
     "downloadLogs": "Download logs ({{n}})",
     "partialFiles": "Partial ({{exists}}/{{total}})",
     "notDownloaded": "Not downloaded",
-    "redownloadTitle": "Already downloaded, click to redownload",
-    "redownload": "↻ Redownload",
     "downloadAction": "⤓ Download",
     "upscalersPreprocess": "Upscalers (preprocess)",
     "availableUpscalers": "Available upscalers",
     "upscalersHelpPath": "Preprocess uses upscaling for small images. Files are stored in <code>{{path}}</code>.",
     "upscalersHelpDefault": "The selected radio item is the default model used by the preprocess page. custom comes from the form below or previous custom downloads.",
-    "selectDefaultPreprocess": "Use as preprocess default",
-    "customDownload": "Custom download",
     "customUpscalerHelpTypes": "Download any <code>.pth</code> / <code>.safetensors</code> upscaler from HuggingFace or ModelScope.",
-    "customUpscalerHelpSources": "Common sources: <code>Kim2091/*</code>, <code>libfishopen/upscaler</code>, <code>licyks/sd-upscaler-models</code>, etc.",
-    "customUpscalerHelpEnable": "After download it appears in the list above (marked custom); select it to enable.",
     "source": "Source",
     "repoId": "Repo ID",
     "upscalerDownloadLogs": "Upscaler download logs",
     "modelRootDefault": "Restored default model root",
     "mainModelSelected": "Default main model switched to {{name}}",
-    "selectDefaultMainModel": "Use as default main model",
     "downloadInProgress": "Downloading...",
     "downloadRequiredFirst": "Not downloaded yet; download it first",
-    "addLocalModel": "＋ Add local model",
-    "localModelAdded": "Added local model {{name}}",
-    "localModelRemoved": "Removed local model",
-    "removeLocalModel": "Remove from the registry; the model file is not deleted.",
-    "removeLocalModelShort": "Remove",
-    "localModelInvalidExt": "Select a .safetensors file",
+    "krea2LicenseNotice": "Downloading and use are subject to the {{license}}",
     "localModelMissing": "File not found",
     "defaultUpscaler": "Default upscaler: {{name}}",
-    "repoAndFilenameRequired": "Repository and filename are required",
     "packageInstalledRestart": "Installed {{pkg}}=={{version}}; restart Studio to apply EP changes",
     "packageInstallFailed": "Package install failed: {{error}}",
     "registerFailed": "Registration failed: {{error}}",
@@ -1168,9 +1117,12 @@
     "hfCustomHint": "Paste self-hosted proxy / sjtug / Tencent mirror, etc.",
     "modelDescriptions": {
       "animaMain": "Cosmos transformer (~4 GB)",
-      "animaVae": "qwen_image_vae (~250 MB)",
+      "animaVae": "qwen_image_vae shared by Anima / Krea2 (~250 MB)",
       "qwen3": "Text encoder (~1.2 GB)",
       "t5Tokenizer": "3 tokenizer files including spiece.model (no weights)",
+      "krea2Main": "Raw training base / Turbo inference base (~26.3 GB each)",
+      "krea2TextEncoder": "Natural-language text encoder (~8.89 GB)",
+      "krea2TextEncoderFp8": "Official fp8-quantized text encoder (~5.24 GB) — optional for test generation, roughly halves weight VRAM",
       "wd14": "SmilingWolf ONNX tagging models",
       "cltagger": "cella110n CLTagger ONNX"
     },
@@ -1273,8 +1225,34 @@
       "desc": "Default: 10 minutes",
       "help": "The generate daemon keeps the model in VRAM after the first run so you can quickly retry with different params. If no new generation arrives within this window, the model is auto-unloaded to free VRAM (next run reloads, ~30-60s). 0 = off, keep the model resident until you manually click \"Free VRAM\". Recommended: 10 minutes.",
       "minutesSuffix": "min",
-      "offHint": "Off: model stays resident until manually freed"
+      "offHint": "Off: model stays resident until manually freed",
+      "taskTimeoutLabel": "Task timeout force-kill (minutes)",
+      "taskTimeoutDesc": "Default 0 = disabled",
+      "taskTimeoutHelp": "Force-kill the generation process when a task exceeds the given duration (freeze safety net: a system-wide paging freeze or GPU hang makes normal cancellation useless — killing the process is the only way out). The task is marked failed; the next generation restarts the process and reloads models automatically. 0 = disabled.",
+      "taskTimeoutOffHint": "Disabled"
     },
+    "vramPolicy": {
+      "title": "VRAM policy",
+      "label": "Test generation VRAM policy",
+      "desc": "Default: release the text encoder after use (krea2)",
+      "help": "How the text encoder and DiT share VRAM during test generation (krea2). Each task pre-encodes all of its prompts into a cache first. Default: release the text encoder right after pre-encoding (zero residency during sampling); switching to a new prompt later reloads it from disk (~3s). Save VRAM: additionally force models to yield to each other during encoding — lowest peak (fp8 base models run on 16GB GPUs). Performance: keep the text encoder resident the whole time — zero wait on prompt changes, suited to large-VRAM GPUs.",
+      "optAuto": "Default (release after use)",
+      "optSaveVram": "Save VRAM",
+      "optPerformance": "Performance (resident)",
+      "ramGuardLabel": "RAM/VRAM guard",
+      "ramGuardDesc": "Budget system RAM and free VRAM against weight file sizes before loading (on by default)",
+      "ramGuardHelp": "Model weights must pass through system RAM (disk → RAM → VRAM) to reach the GPU, so loading temporarily uses RAM roughly equal to the file size. On: before loading, check available RAM and free VRAM against the actual size of the files about to be read, and abort with an error if either falls short — including when another process is holding VRAM (e.g. a leftover generation/training task) — avoiding a system-wide paging freeze. Off: keep loading under pressure, which may make the whole system unresponsive for a long time.",
+      "ramGuardOn": "On",
+      "ramGuardOff": "Off"
+    },
+    "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
+    "deleteAsset": "Delete",
+    "deleteAssetTitle": "Delete the downloaded files (re-download anytime)",
+    "confirmDeleteAsset": "Delete the downloaded files of {{name}}? You can re-download anytime.",
+    "assetDeleted": "Deleted: {{name}}",
+    "teVariantSelected": "Text encoder switched: {{name}}",
+    "selectTeVariant": "Set as default text encoder (shared by training and test generation)",
+    "teVariantNotDownloaded": "Available after download completes",
     "vaePrecision": {
       "title": "VAE decode precision",
       "label": "Test generation VAE precision",
@@ -1442,7 +1420,11 @@
     "targetThisCommit": "{{label}} · This commit",
     "switchToStable": "Switch to stable {{tag}}…",
     "devConfirmSwitch": "Dev · Confirm switch",
-    "devSwitching": "Dev · Switching"
+    "devSwitching": "Dev · Switching",
+    "llmPresetListHint": "A preset bundles connection + prompt + parameters. Select one as the global default; the tagging page can temporarily pick another per run.",
+    "llmPresetSetDefault": "Set as global default",
+    "llmPresetEdit": "✎ Edit",
+    "llmPresetNew": "+ New preset"
   },
   "monitor": {
     "taskLabel": "Task",
@@ -1489,6 +1471,10 @@
     "seedHint": "Specific number → reproducible; 0 → random each time",
     "baseModel": "Base model",
     "baseModelHint": "Defaults to the main model selected in Settings; switch to another downloaded version for this run",
+    "textEncoder": "Text encoder",
+    "textEncoderBf16": "bf16 (~8.9 GB)",
+    "textEncoderFp8": "fp8 (~5 GB, official quantization)",
+    "textEncoderFp8NotDownloaded": "fp8 — not downloaded (Settings → Models)",
     "swapSizeTitle": "Swap width and height (landscape ↔ portrait)",
     "cancelCurrentTitle": "Cancel current task",
     "sharedGpu": "Shares GPU with training",
@@ -1626,7 +1612,8 @@
     "noExportableXyData": "No exportable XY data",
     "allCellsLoadFailed": "All cell images failed to load (the originals may have been released)",
     "canvas2dUnavailable": "canvas 2d is unavailable",
-    "canvasToBlobNull": "canvas.toBlob returned null"
+    "canvasToBlobNull": "canvas.toBlob returned null",
+    "modelFamily": "Model family"
   },
   "overview": {
     "pipelineProgress": "Pipeline progress",
@@ -2079,12 +2066,30 @@
     "toastSavedAllPartial": "Done: {{ok}} saved, {{failed}} failed"
   },
   "steps": {
-    "download": { "title": "Dataset", "subtitle": "Booru scraping + local upload" },
-    "curate": { "title": "Train Set Curation", "subtitle": "Dataset → Train set" },
-    "preprocess": { "title": "Preprocess Tools", "subtitle": "Upscale / crop / inpaint — Upscale tool" },
-    "tag": { "title": "Auto tagging", "subtitle": "WD14 / CLTagger local inference, or remote LLM vision tagging" },
-    "reg": { "title": "Reg set (optional)", "subtitle": "Booru pull or base-model neutral prior; mirror train structure or flat single bucket 1_data/" },
-    "train": { "title": "Train", "subtitle": "Pick preset → Edit config → Queue training" }
+    "download": {
+      "title": "Dataset",
+      "subtitle": "Booru scraping + local upload"
+    },
+    "curate": {
+      "title": "Train Set Curation",
+      "subtitle": "Dataset → Train set"
+    },
+    "preprocess": {
+      "title": "Preprocess Tools",
+      "subtitle": "Upscale / crop / inpaint — Upscale tool"
+    },
+    "tag": {
+      "title": "Auto tagging",
+      "subtitle": "WD14 / CLTagger local inference, or remote LLM vision tagging"
+    },
+    "reg": {
+      "title": "Reg set (optional)",
+      "subtitle": "Booru pull or base-model neutral prior; mirror train structure or flat single bucket 1_data/"
+    },
+    "train": {
+      "title": "Train",
+      "subtitle": "Pick preset → Edit config → Queue training"
+    }
   },
   "curate": {
     "downloadTime": "Added time",
@@ -2188,7 +2193,6 @@
   },
   "tag": {
     "noVersion": "Please select/create a version first",
-    "loadDefaultsFailed": "Failed to load tagger defaults: {{error}}",
     "taggingBtn": "Tagging…",
     "checkingBtn": "Checking…",
     "startBtn": "Start tagging",
@@ -2202,30 +2206,13 @@
     "advanced": "Advanced parameters",
     "fieldTagger": "Tagger",
     "fieldPreset": "Preset",
-    "fieldModel": "Model",
-    "fieldEndpoint": "Endpoint style",
-    "fieldOutputFormat": "Output format",
-    "fieldTemperature": "Temperature",
-    "fieldMaxTokens": "Max tokens",
-    "fieldConcurrency": "Concurrency",
-    "fieldMessages": "Messages",
-    "fieldTimeout": "Timeout (seconds)",
-    "fieldMaxRetries": "Max retries",
-    "fieldRequestsPerSecond": "Requests per second",
-    "fieldMaxRequestsPerMinute": "Max requests per minute",
-    "fieldMaxSide": "Max image side (px)",
-    "fieldJpegQuality": "JPEG quality",
-    "fieldMaxImageMb": "Max image size (MB)",
     "cltaggerExtraTags": "Extra tag categories",
     "blacklistPlaceholder1": "e.g. monochrome, comic",
     "blacklistPlaceholder2": "e.g. low quality, signature",
     "cltaggerLoading": "Loading CLTagger defaults...",
     "llmLoading": "Loading LLM defaults...",
-    "llmSubtitle": "OpenAI compatible · Switch preset to change full config",
     "llmNoPreset": "No LLM preset available. Please configure in Settings.",
     "builtin": " (built-in)",
-    "modelPlaceholder": "model name",
-    "responsesWarning": "⚠️ Responses endpoint: only uses system + first user message; other messages ignored",
     "statusTitle": "Status",
     "statusPanelTitle": "Train set tagging",
     "validationStatusPanelTitle": "Validation set tagging",
@@ -2264,7 +2251,10 @@
     "scope": "Scope",
     "scopeHint": "Which images to tag. Defaults to train + validation together — manually-added validation images start without captions, and eval uses the caption as the generation prompt, so the validation set must be tagged here. You can also tag a single train folder or only the validation set.",
     "scopeAll": "All (train + validation)",
-    "scopeValidation": "Validation set"
+    "scopeValidation": "Validation set",
+    "llmEditPreset": "Edit preset…",
+    "llmPresetScopeHint": "This choice only applies to this tagging run and does not change the global default. To change the global default or edit preset contents, click \"Edit preset…\".",
+    "llmNoModel": "no model set"
   },
   "presets": {
     "loadSchemaFailed": "Failed to load schema: {{error}}",
@@ -2279,7 +2269,6 @@
     "nameInvalid": "Only letters, digits, _, and - are allowed",
     "nameExists": "Name already exists",
     "created": "Created {{name}}",
-    "saved": "Saved",
     "confirmDelete": "Delete preset {{name}}?",
     "deleted": "Deleted",
     "imported": "Imported and selected: {{name}}",
@@ -2293,8 +2282,6 @@
     "switchTitle": "Switch / create preset",
     "label": "Preset",
     "creating": "Creating",
-    "unsaved": "Unsaved",
-    "savedStatus": "Saved",
     "duplicate": "Duplicate",
     "importUpload": "Upload import",
     "importPath": "Import from server path",
@@ -2317,7 +2304,6 @@
     "description": "Description / subtitle",
     "descPlaceholder": "Describe its purpose; shown on the training preset card…",
     "loadingConfig": "Loading preset config",
-    "trainingParams": "Training parameters",
     "yamlPreview": "YAML preview",
     "yamlPreviewHint": "Generated from the current form; matches the yaml saved to disk. Inactive parameters are omitted.",
     "yamlPreviewDirty": "Includes unsaved changes",
@@ -2435,7 +2421,6 @@
     "statusCellLatest": "LATEST",
     "statusCellSkipped": "skipped",
     "nImagesShort": "imgs",
-    "tabGenerate": "Generate",
     "grpAiGen": "Generation",
     "grpRegSettings": "Reg set",
     "grpImageSettings": "Image settings",
@@ -2621,8 +2606,8 @@
     },
     "items": {
       "base": {
-        "label": "Base model bundle",
-        "description": "Anima main + VAE + Qwen3 + T5 — the core models needed for training (about 30 GB total)"
+        "label": "Anima base kit",
+        "description": "Anima main model + VAE + Qwen3 + T5 — the starter models for training (about 30 GB total). Other model families like Krea 2 can be downloaded later in Settings → Training"
       },
       "tagger": {
         "label": "Auto-tagging",
@@ -2817,6 +2802,79 @@
     },
     "export": {
       "name_conflict": "Too many files named \"{{name}}\"; rename and try again"
+    }
+  },
+  "familySwitch": {
+    "title": "Switch model family",
+    "intro": "Switching from {{from}} to {{to}} will also adjust these fields:",
+    "pathsSection": "Model paths",
+    "paramsSection": "Parameter changes",
+    "noChanges": "No other fields need adjusting.",
+    "loading": "Computing changes…",
+    "ok": "Switch",
+    "empty": "(empty)",
+    "failed": "Model family switch failed: {{error}}"
+  },
+  "ruleImpact": {
+    "title": "Linked parameters will be adjusted",
+    "intro": "Setting {{field}} to {{value}} will also adjust these modified parameters:",
+    "ok": "Apply",
+    "automagicLr": "Automagic starts from a per-parameter learning rate; the recommended initial value is 1e-6 (starting at AdamW magnitude makes adaptation ~100× slower to converge)"
+  },
+  "baseModel": {
+    "purpose": {
+      "training": "training",
+      "inference": "inference"
+    }
+  },
+  "llmPreset": {
+    "title": "Edit LLM preset",
+    "builtin": "Built-in",
+    "sectionBasic": "Basic",
+    "sectionConnection": "Connection",
+    "sectionOutput": "Output",
+    "sectionSampling": "Sampling & rate limits",
+    "sectionImage": "Image preprocessing",
+    "sectionMessages": "Prompt messages",
+    "fieldLabel": "Preset name",
+    "fieldModel": "Model",
+    "fieldEndpoint": "Endpoint style",
+    "fieldOutputFormat": "Output format",
+    "fieldTemperature": "Temperature",
+    "fieldMaxTokens": "Max tokens",
+    "fieldTimeout": "Timeout (s)",
+    "fieldMaxRetries": "Max retries",
+    "fieldConcurrency": "Concurrency",
+    "fieldRequestsPerSecond": "Requests per second (0 = no limit)",
+    "fieldMaxRequestsPerMinute": "Max requests per minute (0 = no limit)",
+    "fieldMaxSide": "Max image side (px)",
+    "fieldJpegQuality": "JPEG quality",
+    "fieldMaxImageMb": "Max image size (MB)",
+    "baseUrlHelp": "May be <code>/v1</code>, <code>/chat/completions</code>, or <code>/responses</code>",
+    "fetchModels": "Fetch from server",
+    "fetchingModels": "Loading…",
+    "testConnection": "Test connection",
+    "testing": "Testing…",
+    "modelPlaceholder": "gpt-4.1-mini / qwen-vl-max / local model name",
+    "jsonCaption": "JSON caption",
+    "textCaption": "Text caption",
+    "assistTagger": "Assist tagger",
+    "assistOff": "Off",
+    "assistTaggerHelp": "Pre-tags each image with a local tagger and injects the tags into the %TAGS% placeholder in the prompt. Only takes effect when the prompt contains %TAGS%. Pre-tagging uses the WD14 / CLTagger parameters from global Settings (thresholds, blacklist, etc.).",
+    "assistNeedsTags": "Assist tagger is selected, but the prompt has no %TAGS% placeholder — it will not take effect.",
+    "responsesWarning": "⚠️ Responses endpoint only uses system + first user message; other messages are ignored",
+    "imageSizeHint": "Claude and similar services limit images to <limit>5 MB</limit> each. Larger images will be compressed below this value.",
+    "apiKeySavedPlaceholder": "Saved (hidden); enter a new value to overwrite",
+    "resetBuiltin": "↺ Reset to built-in defaults",
+    "saveAsCopy": "⎘ Save as copy",
+    "done": "Done",
+    "presetLabels": {
+      "styleJson": "Style LoRA JSON",
+      "generalJson": "General LoRA JSON",
+      "txtTags": "TXT tag list",
+      "joycaption": "JoyCaption (local vLLM)",
+      "assistJson": "Local tagger assist · JSON",
+      "assistText": "Local tagger assist · Text"
     }
   }
 }

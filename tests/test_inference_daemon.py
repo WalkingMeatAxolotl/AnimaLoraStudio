@@ -405,3 +405,50 @@ def test_dispatch_generate_skips_task_without_config_path(env, monkeypatch):
         db.update_task(conn, tid, config_path=str(env["configs"] / "gen.json"))
     sup._dispatch_exclusive_tasks(train_slot)
     assert submitted == [tid]
+
+
+# ---------- 任务超时兜底（卡死场景硬杀 daemon） -------------------------------
+
+
+def test_task_timeout_kills_daemon_and_emits_error(
+    mock_daemon_script: Path, tmp_path: Path,
+) -> None:
+    """任务超时（卡死兜底）：到时硬杀 daemon 进程 → reader EOF →
+    _handle_proc_exit 给任务推 error + 状态 STOPPED（下次任务自动重启）。"""
+    d = InferenceDaemon(script_path=mock_daemon_script)
+    d.start()
+    assert _wait_for(lambda: d.state == "idle")
+    with d._lock:
+        d._task_timeout_seconds = 0.5
+
+    events: list[dict] = []
+    d.submit_task(
+        task_id=99, config={"wait_for_cancel": True},  # mock 收到后卡住不回
+        output_dir=str(tmp_path), on_event=events.append,
+    )
+    assert _wait_for(
+        lambda: any(e.get("kind") == "error" for e in events), timeout=6.0,
+    )
+    assert not d.is_alive
+    assert d.state == "stopped"
+
+
+def test_task_timer_cleared_on_normal_done(
+    mock_daemon_script: Path, tmp_path: Path,
+) -> None:
+    """正常完成的任务取消超时 timer（不误杀后续 idle daemon）。"""
+    d = InferenceDaemon(script_path=mock_daemon_script)
+    d.start()
+    assert _wait_for(lambda: d.state == "idle")
+    with d._lock:
+        d._task_timeout_seconds = 30.0
+
+    events: list[dict] = []
+    d.submit_task(
+        task_id=100, config={}, output_dir=str(tmp_path), on_event=events.append,
+    )
+    assert _wait_for(lambda: any(e.get("kind") == "done" for e in events))
+    with d._lock:
+        assert d._task_timer is None
+    assert d.is_alive
+    d.stop()

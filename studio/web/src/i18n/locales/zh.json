@@ -348,11 +348,16 @@
       },
       "sampler": {
         "erSde": "ER SDE",
-        "dpmpp3mSde": "DPM++ 3M SDE"
+        "dpmpp3mSde": "DPM++ 3M SDE",
+        "euler": "Euler"
       },
       "scheduler": {
         "simple": "Simple",
         "sgmUniform": "SGM Uniform"
+      },
+      "modelFamily": {
+        "anima": "Anima",
+        "krea2": "Krea 2"
       }
     },
     "disableHints": {
@@ -368,6 +373,7 @@
       "infonoise_enabled": "需先把 noise_enhancement / loss_weighting / loss_type / schedule_shift 全部置默认才能启用（schema 互斥）"
     },
     "descriptions": {
+      "model_family": "模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐。切换将重算模型路径并重置族相关默认值",
       "transformer_path": "主扩散模型权重（.safetensors）",
       "vae_path": "VAE 权重（.safetensors）",
       "text_encoder_path": "Qwen 文本编码器目录",
@@ -386,7 +392,7 @@
       "caption_comfy_encoding": "标签按 ComfyUI 方式编码（与测试出图同一链路，推荐开启）",
       "cache_latents": "缓存 VAE latent 加速训练",
       "vae_cache_batch_size": "VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
-      "lora_type": "适配器算法。lokr：Kronecker 分解，参数最省（默认）；lora：经典低秩，通用；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
+      "lora_type": "适配器算法。lora：经典低秩，通用（默认）；lokr：Kronecker 分解，参数最省；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
       "lora_rank": "rank：越大表达力越强，参数量与显存上升、易过拟合；越小越省但易欠拟合。常用 8/16/32/64",
       "lora_alpha": "alpha：LoRA 缩放系数，越大 LoRA 效果越强。通常等于 rank；启用 rs_lora 时常设为 √rank",
       "lokr_factor": "LoKr 矩阵分解因子：越大压缩越强、参数越少；越小参数越多。默认 8 适合大多数场景",
@@ -442,7 +448,7 @@
       "noise_enhancement_type": "噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",
       "noise_offset": "DC 偏置强度（0-0.2，0=关闭）。让噪声 mean 偏离 0，让模型有机会学习生成极端亮度场景（pure black / pure white / 强对比）。典型范围 0.05-0.1；0.05 以下噪声场跟 baseline 几乎一样，超过 0.1 起点 loss 会显著偏高",
       "pyramid_noise_iters": "金字塔噪声层数（0-6，0=关闭）。每层在 spatial // 2^(k+1) 尺度注入。实际效果强度由 pyramid_noise_discount 决定 —— iters 单独决定覆盖的频段范围，discount 低时层数多少差异很小",
-      "pyramid_noise_discount": "每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：anima 实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
+      "pyramid_noise_discount": "每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：本实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
       "timestep_sampling": "采样分布。logit_normal 偏中段（SD3/Anima 默认）；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
       "timestep_shift": "logit-normal / mode 内部的分布偏移：>1 偏向高噪声端（粗结构），<1 偏向低噪声端（细节）",
       "timestep_mix_low_prob": "mixed_* 模式下走偏置端的样本比例：0 = 全 uniform；典型 0.15-0.30",
@@ -514,52 +520,6 @@
     "textPlaceholder": "逗号 / 换行分隔，失焦自动同步",
     "sync": "同步",
     "deleteTag": "删除 {{tag}}"
-  },
-  "llmWorkspace": {
-    "preset": "Preset",
-    "builtin": "内置",
-    "selectPreset": "选择 preset",
-    "builtinPrefix": "内置 · ",
-    "dirtySummary": "已修改 · <count>{{n}} 处</count> 与默认不同",
-    "resetBuiltinTitle": "把当前内置预设重置为程序默认值",
-    "resetBuiltin": "↺ 重置默认",
-    "saveAsTitle": "复制当前 preset 字段为新预设",
-    "saveAs": "⎘ 另存为…",
-    "newPreset": "+ 新 Preset",
-    "deletePreset": "✕ 删除",
-    "connection": "连接",
-    "baseUrlHelp": "可填 <code>/v1</code>、<code>/chat/completions</code> 或 <code>/responses</code>",
-    "fetchingModels": "读取中…",
-    "fetchModels": "从服务器拉取",
-    "modelPlaceholder": "gpt-4.1-mini / qwen-vl-max / 本地模型名",
-    "endpointStyle": "Endpoint 风格",
-    "testing": "测试中…",
-    "testConnection": "测试连接",
-    "advanced": "高级参数",
-    "sampling": "采样参数",
-    "temperatureHint": "— 越低越稳定",
-    "imagePreprocess": "图片预处理",
-    "maxSideHint": "px · 缩放最长边",
-    "imageSizeHint": "Claude 等服务限制 <limit>5 MB</limit> / 张。超过会被压缩到此值以下。",
-    "promptTemplate": "Prompt 模板",
-    "messageSummary": "{{n}} 条消息 · 拖动调整顺序",
-    "output": "Output",
-    "jsonCaption": "JSON caption",
-    "textCaption": "Text caption",
-    "assistTagger": "辅助 tagger",
-    "assistOff": "关闭",
-    "assistTaggerHelp": "用本地 tagger 先给每张图预打标，把标签注入提示词里的 %TAGS% 占位符。仅当提示词包含 %TAGS% 时才生效。预打标使用全局设置里的 WD14 / CLTagger 参数（阈值、黑名单等）。",
-    "assistNeedsTags": "已选辅助 tagger，但提示词里没有 %TAGS% 占位符，不会生效。",
-    "responsesWarning": "⚠️ Responses endpoint 只用 system + 第一条 user；其他 messages 会被忽略",
-    "secretSavedPlaceholder": "已保存（不显示），输入新值才覆盖",
-    "presetLabels": {
-      "styleJson": "画风 LoRA JSON",
-      "generalJson": "通用 LoRA JSON",
-      "txtTags": "TXT 标签列表",
-      "joycaption": "JoyCaption（vLLM 本地）",
-      "assistJson": "本地 tagger 辅助 · JSON",
-      "assistText": "本地 tagger 辅助 · 文本"
-    }
   },
   "llmMessages": {
     "roleHintSystem": "指令性 · 一般写一次",
@@ -984,7 +944,7 @@
       "startMigrate": "开始迁移",
       "restartNow": "立即重启",
       "modelsRootLabel": "模型根目录",
-      "modelsRootHelp": "存放下载的 Anima / VAE / 文本编码器 / tokenizer / WD14 等模型权重，默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
+      "modelsRootHelp": "存放下载的模型权重（Anima / Krea 2 / VAE / 文本编码器 / tokenizer / WD14 等），默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
       "modelsMigrateTitle": "迁移模型根目录",
       "modelsKeepOriginalNote": "原位置数据不会被删除。复制完成后立即生效，无需重启。",
       "modelsDoneNote": "已切换到新模型根目录，立即生效（无需重启）；原位置数据已保留，确认无误后可自行删除。",
@@ -1009,7 +969,6 @@
     "downloadStarted": "开始下载 {{name}}",
     "confirmDeletePreset": "删除预设「{{label}}」？此操作不可撤销。",
     "confirmResetPreset": "把预设「{{label}}」重置为默认？你对它的修改会丢失。",
-    "confirmRemoveLocalModel": "移除本地模型「{{name}}」？仅取消登记，不会删除文件。",
     "saved": "已保存",
     "saveFailed": "保存失败",
     "newPresetName": "新预设名称",
@@ -1052,7 +1011,6 @@
     "fieldUserId": "User ID",
     "fieldUsername": "用户名",
     "fieldAccountType": "账户类型",
-    "fieldModelId": "Model ID",
     "boolEnabled": "启用",
     "boolDisabled": "关闭",
     "downloadSourceHelp": "魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace。",
@@ -1105,56 +1063,47 @@
     "loadingModelCatalog": "加载模型清单...",
     "wd14CandidateTitle": "{{name}}（候选模型）",
     "wd14CandidateHelp": "{{desc}}。选中作为当前 <code>model_id</code>；下载缺的版本。",
-    "selectWd14ModelId": "选作 WD14 当前 model_id",
-    "candidateEditor": "候选编辑（添加/删除自定义 model_id）",
+    "addDownloadCandidate": "添加下载",
+    "addLocalCandidate": "添加本地文件",
+    "removeCandidate": "从列表移除（不删除文件）",
+    "removeCandidateShort": "移除",
+    "localBadge": "本地",
+    "candidateAdded": "已添加 {{name}}",
+    "candidateRemoved": "已从列表移除（文件保留）",
+    "selectSourceCandidate": "选作当前模型",
     "clTaggerVersionTitle": "{{name}}（版本）",
     "repoHelp": "{{desc}}。仓库：<code>{{repo}}</code>",
-    "selectClTaggerVersion": "选作 CLTagger 当前版本",
-    "clTaggerFilesAt": "文件",
-    "customRepoAdvanced": "自定义 repo（高级）",
-    "trainingModelsOneClick": "训练模型（一键下载）",
+    "animaModels": "Anima 模型",
+    "krea2Models": "Krea2 模型",
     "modelsRoot": "模型根目录 (models_root)",
     "savePathConfig": "保存路径配置",
     "notModified": "未修改",
     "savePath": "保存路径",
     "trainingParams": "训练参数",
     "autoSyncPathsLabel": "自动配置模型路径",
-    "autoSyncPathsHelp": "开启（默认 / 多数用户）：fork 预设到 version 时，4 个模型路径字段（transformer/vae/text_encoder/t5_tokenizer）自动用 Settings 全局值覆盖，预设里这 4 字段灰显不可改。关闭（独立模型用户）：fork 时尊重预设里的绝对路径，4 字段可编辑 + picker。",
+    "autoSyncPathsHelp": "开启（默认 / 多数用户）：fork 预设到 version 时，模型路径字段（transformer / VAE / 文本编码器等，按模型族而定）自动用 Settings 全局值覆盖，这些字段灰显不可改。关闭（独立模型用户）：fork 时尊重预设里的绝对路径，字段可编辑 + picker。",
     "autoSyncPathsOn": "已开启 · fork 自动同步全局",
     "autoSyncPathsOff": "已关闭 · fork 尊重预设值",
     "defaultTransformerHelp": "选中的版本会作为<strong>新建 version</strong> 的默认 transformer。",
     "downloadLogs": "下载日志 ({{n}})",
     "partialFiles": "部分 ({{exists}}/{{total}})",
     "notDownloaded": "未下载",
-    "redownloadTitle": "已下载，点击重新下载",
-    "redownload": "↻ 重下",
     "downloadAction": "⤓ 下载",
     "upscalersPreprocess": "放大器（预处理）",
     "availableUpscalers": "可用放大器",
     "upscalersHelpPath": "预处理阶段对小图做超分。文件落在 <code>{{path}}</code>。",
     "upscalersHelpDefault": "单选选中的就是预处理页默认用的模型。custom 是从下面表单或之前自定义下载来的。",
-    "selectDefaultPreprocess": "选作预处理默认",
-    "customDownload": "自定义下载",
     "customUpscalerHelpTypes": "从 HuggingFace 或 ModelScope 拉任意 <code>.pth</code> / <code>.safetensors</code> 放大器。",
-    "customUpscalerHelpSources": "常见来源：<code>Kim2091/*</code>、<code>libfishopen/upscaler</code>、<code>licyks/sd-upscaler-models</code> 等。",
-    "customUpscalerHelpEnable": "下完会出现在上面列表里（标记 custom），单选即可启用。",
     "source": "源",
     "repoId": "仓库 ID",
     "upscalerDownloadLogs": "放大器下载日志",
     "modelRootDefault": "已恢复默认模型根目录",
     "mainModelSelected": "默认主模型已切到 {{name}}",
-    "selectDefaultMainModel": "选作默认主模型",
     "downloadInProgress": "下载中...",
     "downloadRequiredFirst": "未下载，请先下载",
-    "addLocalModel": "＋ 添加本地模型",
-    "localModelAdded": "已添加本地模型 {{name}}",
-    "localModelRemoved": "已移除本地模型",
-    "removeLocalModel": "从注册表移除，不删除模型文件。",
-    "removeLocalModelShort": "移除",
-    "localModelInvalidExt": "请选择 .safetensors 文件",
+    "krea2LicenseNotice": "下载和使用须遵守 {{license}}",
     "localModelMissing": "文件不存在",
     "defaultUpscaler": "默认放大器: {{name}}",
-    "repoAndFilenameRequired": "仓库 / 文件名都要填",
     "packageInstalledRestart": "已装 {{pkg}}=={{version}}，请重启 Studio 让 EP 生效",
     "packageInstallFailed": "装包失败: {{error}}",
     "registerFailed": "注册失败: {{error}}",
@@ -1168,9 +1117,12 @@
     "hfCustomHint": "粘贴自建反代 / sjtug / 腾讯镜像等",
     "modelDescriptions": {
       "animaMain": "Cosmos transformer（约 4 GB）",
-      "animaVae": "qwen_image_vae（约 250 MB）",
+      "animaVae": "Anima / Krea2 共享的 qwen_image_vae（约 250 MB）",
       "qwen3": "文本编码器（约 1.2 GB）",
       "t5Tokenizer": "spiece.model 等 3 个 tokenizer 文件（不含权重）",
+      "krea2Main": "Raw 训练底模 / Turbo 推理底模（各约 26.3 GB）",
+      "krea2TextEncoder": "自然语言文本编码器（约 8.89 GB）",
+      "krea2TextEncoderFp8": "官方 fp8 量化文本编码器（约 5.24 GB）——测试出图可选，权重显存约减半",
       "wd14": "SmilingWolf 系列 ONNX 打标模型",
       "cltagger": "cella110n CLTagger ONNX"
     },
@@ -1273,8 +1225,34 @@
       "desc": "默认 10 分钟",
       "help": "测试出图模型加载后会常驻显存，方便重复调参。超过指定时长没出图就自动卸载释放显存（下次出图重新加载约 30-60 秒）。0 = 关闭，模型常驻直到手动点\"清理显存\"。推荐 10 分钟。",
       "minutesSuffix": "分",
-      "offHint": "已关闭：模型常驻直到手动清理"
+      "offHint": "已关闭：模型常驻直到手动清理",
+      "taskTimeoutLabel": "任务超时强制终止（分钟）",
+      "taskTimeoutDesc": "默认 0 = 不开启",
+      "taskTimeoutHelp": "出图任务超过指定时长仍未完成时，强制终止出图进程（卡死兜底：整机换页或 GPU 挂起时普通取消无效，只能杀进程）。任务标记失败，下次出图自动重启进程并重新加载模型。0 = 不开启。",
+      "taskTimeoutOffHint": "不开启"
     },
+    "vramPolicy": {
+      "title": "显存策略",
+      "label": "测试出图显存策略",
+      "desc": "默认：文本编码器用完即释放（krea2 生效）",
+      "help": "测试出图时文本编码器与 DiT 的显存编排（krea2 生效）。任务开始会先把本次全部 prompt 预编码进缓存。默认：预编码后立即释放文本编码器（采样期显存零驻留），之后更换新 prompt 时从磁盘重新加载（约 3 秒）。省显存：在此基础上编码阶段各模型强制互相让位，显存峰值最低（16GB 显卡可跑 fp8 底模）。性能优先：文本编码器全程常驻显存，更换 prompt 零等待——大显存显卡适用。",
+      "optAuto": "默认（用后释放）",
+      "optSaveVram": "省显存",
+      "optPerformance": "性能优先（常驻）",
+      "ramGuardLabel": "内存/显存水位保护",
+      "ramGuardDesc": "加载前按权重文件大小预算系统内存与空闲显存（默认开启）",
+      "ramGuardHelp": "模型权重必须经过系统内存（磁盘 → 内存 → 显存）才能上卡，大文件加载会临时占用与文件等量的内存。开启：加载前按即将读取的权重文件实际大小检查系统可用内存和 GPU 空闲显存，任一不足即中止并报错——包括其他进程占着显存的情形（例如另一个出图/训练任务未退出），避免整机换页卡死。关闭：资源不足时继续加载，可能导致系统长时间无响应。",
+      "ramGuardOn": "开启",
+      "ramGuardOff": "关闭"
+    },
+    "krea2TeCardTitle": "Krea 2 · Qwen3-VL 文本编码器",
+    "deleteAsset": "删除",
+    "deleteAssetTitle": "删除已下载的文件（需要时可重新下载）",
+    "confirmDeleteAsset": "确定删除 {{name}} 的已下载文件？需要时可重新下载。",
+    "assetDeleted": "已删除：{{name}}",
+    "teVariantSelected": "文本编码器已切换：{{name}}",
+    "selectTeVariant": "设为默认文本编码器（训练与测试出图共用）",
+    "teVariantNotDownloaded": "下载完成后可选中",
     "vaePrecision": {
       "title": "VAE 解码精度",
       "label": "测试出图 VAE 精度",
@@ -1442,7 +1420,11 @@
     "targetThisCommit": "{{label}} · 此 commit",
     "switchToStable": "切到稳定版 {{tag}}…",
     "devConfirmSwitch": "开发版 · 确认切换",
-    "devSwitching": "开发版 · 切换中"
+    "devSwitching": "开发版 · 切换中",
+    "llmPresetListHint": "预设 = 一整套连接 + 提示词 + 参数。单选设为全局默认；打标页可按次临时选用其他预设。",
+    "llmPresetSetDefault": "设为全局默认",
+    "llmPresetEdit": "✎ 编辑",
+    "llmPresetNew": "+ 新建预设"
   },
   "monitor": {
     "taskLabel": "任务",
@@ -1489,6 +1471,10 @@
     "seedHint": "填具体数字 → 固定可复现；0 → 每次随机",
     "baseModel": "底模",
     "baseModelHint": "默认用设置页选定的主模型；可临时换成其它已下载的版本出图",
+    "textEncoder": "文本编码器",
+    "textEncoderBf16": "bf16（约 8.9 GB）",
+    "textEncoderFp8": "fp8（约 5 GB，官方量化）",
+    "textEncoderFp8NotDownloaded": "fp8 —— 未下载（设置 → 模型下载）",
     "swapSizeTitle": "交换宽高（横版 ↔ 竖版）",
     "cancelCurrentTitle": "取消当前任务",
     "sharedGpu": "与训练共享 GPU",
@@ -1626,7 +1612,8 @@
     "noExportableXyData": "没有可导出的 XY 数据",
     "allCellsLoadFailed": "所有 cell 图都加载失败（可能原图已释放）",
     "canvas2dUnavailable": "canvas 2d 不可用",
-    "canvasToBlobNull": "canvas.toBlob 返回 null"
+    "canvasToBlobNull": "canvas.toBlob 返回 null",
+    "modelFamily": "模型族"
   },
   "overview": {
     "pipelineProgress": "流水线进度",
@@ -2079,12 +2066,30 @@
     "toastSavedAllPartial": "保存完成：成功 {{ok}} 张，失败 {{failed}} 张"
   },
   "steps": {
-    "download": { "title": "数据集", "subtitle": "Booru 抓取 + 本地上传" },
-    "curate": { "title": "训练集筛选", "subtitle": "数据集 → 训练集" },
-    "preprocess": { "title": "预处理工具", "subtitle": "放大 / 裁剪 / 涂抹 — 放大工具" },
-    "tag": { "title": "自动打标", "subtitle": "WD14 / CLTagger 本地推理，或远程 LLM 视觉打标" },
-    "reg": { "title": "正则集（可选）", "subtitle": "Booru 拉图或 base 模型自生成中性 prior；可镜像 train 结构或平铺单桶 1_data/" },
-    "train": { "title": "训练", "subtitle": "选预设 → 编辑 config → 入队训练" }
+    "download": {
+      "title": "数据集",
+      "subtitle": "Booru 抓取 + 本地上传"
+    },
+    "curate": {
+      "title": "训练集筛选",
+      "subtitle": "数据集 → 训练集"
+    },
+    "preprocess": {
+      "title": "预处理工具",
+      "subtitle": "放大 / 裁剪 / 涂抹 — 放大工具"
+    },
+    "tag": {
+      "title": "自动打标",
+      "subtitle": "WD14 / CLTagger 本地推理，或远程 LLM 视觉打标"
+    },
+    "reg": {
+      "title": "正则集（可选）",
+      "subtitle": "Booru 拉图或 base 模型自生成中性 prior；可镜像 train 结构或平铺单桶 1_data/"
+    },
+    "train": {
+      "title": "训练",
+      "subtitle": "选预设 → 编辑 config → 入队训练"
+    }
   },
   "curate": {
     "downloadTime": "加入时间",
@@ -2188,7 +2193,6 @@
   },
   "tag": {
     "noVersion": "请先选择/创建一个版本",
-    "loadDefaultsFailed": "读取 tagger 默认配置失败：{{error}}",
     "taggingBtn": "打标中…",
     "checkingBtn": "检查中…",
     "startBtn": "开始打标",
@@ -2202,30 +2206,13 @@
     "advanced": "高级参数",
     "fieldTagger": "打标器",
     "fieldPreset": "预设",
-    "fieldModel": "模型",
-    "fieldEndpoint": "Endpoint 风格",
-    "fieldOutputFormat": "输出格式",
-    "fieldTemperature": "温度",
-    "fieldMaxTokens": "最大 token 数",
-    "fieldConcurrency": "并发数",
-    "fieldMessages": "提示词消息",
-    "fieldTimeout": "超时（秒）",
-    "fieldMaxRetries": "最大重试次数",
-    "fieldRequestsPerSecond": "每秒请求数",
-    "fieldMaxRequestsPerMinute": "每分钟最大请求数",
-    "fieldMaxSide": "图片最长边（px）",
-    "fieldJpegQuality": "JPEG 质量",
-    "fieldMaxImageMb": "图片大小上限（MB）",
     "cltaggerExtraTags": "附加标签类别",
     "blacklistPlaceholder1": "如 monochrome, comic",
     "blacklistPlaceholder2": "如 low quality, signature",
     "cltaggerLoading": "加载 CLTagger 默认参数...",
     "llmLoading": "加载 LLM 默认参数...",
-    "llmSubtitle": "OpenAI compatible · 选 preset 切换整套配置",
     "llmNoPreset": "没有可用的 LLM preset。请到 Settings 配置。",
     "builtin": "（内置）",
-    "modelPlaceholder": "模型名",
-    "responsesWarning": "⚠️ Responses endpoint：只用 system + 第一条 user；其余 messages 忽略",
     "statusTitle": "状态",
     "statusPanelTitle": "训练集打标状态",
     "validationStatusPanelTitle": "验证集打标状态",
@@ -2264,7 +2251,10 @@
     "scope": "范围",
     "scopeHint": "打哪些图。默认训练集 + 验证集一起打——手动加入的验证图原本没 caption，eval 拿 caption 当生成 prompt，得在这里把验证集纳入打标。也可只打某个训练集文件夹或只打验证集。",
     "scopeAll": "全部（训练集 + 验证集）",
-    "scopeValidation": "验证集"
+    "scopeValidation": "验证集",
+    "llmEditPreset": "编辑预设…",
+    "llmPresetScopeHint": "此处选择只对本次打标生效，不改全局默认。要改全局默认或编辑预设内容，点「编辑预设…」。",
+    "llmNoModel": "未设置模型"
   },
   "presets": {
     "loadSchemaFailed": "schema 加载失败: {{error}}",
@@ -2279,7 +2269,6 @@
     "nameInvalid": "仅允许字母、数字、_、-",
     "nameExists": "名称已存在",
     "created": "已创建 {{name}}",
-    "saved": "已保存",
     "confirmDelete": "删除预设 {{name}}？",
     "deleted": "已删除",
     "imported": "已导入并选中 {{name}}",
@@ -2293,8 +2282,6 @@
     "switchTitle": "切换 / 新建预设",
     "label": "预设",
     "creating": "新建中",
-    "unsaved": "未保存",
-    "savedStatus": "已保存",
     "duplicate": "复制副本",
     "importUpload": "上传导入",
     "importPath": "从服务器路径导入",
@@ -2317,7 +2304,6 @@
     "description": "描述 / 副标题",
     "descPlaceholder": "用途描述，显示在训练页预设卡片上…",
     "loadingConfig": "加载预设配置中",
-    "trainingParams": "训练参数",
     "yamlPreview": "YAML 预览",
     "yamlPreviewHint": "按当前表单生成，与保存到磁盘的 yaml 内容一致；未启用的参数已省略",
     "yamlPreviewDirty": "包含未保存的修改",
@@ -2435,7 +2421,6 @@
     "statusCellLatest": "最近生成",
     "statusCellSkipped": "已跳过",
     "nImagesShort": "张",
-    "tabGenerate": "生成",
     "grpAiGen": "出图",
     "grpRegSettings": "正则集设置",
     "grpImageSettings": "出图设置",
@@ -2621,8 +2606,8 @@
     },
     "items": {
       "base": {
-        "label": "底模套件",
-        "description": "Anima 主模型 + VAE + Qwen3 + T5,训练所需基础模型(总计约 30GB)"
+        "label": "Anima 底模套件",
+        "description": "Anima 主模型 + VAE + Qwen3 + T5，入门训练所需基础模型（总计约 30GB）。Krea 2 等其它模型族可稍后在 设置 → 训练 下载"
       },
       "tagger": {
         "label": "打标功能",
@@ -2817,6 +2802,79 @@
     },
     "export": {
       "name_conflict": "导出文件名「{{name}}」冲突过多，请重命名后重试"
+    }
+  },
+  "familySwitch": {
+    "title": "切换模型族",
+    "intro": "从 {{from}} 切换到 {{to}}，以下字段将同时调整：",
+    "pathsSection": "模型路径",
+    "paramsSection": "参数调整",
+    "noChanges": "当前配置无需调整其他字段。",
+    "loading": "正在计算变更……",
+    "ok": "切换",
+    "empty": "（空）",
+    "failed": "模型族切换失败：{{error}}"
+  },
+  "ruleImpact": {
+    "title": "关联参数将被调整",
+    "intro": "把 {{field}} 改为 {{value}} 后，以下已修改的参数会被一并调整：",
+    "ok": "应用",
+    "automagicLr": "Automagic 以每参数学习率起步，推荐初始值 1e-6（AdamW 量级起跑会让自适应收敛慢约 100 倍）"
+  },
+  "baseModel": {
+    "purpose": {
+      "training": "训练",
+      "inference": "推理"
+    }
+  },
+  "llmPreset": {
+    "title": "编辑 LLM 预设",
+    "builtin": "内置",
+    "sectionBasic": "基本",
+    "sectionConnection": "连接",
+    "sectionOutput": "输出",
+    "sectionSampling": "采样与限速",
+    "sectionImage": "图片预处理",
+    "sectionMessages": "提示词消息",
+    "fieldLabel": "预设名称",
+    "fieldModel": "模型",
+    "fieldEndpoint": "Endpoint 风格",
+    "fieldOutputFormat": "输出格式",
+    "fieldTemperature": "温度",
+    "fieldMaxTokens": "最大 token 数",
+    "fieldTimeout": "超时（秒）",
+    "fieldMaxRetries": "最大重试次数",
+    "fieldConcurrency": "并发数",
+    "fieldRequestsPerSecond": "每秒请求数（0 = 不限）",
+    "fieldMaxRequestsPerMinute": "每分钟最大请求数（0 = 不限）",
+    "fieldMaxSide": "图片最长边（px）",
+    "fieldJpegQuality": "JPEG 质量",
+    "fieldMaxImageMb": "图片大小上限（MB）",
+    "baseUrlHelp": "可填 <code>/v1</code>、<code>/chat/completions</code> 或 <code>/responses</code>",
+    "fetchModels": "从服务器拉取",
+    "fetchingModels": "读取中…",
+    "testConnection": "测试连接",
+    "testing": "测试中…",
+    "modelPlaceholder": "gpt-4.1-mini / qwen-vl-max / 本地模型名",
+    "jsonCaption": "JSON caption",
+    "textCaption": "Text caption",
+    "assistTagger": "辅助 tagger",
+    "assistOff": "关闭",
+    "assistTaggerHelp": "用本地 tagger 先给每张图预打标，把标签注入提示词里的 %TAGS% 占位符。仅当提示词包含 %TAGS% 时才生效。预打标使用全局设置里的 WD14 / CLTagger 参数（阈值、黑名单等）。",
+    "assistNeedsTags": "已选辅助 tagger，但提示词里没有 %TAGS% 占位符，不会生效。",
+    "responsesWarning": "⚠️ Responses endpoint 只用 system + 第一条 user；其他 messages 会被忽略",
+    "imageSizeHint": "Claude 等服务限制 <limit>5 MB</limit> / 张。超过会被压缩到此值以下。",
+    "apiKeySavedPlaceholder": "已保存（不显示），输入新值才覆盖",
+    "resetBuiltin": "↺ 恢复内置默认",
+    "saveAsCopy": "⎘ 另存为副本",
+    "done": "完成",
+    "presetLabels": {
+      "styleJson": "画风 LoRA JSON",
+      "generalJson": "通用 LoRA JSON",
+      "txtTags": "TXT 标签列表",
+      "joycaption": "JoyCaption（vLLM 本地）",
+      "assistJson": "本地 tagger 辅助 · JSON",
+      "assistText": "本地 tagger 辅助 · 文本"
     }
   }
 }

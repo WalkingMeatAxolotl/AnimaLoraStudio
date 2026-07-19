@@ -49,6 +49,37 @@ def test_cached_latent_invalidates_when_resolution_bucket_changes(tmp_path: Path
     assert cached._is_cache_valid(img_path, npz_path) is True
 
 
+def test_cached_latent_keeps_third_party_caption_fallback(tmp_path: Path) -> None:
+    """Phase 2 resolver 抽取不能把 duck-typed dataset 的 caption 变成空串。"""
+    pytest.importorskip("torch")
+    import numpy as np
+
+    from runtime.training.dataset import CachedLatentDataset
+
+    image = tmp_path / "third-party.png"
+    image.write_bytes(b"fake")
+    caption_path = image.with_suffix(".txt")
+    caption_path.write_text("raw caption", encoding="utf-8")
+    np.savez(image.with_suffix(".npz"), latent=np.zeros((16, 1, 2, 2)))
+
+    class ThirdPartyDataset:
+        caption_override = None
+
+        @staticmethod
+        def _process_caption_txt(caption):
+            return f"processed: {caption}"
+
+    cached = object.__new__(CachedLatentDataset)
+    cached.base_dataset = ThirdPartyDataset()
+    cached.samples = [{"image": image, "txt_path": caption_path}]
+    cached.np = np
+    cached.flip_augment = False
+    cached.load_masks = False
+    cached._multi_reso = set()
+
+    assert cached[0]["caption"] == "processed: raw caption"
+
+
 def test_cached_latent_invalidates_when_flip_augment_added(tmp_path: Path) -> None:
     """老 cache（只有 latent，无 latent_flipped）+ flip_augment=True → 失效重 encode。
 

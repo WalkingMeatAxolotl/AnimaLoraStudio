@@ -17,7 +17,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from training.leap import (  # noqa: E402
+from training.families.anima.leap import (  # noqa: E402
     _finalize_loss,
     bridge_training_step,
     lagrange_training_step,

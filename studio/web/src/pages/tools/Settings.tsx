@@ -2,36 +2,38 @@ import { useEffect, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
-  type CLTaggerVariantInfo,
+  type ModelSourceRow,
   type LLMPreset,
   type Secrets,
   type SecretsPatch,
   type WandBPreset,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
-import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
+import LLMPresetEditorModal, { llmPresetLabel } from '../../components/LLMPresetEditorModal'
 import { TagListInput } from '../../components/TagsInput'
 import PageHeader from '../../components/PageHeader'
+import SaveIndicator from '../../components/SaveIndicator'
 import { useToast } from '../../components/Toast'
-import { useSettingsData, type SaveStatus } from '../../lib/SettingsData'
+import { useSettingsData } from '../../lib/SettingsData'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
-  DEFAULT_LLM_PRESETS,
   DEFAULT_WANDB_PRESET,
   EMPTY,
   getStoredTab,
   _makeFallbackPreset,
   MASK,
+  MODEL_DESCRIPTION_KEYS,
   SECTION_TO_TAB,
   TAB_LIST,
   TAB_SECTIONS,
   TAB_STORAGE_KEY,
   textInputClass,
+  translatedCatalogText,
   type Section,
   type Tab,
 } from './settings/constants'
 import { Bool, SectionIndex, SensitiveInput, SettingsField, SettingsInput, SettingsSection } from './settings/fields'
-import { CLTaggerModelCard, EvalMetricModelCard, HFEndpointSelect, SourceSelect, WD14ModelCard } from './settings/modelCards'
+import { HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
 import {
   DisplaySection,
   FlashAttentionSection,
@@ -45,34 +47,13 @@ import {
   TrainingParamsSection,
   UpscalerSection,
   VaePrecisionSection,
+  VramPolicySection,
   XformersSection,
 } from './settings/sections'
 import { SystemSection } from './settings/SystemSection'
 import WandBWorkspace from './settings/WandBWorkspace'
 
-// 全局保存状态指示（instant-apply 取代旧的顶部保存按钮）。idle 不渲染。
-function SaveIndicator({ status }: { status: SaveStatus }) {
-  const { t } = useTranslation()
-  if (status.state === 'saving') {
-    return <span className="text-xs text-fg-tertiary">{t('settings.saveStatus.saving')}</span>
-  }
-  if (status.state === 'saved') {
-    const time = new Date(status.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    // key={status.at}：每次保存重挂载 → 重播 flash 动画，连续保存也能一眼看出"又存了"。
-    return (
-      <span key={status.at} className="settings-saved-flash text-xs inline-flex items-center gap-1">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 6L9 17l-5-5" />
-        </svg>
-        {t('settings.saveStatus.saved', { time })}
-      </span>
-    )
-  }
-  if (status.state === 'error') {
-    return <span className="text-xs text-err">{t('settings.saveStatus.error')}</span>
-  }
-  return null
-}
+// 保存状态指示已抽到 components/SaveIndicator（Train / Presets 页共用）。
 
 export default function SettingsPage() {
   const { t } = useTranslation()
@@ -98,8 +79,8 @@ export default function SettingsPage() {
   const draft = server ?? EMPTY
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>(getStoredTab)
-  const [llmModelsBusy, setLlmModelsBusy] = useState(false)
-  const [llmTestBusy, setLlmTestBusy] = useState(false)
+  // LLM 预设编辑 modal：非 null = 正在编辑该 id 的预设
+  const [editingLlmPresetId, setEditingLlmPresetId] = useState<string | null>(null)
   const { toast } = useToast()
   const { prompt, confirm } = useDialog()
   const drawer = useSettingsDrawer()
@@ -150,35 +131,20 @@ export default function SettingsPage() {
   }
 
 
-  const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
+  // CLTagger 选中值是 (model_id, model_path, tag_mapping_path) 三元组：行
+  // value 用 `|` 合成键匹配，选中时从统一行 extra 一次写回三字段。
+  const selectCLTaggerRow = (row: ModelSourceRow) => {
     commitSecrets({
       cltagger: {
-        model_id: variant.model_id,
-        model_path: variant.model_path,
-        tag_mapping_path: variant.tag_mapping_path,
+        model_id: row.extra.model_id ?? '',
+        model_path: row.extra.model_path ?? '',
+        tag_mapping_path: row.extra.tag_mapping_path ?? '',
       },
     } as SecretsPatch)
   }
 
-  // 找到当前 active preset；如果 current_preset 指向不存在的 id（理论上 validator
-  // 已保底），fallback 到第一个，避免空 crash。
-  const currentPreset: LLMPreset =
-    draft.llm_tagger.presets.find((p) => p.id === draft.llm_tagger.current_preset)
-    ?? draft.llm_tagger.presets[0]
-    ?? DEFAULT_LLM_PRESETS[0]
-
-  const serverCurrentPreset: LLMPreset | undefined =
-    server?.llm_tagger.presets.find((p) => p.id === currentPreset.id)
-
-  /** 改 active preset 的某个字段。 */
-  const updatePreset = <K extends keyof LLMPreset>(field: K, value: LLMPreset[K]) => {
-    const next = draft.llm_tagger.presets.map((p) =>
-      p.id === currentPreset.id ? { ...p, [field]: value } : p
-    )
-    update('llm_tagger', 'presets', next)
-  }
-
-  const addPreset = () => {
+  // —— LLM 预设管理（列表 + 编辑 modal；字段编辑集中在 LLMPresetEditorModal）——
+  const addLlmPreset = () => {
     const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
     let idx = 1
     let id = `preset_${idx}`
@@ -186,56 +152,13 @@ export default function SettingsPage() {
       idx += 1
       id = `preset_${idx}`
     }
-    const next: LLMPreset = _makeFallbackPreset(id, t('settings.newPresetLabel', { n: idx }), 'json')
+    const next: LLMPreset = _makeFallbackPreset(id, t('settings.newPresetLabel', { n: idx }), 'text')
     next.builtin = false
     update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
-    update('llm_tagger', 'current_preset', id)
+    setEditingLlmPresetId(id)
   }
 
-  const deleteCurrentPreset = async () => {
-    if (currentPreset.builtin || draft.llm_tagger.presets.length <= 1) return
-    if (!(await confirm(t('settings.confirmDeletePreset', { label: currentPreset.label }), { tone: 'danger' }))) return
-    const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
-    update('llm_tagger', 'presets', next)
-    update('llm_tagger', 'current_preset', next[0]?.id ?? 'style_json')
-  }
-
-  const resetCurrentPresetToBuiltin = async () => {
-    // 删除当前 builtin preset，让 backend validator 在 PUT 后从 defaults 补回
-    if (!currentPreset.builtin) return
-    if (!(await confirm(t('settings.confirmResetPreset', { label: currentPreset.label }), { tone: 'danger' }))) return
-    const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
-    update('llm_tagger', 'presets', next)
-    // current_preset 不变；validator 会重建 preset
-  }
-
-  const saveAsNewPreset = async () => {
-    const label = await prompt(t('settings.newPresetName'), {
-      defaultValue: t('settings.presetCopy', { label: currentPreset.label }),
-      placeholder: 'my-preset',
-      validate: (v) => (v.trim() ? null : t('settings.nameRequired')),
-    })
-    if (!label) return
-    const slug = label.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset'
-    const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
-    let idx = 1
-    let id = slug
-    while (used.has(id)) {
-      idx += 1
-      id = `${slug}_${idx}`
-    }
-    const next: LLMPreset = {
-      ...currentPreset,
-      // deep-copy messages 避免共享引用
-      messages: currentPreset.messages.map((m) => ({ ...m })),
-      model_ids: [...currentPreset.model_ids],
-      id,
-      label,
-      builtin: false,
-    }
-    update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
-    update('llm_tagger', 'current_preset', id)
-  }
+  // 删除/恢复内置/另存为都住在 LLMPresetEditorModal footer 里，这里只管列表与新建。
 
   // —— WandB 预设管理（0.18 预设化，复刻 llm_tagger 模式）——
   const currentWandbPreset: WandBPreset =
@@ -319,60 +242,6 @@ export default function SettingsPage() {
       toast(t('settings.wandbPresetImported', { label: r.label }), 'success')
     } catch (e) {
       toast(`${t('settings.wandbImportInvalid')}: ${e}`, 'error')
-    }
-  }
-
-  const refreshLLMModels = async () => {
-    if (!server) return
-    setLlmModelsBusy(true)
-    setError(null)
-    try {
-      // instant-apply：preset 字段已即时落盘，直接用 server 当前值刷新。
-      const sourcePreset = server.llm_tagger.presets.find((p) => p.id === currentPreset.id)
-        ?? server.llm_tagger.presets[0]
-      const result = await api.refreshLLMModels({
-        preset_id: sourcePreset.id,
-        base_url: sourcePreset.base_url,
-        api_key: sourcePreset.api_key,
-        timeout: sourcePreset.timeout,
-      })
-      setServer(result.secrets)
-      toast(t('settings.modelsLoaded', { n: result.items.length }), 'success')
-    } catch (e) {
-      setError(String(e))
-      toast(t('settings.modelsLoadFailed', { error: String(e) }), 'error')
-    } finally {
-      setLlmModelsBusy(false)
-    }
-  }
-
-  const testLLMConnection = async () => {
-    setLlmTestBusy(true)
-    setError(null)
-    try {
-      const result = await api.testLLMConnection({
-        preset_id: currentPreset.id,
-        base_url: currentPreset.base_url,
-        api_key: currentPreset.api_key,
-        model: currentPreset.model,
-        endpoint: currentPreset.endpoint,
-        timeout: currentPreset.timeout,
-        max_tokens: Math.max(512, currentPreset.max_tokens),
-        temperature: currentPreset.temperature,
-      })
-      // 把延迟 / HTTP 状态 / 错误预览拼进 toast，避免移除 ConnBar 后用户拿不到详情。
-      const parts: string[] = [result.ok ? t('settings.llmTestOk') : t('settings.llmTestNotOk')]
-      if (result.elapsed_ms > 0) parts.push(`${result.elapsed_ms} ms`)
-      if (result.status_code !== null) parts.push(`HTTP ${result.status_code}`)
-      if (!result.ok) {
-        const detail = result.error || result.response_preview
-        if (detail) parts.push(detail.slice(0, 120))
-      }
-      toast(parts.join(' · '), result.ok ? 'success' : 'error')
-    } catch (e) {
-      toast(t('settings.llmTestFailed', { error: String(e) }), 'error')
-    } finally {
-      setLlmTestBusy(false)
     }
   }
 
@@ -578,41 +447,71 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'tagging' && (<>
-      {/* LLMTaggerWorkspace 自带 card；title 渲染在 card 内最顶部跟 WD14/CLTagger 视觉对齐。
-       * 外层 div 只承担 id（给 section index 滚动定位用）+ scroll-mt-24 锚点偏移。 */}
-      <div id="llm-tagger" className="scroll-mt-24">
-        <LLMTaggerWorkspace
-          title="LLM Tagger"
-          currentPreset={currentPreset}
-          serverCurrentPreset={serverCurrentPreset}
-          presets={draft.llm_tagger.presets}
-          currentPresetId={draft.llm_tagger.current_preset}
-          onSelectPreset={(id) => update('llm_tagger', 'current_preset', id)}
-          onUpdatePreset={updatePreset}
-          onResetToBuiltin={resetCurrentPresetToBuiltin}
-          onSaveAs={saveAsNewPreset}
-          onAddPreset={addPreset}
-          onDeletePreset={deleteCurrentPreset}
-          llmModelsBusy={llmModelsBusy}
-          llmTestBusy={llmTestBusy}
-          onRefreshModels={() => void refreshLLMModels()}
-          onTestConnection={() => void testLLMConnection()}
-        />
-      </div>
+      {/* LLM 预设管理：只做列表（选全局默认 + 行 action 编辑 + 右上角新建）；
+       * 字段编辑/删除/另存为集中在 LLMPresetEditorModal（打标页开同一个 modal）。
+       * 列表样式对齐下面下载中心的模型列表（bg-sunken 卡 + 行高亮 + StatusLabel chip）。 */}
+      <SettingsSection
+        id="llm-tagger"
+        title="LLM Tagger"
+        headerExtras={
+          <button type="button" onClick={addLlmPreset} className="btn btn-secondary btn-sm ml-auto">
+            {t('settings.llmPresetNew')}
+          </button>
+        }
+      >
+        <p className="text-xs text-fg-tertiary m-0">{t('settings.llmPresetListHint')}</p>
+        <div className="rounded-sm border border-subtle bg-sunken p-2.5">
+          <ul className="list-none m-0 p-0 flex flex-col gap-1">
+            {draft.llm_tagger.presets.map((p) => {
+              const isDefault = p.id === draft.llm_tagger.current_preset
+              return (
+                <li key={p.id} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                  isDefault ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
+                }`}>
+                  <input type="radio" name="llm_preset_default" checked={isDefault}
+                    onChange={() => update('llm_tagger', 'current_preset', p.id)}
+                    className="shrink-0"
+                    style={{ accentColor: 'var(--accent)' }}
+                    title={t('settings.llmPresetSetDefault')}
+                  />
+                  <span className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+                    {llmPresetLabel(p, t)}
+                  </span>
+                  {p.builtin && (
+                    <span className="text-xs px-1.5 py-0.5 rounded-sm font-mono bg-overlay text-fg-tertiary shrink-0">
+                      {t('llmPreset.builtin')}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setEditingLlmPresetId(p.id)}
+                    className="btn btn-secondary btn-sm min-w-[5rem] justify-center shrink-0"
+                  >
+                    {t('settings.llmPresetEdit')}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      </SettingsSection>
 
       <SettingsSection id="wd14" title="WD14">
         <SourceSelect
           opt={catalog?.download_source_options?.wd14}
           onChange={(s) => void setDownloadSource('wd14', s)}
         />
-        <WD14ModelCard
+        <ModelSourceCard
+          domain="wd14"
+          title={t('settings.wd14CandidateTitle', { name: catalog?.wd14?.name ?? 'WD14' })}
+          helpTooltip={
+            <p><Trans i18nKey="settings.wd14CandidateHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'wd14', catalog?.wd14?.description, t) }} components={{ code: <code /> }} /></p>
+          }
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          currentModelId={draft.wd14.model_id}
-          onSelectModelId={(id) => update('wd14', 'model_id', id)}
-          candidates={draft.wd14.model_ids}
-          onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
+          currentValue={draft.wd14.model_id}
+          onSelect={(v) => update('wd14', 'model_id', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
         <div className="grid grid-cols-2 gap-3">
@@ -656,15 +555,17 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.cltagger}
           onChange={(s) => void setDownloadSource('cltagger', s)}
         />
-        <CLTaggerModelCard
+        <ModelSourceCard
+          domain="cltagger"
+          title={t('settings.clTaggerVersionTitle', { name: catalog?.cltagger?.name ?? 'CLTagger' })}
+          helpTooltip={
+            <p><Trans i18nKey="settings.repoHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'cltagger', catalog?.cltagger?.description, t), repo: catalog?.cltagger?.repo ?? '' }} components={{ code: <code /> }} /></p>
+          }
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          currentModelPath={draft.cltagger.model_path}
-          currentTagMappingPath={draft.cltagger.tag_mapping_path}
-          onSelectVariant={selectCLTaggerVariant}
-          modelId={draft.cltagger.model_id}
-          onModelIdChange={(id) => update('cltagger', 'model_id', id)}
+          currentValue={`${draft.cltagger.model_id}|${draft.cltagger.model_path}|${draft.cltagger.tag_mapping_path}`}
+          onSelect={(_, row) => selectCLTaggerRow(row)}
+          addDownload={{ repoPlaceholder: 'cella110n/cl_tagger' }}
+          addLocal={{ secondFileKey: 'tag_mapping_path' }}
           t={t}
         />
         <div className="grid grid-cols-2 gap-3">
@@ -763,28 +664,37 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.eval}
           onChange={(s) => void setDownloadSource('eval', s)}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="clip" dlId="eval_clip"
-          titleKey="settings.evalClipModel" helpKey="settings.evalClipModelHelp"
-          modelId={draft.eval_metrics.clip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'clip_model_name', id)}
+        <ModelSourceCard
+          domain="eval_clip"
+          title={t('settings.evalClipModel')}
+          helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.clip_model_name}
+          onSelect={(v) => update('eval_metrics', 'clip_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="dino" dlId="eval_dino"
-          titleKey="settings.evalDinoModel" helpKey="settings.evalDinoModelHelp"
-          modelId={draft.eval_metrics.dino_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
+        <ModelSourceCard
+          domain="eval_dino"
+          title={t('settings.evalDinoModel')}
+          helpTooltip={<p>{t('settings.evalDinoModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.dino_model_name}
+          onSelect={(v) => update('eval_metrics', 'dino_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="ccip" dlId="eval_ccip"
-          titleKey="settings.evalCcipModel" helpKey="settings.evalCcipModelHelp"
-          modelId={draft.eval_metrics.ccip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'ccip_model_name', id)}
+        <ModelSourceCard
+          domain="eval_ccip"
+          title={t('settings.evalCcipModel')}
+          helpTooltip={<p>{t('settings.evalCcipModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.ccip_model_name}
+          onSelect={(v) => update('eval_metrics', 'ccip_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
         <SettingsField
@@ -855,8 +765,6 @@ export default function SettingsPage() {
       {tab === 'preprocess' && (
         <UpscalerSection
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
           setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}
@@ -869,6 +777,7 @@ export default function SettingsPage() {
             secrets.generate.attention_backend (flash_attn / xformers / none).
             Only xformers is an exact ComfyUI KSampler parity target. */}
         <IdleTimeoutSection draft={draft} update={update} />
+        <VramPolicySection draft={draft} update={update} />
         <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />
@@ -980,6 +889,13 @@ export default function SettingsPage() {
     <SectionIndex sections={TAB_SECTIONS[tab]} scrollContainer={scrollContainerRef} />
     </div>
     </div>
+
+    {editingLlmPresetId && (
+      <LLMPresetEditorModal
+        presetId={editingLlmPresetId}
+        onClose={() => setEditingLlmPresetId(null)}
+      />
+    )}
     </div>
   )
 }

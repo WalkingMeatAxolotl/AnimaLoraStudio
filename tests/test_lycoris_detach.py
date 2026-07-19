@@ -8,18 +8,19 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from utils.lycoris_adapter import AnimaLycorisAdapter
+from training.families.anima.preset import ANIMA_PRESET
 
 
 def test_detach_noop_when_not_injected() -> None:
     """没 inject 过的 adapter，detach 是 noop 返 True。"""
-    a = AnimaLycorisAdapter()
+    a = AnimaLycorisAdapter(preset=ANIMA_PRESET, )
     assert a.detach() is True
     assert a.network is None
 
 
 def test_detach_calls_restore_and_clears_state() -> None:
     """有 LycorisNetwork.restore() 时被调用 + model.train 还原 + 引用清空。"""
-    a = AnimaLycorisAdapter()
+    a = AnimaLycorisAdapter(preset=ANIMA_PRESET, )
     fake_network = MagicMock()
     # restore 是第一个被尝试的方法名
     fake_network.restore = MagicMock()
@@ -42,7 +43,7 @@ def test_detach_calls_restore_and_clears_state() -> None:
 
 def test_detach_falls_back_to_restore_apply() -> None:
     """没 restore 但有 restore_apply 时，调 restore_apply。"""
-    a = AnimaLycorisAdapter()
+    a = AnimaLycorisAdapter(preset=ANIMA_PRESET, )
     fake_network = MagicMock(spec=["restore_apply", "remove_apply"])
     fake_network.restore_apply = MagicMock()
     a.network = fake_network
@@ -55,7 +56,7 @@ def test_detach_falls_back_to_restore_apply() -> None:
 
 def test_detach_returns_false_when_no_restore_interface() -> None:
     """lycoris 三个接口都没（旧版本）→ 返 False，调用方应 fallback 到 reload。"""
-    a = AnimaLycorisAdapter()
+    a = AnimaLycorisAdapter(preset=ANIMA_PRESET, )
     # spec=[] 让 MagicMock 不自动生成 restore* 属性 → getattr 返 None
     fake_network = MagicMock(spec=[])
     a.network = fake_network
@@ -69,7 +70,7 @@ def test_detach_returns_false_when_no_restore_interface() -> None:
 
 def test_detach_idempotent() -> None:
     """重复 detach 不抛错，第二次 noop。"""
-    a = AnimaLycorisAdapter()
+    a = AnimaLycorisAdapter(preset=ANIMA_PRESET, )
     fake_network = MagicMock()
     fake_network.restore = MagicMock()
     a.network = fake_network

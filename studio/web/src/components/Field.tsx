@@ -24,6 +24,13 @@ interface Props {
   /** path 字段右侧额外按钮槽（如「↺ 重置为全局默认」）。仅对 string/path
    * 字段渲染；其他类型字段忽略。 */
   suffix?: React.ReactNode
+  /** select 的可见选项覆盖（option_show_when 过滤后的 enum 子集，由
+   * SchemaForm 按当前 values 计算）。缺省渲染 prop.enum 全量。 */
+  enumOptions?: unknown[]
+  /** option_disable_when 命中的选项（D4：灰显不可选、不隐藏），由 SchemaForm
+   * 按当前 values 计算；title 显示 disabledOptionHint 解释为什么不可选。 */
+  disabledEnumOptions?: string[]
+  disabledOptionHint?: string
 }
 
 // input 覆盖 .input 默认值（更紧凑；背景用 canvas 而不是 surface）
@@ -34,6 +41,16 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--fg-primary)',
 }
 
+// disabled 灰显：行内 inputStyle 指定了 background/color，浏览器默认的
+// disabled 外观被盖掉 —— input/textarea 必须显式叠加（checkbox 的
+// opacity-60 wrapper / select 的原生灰显不受此影响）。
+const disabledInputStyle: React.CSSProperties = {
+  ...inputStyle, opacity: 0.55, cursor: 'not-allowed',
+}
+
+const fieldStyle = (disabled: boolean): React.CSSProperties =>
+  disabled ? disabledInputStyle : inputStyle
+
 const FieldHint = ({ children }: { children: React.ReactNode }) => (
   <span className="ml-2 text-[11px] text-warn align-middle">{children}</span>
 )
@@ -41,6 +58,7 @@ const FieldHint = ({ children }: { children: React.ReactNode }) => (
 /** 单个表单字段，按 control kind 分发渲染。 */
 export default function Field({
   name, prop, value, onChange, disabled = false, hint, descriptionOverride, suffix,
+  enumOptions, disabledEnumOptions, disabledOptionHint,
 }: Props) {
   const { t } = useTranslation()
   const kind = controlKind(prop)
@@ -111,11 +129,23 @@ export default function Field({
           disabled={disabled}
           className="input" style={inputStyle}
         >
-          {(prop.enum ?? []).map((opt) => (
-            <option key={String(opt)} value={String(opt)}>
-              {schemaEnumLabel(name, opt, t)}
-            </option>
-          ))}
+          {(enumOptions ?? prop.enum ?? []).map((opt) => {
+            // 当前已选中的值即使被禁也保持可选中状态渲染（表单如实反映
+            // config；非法组合由后端校验报错，不在 UI 里凭空清值）
+            const optDisabled =
+              disabledEnumOptions?.includes(String(opt)) &&
+              String(opt) !== String(value ?? '')
+            return (
+              <option
+                key={String(opt)}
+                value={String(opt)}
+                disabled={optDisabled}
+                title={optDisabled ? disabledOptionHint : undefined}
+              >
+                {schemaEnumLabel(name, opt, t)}
+              </option>
+            )
+          })}
         </select>
         {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
       </div>
@@ -239,7 +269,7 @@ function TextareaField({
         value={text}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="input input-mono resize-none overflow-hidden" style={inputStyle}
+        className="input input-mono resize-none overflow-hidden" style={fieldStyle(disabled)}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -280,7 +310,7 @@ function StringListField({
         }}
         onBlur={() => setRaw(parse(raw).join('\n'))}
         disabled={disabled}
-        className="input input-mono resize-none overflow-hidden" style={inputStyle}
+        className="input input-mono resize-none overflow-hidden" style={fieldStyle(disabled)}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -353,7 +383,7 @@ function JsonCodeField({
         onBlur={commit}
         disabled={disabled}
         className="input input-mono"
-        style={inputStyle}
+        style={fieldStyle(disabled)}
       />
       {error && <div className="text-xs text-err mt-1">{error}</div>}
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
@@ -423,7 +453,7 @@ function IntListField({
           }
         }}
         disabled={disabled}
-        className="input input-mono" style={inputStyle}
+        className="input input-mono" style={fieldStyle(disabled)}
         placeholder={placeholder}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
@@ -500,7 +530,7 @@ function NumberField({
           }
         }}
         disabled={disabled}
-        className="input input-mono" style={inputStyle}
+        className="input input-mono" style={fieldStyle(disabled)}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -552,7 +582,7 @@ function PathStringField({
           value={text}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          className={'input' + (kind === 'path' ? ' input-mono' : '')} style={inputStyle}
+          className={'input' + (kind === 'path' ? ' input-mono' : '')} style={fieldStyle(disabled)}
         />
         {kind === 'path' && (
           <button

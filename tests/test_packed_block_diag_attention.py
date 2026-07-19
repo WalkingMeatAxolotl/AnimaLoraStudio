@@ -17,7 +17,7 @@ pytest.importorskip("xformers")
 
 from xformers.ops.fmha import BlockDiagonalMask
 
-from modeling.cosmos_predict2_modeling import torch_attention_op
+from modeling.anima.cosmos_predict2_modeling import torch_attention_op
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="needs CUDA + xformers"

@@ -1,9 +1,7 @@
 """逐模型高层下载流程 + 异步状态跟踪（PR-3.8 拆出 4-way 第 3 个）。
 
-含 download_anima_main / download_anima_vae / download_qwen3 / download_t5_tokenizer /
-download_cltagger / download_upscaler[_custom] / download_wd14 / download_taeflux 8 个
-逐模型函数，调 sources.py 的 download_flat[_ms] 实际下载，调 paths.py 拿
-target Path 和模型清单常量。
+含 Anima / Krea 2 训练资产与各类工具模型的逐模型下载函数，调 sources.py 的
+download_flat[_ms] 实际下载，调 paths.py / families 拿 target Path 和模型清单。
 
 异步：DownloadStatus / start_download_async / trigger 把同步下载包成后台 thread，
 向 event_bus 推 model_download_changed。
@@ -18,34 +16,49 @@ from typing import Any, Callable, Optional
 
 from ... import secrets
 from ...infrastructure.event_bus import bus
-from .paths import (
+from .families.anima import (
     ANIMA_REPO,
     ANIMA_VAE_PATH,
     ANIMA_VARIANTS,
-    CLTAGGER_VERSIONS,
-    DEFAULT_UPSCALER,
     LATEST_ANIMA,
     QWEN_FILES,
     QWEN_REPO,
     T5_FILES,
     T5_REPO,
+    anima_main_target,
+    qwen_dir,
+    selected_anima_variant,
+    t5_tokenizer_dir,
+)
+from .families.krea2 import (
+    KREA2_VARIANTS,
+    LATEST_KREA2,
+    QWEN3_VL_FILES,
+    QWEN3_VL_FP8_FILE,
+    QWEN3_VL_FP8_REPO,
+    QWEN3_VL_FP8_SMALL_FILES,
+    QWEN3_VL_FP8_SUBPATH,
+    QWEN3_VL_REPO,
+    krea2_main_target,
+    qwen3_vl_dir,
+    qwen3_vl_fp8_dir,
+)
+from .paths import (
+    CLTAGGER_VERSIONS,
+    DEFAULT_UPSCALER,
     TAEFLUX_FILES,
     TAEFLUX_REPO,
     UPSCALER_EXTS,
     UPSCALER_VARIANTS,
     WD14_FILES,
-    anima_main_target,
-    anima_vae_target,
+    ccip_model_dir,
     cltagger_canonical_file_paths,
     cltagger_required_files,
     cltagger_target_root,
-    ccip_model_dir,
     eval_model_target_dir,
     models_root,
-    qwen_dir,
-    selected_anima_variant,
+    qwen_image_vae_target,
     selected_upscaler,
-    t5_tokenizer_dir,
     taeflux_dir,
     upscaler_dir,
     upscaler_target,
@@ -91,11 +104,88 @@ def download_anima_main(
 
 
 def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
-    target = anima_vae_target(root)
+    # 落点是族无关共享资产（Krea2 同用）；下载渠道走 Anima repo（文件在那儿）。
+    target = qwen_image_vae_target(root)
     on_log("\n📥 Anima VAE (~250 MB)")
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
+
+
+def download_krea2_main(
+    root: Path, variant: str, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """从 HuggingFace 官方仓库或 ModelScope Comfy-Org 镜像下载 Krea2。"""
+    if variant == "latest":
+        variant = LATEST_KREA2
+    info = KREA2_VARIANTS.get(variant)
+    if info is None:
+        on_log(f"✗ 未知 Krea 2 variant {variant!r}")
+        return False
+    target = krea2_main_target(root, variant)
+    size_gb = float(info.get("size_estimate", 0)) / 1e9
+    on_log(f"\n📥 Krea 2 [{variant}] (~{size_gb:.1f} GB) → {target}")
+    if _sources._source_for("training") == "modelscope":
+        return _sources.download_flat_ms(
+            str(info["ms_repo"]), str(info["ms_subpath"]), target, on_log=on_log,
+        )
+    return _sources.download_flat(
+        str(info["repo"]), str(info["subpath"]), target, on_log=on_log,
+    )
+
+
+def download_qwen3_vl(
+    root: Path, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """下载 Krea 2 使用的完整 Qwen3-VL-4B-Instruct transformers 目录。"""
+    target_dir = qwen3_vl_dir(root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    use_modelscope = _sources._source_for("training") == "modelscope"
+    source_label = "ModelScope" if use_modelscope else "HuggingFace"
+    on_log(
+        f"\n📥 Krea 2 文本编码器 Qwen3-VL-4B-Instruct "
+        f"(~8.89 GB, {source_label}) → {target_dir}"
+    )
+    ok = True
+    for filename in QWEN3_VL_FILES:
+        target = target_dir / filename
+        if use_modelscope:
+            downloaded = _sources.download_flat_ms(
+                QWEN3_VL_REPO, filename, target, on_log=on_log,
+            )
+        else:
+            downloaded = _sources.download_flat(
+                QWEN3_VL_REPO, filename, target, on_log=on_log,
+            )
+        if not downloaded:
+            ok = False
+    return ok
+
+
+def download_qwen3_vl_fp8(
+    root: Path, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """下载官方 fp8_scaled 单文件 TE + config/tokenizer 小文件到独立目录。
+
+    权重来自 Comfy-Org/Krea-2（HF 与 ModelScope 同 repo 布局）；小文件来自
+    Qwen 官方 repo（单文件里没有，loader 需要 config 建结构、tokenizer
+    编码）。
+    """
+    target_dir = qwen3_vl_fp8_dir(root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    use_ms = _sources._source_for("training") == "modelscope"
+    on_log(f"\n📥 Krea 2 文本编码器 Qwen3-VL fp8 (~5.24 GB) → {target_dir}")
+    download = _sources.download_flat_ms if use_ms else _sources.download_flat
+    ok = download(
+        QWEN3_VL_FP8_REPO, QWEN3_VL_FP8_SUBPATH,
+        target_dir / QWEN3_VL_FP8_FILE, on_log=on_log,
+    )
+    for filename in QWEN3_VL_FP8_SMALL_FILES:
+        if not download(
+            QWEN3_VL_REPO, filename, target_dir / filename, on_log=on_log,
+        ):
+            ok = False
+    return ok
 
 
 def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
@@ -233,6 +323,45 @@ def download_upscaler_custom(
     if source == "ms":
         return _sources.download_flat_ms(repo_id, repo_subpath, target, on_log=on_log)
     return _sources.download_flat(repo_id, repo_subpath, target, on_log=on_log)
+
+
+def download_main_custom(
+    repo_id: str,
+    filename: str,
+    root: Optional[Path] = None,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """统一来源候选的第三方主模型单文件下载 → `{models_root}/diffusion_models/`。
+
+    filename 是 repo 内路径（可含子目录），落地时剥成纯文件名（与官方
+    variant 同目录，文件名即身份）。走 download_flat 的「有 MS 映射用 MS、
+    否则 HF」默认逻辑——自定义 repo 无映射即直连 HF。
+    """
+    save_name = Path(filename).name
+    if not save_name.lower().endswith(".safetensors"):
+        on_log(f"✗ 仅支持 .safetensors，收到 {save_name!r}")
+        return False
+    r = root or models_root()
+    target = r / "diffusion_models" / save_name
+    on_log(f"\n📥 自定义主模型 {repo_id}/{filename} → {target}")
+    return _sources.download_flat(repo_id, filename, target, on_log=on_log)
+
+
+def _download_candidate(domain: str, filename: str) -> "secrets.SourceCandidate":
+    """按 filename 查该 domain 的下载型候选（trigger / delete 共用）。"""
+    for c in secrets.load().model_sources.get(domain, []):
+        if c.kind == "download" and c.filename == filename:
+            return c
+    raise ValueError(f"no download candidate {filename!r} for domain {domain!r}")
+
+
+def _custom_family(model_id: str) -> Optional[str]:
+    """`{family}_custom` 形式的 model_id → family id（未注册族返回 None）。"""
+    from .families import FAMILY_ASSETS
+
+    family = model_id[: -len("_custom")]
+    return family if family in FAMILY_ASSETS else None
 
 
 def download_wd14(
@@ -467,6 +596,114 @@ def start_download_async(
     return ds
 
 
+def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
+    """删除一个已下载资产（下载按钮的逆操作：用户先删除、再下载）。
+
+    目标路径全部由服务端 target 函数解析——不接受任意路径；对应 key 的
+    下载进行中拒绝。覆盖下载中心全部资产 id：训练模型区（主模型 variant /
+    VAE / 文本编码器 / tokenizer）、打标（wd14 / cltagger）、eval 指标
+    （clip / dino / ccip）、放大器（预设 + 自定义文件名）。文件被占用
+    （模型已加载 / 训练中）时 OSError 原样转可操作报错。
+    """
+    import shutil
+
+    root = models_root()
+    target: Path
+    key = model_id
+    if model_id == "anima_main":
+        v = variant or ""
+        if v not in ANIMA_VARIANTS:
+            raise ValueError(f"unknown anima variant {variant!r}")
+        key = f"anima_main:{v}"
+        target = anima_main_target(root, v)
+    elif model_id == "krea2_main":
+        v = variant or ""
+        if v not in KREA2_VARIANTS:
+            raise ValueError(f"unknown Krea 2 variant {variant!r}")
+        key = f"krea2_main:{v}"
+        target = krea2_main_target(root, v)
+    elif model_id == "anima_vae":
+        target = qwen_image_vae_target(root)
+    elif model_id == "qwen3":
+        target = qwen_dir(root)
+    elif model_id == "t5_tokenizer":
+        target = t5_tokenizer_dir(root)
+    elif model_id == "krea2_text_encoder":
+        target = qwen3_vl_dir(root)
+    elif model_id == "krea2_text_encoder_fp8":
+        target = qwen3_vl_fp8_dir(root)
+    elif model_id == "wd14":
+        if not variant:
+            raise ValueError("wd14 需要 variant=model_id")
+        key = f"wd14:{variant}"
+        target = wd14_target_dir(root, variant)
+    elif model_id == "cltagger":
+        preset = CLTAGGER_VERSIONS.get(variant or "")
+        if preset is None:
+            raise ValueError(f"unknown cltagger variant {variant!r}")
+        key = f"cltagger:{variant}"
+        # 只删该版本子目录——v1/v2 同 repo 根下可并存多版本
+        target = cltagger_target_root(root, preset["model_id"]) / Path(
+            preset["model_path"]
+        ).parent
+    elif model_id in ("eval_clip", "eval_dino"):
+        if not variant:
+            raise ValueError(f"{model_id} 需要 variant=model_id")
+        kind = "clip" if model_id == "eval_clip" else "dino"
+        key = f"{model_id}:{variant}"
+        target = eval_model_target_dir(root, kind, variant)
+    elif model_id == "eval_ccip":
+        if not variant:
+            raise ValueError("eval_ccip 需要 variant=ccip 变体名")
+        key = f"eval_ccip:{variant}"
+        target = ccip_model_dir(root, variant)
+    elif model_id == "upscaler":
+        if not variant:
+            raise ValueError("upscaler 需要 variant=label")
+        # 预设 label 或自定义文件名；upscaler_target 自带路径穿越校验
+        key = (
+            f"upscaler:{variant}"
+            if variant in UPSCALER_VARIANTS
+            else f"upscaler:custom:{variant}"
+        )
+        target = upscaler_target(variant, root)
+    elif model_id == "cltagger_custom":
+        # fork repo 专属根目录整删（与官方 repo 目录隔离，安全）
+        if not variant:
+            raise ValueError("cltagger_custom 需要 variant=repo")
+        key = f"cltagger_custom:{variant}"
+        target = cltagger_target_root(root, variant)
+    elif model_id == "upscaler_custom":
+        # 统一来源 download 候选落盘的文件（filename 即身份）
+        if not variant:
+            raise ValueError("upscaler_custom 需要 variant=filename")
+        save_name = Path(variant).name
+        key = f"upscaler:custom:{save_name}"
+        target = upscaler_dir(root) / save_name
+    elif model_id.endswith("_custom") and _custom_family(model_id) is not None:
+        if not variant:
+            raise ValueError(f"{model_id} 需要 variant=filename")
+        key = f"{model_id}:{variant}"
+        target = root / "diffusion_models" / Path(variant).name
+    else:
+        raise ValueError(f"asset {model_id!r} does not support deletion")
+
+    with _LOCK:
+        existing = _DOWNLOADS.get(key)
+        if existing and existing.status == "running":
+            raise RuntimeError(f"{key} 正在下载中，无法删除")
+
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    except OSError as exc:
+        raise RuntimeError(
+            f"删除失败（文件可能被占用——模型已加载或训练中）：{exc}"
+        ) from exc
+
+
 def trigger(model_id: str, variant: Optional[str] = None) -> str:
     """便于端点调用的入口：根据 model_id 选对应的 download_* 函数 + 启动异步。
 
@@ -489,6 +726,29 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = "anima_vae"
         start_download_async(
             key, lambda log: download_anima_vae(root, on_log=log)
+        )
+        return key
+    if model_id == "krea2_main":
+        v = variant or "latest"
+        if v == "latest":
+            v = LATEST_KREA2
+        if v not in KREA2_VARIANTS:
+            raise ValueError(f"unknown Krea 2 variant {variant!r}")
+        key = f"krea2_main:{v}"
+        start_download_async(
+            key, lambda log: download_krea2_main(root, v, on_log=log)
+        )
+        return key
+    if model_id == "krea2_text_encoder":
+        key = "krea2_text_encoder"
+        start_download_async(
+            key, lambda log: download_qwen3_vl(root, on_log=log)
+        )
+        return key
+    if model_id == "krea2_text_encoder_fp8":
+        key = "krea2_text_encoder_fp8"
+        start_download_async(
+            key, lambda log: download_qwen3_vl_fp8(root, on_log=log)
         )
         return key
     if model_id == "qwen3":
@@ -561,4 +821,57 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
             key, lambda log: download_upscaler(label, root, on_log=log)
         )
         return key
+    if model_id == "cltagger_custom":
+        # fork repo 候选（镜像覆盖退役后的替代，D4）：variant=repo，双文件
+        # 相对路径从候选 extra 取，下载到该 fork 专属根目录。
+        if not variant:
+            raise ValueError("cltagger_custom 需要 variant=repo")
+        cand = next(
+            (c for c in secrets.load().model_sources.get("cltagger", [])
+             if c.kind == "download" and c.repo == variant),
+            None,
+        )
+        if cand is None:
+            raise ValueError(f"no cltagger download candidate {variant!r}")
+        cfg = secrets.CLTaggerConfig(**{
+            **secrets.load().cltagger.model_dump(),
+            "model_id": cand.repo,
+            "model_path": cand.extra.get("model_path", ""),
+            "tag_mapping_path": cand.extra.get("tag_mapping_path", ""),
+        })
+        key = f"cltagger_custom:{variant}"
+        target = cltagger_target_root(root, cand.repo)
+        start_download_async(
+            key, lambda log: download_cltagger(target, cfg, on_log=log)
+        )
+        return key
+    if model_id == "upscaler_custom":
+        # 统一来源 download 候选（variant=filename；repo 从候选记录取，
+        # 源跟全局 download_sources.upscaler）。key 与扫盘行一致。
+        if not variant:
+            raise ValueError("upscaler_custom 需要 variant=filename")
+        cand = _download_candidate("upscaler", variant)
+        key = f"upscaler:custom:{Path(variant).name}"
+        source = "ms" if _sources._source_for("upscaler") == "modelscope" else "hf"
+        start_download_async(
+            key,
+            lambda log: download_upscaler_custom(
+                source, cand.repo, variant, root, on_log=log),
+        )
+        return key
+    if model_id.endswith("_custom"):
+        from .families import FAMILY_ASSETS
+
+        family = model_id[: -len("_custom")]
+        if family in FAMILY_ASSETS:
+            if not variant:
+                raise ValueError(f"{model_id} 需要 variant=filename")
+            cand = _download_candidate(family, variant)
+            key = f"{model_id}:{variant}"
+            start_download_async(
+                key,
+                lambda log: download_main_custom(
+                    cand.repo, variant, root, on_log=log),
+            )
+            return key
     raise ValueError(f"unknown model_id {model_id!r}")

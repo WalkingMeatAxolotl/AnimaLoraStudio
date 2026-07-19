@@ -64,7 +64,8 @@ Thumbs.db
 
 # models/ = 下载的权重 / tokenizer 数据落点，像 studio_data/ 一样整个忽略、
 # 按需创建（下载器按需 mkdir 子目录）。模型架构代码已挪到 modeling/（tracked）。
-models/
+# 只忽略仓库根的权重下载目录；不锚定会误伤 studio/services/models/ 等源码目录下的新文件
+/models/
 
 # Dataset (training images)
 dataset/

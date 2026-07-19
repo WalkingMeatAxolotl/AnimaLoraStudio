@@ -75,23 +75,23 @@ from training.model_loading import (  # noqa: E402
     enable_xformers,
     find_diffusion_pipe_root,
     forward_with_optional_checkpoint,
-    load_module_from_path,
     resolve_path_best_effort,
 )
-from training.text_encoding import (  # noqa: E402
+from training.families.anima.text_encoding import (  # noqa: E402
     _build_qwen_text_from_prompt,
     _parse_weighted_tag,
     encode_qwen,
     tokenize_t5_weighted,
 )
 from training.state import load_training_state, save_training_state  # noqa: E402
-from training.models import (  # noqa: E402
-    ensure_models_namespace,
+from training.model_loading import ensure_models_namespace  # noqa: E402
+from training.vae import load_vae  # noqa: E402
+from training.families import get_family, resolve_family  # noqa: E402  # 派发咽喉（D8'）
+from training.families.anima.loader import (  # noqa: E402
     load_anima_model,
     load_text_encoders,
-    load_vae,
 )
-from training.sampling import sample_image  # noqa: E402
+from training.families.anima.sampling import sample_image  # noqa: E402
 from training.dataset import (  # noqa: E402
     BucketBatchSampler,
     BucketManager,
@@ -130,6 +130,8 @@ def main():
     phases.bootstrap.run(ctx)
     phases.models.run(ctx)
     phases.dataset.run(ctx)
+    phases.text_cache.run(ctx)
+    phases.models.finish(ctx)
     phases.optimizer.run(ctx)
     phases.resume.run(ctx)
     loop.run(ctx)

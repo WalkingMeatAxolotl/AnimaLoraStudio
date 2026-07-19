@@ -53,6 +53,11 @@ PRESETS_PREFIX = "presets/"
 CAPTION_EXTS = {".txt"}
 # VAE latent 缓存（CachedLatentDataset 的 {名}.npz / {名}.r{reso}.npz，紧挨图片）
 LATENT_CACHE_EXT = ".npz"
+# Phase 2 文本缓存：随图 sidecar。prompt 聚合缓存归 task 档案
+# （tasks/<id>/.text-cache/），不在 version 树里，bundle 不打包。
+# 继续复用现有 train_latent_cache / reg_latent_cache bundle 选项：两者表达的
+# 是“携带可重建训练缓存”，不改变默认导出体积。
+TEXT_CACHE_SIDECAR_SUFFIX = ".text.safetensors"
 # 训练 mask sidecar（train/{folder}/{stem}.mask，与图同目录，详
 # services/preprocess/masks.py）。arcname 两段与图片同构。
 MASK_SUFFIX = ".mask"
@@ -366,12 +371,13 @@ def _collect_train(
     image_count = 0
     tagged_count = 0
     latent_cache_count = 0
+    text_cache_count = 0
     mask_count = 0
 
     if not train_dir.exists():
         return payload, {
             "image_count": 0, "tagged_count": 0, "concepts": [],
-            "latent_cache_count": 0, "mask_count": 0,
+            "latent_cache_count": 0, "text_cache_count": 0, "mask_count": 0,
         }
 
     for sub in sorted(train_dir.iterdir()):
@@ -393,6 +399,11 @@ def _collect_train(
             elif ext == LATENT_CACHE_EXT and include_latent_cache:
                 latent_cache_count += 1
                 payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
+            elif include_latent_cache and f.name.endswith(
+                TEXT_CACHE_SIDECAR_SUFFIX
+            ):
+                text_cache_count += 1
+                payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
             elif ext == MASK_SUFFIX and include_masks:
                 mask_count += 1
                 payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
@@ -408,6 +419,7 @@ def _collect_train(
         "tagged_count": tagged_count,
         "concepts": concepts,
         "latent_cache_count": latent_cache_count,
+        "text_cache_count": text_cache_count,
         "mask_count": mask_count,
     }
 
@@ -419,9 +431,12 @@ def _collect_reg(
     payload: list[tuple[Path, str]] = []
     image_count = 0
     latent_cache_count = 0
+    text_cache_count = 0
 
     if not reg_dir.exists():
-        return payload, {"image_count": 0, "latent_cache_count": 0}
+        return payload, {
+            "image_count": 0, "latent_cache_count": 0, "text_cache_count": 0,
+        }
 
     # meta.json
     meta = reg_dir / "meta.json"
@@ -445,6 +460,12 @@ def _collect_reg(
                 elif ext == LATENT_CACHE_EXT and include_latent_cache:
                     latent_cache_count += 1
                     payload.append((f, f"{REG_PREFIX}{item.name}/{f.name}"))
+                elif (
+                    include_latent_cache
+                    and f.name.endswith(TEXT_CACHE_SIDECAR_SUFFIX)
+                ):
+                    text_cache_count += 1
+                    payload.append((f, f"{REG_PREFIX}{item.name}/{f.name}"))
                 elif ext in CAPTION_EXTS and include_captions:
                     pass  # 由图片侧 include
         elif item.is_file() and item.suffix.lower() in IMAGE_EXTS:
@@ -453,7 +474,11 @@ def _collect_reg(
             image_count += 1
             payload.append((item, f"{REG_PREFIX}{item.name}"))
 
-    return payload, {"image_count": image_count, "latent_cache_count": latent_cache_count}
+    return payload, {
+        "image_count": image_count,
+        "latent_cache_count": latent_cache_count,
+        "text_cache_count": text_cache_count,
+    }
 
 
 def export_bundle(
@@ -565,6 +590,10 @@ def export_bundle(
             "latent_cache_count": (
                 train_stats.get("latent_cache_count", 0)
                 + reg_stats.get("latent_cache_count", 0)
+            ),
+            "text_cache_count": (
+                train_stats.get("text_cache_count", 0)
+                + reg_stats.get("text_cache_count", 0)
             ),
             "train_mask_count": train_stats.get("mask_count", 0),
         },
@@ -863,7 +892,14 @@ def import_bundle(
                             from .. import presets as _presets_svc
                             from .. import models as _md
                             if _presets_svc._auto_sync_paths():
-                                raw.update(_md.default_paths_for_new_version())
+                                family = str(raw.get("model_family") or "anima")
+                                try:
+                                    raw.update(_md.default_paths_for_new_version(
+                                        family=family))
+                                except ValueError:
+                                    # 未知族的 bundle：不覆路径，交给下面
+                                    # write_version_config 的 schema 校验拒绝
+                                    pass
                             try:
                                 _vc.write_version_config(p, v, raw, force_project_overrides=True)
                                 config_imported = True

@@ -43,14 +43,22 @@ python -m studio test         # pytest + vitest
 
 ## 下载模型
 
-打开后先去 **设置（Settings）→ Models**，点按钮一键下载训练所需的全部权重 + tokenizer（默认落到 `./models/`）：
+打开后先去 **设置 → 训练** 的模型下载中心。下载区按模型族分区（Anima / Krea 2），按需下载对应族的权重 + tokenizer（默认落到 `./models/`）；只训 Anima 的话不用下 Krea 2 的大文件：
 
 | 项 | 来源 | 路径 | 大小 |
 |---|---|---|---|
 | Anima 主模型（latest = 1.0）| [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
-| Anima VAE | 同上 | `models/vae/` | ~250 MB |
+| Qwen-Image VAE（Anima / Krea 2 共享） | 同上 | `models/vae/` | ~250 MB |
 | Qwen3-0.6B-Base 文本编码器 | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer（仅 3 文件，不下权重）| [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |
+| Krea 2 Raw（LoRA 训练 / 训练中采样） | [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) | `models/diffusion_models/krea2-raw-bf16.safetensors` | ~26.3 GB |
+| Krea 2 Raw **官方 fp8**（24 GB 级卡训练 / 推理） | [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) | `models/diffusion_models/krea2-raw-fp8-scaled.safetensors` | ~13.1 GB |
+| Krea 2 Turbo（测试推理） | [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) | `models/diffusion_models/krea2-turbo-bf16.safetensors` | ~26.3 GB |
+| Krea 2 Turbo **官方 fp8**（测试推理） | [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) | `models/diffusion_models/krea2-turbo-fp8-scaled.safetensors` | ~13.1 GB |
+| Krea 2 文本编码器（bf16） | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) | `models/text_encoders/Qwen_Qwen3-VL-4B-Instruct/` | ~8.89 GB |
+| Krea 2 文本编码器 **官方 fp8** | [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) | `models/text_encoders/qwen3vl-4b-fp8/` | ~5.24 GB |
+
+Krea 2 权重受 [Krea 2 Community License](https://huggingface.co/krea/Krea-2-Raw/blob/main/LICENSE.pdf) 约束。训练和训练中采样直接复用 Raw；Turbo 作为测试推理模型（Raw 上训练的 LoRA 可直接加载到 Turbo）。官方 fp8 版把权重显存约减半：fp8 Raw 可直接当训练底模（24 GB 级卡的选择，详见 [training-tips → Krea 2 训练](training-tips.md#krea-2-训练)），文本编码器 bf16 / fp8 用设置页的单选切换。Krea 2 与 Anima 共享现有 VAE，无需重复下载。选择 ModelScope 时，Krea 2 各文件从 [Comfy-Org/Krea-2](https://www.modelscope.cn/models/Comfy-Org/Krea-2) 下载。
 
 WD14 打标模型不在这里——首次进 ④ 打标时自动从 HF 拉到 `models/wd14/`。
 
@@ -59,7 +67,9 @@ WD14 打标模型不在这里——首次进 ④ 打标时自动从 HF 拉到 `m
 也可走 CLI（与 UI 共用同一份代码，全部 flag 见 [tools/README.md](../../tools/README.md)）：
 
 ```bash
-python tools/download_models.py                   # 全量下（HF 官方源）
+python tools/download_models.py                   # Anima（默认，HF 官方源）
+python tools/download_models.py --family krea2    # Krea 2 Raw + 共享 VAE + Qwen3-VL
+python tools/download_models.py --family krea2 --variant turbo
 python tools/download_models.py --endpoint URL    # 走自建反代
 python tools/download_models.py --modelscope      # 走魔搭社区
 ```
@@ -74,7 +84,7 @@ python tools/download_models.py --modelscope      # 走魔搭社区
 4. **打标** — WD14 / CLTagger / LLM（OpenAI 兼容，含 JoyCaption preset）三选一 + 阈值，GPU EP 自动 fallback；顶部填 trigger_word 自动注入每张 caption 与采样图 prompt。
 5. **标签编辑** — 缓存模式 + 还原点，批量加 / 删 / 替换，单图修。
 6. **正则集** ✱ — 两种生成方式：**AI 先验生成**（默认，无 LoRA 直接用底模出图当 reg 集）或 **Booru 反向搜**（按 tag 分布反搜 booru + 自动 WD14 打标 + 分辨率 AR 聚类）。mirror / flat 结构，可编辑 / 删图 / 自动去重 / 双 tagger 可选。
-7. **训练** — 选 preset 复制进 version 私有 config，改参数（debounce 600ms 自动落盘，无需点保存），入队即开始训练。Picker 标签显示「· 已自定义」表示和原预设已分叉，预设池不会被改。Simple / Advanced 模式。
+7. **训练** — 选 preset 复制进 version 私有 config，改参数（debounce 600ms 自动落盘，无需点保存），入队即开始训练。Picker 标签显示「· 已自定义」表示和原预设已分叉，预设池不会被改。Simple / Advanced 模式。**模型族**默认 Anima；下拉切到 Krea 2 会弹确认框逐项列出将重算的权重路径与族默认值，确认后整个版本按 Krea 2 训练（详见 [training-tips → Krea 2 训练](training-tips.md#krea-2-训练)）。
 8. **测试出图** — 单图 / XY 矩阵 / 推理 daemon。
 
 「队列」页查看任务，进**任务详情**看日志 / 监控 / 输出（含一键全量 zip 下载）。

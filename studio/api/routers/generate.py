@@ -34,7 +34,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from ..deps import _resolve_anima_model_paths
+from ..deps import _resolve_model_paths
 from ..errors import _validate_component_or_400
 from ..schemas.generate import GenerateRequest
 from ... import db, secrets
@@ -168,8 +168,27 @@ _cleanup_xy_tmp_folders()
 def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
     from ...services.inference.core import generate_tempdir
+    from ...services.models.families import get_assets
 
-    model_paths = _resolve_anima_model_paths(body.base_model)
+    model_paths = _resolve_model_paths(body.base_model, family=body.model_family)
+    # TE variant 覆盖（krea2）：请求显式给 bf16/fp8 时覆盖 selected_te 默认
+    # （default_paths 已按 selected_te 解析）；fp8 未下载给可操作报错。
+    if body.text_encoder and body.model_family == "krea2":
+        from ...services.models.families.krea2 import qwen3_vl_dir_for
+        from ...services.models.paths import models_root
+
+        te_dir = qwen3_vl_dir_for(models_root(), body.text_encoder)
+        if body.text_encoder == "fp8" and not (te_dir / "config.json").exists():
+            raise HTTPException(
+                status_code=409,
+                detail="Qwen3-VL fp8 文本编码器未下载——请到 设置 → 模型下载 "
+                       "下载后重试。",
+            )
+        model_paths["text_encoder_path"] = str(te_dir)
+    # Turbo 检测（A4/C9）：官方蒸馏 variant → daemon 走 8 步/guidance 0/固定 mu
+    # 的采样时刻表默认；custom 权重无 purpose 元数据按非蒸馏处理
+    distilled = bool(get_assets(body.model_family).is_distilled_path(
+        model_paths.get("transformer_path", "")))
 
     with db.connection_for() as conn:
         task_id = db.create_task(
@@ -193,10 +212,14 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             attn_default = gen_cfg.attention_backend
             preview_n = int(gen_cfg.preview_every_n_steps or 0)
             vae_precision = str(getattr(gen_cfg, "vae_precision", "bf16") or "bf16")
+            vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
+            ram_guard = bool(getattr(gen_cfg, "ram_guard", True))
         except Exception:
             attn_default = "auto"
             preview_n = 0
             vae_precision = "bf16"
+            vram_policy = "auto"
+            ram_guard = True
         attn = body.attention_backend or attn_default
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
@@ -204,6 +227,8 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
 
         cfg = GenerateConfig(
             **model_paths,
+            model_family=body.model_family,
+            distilled=distilled,
             output_dir=str(tempdir),
             prompts=body.prompts,
             negative_prompt=body.negative_prompt,
@@ -219,6 +244,8 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             mixed_precision="bf16",
             vae_precision=vae_precision,
             attention_backend=attn,
+            vram_policy=vram_policy,
+            ram_guard=ram_guard,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
 
@@ -322,6 +349,46 @@ def install_taeflux() -> dict[str, Any]:
             code="generate.preview_model_download_failed", http_status=500,
         )
     return {"ok": True}
+
+
+_TOKENIZER_CACHE: dict[str, Any] = {}
+
+
+@router.post("/api/generate/token_count")
+def count_prompt_tokens(body: dict) -> dict[str, Any]:
+    """prompt 的真实 token 数（前端角标用；tokenizer 与训练/推理同源）。
+
+    krea2 的文本条件训练口径 512 token，超出部分模型没见过（不拦截、
+    不警告——质量后果由用户掌握，前端只给中性计数）。tokenizer 惰性
+    加载并缓存；不可用时返回 tokens=null，前端隐藏角标。
+    """
+    text = str(body.get("text") or "")
+    family = str(body.get("model_family") or "anima")
+    try:
+        from ...services.models.paths import models_root
+
+        if family == "krea2":
+            from ...services.models.families.krea2 import (
+                qwen3_vl_dir_for, selected_te_variant,
+            )
+
+            tok_dir = str(qwen3_vl_dir_for(models_root(), selected_te_variant()))
+        else:
+            from ...services.models.families.anima import qwen_dir
+
+            tok_dir = str(qwen_dir(models_root()))
+        tokenizer = _TOKENIZER_CACHE.get(tok_dir)
+        if tokenizer is None:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                tok_dir, local_files_only=True,
+            )
+            _TOKENIZER_CACHE[tok_dir] = tokenizer
+        tokens = len(tokenizer(text, add_special_tokens=False)["input_ids"])
+        return {"tokens": tokens}
+    except Exception:
+        return {"tokens": None}
 
 
 @router.get("/api/generate/daemon/status")

@@ -71,13 +71,24 @@ def test_daemon_exact_ksampler_parity_fails_when_xformers_unavailable(monkeypatc
     reached: list[str] = []
 
     monkeypatch.setattr(mod._T, "find_diffusion_pipe_root", lambda: _REPO / "modeling")
-    monkeypatch.setattr(mod._T, "load_anima_model", lambda *args, **kwargs: object())
+    # daemon 加载已经 family 派发（多模型 PR-2b D8'）：mock 面升级为 family 缝
+    class _FakeFamily:
+        def load_dit(self, *args, **kwargs):
+            return object()
+
+        def load_vae(self, *args, **kwargs):
+            reached.append("vae")
+
+        def load_text(self, *args, **kwargs):
+            reached.append("text")
+            return (object(), object(), object())
+
+    monkeypatch.setattr(mod._T, "get_family", lambda _fid: _FakeFamily())
     monkeypatch.setattr(mod._T, "enable_xformers", lambda _model: False)
-    monkeypatch.setattr(mod._T, "load_vae", lambda *args, **kwargs: reached.append("vae"))
-    monkeypatch.setattr(mod._T, "load_text_encoders", lambda *args, **kwargs: reached.append("text"))
 
     with pytest.raises(RuntimeError, match="xformers"):
         cache._load(
+            family_id="anima",
             transformer_path="transformer.safetensors",
             vae_path="vae.safetensors",
             text_encoder_path="text_encoder",
@@ -95,16 +106,22 @@ def test_daemon_exact_ksampler_parity_fails_when_xformers_unavailable(monkeypatc
 def test_daemon_worker_reports_error_when_all_images_fail(monkeypatch, tmp_path) -> None:
     mod = importlib.import_module("anima_daemon")
 
+    class _BoomFamily:
+        def sample_image(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
     class FakeCache:
         model = object()
         vae = object()
-        qwen_model = object()
-        qwen_tok = object()
-        t5_tok = object()
+        text_stack = (object(), object(), object())
+        family = _BoomFamily()
         device = "cpu"
         dtype = None
 
         def ensure_loaded(self, _cfg):
+            return None
+
+        def ensure_text_ready(self, _cfg):
             return None
 
         def apply_loras(self, _lora_configs):
@@ -114,7 +131,6 @@ def test_daemon_worker_reports_error_when_all_images_fail(monkeypatch, tmp_path)
 
     monkeypatch.setattr(mod, "CACHE", FakeCache())
     monkeypatch.setattr(mod, "_emit_for", lambda req_id, kind, **extra: events.append({"id": req_id, "kind": kind, **extra}))
-    monkeypatch.setattr(mod._T, "sample_image", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
 
     mod._run_generate_worker(
         "req-1",
@@ -142,17 +158,24 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
 
     events: list[str] = []
 
+    class _RecordingFamily:
+        def sample_image(self, *_args, **_kwargs):
+            events.append("sample_image")
+            return Image.new("RGB", (1, 1))
+
     class FakeCache:
         model = object()
         vae = object()
-        qwen_model = object()
-        qwen_tok = object()
-        t5_tok = object()
+        text_stack = (object(), object(), object())
+        family = _RecordingFamily()
         device = "cuda"
         dtype = None
 
         def ensure_loaded(self, _cfg):
             events.append("ensure_loaded")
+
+        def ensure_text_ready(self, _cfg):
+            events.append("ensure_text_ready")
 
         def apply_loras(self, _lora_configs):
             events.append("apply_loras")
@@ -161,12 +184,7 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
         def _move_runtime_to_device(self):
             events.append("restore_runtime")
 
-    def fake_sample_image(*_args, **_kwargs):
-        events.append("sample_image")
-        return Image.new("RGB", (1, 1))
-
     monkeypatch.setattr(mod, "CACHE", FakeCache())
-    monkeypatch.setattr(mod._T, "sample_image", fake_sample_image)
     monkeypatch.setattr(
         mod,
         "_emit_for",
@@ -190,3 +208,25 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
 
     assert events.index("sample_image") < events.index("restore_runtime")
     assert events.index("restore_runtime") < events.index("emit:image_done")
+
+
+def test_unload_clears_cublas_workspaces_before_empty_cache(monkeypatch) -> None:
+    """「清理显存」必须清 cuBLAS workspace：C++ 级常驻分配会把 allocator
+    segment 整段钉住（实测 fp8 采样后 8GB+ reserved empty_cache 清不掉）。
+    顺序约束：clear workspace 在 empty_cache 之前才能让 segment 变空闲。"""
+    mod = importlib.import_module("anima_daemon")
+    cache = mod.ModelCache()
+    cache.model = object()  # 让 loaded 为真
+
+    calls: list[str] = []
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(mod.torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    monkeypatch.setattr(
+        mod.torch._C, "_cuda_clearCublasWorkspaces",
+        lambda: calls.append("clear_cublas"), raising=False,
+    )
+
+    cache.unload()
+
+    assert calls == ["clear_cublas", "empty_cache"]
+    assert cache.model is None and cache.adapters == []

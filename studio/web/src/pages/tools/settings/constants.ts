@@ -52,6 +52,7 @@ export type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' 
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 export const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
+  'krea2-models': 'training',
   'eval-metrics': 'monitor',
   'version': 'system',
   'service': 'system',
@@ -93,7 +94,8 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
     { id: 'xformers', labelKey: 'settings.xformers' },
-    { id: 'models', labelKey: 'settings.trainingModels' },
+    { id: 'models', labelKey: 'settings.animaModels' },
+    { id: 'krea2-models', labelKey: 'settings.krea2Models' },
   ],
   monitor: [
     { id: 'eval-metrics', labelKey: 'settings.evalMetrics' },
@@ -237,9 +239,9 @@ export const EMPTY: Secrets = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
+  models: { root: null, selected: { anima: '1.0', krea2: 'raw' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { light_tasks_during_train: true },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: true, task_timeout_minutes: 0 },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -256,6 +258,9 @@ export const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   anima_vae: 'settings.modelDescriptions.animaVae',
   qwen3: 'settings.modelDescriptions.qwen3',
   t5_tokenizer: 'settings.modelDescriptions.t5Tokenizer',
+  krea2_main: 'settings.modelDescriptions.krea2Main',
+  krea2_text_encoder: 'settings.modelDescriptions.krea2TextEncoder',
+  krea2_text_encoder_fp8: 'settings.modelDescriptions.krea2TextEncoderFp8',
   wd14: 'settings.modelDescriptions.wd14',
   cltagger: 'settings.modelDescriptions.cltagger',
 }

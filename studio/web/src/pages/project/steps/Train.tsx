@@ -17,9 +17,11 @@ import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
 import ConfigYamlPanel from '../../../components/ConfigYamlPanel'
 import { useDialog } from '../../../components/Dialog'
+import SaveIndicator from '../../../components/SaveIndicator'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
 import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
 import StepShell from '../../../components/StepShell'
+import type { SaveStatus } from '../../../lib/SettingsData'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../../lib/useAdvancedMode'
@@ -28,6 +30,7 @@ import {
   defaultsFromSchema,
   generateUniquePresetName,
 } from '../../../lib/preset-helpers'
+import FamilySwitchDialog from '../../../components/FamilySwitchDialog'
 
 // 全局模型字段来自全局设置，对版本维度只读
 const GLOBAL_MODEL_FIELDS = [
@@ -97,6 +100,26 @@ export default function TrainPage() {
     configRef.current = v
     setConfig(v)
   }, [])
+
+  /** 待确认的族切换目标（非空时渲染 FamilySwitchDialog）。 */
+  const [familySwitchTarget, setFamilySwitchTarget] = useState<string | null>(null)
+
+  /** header 自动保存指示（与 Settings 页同款 SaveIndicator）。 */
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'idle' })
+
+  /** SchemaForm.onChange 入口：拦截 model_family 变化走切换动作（P4-3）。
+   * 切族不是裸字段编辑——弹结构化确认对话框（后端重算路径 + 重置族风味
+   * 字段），用户取消则保持旧值不动。其余字段变更原样透传 setConfigSync。 */
+  const onFormChange = useCallback((v: ConfigData) => {
+    const prev = configRef.current
+    const prevFamily = String(prev?.model_family ?? 'anima')
+    const nextFamily = String(v.model_family ?? 'anima')
+    if (prev && nextFamily !== prevFamily) {
+      setFamilySwitchTarget(nextFamily)
+      return
+    }
+    setConfigSync(v)
+  }, [setConfigSync])
 
   const vid = activeVersion?.id ?? null
 
@@ -221,17 +244,24 @@ export default function TrainPage() {
     // GET 归一化结果里，JSON diff 看不出差异）。
     if (!force && JSON.stringify(cfg) === savedJsonRef.current) return
     const p = (async () => {
-      const r = await api.putVersionConfig(project.id, vid!, cfg)
-      setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
-      // baseline 用 server 归一化后的 r.config，下次 dirty diff 才不会假阳性。
-      savedJsonRef.current = JSON.stringify(r.config)
-      if (configRef.current === cfg) {
-        configRef.current = r.config
-        setConfig(r.config)
+      setSaveStatus({ state: 'saving' })
+      try {
+        const r = await api.putVersionConfig(project.id, vid!, cfg)
+        setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
+        // baseline 用 server 归一化后的 r.config，下次 dirty diff 才不会假阳性。
+        savedJsonRef.current = JSON.stringify(r.config)
+        if (configRef.current === cfg) {
+          configRef.current = r.config
+          setConfig(r.config)
+        }
+        // PUT 全量重写 yaml（tolerant validate + prune），磁盘上不再有旧字段 /
+        // 非法值 —— 兼容横幅的信息已过期，清掉。
+        applyPresetWarnings({})
+        setSaveStatus({ state: 'saved', at: Date.now() })
+      } catch (e) {
+        setSaveStatus({ state: 'error', error: String(e) })
+        throw e
       }
-      // PUT 全量重写 yaml（tolerant validate + prune），磁盘上不再有旧字段 /
-      // 非法值 —— 兼容横幅的信息已过期，清掉。
-      applyPresetWarnings({})
     })()
     inFlightSaveRef.current = p
     try { await p } finally { inFlightSaveRef.current = null }
@@ -642,6 +672,8 @@ export default function TrainPage() {
             >
               {t('train.saveAsPreset')}
             </button>
+            {/* 自动保存指示（Settings / Presets 页同款）：600ms debounce 落盘后显示时间 */}
+            <SaveIndicator status={saveStatus} />
 
             {/* popover */}
             {pickerOpen && (
@@ -776,13 +808,24 @@ export default function TrainPage() {
                 <SchemaForm
                   schema={schema}
                   values={config}
-                  onChange={setConfigSync}
+                  onChange={onFormChange}
                   disabledFields={disabledFields}
                   disabledHints={disabledHints}
                   autoHints={autoHints}
                   fieldSuffixes={makeResetSuffixes(config, setConfigSync)}
                   advancedMode={advancedMode}
                 />
+                {familySwitchTarget && config && (
+                  <FamilySwitchDialog
+                    target={familySwitchTarget}
+                    config={config}
+                    onApply={(switched) => {
+                      setConfigSync(switched)
+                      setFamilySwitchTarget(null)
+                    }}
+                    onCancel={() => setFamilySwitchTarget(null)}
+                  />
+                )}
               </section>
             ) : (
               <ConfigSkeleton label={t('train.loadingConfig')} />
@@ -851,7 +894,6 @@ export default function TrainPage() {
             ) : config ? (
               <ConfigYamlPanel
                 config={config}
-                schema={schema}
                 fileLabel="config.yaml"
                 className="flex-1 flex flex-col min-h-0"
               />

@@ -37,7 +37,6 @@ import torch.nn.functional as F
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-from utils.lokr_preset import ANIMA_PRESET
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +45,10 @@ def _lora_name(module_name: str) -> str:
     return "lora_unet_" + module_name.replace(".", "_")
 
 
-def _matches_anima_preset(module_name: str) -> bool:
-    if any(fnmatch(module_name, pat) for pat in ANIMA_PRESET.get("exclude_name", [])):
+def _matches_preset(module_name: str, preset: dict) -> bool:
+    if any(fnmatch(module_name, pat) for pat in preset.get("exclude_name", [])):
         return False
-    return any(fnmatch(module_name, pat) for pat in ANIMA_PRESET.get("target_name", []))
+    return any(fnmatch(module_name, pat) for pat in preset.get("target_name", []))
 
 
 def _split_parent(root: nn.Module, module_name: str) -> tuple[nn.Module, str]:
@@ -218,6 +217,7 @@ class OrthoLoRAAdapter:
         rank_dropout: float = 0.0,
         module_dropout: float = 0.0,
         use_timestep_mask: bool = False,
+        preset: dict | None = None,
         tlora_min_rank: int = 1,
         tlora_alpha_rank_scale: float = 1.0,
     ) -> None:
@@ -227,6 +227,8 @@ class OrthoLoRAAdapter:
         self.rank_dropout = float(rank_dropout or 0.0)
         self.module_dropout = float(module_dropout or 0.0)
         self.use_timestep_mask = bool(use_timestep_mask)
+        # 族知识（target/exclude）由调用方注入，见 families/<fam>/preset.py
+        self._preset = preset
         self.tlora_min_rank = max(1, int(tlora_min_rank))
         self.tlora_alpha_rank_scale = max(0.0, float(tlora_alpha_rank_scale))
         self.loras = nn.ModuleList()
@@ -237,7 +239,7 @@ class OrthoLoRAAdapter:
     def inject(self, model: nn.Module) -> dict[str, nn.Module]:
         replacements: list[tuple[str, nn.Module, str, nn.Linear]] = []
         for name, module in model.named_modules():
-            if isinstance(module, nn.Linear) and _matches_anima_preset(name):
+            if isinstance(module, nn.Linear) and _matches_preset(name, self._preset or {}):
                 parent, child_name = _split_parent(model, name)
                 replacements.append((name, parent, child_name, module))
 
@@ -364,21 +366,22 @@ class OrthoLoRAAdapter:
         sd: dict[str, torch.Tensor] = {}
         for layer in self.loras:
             sd.update(layer.distilled_lora_state())
+        ss_args = {
+            "algo": "lora",
+            "source_algo": "tlora_ortho" if self.use_timestep_mask else "ortho",
+            "factor": 8,
+            "dropout": self.dropout,
+            "rank_dropout": self.rank_dropout,
+            "module_dropout": self.module_dropout,
+            "weight_decompose": False,
+            "rs_lora": False,
+        }
+        ss_args.update(getattr(self, "metadata_extra", None) or {})
         meta = {
             "ss_network_dim": str(self.rank),
             "ss_network_alpha": str(self.alpha),
             "ss_network_module": "lycoris.kohya",
-            "ss_network_args": json.dumps({
-                "algo": "lora",
-                "source_algo": "tlora_ortho" if self.use_timestep_mask else "ortho",
-                "factor": 8,
-                "preset": "anima_full",
-                "dropout": self.dropout,
-                "rank_dropout": self.rank_dropout,
-                "module_dropout": self.module_dropout,
-                "weight_decompose": False,
-                "rs_lora": False,
-            }),
+            "ss_network_args": json.dumps(ss_args),
         }
         save_file(sd, str(path), metadata=meta)
         logger.info("OrthoLoRA 保存到: %s (baked as plain LoRA)", path)

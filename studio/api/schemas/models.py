@@ -3,23 +3,32 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelDownloadRequest(BaseModel):
     model_id: str           # "anima_main" | "anima_vae" | "qwen3" | "t5_tokenizer"
-    variant: Optional[str] = None  # 仅 anima_main 用，其他忽略
+    variant: Optional[str] = None  # anima_main / krea2_main 使用，其他忽略
 
 
-class AnimaCustomModelRequest(BaseModel):
-    path: str   # 本地 .safetensors 主模型绝对路径（PathPicker 选盘上已有文件）
+class FamilySwitchRequest(BaseModel):
+    """训练配置切换模型族的预览计算（多模型 P4-3）。纯计算不落盘。"""
+    target: str          # 目标族 id（"anima" / "krea2"）
+    config: dict         # 当前 config dict（允许部分字段缺失）
+
+
+class ModelSourceCandidateRequest(BaseModel):
+    """统一模型来源候选的添加 / 移除请求（docs/design/model-source-unification.md §6）。
+
+    POST 添加：kind=download 需 repo（单文件资产另需 filename）；kind=local 需
+    path。DELETE 移除：只按身份键（download=(repo, filename)，local=path）匹配。
+    """
+    kind: str                # "download" | "local"
+    repo: str = ""
+    filename: str = ""
+    path: str = ""
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class UpscalerSelectRequest(BaseModel):
-    label: str   # 预设 key 或 custom 文件名
-
-
-class UpscalerCustomDownloadRequest(BaseModel):
-    source: str   # "hf" | "ms"
-    repo_id: str  # 例 "Kim2091/UltraSharp" 或 ModelScope 同形式
-    filename: str  # 例 "4x-UltraSharp.pth"
+    label: str   # 预设 key、custom 文件名或本地绝对路径

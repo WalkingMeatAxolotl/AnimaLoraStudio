@@ -1,9 +1,68 @@
 import { useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import type { WandBConfig, WandBPreset } from '../../../api/client'
-import { Caption, PBtn } from '../../../components/LLMTaggerWorkspace'
 import { textInputClass } from './constants'
 import { Bool, SensitiveInput, SettingsField, SettingsInput } from './fields'
+
+// ── 预设工作区骨架原语（原住 LLMTaggerWorkspace；LLM 侧改列表+modal 后迁到
+// 这里，本文件成了唯一消费者）─────────────────────────────────────────────
+
+function Caption({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{
+      fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
+      color: 'var(--fg-tertiary)', letterSpacing: '0.08em',
+      textTransform: 'uppercase', whiteSpace: 'nowrap',
+    }}>
+      {children}
+    </span>
+  )
+}
+
+function PBtn({ children, onClick, variant, title }: {
+  children: React.ReactNode
+  onClick?: () => void
+  variant?: 'default' | 'primary' | 'danger'
+  title?: string
+}) {
+  const base: React.CSSProperties = {
+    background: variant === 'primary' ? 'var(--accent)' : 'transparent',
+    border: '1px solid transparent',
+    color: variant === 'primary' ? 'var(--accent-fg)' : 'var(--fg-secondary)',
+    padding: variant === 'primary' ? '7px 14px' : '6px 10px',
+    borderRadius: 'var(--r-md)',
+    fontSize: 'var(--t-sm)',
+    fontWeight: variant === 'primary' ? 500 : 400,
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      style={base}
+      onMouseEnter={(e) => {
+        if (variant === 'primary') {
+          e.currentTarget.style.background = 'var(--accent-hover)'
+        } else if (variant === 'danger') {
+          e.currentTarget.style.background = 'var(--err-soft)'
+          e.currentTarget.style.color = 'var(--err)'
+        } else {
+          e.currentTarget.style.background = 'var(--bg-overlay)'
+          e.currentTarget.style.color = 'var(--fg-primary)'
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = variant === 'primary' ? 'var(--accent)' : 'transparent'
+        e.currentTarget.style.color = variant === 'primary' ? 'var(--accent-fg)' : 'var(--fg-secondary)'
+      }}
+    >
+      {children}
+    </button>
+  )
+}
 
 /** artifact 上传三档合并进一个 dropdown：关闭 / 仅保留最新 / 保留全部。 */
 type UploadChoice = 'off' | 'last' | 'all'

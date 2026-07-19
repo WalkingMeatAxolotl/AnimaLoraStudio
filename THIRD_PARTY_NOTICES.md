@@ -32,8 +32,12 @@
 - **来源**：[`comfyanonymous/ComfyUI`](https://github.com/comfyanonymous/ComfyUI)（现由 Comfy-Org 维护）
 - **许可**：GPL-3.0
 - **涉及文件**：
-  - `modeling/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
+  - `modeling/anima/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
     `comfy/ldm/anima/model.py` 高度相关
+  - `modeling/krea2/krea2_modeling.py` — Krea2 single-stream MMDiT 结构与参数模块
+    命名派生自 ComfyUI `comfy/ldm/krea2/model.py`，固定参考 commit
+    `87d23b81765161624889febfb3b81f19f3c8435b`；保留 `blocks.N.attn.*`、
+    `blocks.N.mlp.*`、`txtfusion.*`、`txtmlp.*` 路径以兼容 ComfyUI 的 kohya LoRA 映射
   - `runtime/training/comfy_qwen.py` — Comfy-style Anima Qwen3 0.6B text encoder
     路径，对应 ComfyUI `comfy/text_encoders/anima.py` 的 Qwen3 encoder 行为
   - `runtime/training/text_encoding.py` — Anima prompt / tag 权重 / T5 token weights
@@ -51,11 +55,13 @@
     `runtime/anima_daemon.py`、`runtime/training/sample_runner.py`、
     `studio/api/routers/generate.py` — 将测试出图与训练 sample 接到 Comfy-style
     parity runtime 的本项目 glue/config 代码
-  - `runtime/anima_daemon.py` — 中间步预览的 `_WAN21_LATENT_RGB_FACTORS` /
-    `_WAN21_LATENT_RGB_BIAS` 常量取自 ComfyUI `comfy/latent_formats.py` 的 `Wan21`
-    （Qwen-Image VAE 复用 Wan2.1 latent 空间：`comfy/supported_models.py`
-    `QwenImage.latent_format = Wan21`）；`_decode_latent2rgb_preview` 的投影 + 范围
-    映射对齐 ComfyUI `latent_preview.py` `Latent2RGBPreviewer`
+  - `runtime/training/families/latent_spaces.py` — latent2rgb 预览投影系数
+    `_WAN21_RGB_FACTORS` / `_WAN21_RGB_BIAS` 取自 ComfyUI
+    `comfy/latent_formats.py` 的 `Wan21`（Qwen-Image VAE 复用 Wan2.1 latent 空间：
+    `comfy/supported_models.py` `QwenImage.latent_format = Wan21`；Anima 与 Krea2
+    的 `ModelSpec.latent` 引用此单一副本）；`runtime/anima_daemon.py`
+    `_decode_latent2rgb_preview` 的投影 + 范围映射对齐 ComfyUI `latent_preview.py`
+    `Latent2RGBPreviewer`
 
 > 由于包含/派生自 GPL-3.0 代码，本项目整体以 GPL-3.0 发布（见 `LICENSE`）。
 
@@ -193,6 +199,54 @@
 - **关系**：基于论文 Algorithm 1（I-MMSE 恒等式 + log-σ bin EMA）自实现，未参考特定
   reference 代码。Anima 在 Flow Matching `t ∈ (0,1)` 空间内做了 `σ = t/(1-t)` 适配，
   与论文 σ-空间设计保持一致。
+
+### kohya-ss / musubi-tuner — Krea2 training references (Apache-2.0)
+
+- **来源**：[`kohya-ss/musubi-tuner`](https://github.com/kohya-ss/musubi-tuner)；
+  固定参考 commit `8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6`
+- **许可**：Apache-2.0（上游 README `License` 段声明 other code 适用 Apache-2.0）
+- **涉及文件**：
+  - `runtime/training/timestep_samplers/krea2_shift.py` — Krea2 `krea2_shift` 的 image-sequence
+    length 线性 `mu`、`exp(mu)` 与 Möbius shift 公式；端点同时与 Hugging Face diffusers
+    Krea2 inference pipeline（Apache-2.0，commit
+    `bc529a5f677db9c4b3fc72c76962c4e2f61567e1`）交叉核对
+  - `modeling/krea2/krea2_modeling.py` — 训练 tensor 布局、三轴 RoPE 与逐 block
+    gradient checkpointing 参考 `src/musubi_tuner/krea2/krea2_mmdit.py`；模型配置与结构同时
+    对照 Hugging Face diffusers `transformer_krea2.py`（Apache-2.0，同上固定 commit）
+  - `runtime/training/families/krea2/loader.py` — meta-device + `assign=True` 的大权重
+    加载策略参考 `src/musubi_tuner/krea2/krea2_utils.py`；结构指纹、前缀归一和错误诊断为本仓库实现
+  - `runtime/training/families/krea2/preset.py` — 全部 Linear target 与统一
+    `lora_unet` 前缀参考 `src/musubi_tuner/networks/lora_krea2.py`
+  - `runtime/training/families/krea2/text_encoding.py` — Qwen3-VL prompt 模板、12 层
+    hidden-state 选择、有效 token gather 与 `(seq, 12, 2560)` 缓存布局派生自
+    `src/musubi_tuner/krea2/krea2_encoder.py` 和
+    `src/musubi_tuner/krea2_cache_text_encoder_outputs.py`；本仓库改为读取官方 HF
+    sharded 目录并接入共享 sidecar 协议与可选的 TE 惰性加载/释放生命周期
+  - `runtime/training/families/krea2/sampling.py` — 分辨率对齐、动态 `mu`、指数
+    timestep shift 与 FlowMatchEuler 循环派生自 `src/musubi_tuner/krea2/krea2_sampling.py`；
+    Raw/TDM 默认值和 Krea guidance `cond + g*(cond-uncond)` 同时对照 diffusers
+    `pipeline_krea2.py` 与 `scheduling_flow_match_euler_discrete.py`（固定 commit 见文件头）
+  - `runtime/training/families/krea2/quant_fp8.py` — fp8 权重的 Linear 前向
+    monkey-patch 思路来自 `src/musubi_tuner/krea2/krea2_utils.py` 的
+    `apply_fp8_monkey_patch`；dequant 数值口径（`W.to(compute) * scale.to(compute)`、
+    目标 dtype=input.dtype、`_quantization_metadata` per-layer 协议）逐位对齐
+    ComfyUI（GPL-3.0）`comfy/ops.py cast_bias_weight`、`comfy/utils.py
+    convert_old_quants` 与 comfy_kitchen（Comfy-Org，见其 wheel 许可）
+    `backends/eager/quantization.py dequantize_per_tensor_fp8`——公式级对照，
+    未复制代码结构
+  - `runtime/training/families/krea2/lora_fp8_merge.py` — LoRA×fp8 的 merge
+    回写语义逐位对齐 ComfyUI（GPL-3.0）：merge 编排与备份/还原来自
+    `comfy/model_patcher.py patch_weight_to_device`；delta 计算顺序（fp32
+    中间、`weight += ((strength*alpha)*diff).type(dtype)`）来自
+    `comfy/weight_adapter/lokr.py`、`comfy/weight_adapter/lora.py` 与
+    `comfy/lora.py calculate_weight`；requantize（scale=amax/448 + fp16 防
+    下溢 clamp）来自 `comfy/quant_ops.py`；stochastic rounding（Generator
+    RNG 形态 + 尾数随机进位公式）来自 `comfy/float.py stochastic_rounding`
+    与 comfy_kitchen `backends/eager/quantization.py calc_mantissa /
+    stochastic_rounding_fp8`；seed 的 CRC-32 口径来自 `comfy/utils.py
+    string_to_seed`（以 zlib.crc32 等价实现）——公式级对照，未复制代码结构
+
+实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 
 ---
 

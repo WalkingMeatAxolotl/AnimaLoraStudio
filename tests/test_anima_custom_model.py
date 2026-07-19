@@ -74,13 +74,13 @@ def test_default_paths_for_new_version_follows_custom(
     paths = model_downloader.default_paths_for_new_version()
     assert paths["transformer_path"] == str(custom)
     # 其余三件套仍走标准位置（微调复用同一套 VAE/TE/T5）
-    assert paths["vae_path"] == str(model_downloader.anima_vae_target(tmp_path))
+    assert paths["vae_path"] == str(model_downloader.qwen_image_vae_target(tmp_path))
 
 
 def test_generate_resolver_follows_selected_custom(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """测试/出图页 deps._resolve_anima_model_paths 跟随 selected_anima（含 custom），
+    """测试/出图页 deps._resolve_model_paths 跟随 selected_anima（含 custom），
     不再写死 v1.0。"""
     from studio.api import deps
 
@@ -90,7 +90,7 @@ def test_generate_resolver_follows_selected_custom(
         secrets, "load",
         lambda: _secrets(tmp_path, selected=str(custom), custom=[str(custom)]),
     )
-    assert deps._resolve_anima_model_paths()["transformer_path"] == str(custom)
+    assert deps._resolve_model_paths()["transformer_path"] == str(custom)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ def test_base_model_override_picks_variant(
         model_downloader.anima_main_target(tmp_path, "preview3-base")
     )
     # 其余三件套仍跟随全局，不受 override 影响
-    assert paths["vae_path"] == str(model_downloader.anima_vae_target(tmp_path))
+    assert paths["vae_path"] == str(model_downloader.qwen_image_vae_target(tmp_path))
 
 
 def test_base_model_override_picks_custom(
@@ -144,14 +144,14 @@ def test_base_model_override_missing_custom_falls_back(
     assert resolved == str(model_downloader.anima_main_target(tmp_path, "1.0"))
 
 
-def test_resolve_anima_model_paths_threads_override(
+def test_resolve_model_paths_threads_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """deps._resolve_anima_model_paths(base_model) 透传到 transformer_path。"""
+    """deps._resolve_model_paths(base_model) 透传到 transformer_path。"""
     from studio.api import deps
 
     monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path, selected="1.0"))
-    got = deps._resolve_anima_model_paths("preview3-base")["transformer_path"]
+    got = deps._resolve_model_paths("preview3-base")["transformer_path"]
     assert got == str(model_downloader.anima_main_target(tmp_path, "preview3-base"))
 
 
@@ -209,47 +209,51 @@ def fake_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def test_add_custom_anima_registers_and_dedupes(
     tmp_path: Path, fake_store
 ) -> None:
-    from studio.api.routers.models import add_custom_anima
-    from studio.api.schemas.models import AnimaCustomModelRequest
+    from studio.api.routers.models import add_model_source
+    from studio.api.schemas.models import ModelSourceCandidateRequest
 
     f = tmp_path / "ft.safetensors"
     f.write_bytes(b"x")
-    cat = add_custom_anima(AnimaCustomModelRequest(path=str(f)))
+    cat = add_model_source(
+        "anima", ModelSourceCandidateRequest(kind="local", path=str(f)))
     assert fake_store["s"].models.custom_anima_paths == [str(f)]
     assert any(c["path"] == str(f) for c in cat["anima_main"]["custom"])
 
     # 重复添加不产生第二条
-    add_custom_anima(AnimaCustomModelRequest(path=str(f)))
+    add_model_source(
+        "anima", ModelSourceCandidateRequest(kind="local", path=str(f)))
     assert fake_store["s"].models.custom_anima_paths == [str(f)]
 
 
 def test_add_custom_anima_rejects_bad_ext(tmp_path: Path, fake_store) -> None:
-    from studio.api.routers.models import add_custom_anima
-    from studio.api.schemas.models import AnimaCustomModelRequest
+    from studio.api.routers.models import add_model_source
+    from studio.api.schemas.models import ModelSourceCandidateRequest
     from studio.domain.errors import ValidationError
 
     bad = tmp_path / "evil.txt"
     bad.write_bytes(b"x")
     with pytest.raises(ValidationError) as exc:
-        add_custom_anima(AnimaCustomModelRequest(path=str(bad)))
-    assert exc.value.code == "model.ext_invalid"
+        add_model_source(
+            "anima", ModelSourceCandidateRequest(kind="local", path=str(bad)))
+    assert exc.value.code == "file.ext_invalid"
 
 
 def test_add_custom_anima_rejects_missing_file(tmp_path: Path, fake_store) -> None:
-    from studio.api.routers.models import add_custom_anima
-    from studio.api.schemas.models import AnimaCustomModelRequest
+    from studio.api.routers.models import add_model_source
+    from studio.api.schemas.models import ModelSourceCandidateRequest
     from studio.domain.errors import ValidationError
 
     with pytest.raises(ValidationError) as exc:
-        add_custom_anima(AnimaCustomModelRequest(path=str(tmp_path / "ghost.safetensors")))
+        add_model_source("anima", ModelSourceCandidateRequest(
+            kind="local", path=str(tmp_path / "ghost.safetensors")))
     assert exc.value.code == "model.not_found"
 
 
 def test_remove_custom_anima_resets_selected_when_current(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.api.routers.models import remove_custom_anima
-    from studio.api.schemas.models import AnimaCustomModelRequest
+    from studio.api.routers.models import remove_model_source
+    from studio.api.schemas.models import ModelSourceCandidateRequest
 
     a = str(tmp_path / "a.safetensors")
     b = str(tmp_path / "b.safetensors")
@@ -257,7 +261,8 @@ def test_remove_custom_anima_resets_selected_when_current(
     monkeypatch.setattr(secrets, "load", lambda: state["s"])
     monkeypatch.setattr(secrets, "save", lambda s: state.update(s=s))
 
-    remove_custom_anima(AnimaCustomModelRequest(path=a))
+    remove_model_source(
+        "anima", ModelSourceCandidateRequest(kind="local", path=a))
     assert state["s"].models.custom_anima_paths == [b]
     # 删的是当前默认 → 重置回最新官方 variant
     assert state["s"].models.selected_anima == model_downloader.LATEST_ANIMA
@@ -266,8 +271,8 @@ def test_remove_custom_anima_resets_selected_when_current(
 def test_remove_custom_anima_keeps_selected_when_other(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.api.routers.models import remove_custom_anima
-    from studio.api.schemas.models import AnimaCustomModelRequest
+    from studio.api.routers.models import remove_model_source
+    from studio.api.schemas.models import ModelSourceCandidateRequest
 
     a = str(tmp_path / "a.safetensors")
     b = str(tmp_path / "b.safetensors")
@@ -275,6 +280,7 @@ def test_remove_custom_anima_keeps_selected_when_other(
     monkeypatch.setattr(secrets, "load", lambda: state["s"])
     monkeypatch.setattr(secrets, "save", lambda s: state.update(s=s))
 
-    remove_custom_anima(AnimaCustomModelRequest(path=b))
+    remove_model_source(
+        "anima", ModelSourceCandidateRequest(kind="local", path=b))
     assert state["s"].models.custom_anima_paths == [a]
     assert state["s"].models.selected_anima == a  # 未动当前默认

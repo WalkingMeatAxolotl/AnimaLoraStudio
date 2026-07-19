@@ -55,6 +55,16 @@ def get_schema() -> dict[str, Any]:
     }
 
 
+@router.post("/api/schema/preview-yaml")
+def preview_config_yaml_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+    """当前表单 config → 与保存后落盘文件同一序列化路径的 yaml 文本(R4)。
+
+    取代前端 pruneInactiveConfig + configToYaml 双镜像:预览不再「声称一致」
+    而是物理一致。纯计算不落盘;tolerant 修复语义与保存一致。
+    """
+    return {"yaml": presets_io.preview_config_yaml_text(dict(body.get("config") or {}))}
+
+
 def _apply_feature_flags(schema: dict[str, Any]) -> None:
     """按 SystemConfig 的实验性 flag 动态调整 schema（只影响 UI 渲染）。
 

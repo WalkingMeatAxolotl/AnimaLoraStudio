@@ -76,8 +76,19 @@ def _flag_for(name: str, field: FieldInfo) -> str:
     return alias or "--" + name.replace("_", "-")
 
 
-def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInfo) -> None:
-    """把单个字段加到 parser。dest 始终等于字段名（即下划线形式）。"""
+def add_argument_for(
+    parser: argparse.ArgumentParser,
+    name: str,
+    field: FieldInfo,
+    *,
+    suppress_default: bool = False,
+) -> None:
+    """把单个字段加到 parser。dest 始终等于字段名（即下划线形式）。
+
+    suppress_default=True 时所有参数 default=argparse.SUPPRESS —— parse 产物
+    Namespace 只含用户显式传入的键（sparse），CLI 显式性由键的存在性精确判定，
+    供 namespace_from_config 做 CLI > YAML 合并。
+    """
     flag = _flag_for(name, field)
     annotation, is_optional = _unwrap_optional(field.annotation)
     default = _default_value(field)
@@ -90,15 +101,14 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
 
     # bool ----------------------------------------------------------------
     if annotation is bool:
-        # Optional[bool] 的默认值保留 None —— 表示「未指定」。
+        # Optional[bool] 的默认值保留 None —— 表示「未指定」；
         # 非 Optional 的 bool 则 fallback 到 False。
-        # 关键：merge_yaml_into_namespace 靠 `current == default` 判断
-        # CLI 有没有显式设值；如果这里把 None 转成 False，merge 会
-        # 误以为 CLI 显式传了 --no-xxx，YAML 值就永远合不进去。
         if is_optional:
             actual_default = default  # keep None
         else:
             actual_default = bool(default) if default is not None else False
+        if suppress_default:
+            actual_default = argparse.SUPPRESS
         # Python 3.13+ 的 argparse 拒绝把 --no-X 形式的 flag 传给
         # BooleanOptionalAction（会自动衍生 --no-no-X 与字段重名）。
         # 字段名以 no_ 开头时退化为一对互斥 store_true/store_false：
@@ -113,7 +123,13 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
                 default=actual_default,
                 help=help_text or None,
             )
-            parser.add_argument(positive, dest=name, action="store_false", help=None)
+            # 第二个同 dest action 的 default 必须与第一个一致：argparse 在
+            # parse 开始时按注册顺序 setattr default，非 SUPPRESS 的 None 会
+            # 把 sparse namespace 撑出一个假显式键。
+            parser.add_argument(
+                positive, dest=name, action="store_false",
+                default=actual_default, help=None,
+            )
         else:
             parser.add_argument(
                 flag,
@@ -134,7 +150,7 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
             dest=name,
             choices=choices,
             type=item_t,
-            default=default,
+            default=argparse.SUPPRESS if suppress_default else default,
             help=help_text or None,
         )
         return
@@ -147,17 +163,26 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
             dest=name,
             nargs="*",
             type=item_t,
-            default=default if default is not None else [],
+            default=argparse.SUPPRESS if suppress_default
+            else (default if default is not None else []),
             help=help_text or None,
         )
         return
 
     # int / float / str ---------------------------------------------------
     if annotation is int:
-        parser.add_argument(flag, dest=name, type=int, default=default, help=help_text or None)
+        parser.add_argument(
+            flag, dest=name, type=int,
+            default=argparse.SUPPRESS if suppress_default else default,
+            help=help_text or None,
+        )
         return
     if annotation is float:
-        parser.add_argument(flag, dest=name, type=float, default=default, help=help_text or None)
+        parser.add_argument(
+            flag, dest=name, type=float,
+            default=argparse.SUPPRESS if suppress_default else default,
+            help=help_text or None,
+        )
         return
 
     # 默认按字符串处理（包括 str、Optional[str]、未知类型）
@@ -165,7 +190,8 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
         flag,
         dest=name,
         type=str,
-        default=default if default is not None else ("" if not is_optional else None),
+        default=argparse.SUPPRESS if suppress_default
+        else (default if default is not None else ("" if not is_optional else None)),
         help=help_text or None,
     )
 
@@ -176,41 +202,59 @@ def build_parser(
     prog: str | None = None,
     description: str | None = None,
     add_config_arg: bool = True,
+    suppress_defaults: bool = False,
 ) -> argparse.ArgumentParser:
     """从 pydantic 模型生成完整 parser。
 
-    add_config_arg=True 时自动加上 `--config PATH`（指向 YAML 配置）。
+    add_config_arg=True 时自动加上 `--config PATH`（指向 YAML 配置；不参与
+    suppress —— 调用方在合并前就要读它）。
+    suppress_defaults=True 时 schema 字段全部 default=argparse.SUPPRESS，
+    parse 产物只含用户显式传入的键，配合 namespace_from_config 使用。
     """
     parser = argparse.ArgumentParser(prog=prog, description=description)
     if add_config_arg:
         parser.add_argument("--config", default="", help="YAML 配置文件路径")
     for name, field in model_cls.model_fields.items():
-        add_argument_for(parser, name, field)
+        add_argument_for(parser, name, field, suppress_default=suppress_defaults)
     return parser
 
 
 # ---------------------------------------------------------------------------
-# YAML → Namespace 合并（CLI 优先于 YAML）
+# YAML + CLI 显式值 → pydantic 校验 → 完整 Namespace
 # ---------------------------------------------------------------------------
 
 
-def merge_yaml_into_namespace(
+def namespace_from_config(
     args: argparse.Namespace,
     yaml_data: dict[str, Any],
     model_cls: type[BaseModel],
 ) -> argparse.Namespace:
-    """把 YAML 的字段写进 args，但仅当 args 当前值仍等于该字段的默认值时。
+    """合并 YAML 与 CLI 显式值，经 model_cls 完整构造后展开成 Namespace。
 
-    这与 anima_train.py 现有的「CLI 显式设置则保留」语义一致；CLI 的实际显式
-    设置无法直接探测，因此用「值 == 默认值」做近似。
+    取代旧 merge_yaml_into_namespace（「值==默认值」近似 CLI 显式性且绕过全部
+    validator——字段迁移 / FAMILY_CONFIG_DEFAULTS 族默认 overlay / 互斥与能力
+    校验在 trainer 路径全部失效，如 krea2 缺键 shuffle_caption 落回 anima 语义
+    默认 True 而拒训）。调用方的 parser 必须以 suppress_defaults=True 构建，
+    `args` 只含显式键，CLI > YAML 的优先级是精确判定。
+
+    合并语义：
+    - yaml_data 原样交给 pydantic —— 旧键由 before-validator 迁移，未知键按
+      模型的 extra 策略处理（TrainingConfig 为 ignore）
+    - args 中属于 schema 的键覆盖 YAML（CLI 显式优先）；合并结果整体过一次
+      模型构造，任何来源组合出的非法配置都在此 fail-fast
+    - args 中不属于 schema 的键（--interactive 等 CLI-only 开关）原样带回
+
+    Raises:
+        pydantic.ValidationError: 合并结果非法（互斥冲突 / 族能力越界等）。
     """
     fields = model_cls.model_fields
-    for key, value in yaml_data.items():
-        if key not in fields:
-            continue
-        default = _default_value(fields[key])
-        current = getattr(args, key, default)
-        # 只在 args 还是默认值时让 YAML 覆盖
-        if current == default:
-            setattr(args, key, value)
-    return args
+    explicit = vars(args)
+    merged = dict(yaml_data)
+    merged.update({k: v for k, v in explicit.items() if k in fields})
+    cfg = model_cls(**merged)
+    out = argparse.Namespace(
+        **{k: v for k, v in explicit.items() if k not in fields}
+    )
+    for key, value in cfg.model_dump(mode="python").items():
+        setattr(out, key, value)
+    return out

@@ -18,7 +18,7 @@ for _p in (_REPO, _REPO / "runtime"):
     if s not in sys.path:
         sys.path.insert(0, s)
 
-from training.comfy_qwen import select_encoder_state_dict  # noqa: E402
+from training.families.anima.comfy_qwen import select_encoder_state_dict  # noqa: E402
 
 
 _EXPECTED = [

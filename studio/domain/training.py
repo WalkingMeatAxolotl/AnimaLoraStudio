@@ -17,7 +17,18 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .common import AttentionBackend, _meta
+from .common import (
+    AttentionBackend,
+    FAMILY_CONFIG_DEFAULTS,
+    FAMILY_SAMPLING,
+    LEGACY_SAMPLING_FAMILIES,
+    TIMESTEP_SAMPLING_OPTION_FAMILIES,
+    _meta,
+    cap_gate,
+    capability_violations,
+    option_gates,
+    sampling_option_gates,
+)
 from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
 
 
@@ -35,6 +46,13 @@ class TrainingConfig(BaseModel):
     # Train 页看到的总是无歧义的绝对路径，不用考虑相对路径锚定。
     # 这里的默认值仅 fallback：裸 CLI 跑训练 + yaml 完全没填时，按 repo
     # 相对路径解析（与历史行为一致）。
+    # 一级决策不藏高级区（P4-3）。前端对该字段的变更做「切换动作」拦截：
+    # 经 /api/models/family-switch 重算路径 + 重置族风味字段 + 确认后才写。
+    model_family: Literal["anima", "krea2"] = Field(
+        "anima",
+        description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐。切换将重算模型路径并重置族相关默认值",
+        json_schema_extra=_meta("model"),
+    )
     transformer_path: str = Field(
         "models/diffusion_models/anima-base-v1.0.safetensors",
         description="主扩散模型权重（.safetensors）",
@@ -52,8 +70,16 @@ class TrainingConfig(BaseModel):
     )
     t5_tokenizer_path: str = Field(
         "models/t5_tokenizer",
-        description="T5 tokenizer 目录",
-        json_schema_extra=_meta("model", "path", cli_alias="--t5-tokenizer"),
+        description="T5 tokenizer 目录（Anima 族专用）",
+        json_schema_extra=_meta("model", "path", cli_alias="--t5-tokenizer",
+                                show_when="model_family==anima"),
+    )
+    text_encoder_cache: bool = Field(
+        True,
+        description="预缓存文本条件并释放文本编码器（推荐，节省约 9GB 显存）；关闭后不读写文本 sidecar，Qwen3-VL 常驻并逐 batch 编码，适合大显存但磁盘紧张的云端",
+        json_schema_extra=_meta(
+            "model", show_when=cap_gate("text_cache"), advanced=True,
+        ),
     )
 
     # ----------------------------------------------------------------- 数据集
@@ -92,13 +118,13 @@ class TrainingConfig(BaseModel):
     shuffle_caption: bool = Field(
         True,
         description="启用标签打乱（JSON 模式分类内打乱，TXT 模式全部打乱）",
-        json_schema_extra=_meta("caption"),
+        json_schema_extra=_meta("caption", show_when=cap_gate("caption_tag_ops")),
     )
     keep_tokens: int = Field(
         0, ge=0,
         description="保护前 N 个标签不参与打乱与 dropout（仅 TXT 模式；JSON 模式由"
                     " meta.trigger 与固定字段承担同类角色）",
-        json_schema_extra=_meta("caption"),
+        json_schema_extra=_meta("caption", show_when=cap_gate("caption_tag_ops")),
     )
     flip_augment: bool = Field(
         True,
@@ -108,7 +134,7 @@ class TrainingConfig(BaseModel):
     tag_dropout: float = Field(
         0.0, ge=0.0, le=1.0,
         description="训练时每个标签的随机丢弃概率（0 = 关闭）；非 0 帮助泛化、减弱单标签依赖",
-        json_schema_extra=_meta("caption"),
+        json_schema_extra=_meta("caption", show_when=cap_gate("caption_tag_ops")),
     )
     prefer_json: bool = Field(
         True,
@@ -125,7 +151,12 @@ class TrainingConfig(BaseModel):
     cache_latents: bool = Field(
         True,
         description="缓存 VAE latent 加速训练",
-        json_schema_extra=_meta("system"),
+        json_schema_extra=_meta(
+            "system",
+            disable_when="navit_packing==true",
+            disable_value=True,
+            disable_hint="NaViT 打包按 latent token 数预算分包，必须预编码缓存",
+        ),
     )
     vae_cache_batch_size: int = Field(
         0, ge=0,
@@ -143,6 +174,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "system",
             advanced=True,
+            show_when=cap_gate("navit"),
             disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
             disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
         ),
@@ -212,9 +244,15 @@ class TrainingConfig(BaseModel):
 
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
-        "lokr",
-        description="适配器算法。lokr：Kronecker 分解，参数最省（默认）；lora：经典低秩，通用；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
-        json_schema_extra=_meta("lora"),
+        "lora",
+        description="适配器算法。lora：经典低秩，通用（默认）；lokr：Kronecker 分解，参数最省；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
+        json_schema_extra=_meta(
+            "lora",
+            # option 级禁值（forbid，R2 v2）：navit 是 B=1 打包序列 + 逐图 t，
+            # T-LoRA rank mask 按 batch 维匹配 timestep，维度不匹配
+            option_disable_when={"tlora": "navit_packing==true"},
+            disable_hint="T-LoRA 的 rank mask 按 batch 维匹配 timestep，与 NaViT 打包（B=1 逐图 t）不兼容",
+        ),
     )
     lora_rank: int = Field(
         32, ge=4,
@@ -583,7 +621,7 @@ class TrainingConfig(BaseModel):
     )
     pyramid_noise_discount: float = Field(
         0.5, ge=0.1, le=0.9,
-        description="每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：anima 实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
+        description="每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：本实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
         json_schema_extra=_meta("noise_augmentation", show_when="noise_enhancement_type==pyramid", advanced=True),
     )
     timestep_sampling: Literal[
@@ -593,14 +631,18 @@ class TrainingConfig(BaseModel):
         "mode",
         "mixed_uniform_low",
         "mixed_uniform_logit",
+        "krea2_shift",
     ] = Field(
         "logit_normal",
-        description="采样分布。logit_normal 偏中段（SD3/Anima 默认）；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
+        description="采样分布。logit_normal 偏中段（SD3/Anima 默认）；krea2_shift 按每图 token 数动态 shift；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
         json_schema_extra=_meta(
             "timestep_sampling",
             alt_description="【时间步采样】InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
             alt_description_when="infonoise_enabled==true||leap_enabled==true",
             advanced=True,
+            # krea2_shift 的 mu 插值按 K2 校准，仅 UI 不向其他族展示；机制上
+            # 共享循环任何族都能跑，后端不设闸（A1），手改 yaml 尊重
+            option_show_when=option_gates(TIMESTEP_SAMPLING_OPTION_FAMILIES),
         ),
     )
     timestep_shift: float = Field(
@@ -661,8 +703,9 @@ class TrainingConfig(BaseModel):
                 "||loss_type==huber"
                 "||timestep_schedule_shift!=1"
                 "||leap_enabled==true"
+                "||navit_packing==true"
             ),
-            disable_hint="互斥字段（noise_enhancement / loss_weighting / loss_type / schedule_shift / leap）非默认时不可启用（schema 互斥）",
+            disable_hint="互斥字段（noise_enhancement / loss_weighting / loss_type / schedule_shift / leap / navit）非默认时不可启用（schema 互斥）",
         ),
     )
     infonoise_K: int = Field(
@@ -728,6 +771,7 @@ class TrainingConfig(BaseModel):
         description="按训练 mask 加权 loss：预处理涂抹页画的 mask 区域（灰度 0=不学、255=正常学习、中间值=部分权重）不产生梯度，该区域生成时由 base 模型先验决定；没有 mask 的图不受影响",
         json_schema_extra=_meta(
             "loss",
+            show_when=cap_gate("masked_loss"),
             disable_when="leap_enabled==true||navit_packing==true",
             disable_hint="Leap（per-sample loss 无空间维度）/ NaViT 打包路径不支持 mask（schema 互斥）",
         ),
@@ -758,8 +802,9 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "loss",
             advanced=True,
-            disable_when="infonoise_enabled==true||loss_weighting!=none||loss_type==huber",
-            disable_hint="互斥字段（InfoNoise / loss_weighting / loss_type=huber）非默认时不可启用（schema 互斥，与对侧形成对称锁）",
+            show_when=cap_gate("leap"),
+            disable_when="infonoise_enabled==true||loss_weighting!=none||loss_type==huber||navit_packing==true",
+            disable_hint="互斥字段（InfoNoise / loss_weighting / loss_type=huber / navit）非默认时不可启用（schema 互斥，与对侧形成对称锁）",
         ),
     )
     leap_ratio: float = Field(
@@ -802,7 +847,13 @@ class TrainingConfig(BaseModel):
     sra_enabled: bool = Field(
         False,
         description="【SRA v2 表征对齐】启用 VAE Self-Representation Alignment：将中间 transformer block 的 hidden state 对齐到 clean VAE latent，加速收敛并正则化表征。仅增加 ~4% GFLOPs（一个轻量 MLP），训练完自动丢弃",
-        json_schema_extra=_meta("loss", advanced=True),
+        json_schema_extra=_meta(
+            "loss", advanced=True, show_when=cap_gate("sra"),
+            # 审计 #1（设计文档 §10.1）：leap 步整段跳过 SRA（loop.py 守卫），
+            # leap_ratio=1.0 时 SRA 100% 静默零生效；navit 路径同款守卫
+            disable_when="leap_enabled==true||navit_packing==true",
+            disable_hint="Leap / NaViT 路径跳过 SRA 计算（逐图 t / 打包序列未适配），开着也不生效",
+        ),
     )
     sra_block: int = Field(
         4, ge=1, le=35,
@@ -838,7 +889,15 @@ class TrainingConfig(BaseModel):
     grad_clip_max_norm: float = Field(
         1.0, ge=0.0,
         description="梯度裁剪最大范数：当本步所有可训练参数的梯度全局范数超过该值时按比例缩到该值，防止单步极端梯度把模型推飞；默认 1.0 适合绝大多数场景，bf16+DoRA/LoKr 不稳可降到 0.5，0=禁用",
-        json_schema_extra=_meta("training", advanced=True),
+        json_schema_extra=_meta(
+            "training", advanced=True,
+            # 审计 #6（设计文档 §10.1）：automagic v2 的 fused backward 就地更新
+            # 参数，事后 clip 静默失效（optimizer 仅打一行 warning）；默认 1.0
+            # 恰好人人踩中——配置层钉 0 明示「此组合下无裁剪」
+            disable_when="optimizer_type==automagic&&automagic_variant==v2",
+            disable_value=0.0,
+            disable_hint="Automagic v2 fused backward 就地更新参数，梯度裁剪无法生效",
+        ),
     )
 
     mixed_precision: Literal["bf16", "fp16", "no"] = Field(
@@ -886,6 +945,30 @@ class TrainingConfig(BaseModel):
                 out.append(n)
         return out or [1024]
 
+    @model_validator(mode="after")
+    def _validate_family_capabilities(self):
+        # 多模型 PR-3 第二层防线（第一层 = show_when 作者写时展开；第三层 =
+        # trainer bootstrap）：拦手写 yaml / 裸 CLI 给当前族开不支持的能力
+        bad = capability_violations(self.model_family, self.__dict__)
+        if bad:
+            raise ValueError(
+                f"model_family='{self.model_family}' 不支持这些已启用字段: {bad}"
+                f"（各族能力见 studio/domain/common.py FAMILY_CAPABILITIES）"
+            )
+        return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_family_config_defaults(cls, data: Any) -> Any:
+        """Overlay ModelSpec defaults only when a family-specific field is absent."""
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        family = str(payload.get("model_family") or "anima")
+        for field, value in FAMILY_CONFIG_DEFAULTS.get(family, {}).items():
+            payload.setdefault(field, value)
+        return payload
+
     @model_validator(mode="before")
     @classmethod
     def _migrate_save_keys(cls, data: Any) -> Any:
@@ -899,35 +982,87 @@ class TrainingConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _coerce_sample_sampler_scheduler(cls, data: Any) -> Any:
-        """sampler/scheduler 收紧为 Literal 前是自由文本，旧 preset / 旧版本
-        config 可能存了其他值（如 euler，当年走 inline Euler 兜底）。统一
-        归并到默认值而不是让整个 config 加载失败。"""
-        if isinstance(data, dict):
-            if data.get("sample_sampler_name") not in (None, "er_sde", "dpmpp_3m_sde"):
-                data["sample_sampler_name"] = "er_sde"
-            if data.get("sample_scheduler") not in (None, "simple", "sgm_uniform"):
-                data["sample_scheduler"] = "simple"
+        """sampler / scheduler 白名单外值的按族处理（多模型 P4-2，还 #419 债）：
+
+        - **有 legacy 语料的族**（anima，Literal 收紧 #256 前就存在）：白名单外
+          一律静默归并到族默认——#256 的迁移契约原样保留（euler 等历史存量值
+          必须让老 config 能加载）。「UI 提供选项又静默改写」的 C1 病灶由
+          option_show_when 门控根除：UI 不再向 anima 展示 euler。
+        - **Literal 时代出生的族**（krea2 起）：无 legacy 语料。Literal 外的
+          垃圾值仍归并（加载健壮性）；**在 Literal 内但本族跑不了的值报错**
+          （两族 sample_image 都在入口 raise，配置层提前 fail-fast），不静默
+          改写显式配置。
+        """
+        if not isinstance(data, dict):
+            return data
+        family = str(data.get("model_family") or "anima")
+        allowed = FAMILY_SAMPLING.get(family)
+        if allowed is None:
+            return data  # 未知族由 model_family 的 Literal 校验报错，不在此重复
+        union: dict[str, tuple[str, ...]] = {}
+        for spec in FAMILY_SAMPLING.values():
+            for kind in ("samplers", "schedulers"):
+                union[kind] = tuple(dict.fromkeys(union.get(kind, ()) + spec[kind]))
+        legacy = family in LEGACY_SAMPLING_FAMILIES
+        for field, kind in (
+            ("sample_sampler_name", "samplers"),
+            ("sample_scheduler", "schedulers"),
+        ):
+            value = data.get(field)
+            if value is None or value in allowed[kind]:
+                continue
+            if legacy or value not in union[kind]:
+                data[field] = allowed[kind][0]  # grandfather / 垃圾值 → 族默认
+            else:
+                raise ValueError(
+                    f"{field}='{value}' 不适用于 model_family='{family}'"
+                    f"（该族可用：{'、'.join(allowed[kind])}）"
+                )
         return data
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_navit_attention_backend(cls, data: Any) -> Any:
-        """NaViT 打包的块对角 attention 必需 xformers varlen（运行时只认 xformers 是否
-        安装、不看 attention_backend 值）。navit_packing 开启时强制 attention_backend=
-        xformers——避免用户选了 flash/none 以为对 navit 训练生效，实际 navit 训练步只
-        走 xformers varlen。参考 PPSF 工厂内覆盖 lr 的强制模式。"""
-        if isinstance(data, dict) and data.get("navit_packing"):
-            data["attention_backend"] = "xformers"
-        return data
+    def _pin_setdefaults(cls, data: Any) -> Any:
+        """pin 规则的构造期 setdefault:「缺省跟随钉值,显式违反才报错」。
+
+        `TrainingConfig(navit_packing=True)` 时 attention_backend / cache_latents
+        等未显式提供的钉值字段自动落钉值(与前端 takeover 同语义),显式提供
+        且违反的值留给 _enforce_disable_rules fail-fast —— 用户显式配置绝不静默改
+        (取代历史 _coerce_navit_attention_backend 的无差别 coerce)。
+        """
+        if not isinstance(data, dict):
+            return data
+        from .config_rules import apply_pin_setdefaults
+
+        return apply_pin_setdefaults(data, cls)
 
     @model_validator(mode="after")
-    def _validate_prodigy_scheduler(self) -> "TrainingConfig":
-        """Prodigy / Automagic / Schedule-Free 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
-        if self.optimizer_type in {"automagic", "prodigy", "prodigy_plus_schedulefree", "soap_sf"} and self.lr_scheduler != "none":
-            raise ValueError(
-                f"optimizer_type={self.optimizer_type} requires lr_scheduler=none "
-                "(自适应优化器固定使用常数学习率)."
-            )
+    def _enforce_disable_rules(self) -> "TrainingConfig":
+        """disable_when 声明的双端强制(刀 2 / R2 v2,设计文档 §6)。
+
+        字段上的 disable_when + disable_value + disable_hint / option_disable_when
+        是单源规则声明:前端灰显 + takeover、本 validator、tolerant 修复
+        (apply_disable_rule_fixes)、R6 确认弹窗都从同一份派生。历史上按对手写
+        的互斥 validator(prodigy×scheduler、infonoise×4、leap×3、navit×4、
+        navit→cache_latents、navit→attention_backend coerce)全部由此替代;
+        领域理由保存在各字段的 disable_hint 里。
+        """
+        from .config_rules import disable_rule_violations
+
+        violations = disable_rule_violations(self.__dict__, type(self))
+        if violations:
+            lines = []
+            for v in violations:
+                if v["kind"] == "pin":
+                    lines.append(
+                        f"{v['field']}={v['actual']!r} 在当前配置下必须为 "
+                        f"{v['expected']!r}:{v['hint']}"
+                    )
+                else:
+                    lines.append(
+                        f"{v['field']}={v['actual']!r} 在当前配置下不可用:{v['hint']}"
+                    )
+            raise ValueError("字段联动约束不满足 —— " + "; ".join(lines))
         return self
 
     @model_validator(mode="after")
@@ -951,24 +1086,6 @@ class TrainingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_infonoise_loss_weighting_exclusive(self) -> "TrainingConfig":
-        """InfoNoise 与 loss_weighting 互斥：两者都在做 schedule 重塑，叠加会互相消磨。
-
-        InfoNoise 用未加权 MSE 估各噪声区间的信息量（论文 entropy rate 推导的必要前提，
-        见 arxiv 2602.18647 §3.1）；loss_weighting 改实际优化目标。同开时 InfoNoise 学
-        到的分布跟用户配的 loss_weighting 方向冲突（如 detail_inv_t 抬高低 t 权重 vs
-        InfoNoise 默认压低低 t 采样）。强制二选一避免 silent 不一致。
-        """
-        if self.infonoise_enabled and self.loss_weighting != "none":
-            raise ValueError(
-                f"infonoise_enabled=true 与 loss_weighting={self.loss_weighting!r} 互斥："
-                "两个机制都在做 schedule 重塑（前者自适应 resample，后者手工 reweight）。"
-                "请二选一：(a) 关闭 InfoNoise 走传统 loss_weighting 路径；"
-                "或 (b) 设 loss_weighting=none 走 InfoNoise 自适应路径。"
-            )
-        return self
-
-    @model_validator(mode="after")
     def _validate_infonoise_n_min_le_b(self) -> "TrainingConfig":
         """N_min > B 会让自适应分布永远学不出来（FIFO 容量不够触发刷新）。"""
         if self.infonoise_enabled and self.infonoise_N_min > self.infonoise_B:
@@ -979,146 +1096,19 @@ class TrainingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_infonoise_schedule_shift_exclusive(self) -> "TrainingConfig":
-        """InfoNoise 与 timestep_schedule_shift 互斥：InfoNoise CDF 接管后 shift 静默失效。
+    def _validate_navit_prerequisites(self) -> "TrainingConfig":
+        """NaViT 打包的两条非「钉值/禁值」前置校验(§6.4 保留手写)。
 
-        timestep_schedule_shift 仅在 sample_t 的 baseline 路径生效；InfoNoise sample()
-        走 CDF 路径直接返回 t，不再应用 shift。同开时用户期望的"全程偏移"会在 warmup
-        结束后悄悄消失。强制二选一，避免 silent 行为切换。
-        """
-        if self.infonoise_enabled and self.timestep_schedule_shift != 1.0:
-            raise ValueError(
-                f"infonoise_enabled=true 与 timestep_schedule_shift={self.timestep_schedule_shift} 互斥："
-                "InfoNoise 自适应 CDF 接管后 schedule_shift 不再生效，会在 warmup 结束时"
-                "悄悄切换行为。请二选一：(a) 关闭 InfoNoise 保留 schedule_shift；"
-                "或 (b) 设 timestep_schedule_shift=1.0 走 InfoNoise 自适应路径。"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_infonoise_loss_type_exclusive(self) -> "TrainingConfig":
-        """InfoNoise 与 loss_type=huber 互斥：huber 削峰让 InfoNoise 推 mass 进死循环。
-
-        InfoNoise 用 raw MSE（不削峰）估各噪声区间的信息量，huber 让模型对 outlier
-        不学。某区间 outlier 多时，InfoNoise 看到 raw MSE 仍高 → 推 mass 过去 → huber
-        让模型仍然不学那里 → raw MSE 仍高 → InfoNoise 继续推 mass 过去（反馈环）。
-        """
-        if self.infonoise_enabled and self.loss_type == "huber":
-            raise ValueError(
-                "infonoise_enabled=true 与 loss_type=huber 互斥：huber 对 outlier 鲁棒"
-                "（不学），但 InfoNoise 用 raw MSE 看到 outlier 区间高损失会持续把采样推过去，"
-                "形成 mass 集中在不学的区间的反馈环。请二选一：(a) 关闭 InfoNoise 保留 huber；"
-                "或 (b) 设 loss_type=mse 走 InfoNoise 自适应路径。"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_infonoise_noise_enhancement_exclusive(self) -> "TrainingConfig":
-        """InfoNoise 与 noise_enhancement_type 互斥：噪声增强改变 noise 形状会让 InfoNoise
-        schedule 偏离论文最优。
-
-        InfoNoise 论文 I-MMSE 推导假设标准高斯 noise；offset 加 DC 偏置、pyramid 加多尺度
-        低频成分都改变 noise 频谱，让 InfoNoise 学到的不再是 clean entropy rate profile。
-        """
-        if self.infonoise_enabled and self.noise_enhancement_type != "none":
-            raise ValueError(
-                f"infonoise_enabled=true 与 noise_enhancement_type={self.noise_enhancement_type!r} 互斥："
-                "噪声增强会改变 noise 形状，让 InfoNoise 学到的 schedule 偏离论文最优"
-                "（I-MMSE 推导假设标准高斯 noise）。请二选一：(a) 关闭 InfoNoise 保留噪声增强；"
-                "或 (b) 设 noise_enhancement_type=none 走 InfoNoise 自适应路径。"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_leap_exclusive(self) -> "TrainingConfig":
-        """LeapAlign/FlowBP 自蒸馏与 InfoNoise / loss_weighting / loss_type=huber 互斥。
-
-        leap 路径（任意 variant）每步 per-sample 采多个时刻沿代理轨迹积分（original/bridge/
-        lagrange 采两个时刻 (k,j)，sparse 采 K 个时刻），不存在单一 t，且 loss 在 leap.py
-        里写死 MSE(x̂0, x0)：
-        - InfoNoise：用单一 t 的 raw MSE 学 I-MMSE schedule，多 timestep 无从 record；
-          且 leap 的 loss 是 x̂0 自蒸馏 MSE，不是 v 预测 MSE，语义也不匹配。
-        - loss_weighting：min_snr / detail_inv_t / cosmap 全都按单一 t 算 SNR 权重，
-          多 timestep 没有定义；leap 自带 traj_sim_weighting 做轨迹质量加权。
-        - loss_type=huber：leap.py 直接走 (x̂0-x0)**2 内联 MSE，绕过 ctx.loss_fn，开了
-          huber 会被静默无视。
-        故 leap 路径在 loop.py 里有意跳过这三个机制，这里强制配置层面关闭，避免用户
-        以为开了却被静默忽略。三条互斥对全部四个 variant 一致成立。
-        """
-        if self.leap_enabled:
-            if self.infonoise_enabled:
-                raise ValueError(
-                    "leap_enabled=true 与 infonoise_enabled=true 互斥：leap 每步沿代理轨迹采"
-                    "多个时刻积分，没有 InfoNoise 学 I-MMSE 所需的单一 t，且 loss 是 x̂0 "
-                    "自蒸馏而非 v 预测 MSE。请二选一：(a) 关闭 leap 用 InfoNoise；"
-                    "或 (b) 设 infonoise_enabled=false 走 leap 自蒸馏。"
-                )
-            if self.loss_weighting != "none":
-                raise ValueError(
-                    f"leap_enabled=true 与 loss_weighting={self.loss_weighting!r} 互斥：loss 加权"
-                    "按单一 t 算 SNR 权重，leap 的多 timestep 无从定义；leap 用 "
-                    "leap_traj_sim_weighting 做轨迹质量加权。请二选一：(a) 关闭 leap；"
-                    "或 (b) 设 loss_weighting=none 走 leap 自蒸馏。"
-                )
-            if self.loss_type == "huber":
-                raise ValueError(
-                    "leap_enabled=true 与 loss_type=huber 互斥：leap.py 写死 MSE(x̂0, x0) "
-                    "内联自蒸馏目标，绕过 ctx.loss_fn 分发，huber 会被静默忽略。"
-                    "请二选一：(a) 关闭 leap；或 (b) 设 loss_type=mse 走 leap 自蒸馏。"
-                )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_navit_exclusive(self) -> "TrainingConfig":
-        """NaViT / Patch-n-Pack 打包训练的配置校验与互斥。
-
-        NaViT 改变了 batch 语义（一包异构图、逐图 t），许多按"批量网格 + 逐 batch
-        单 timestep"假设写的特性会语义错位。v1 的策略是 fail-fast：同时开 → 启动即
-        报错，提示显式关掉，避免"开着却悄悄不生效"的隐性行为改变。
-
-        互斥项（详见 docs/navit-packing.md 第 3 节）：
-        - leap_enabled：leap 假设批量网格 + 共享 noise，与逐图打包不兼容。
-        - infonoise_enabled：InfoNoise 的 I-MMSE record 需走标准路径的 per-sample
-          MSE；navit 路径的 per-image loss 语义不同，v1 未适配。
-        - lora_type=tlora：T-LoRA 的 rank mask 按 batch 维匹配 timestep，navit 是
-          B=1 打包序列 + 逐图 t，维度不匹配。
-        - sra_enabled：SRA v2 表征对齐按批量网格中间特征 tap 对齐，navit 是 B=1
-          打包序列 + 逐图，per-image 适配 v1 未做（loop 路径已守卫跳过，这里 fail-fast）。
-
-        前置要求：
-        - cache_latents：navit 打包按 latent token 数预算分包，需要预编码缓存。
-        - navit_token_budget > 0：必须显式设置（按显存定）。
+        互斥项(leap / infonoise / sra / tlora / cache_latents / attention_backend)
+        已由 disable_when / option_disable_when 声明经 _enforce_disable_rules 强制,
+        领域理由见各字段 disable_hint 与 docs/navit-packing.md 第 3 节。
         """
         if self.navit_native_resolution and not self.navit_packing:
             raise ValueError(
                 "navit_native_resolution=true 需要 navit_packing=true"
                 "（原生定尺寸只在 NaViT 块对角打包路径生效）。"
             )
-        if not self.navit_packing:
-            return self
-
-        _conflicts = []
-        if self.leap_enabled:
-            _conflicts.append("leap_enabled")
-        if self.infonoise_enabled:
-            _conflicts.append("infonoise_enabled")
-        if self.lora_type == "tlora":
-            _conflicts.append("lora_type=tlora")
-        if self.sra_enabled:
-            _conflicts.append("sra_enabled")
-        if _conflicts:
-            raise ValueError(
-                "navit_packing(v1) 暂不支持与以下特性同时开启："
-                + ", ".join(_conflicts)
-                + "。请关掉它们，或暂不使用 NaViT 打包。"
-            )
-
-        if not self.cache_latents:
-            raise ValueError(
-                "navit_packing 需要 cache_latents=true（打包按 latent token 数预算分包，"
-                "需要预编码缓存）。"
-            )
-        if self.navit_token_budget <= 0:
+        if self.navit_packing and self.navit_token_budget <= 0:
             raise ValueError(
                 "navit_packing 需要显式设置 navit_token_budget（>0，按显存定，"
                 "见 docs/navit-packing.md 显存对照表）。"
@@ -1193,16 +1183,22 @@ class TrainingConfig(BaseModel):
         description="CFG Scale",
         json_schema_extra=_meta("sample"),
     )
-    sample_sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = Field(
+    sample_sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = Field(
         "er_sde",
-        description="采样器。er_sde 默认；dpmpp_3m_sde 与 ComfyUI 同款"
-                    "（BrownianTree 噪声，需要 torchsde）",
-        json_schema_extra=_meta("sample"),
+        description="采样器。er_sde / dpmpp_3m_sde 为 Anima 的 ComfyUI 同款栈"
+                    "（dpmpp_3m_sde 走 BrownianTree 噪声，需要 torchsde）；"
+                    "euler 为 Krea 2 的 FlowMatchEuler",
+        json_schema_extra=_meta(
+            "sample", option_show_when=sampling_option_gates("samplers"),
+        ),
     )
     sample_scheduler: Literal["simple", "sgm_uniform"] = Field(
         "simple",
-        description="调度器。simple 默认；sgm_uniform 为 ComfyUI 的 SGM 均匀切分",
-        json_schema_extra=_meta("sample"),
+        description="调度器。与 ComfyUI 同名同义；sigma 表由模型族决定"
+                    "（Krea 2 的 simple 含固定 shift=1.15 口径）",
+        json_schema_extra=_meta(
+            "sample", option_show_when=sampling_option_gates("schedulers"),
+        ),
     )
     sample_width: int = Field(
         0, ge=0,

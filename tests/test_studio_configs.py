@@ -147,13 +147,21 @@ def test_ppsf_accepts_none_scheduler() -> None:
     assert cfg.optimizer_type == "prodigy_plus_schedulefree"
 
 
-def test_navit_forces_xformers_backend() -> None:
-    """navit_packing 开启时 attention_backend 强制 xformers（块对角只走 xformers varlen）。"""
-    payload = TrainingConfig().model_dump(mode="python")
-    payload["navit_packing"] = True
-    payload["attention_backend"] = "flash_attn"
-    cfg = TrainingConfig.model_validate(payload)
+def test_navit_requires_xformers_backend() -> None:
+    """navit_packing 开启时 attention_backend 必须 xformers（块对角只走 xformers varlen）。
+
+    刀 2 / R2 v2 语义：缺省跟随钉值（未显式提供 → 自动落 xformers），显式提供
+    冲突值 → fail-fast 报错（取代历史 _coerce 的无差别静默改写）。
+    """
+    import pytest as _pytest
+    from pydantic import ValidationError as _VErr
+
+    cfg = TrainingConfig.model_validate({"navit_packing": True})
     assert cfg.attention_backend == "xformers"
+    with _pytest.raises(_VErr, match="attention_backend"):
+        TrainingConfig.model_validate(
+            {"navit_packing": True, "attention_backend": "flash_attn"}
+        )
 
 
 def test_navit_off_keeps_user_attention_backend() -> None:
@@ -248,7 +256,7 @@ def test_yaml_on_disk_is_human_readable(client: TestClient, presets_dir: Path) -
     assert "transformer_path:" in text
     assert not text.startswith("{")
     parsed = yaml.safe_load(text)
-    assert parsed["lora_type"] == "lokr"
+    assert parsed["lora_type"] == "lora"
 
 
 # ---------------------------------------------------------------------------

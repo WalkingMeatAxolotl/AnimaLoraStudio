@@ -42,10 +42,18 @@ export interface SchemaProperty {
   control?: string
   cli_alias?: string
   show_when?: string
+  /** option 级 show_when（多模型 P4-2）：enum 值 → 表达式（语法同 show_when），
+   * 求值为假的选项从下拉隐藏。未列出的选项永远可见；当前已选中的值即使被
+   * 门控也保留显示（表单如实反映 config，越族值由后端校验报错）。 */
+  option_show_when?: Record<string, string>
   /** 当此表达式为真时字段在 UI 上 disabled（值由 SchemaForm 自动回退到 default）。
    * 表达式语法与 show_when 一致：`key==value` / `key!=value`。
    * 例：lr_scheduler 在 optimizer_type=prodigy_plus_schedulefree 时被 disable。 */
   disable_when?: string
+  /** option 级禁值（刀 2 / R2 v2，D4）：enum 值 → 表达式为真时该选项灰显
+   * 不可选（不隐藏——用户能看见为什么不可选，title 显示 disable_hint）。
+   * 后端 _enforce_disable_rules 消费同一份声明做校验。 */
+  option_disable_when?: Record<string, string>
   /** disable_when 触发时写回的值；缺省回退到 default。 */
   disable_value?: unknown
   /** disable_when 触发时显示的提示徽章文本。 */
@@ -488,6 +496,11 @@ export interface ModelsConfig {
    * Studio 创建新 version 时把它展开成绝对路径写到 yaml.transformer_path；
    * 已存在 version 不动（保证训练重现性）。 */
   selected_anima: string
+  /** 按模型族保存的默认主模型：variant key 或已注册的本地路径。 */
+  selected: Record<string, string>
+  /** 按模型族选中的文本编码器 variant（krea2："bf16"|"fp8"，缺失=bf16）。
+   * 决定训练新建 version 的 text_encoder_path 默认 + 测试出图 TE 默认。 */
+  selected_te?: Record<string, string>
   /** 用户注册的本地 custom 主模型（.safetensors 绝对路径）。微调训练 /
    * 在微调权重上测试出图用；仅登记路径，不下载不复制。 */
   custom_anima_paths: string[]
@@ -517,6 +530,16 @@ export interface GenerateSecretsConfig {
   /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
    * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
   idle_timeout_minutes: number
+  /** 出图任务超时兜底：超 N 分钟未完成强制终止 daemon 进程（卡死场景普通
+   * 取消无效）。0（默认）= 不开启。 */
+  task_timeout_minutes: number
+  /** 测试出图显存策略（krea2 生效）。auto=按空闲显存决定文本编码器与 DiT
+   * 是否让位；save_vram=强制顺序化（峰值最低，每图多几秒搬运）；
+   * performance=全部常驻显存（峰值最高、零搬运）。 */
+  vram_policy: 'auto' | 'save_vram' | 'performance'
+  /** 系统内存水位保护：加载大模型前可用物理内存不足 6GB 时中止并报错
+   * （默认开）；关闭后继续加载，可能触发整机换页卡顿。 */
+  ram_guard: boolean
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean
@@ -596,31 +619,41 @@ export interface ModelFileStatus {
   mtime: number
 }
 
-export interface AnimaVariantInfo extends ModelFileStatus {
+/** 族主模型的官方 variant（多模型 P4-5 统一形状；anima 无 purpose/repo 细分）。 */
+export interface FamilyMainVariantInfo extends ModelFileStatus {
   variant: string
   is_latest: boolean
   target_path: string
+  /** variant 级 repo（krea2：Raw/Turbo 各自的 HF 仓库）；anima 用 section repo。 */
+  repo?: string
+  /** 用途声明（krea2：raw=training / turbo=inference）。 */
+  purpose?: 'training' | 'inference'
+  size_estimate?: number
 }
 
 /** 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。 */
-export interface CustomAnimaInfo extends ModelFileStatus {
+export interface CustomModelInfo extends ModelFileStatus {
   /** 注册的绝对路径（也是选中时写入 selected_anima 的值）。 */
   path: string
   /** 文件名，列表展示用。 */
   name: string
 }
 
-export interface AnimaMainCatalog {
-  id: 'anima_main'
+/** 族主模型 catalog 区块的统一形状（anima_main / krea2_main 同构，P4-5）。 */
+export interface FamilyMainCatalog {
+  id: string
   name: string
   description: string
   repo: string
-  variants: AnimaVariantInfo[]
+  variants: FamilyMainVariantInfo[]
   /** 本地注册的 custom 主模型列表。 */
-  custom: CustomAnimaInfo[]
+  custom: CustomModelInfo[]
   /** 当前选中的主模型：variant key 或 custom 路径。 */
   selected: string
   latest: string
+  /** 许可展示（krea2 社区许可；anima 无）。 */
+  license?: string
+  license_url?: string
 }
 
 export interface AnimaVaeCatalog extends ModelFileStatus {
@@ -632,11 +665,13 @@ export interface AnimaVaeCatalog extends ModelFileStatus {
 }
 
 export interface ModelDirCatalog {
-  id: 'qwen3' | 't5_tokenizer'
+  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
   name: string
   description: string
   repo: string
   target_dir: string
+  /** krea2_text_encoder 专属：选中的 TE variant（'bf16' | 'fp8'）。 */
+  selected?: string
   files: Array<{ name: string; exists: boolean; size: number; mtime: number }>
 }
 
@@ -709,6 +744,44 @@ export interface ModelDownloadStatus {
   log_tail: string[]
 }
 
+/** 统一模型来源候选行（catalog.model_sources[domain]，后端拼好能力位）。
+ *  docs/design/model-source-unification.md §6。 */
+export interface ModelSourceRow {
+  kind: 'preset' | 'download' | 'local' | 'scanned'
+  /** 用户候选的原始存储记录（DELETE 的身份键）；preset / scanned 行为 null。 */
+  candidate: ModelSourceCandidate | null
+  /** 写进该 domain 选中值字段的值（repo id / 绝对路径 / 文件名）。 */
+  value: string
+  label: string
+  /** 行副标题（放大器描述 / 自定义候选的 repo 来源等）。 */
+  description: string
+  /** POST /api/models/download 的 model_id；local 候选为 null（不可下载）。 */
+  download_id: string | null
+  /** 下载触发的 variant 参数（默认 = value；主模型/放大器候选 = repo 内文件路径）。 */
+  download_variant: string | null
+  /** catalog.downloads 的 status key；local 候选为 null。 */
+  status_key: string | null
+  exists: boolean
+  size: number
+  files?: Array<{ name: string; exists: boolean; size: number; mtime: number }> | null
+  size_estimate: number
+  is_current: boolean
+  /** 内置 preset 不可移除（保护默认）。 */
+  removable: boolean
+  /** local 候选永不从 UI 删除磁盘文件。 */
+  deletable: boolean
+  extra: Record<string, string>
+}
+
+/** POST/DELETE /api/model-sources/{domain} 的候选描述。 */
+export interface ModelSourceCandidate {
+  kind: 'download' | 'local'
+  repo?: string
+  filename?: string
+  path?: string
+  extra?: Record<string, string>
+}
+
 export interface UpscalerVariant {
   label: string
   filename: string
@@ -736,18 +809,34 @@ export interface UpscalersCatalog {
   variants: UpscalerVariant[]
 }
 
+export interface FamilySwitchChange {
+  field: string
+  from: unknown
+  to: unknown
+}
+
+export interface FamilySwitchResponse {
+  config: ConfigData
+  changes: FamilySwitchChange[]
+}
+
 export interface ModelsCatalog {
   models_root: string
-  anima_main: AnimaMainCatalog
+  anima_main: FamilyMainCatalog
   anima_vae: AnimaVaeCatalog
   qwen3: ModelDirCatalog
   t5_tokenizer: ModelDirCatalog
+  krea2_main: FamilyMainCatalog
+  krea2_text_encoder: ModelDirCatalog
+  krea2_text_encoder_fp8: ModelDirCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   eval_metrics?: EvalMetricsCatalog
   /** 评估指标 registry（Settings 复选框列表）。 */
   eval_metric_catalog?: EvalMetricCatalogItem[]
   upscalers?: UpscalersCatalog
+  /** 统一来源候选行（泛化候选卡消费；键 = domain：wd14 / eval_clip / ...）。 */
+  model_sources?: Record<string, ModelSourceRow[]>
   /** 按类型的下载源选项：current = 当前选中，available = 可选源（长度 1 = 固定单源）。 */
   download_source_options: Record<string, { current: string; available: string[] }>
   downloads: Record<string, ModelDownloadStatus>
@@ -1328,9 +1417,14 @@ export interface XYMatrixSpec {
 
 export interface GenerateRequest {
   prompts: string[]
+  /** 底模所属模型族（多模型 P4-4）；省略 = anima。 */
+  model_family?: 'anima' | 'krea2'
   /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
-   *  省略 → server 用 Settings 里的 selected_anima。 */
+   *  省略 → server 用 Settings 里该族的 selected。 */
   base_model?: string
+  /** 本次出图的文本编码器 variant（krea2 生效）：省略 = 跟随下载中心选中
+   *  的 TE（selected_te）；显式 bf16/fp8 临时覆盖（与 base_model 对称）。 */
+  text_encoder?: 'bf16' | 'fp8'
   negative_prompt?: string
   width?: number
   height?: number
@@ -1996,31 +2090,45 @@ export const api = {
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   /** 当前 Settings 算出的 4 个模型字段绝对路径。预设页 reset / 新建用。 */
   getModelPathDefaults: () => req<Record<string, string>>('/api/models/path-defaults'),
+  /** YAML 预览（R4）：当前表单 config → 与保存后落盘文件同一序列化路径的
+   * yaml 文本。纯计算不落盘；tolerant 修复语义与保存一致。 */
+  previewConfigYaml: (config: ConfigData) =>
+    req<{ yaml: string }>('/api/schema/preview-yaml', {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    }),
+  /** 训练配置切换模型族的预览计算（多模型 P4-3）。纯计算不落盘：返回
+   * 重算路径 + 重置族风味字段后的完整 config 与变更清单，前端确认后走
+   * 正常保存链路。 */
+  switchModelFamily: (target: string, config: ConfigData) =>
+    req<FamilySwitchResponse>('/api/models/family-switch', {
+      method: 'POST',
+      body: JSON.stringify({ target, config }),
+    }),
   startModelDownload: (body: { model_id: string; variant?: string }) =>
     req<{ key: string; status: string }>('/api/models/download', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  /** 注册一个本地 .safetensors 主模型（微调训练 / 微调上测试）。返回新 catalog。 */
-  addCustomAnima: (path: string) =>
-    req<ModelsCatalog>('/api/models/anima/custom', {
+  /** 删除一个已下载资产（下载的逆操作：先删除、再重新下载）。路径由
+   *  服务端解析；下载中 / 文件被占用时 409。返回删除后的 catalog。 */
+  deleteModelAsset: (model_id: string, variant?: string) =>
+    req<ModelsCatalog>(
+      `/api/models/asset?model_id=${encodeURIComponent(model_id)}`
+      + (variant ? `&variant=${encodeURIComponent(variant)}` : ''),
+      { method: 'DELETE' },
+    ),
+  /** 添加一条统一来源候选（下载型 / 本地文件），返回新 catalog。 */
+  addModelSource: (domain: string, cand: ModelSourceCandidate) =>
+    req<ModelsCatalog>(`/api/model-sources/${domain}`, {
       method: 'POST',
-      body: JSON.stringify({ path }),
+      body: JSON.stringify(cand),
     }),
-  /** 注销一个本地 custom 主模型。返回新 catalog。 */
-  removeCustomAnima: (path: string) =>
-    req<ModelsCatalog>('/api/models/anima/custom', {
+  /** 移除一条候选（不动磁盘；移除当前选中项时服务端回退默认）。 */
+  removeModelSource: (domain: string, cand: ModelSourceCandidate) =>
+    req<ModelsCatalog>(`/api/model-sources/${domain}`, {
       method: 'DELETE',
-      body: JSON.stringify({ path }),
-    }),
-  startUpscalerCustomDownload: (body: {
-    source: 'hf' | 'ms'
-    repo_id: string
-    filename: string
-  }) =>
-    req<{ key: string; status: string }>('/api/upscalers/download_custom', {
-      method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(cand),
     }),
   selectUpscaler: (label: string) =>
     req<{ selected: string }>('/api/upscalers/select', {

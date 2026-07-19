@@ -97,9 +97,11 @@ def main() -> None:
     scheduler: str = cfg.get("scheduler", "simple")
     count: int = max(1, int(cfg.get("count", 1)))
     base_seed: int = int(cfg.get("seed", 0))
+    distilled: bool = bool(cfg.get("distilled", False))
     lora_configs: list[dict] = cfg.get("lora_configs", [])
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
     vae_precision: str = cfg.get("vae_precision", mixed_precision)
+    vram_policy: str = str(cfg.get("vram_policy") or "auto")
     text_encoder_backend: str = cfg.get("text_encoder_backend", "hf")
     t5_tokenizer_backend: str = cfg.get("t5_tokenizer_backend", "slow")
     backend: str = cfg.get("attention_backend", "none")
@@ -141,27 +143,51 @@ def main() -> None:
     if t5_tokenizer_path:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
+    family = _T.resolve_family(cfg)  # D8'：旁路调用方经 family 派发
+    logger.info("加载 VAE...")
+    vae = family.load_vae(vae_path, device, vae_dtype,
+                          tiling=str(cfg.get("vae_tiling", "auto")))
+
+    logger.info("加载文本编码器...")
+    # 族 opaque 文本栈不拆包；ad-hoc prompt 关缓存（cached_varlen 族 TE 常驻）
+    text_stack = family.load_text(
+        text_encoder_path, device, dtype,
+        t5_tokenizer_path=t5_tokenizer_path or None,
+        comfy_qwen=text_encoder_backend == "comfy_qwen3",
+        t5_fast=t5_tokenizer_backend == "fast",
+        purpose="generate",
+        cache_enabled=False,
+    )
+
+    # TE 先行编排（krea2，daemon 同款）：DiT 加载前预编码全部 prompt 并
+    # 彻底释放 TE——任一时刻 GPU 只有一个大模型。prompts 集合封闭（XY 时
+    # schema 保证单条）。anima 文本栈（tuple）无此 API 自然跳过；
+    # performance 档不释放。
+    precache = getattr(text_stack, "precache_online_prompts", None)
+    if callable(precache):
+        try:
+            encoded = precache([*[str(p) for p in prompts], negative_prompt])
+        except Exception:
+            logger.exception("prompt 预编码失败；退回逐图惰性编码")
+        else:
+            if vram_policy != "performance":
+                release = getattr(text_stack, "release_model", None)
+                if callable(release):
+                    release()
+            if encoded:
+                logger.info("krea2 预编码 %d 条 prompt；TE 已释放", encoded)
+
     logger.info("加载 Transformer...")
-    model = _T.load_anima_model(transformer_path, device, dtype, repo_root, flash_attn=use_flash)
+    model = family.load_dit(
+        transformer_path, device, dtype,
+        attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
+        purpose="generate",
+    )
     if use_xformers and not _T.enable_xformers(model):
         raise RuntimeError(
             "Exact ComfyUI KSampler parity is guaranteed only with xformers, "
             "but xformers could not be enabled"
         )
-
-    logger.info("加载 VAE...")
-    vae = _T.load_vae(vae_path, device, vae_dtype, repo_root,
-                      tiling=str(cfg.get("vae_tiling", "auto")))
-
-    logger.info("加载文本编码器...")
-    qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(
-        text_encoder_path,
-        t5_tokenizer_path or None,
-        device,
-        dtype,
-        comfy_qwen=text_encoder_backend == "comfy_qwen3",
-        t5_fast=t5_tokenizer_backend == "fast",
-    )
 
     # 多 LoRA：每份独立 inject + multiplier=scale。adapters 必须保持引用，否则
     # 被 GC 后 forward hook 失效（lycoris 通过 closure 持有 network）。
@@ -169,7 +195,8 @@ def main() -> None:
         LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
         for lc in lora_configs
     ]
-    _adapters = apply_loras(model, specs, device, torch.float32)  # noqa: F841 — 保持引用
+    _adapters = apply_loras(model, specs, device, torch.float32,  # noqa: F841 — 保持引用
+                            family_id=family.spec.family_id)
 
     model.eval()
 
@@ -187,13 +214,14 @@ def main() -> None:
             base_cfg_scale=cfg_scale,
             base_sampler=sampler_name,
             scheduler=scheduler,
+            distilled=distilled,
             height=height,
             width=width,
-            model=model, vae=vae,
-            qwen_model=qwen_model, qwen_tok=qwen_tok, t5_tok=t5_tok,
+            family=family, model=model, vae=vae, text=text_stack,
             device=device, dtype=dtype,
             output_dir=output_dir,
             update_monitor=_update_monitor,
+            vram_policy=vram_policy,
         )
         logger.info("XY 矩阵生成完成")
         return
@@ -211,9 +239,9 @@ def main() -> None:
 
             logger.info(f"[{img_idx + 1}/{total}] seed={seed}  prompt={prompt[:60]}...")
             try:
-                img = _T.sample_image(
-                    model, vae, qwen_model, qwen_tok, t5_tok,
-                    prompt=prompt,
+                img = family.sample_image(
+                    model, vae, text_stack,
+                    prompt,
                     height=height,
                     width=width,
                     steps=steps,
@@ -221,9 +249,11 @@ def main() -> None:
                     negative_prompt=negative_prompt,
                     sampler_name=sampler_name,
                     scheduler=scheduler,
+                    distilled=distilled,
                     device=device,
                     dtype=dtype,
                     seed=seed,
+                    vram_policy=vram_policy,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 out_path = output_dir / fname
@@ -303,10 +333,12 @@ def _run_xy_matrix(
     scheduler: str,
     height: int,
     width: int,
-    model, vae, qwen_model, qwen_tok, t5_tok,
+    family, model, vae, text,
     device: str, dtype,
     output_dir,
     update_monitor,
+    distilled: bool = False,
+    vram_policy: str = "auto",
 ) -> None:
     """循环 (yi, xi) 出 N×M 张图。
 
@@ -333,6 +365,19 @@ def _run_xy_matrix(
             "lora_ckpt 轴需走 daemon path (runtime/anima_daemon.py)；"
             "CLI runner anima_generate.py 不支持热切换 LoRA 文件"
         )
+
+    # fp8 底模的 LoRA 是 merge 进权重的（无常驻 network），lora_scale 轴
+    # 需要逐格 detach + 重 merge——daemon 的 CACHE.apply_loras 路径已支持
+    # （_cell_lora_configs）；CLI runner 无缓存管理，与 lora_ckpt 轴同款
+    # 不接入。
+    if x_spec.get("axis") == "lora_scale" or (y_spec and y_spec.get("axis") == "lora_scale"):
+        from training.families.krea2.quant_fp8 import model_has_fp8_layers
+
+        if model_has_fp8_layers(model):
+            raise NotImplementedError(
+                "fp8 底模的 LoRA 强度轴需逐格重新合并，走 daemon path "
+                "(runtime/anima_daemon.py)；CLI runner 请改用 bf16 底模。"
+            )
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
@@ -377,9 +422,9 @@ def _run_xy_matrix(
                 f"steps={cur_steps} cfg={cur_cfg_scale} seed={cur_seed} sampler={cur_sampler}"
             )
             try:
-                img = _T.sample_image(
-                    model, vae, qwen_model, qwen_tok, t5_tok,
-                    prompt=prompt,
+                img = family.sample_image(
+                    model, vae, text,
+                    prompt,
                     height=height,
                     width=width,
                     steps=cur_steps,
@@ -387,9 +432,11 @@ def _run_xy_matrix(
                     negative_prompt=negative_prompt,
                     sampler_name=cur_sampler,
                     scheduler=scheduler,
+                    distilled=distilled,
                     device=device,
                     dtype=dtype,
                     seed=cur_seed,
+                    vram_policy=vram_policy,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 out_path = output_dir / fname

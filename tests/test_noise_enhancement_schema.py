@@ -51,6 +51,31 @@ def test_migrate_legacy_both_set_pyramid_wins() -> None:
     assert out["noise_offset"] == 0.0
 
 
+# ---------------------------------------------------------------------------
+# runtime 纵深防御：noise_params_from_args 按 type 分派（审计 #3）
+# ---------------------------------------------------------------------------
+
+
+def test_noise_params_dispatch_by_type() -> None:
+    """runtime 消费端以 noise_enhancement_type 为准 —— 绕过配置构造的 args
+    （pause snapshot 旧格式等）残留反组参数不参与，杜绝 offset+pyramid 叠加。"""
+    from argparse import Namespace
+
+    from training.noise import noise_params_from_args
+
+    both = Namespace(
+        noise_enhancement_type="offset",
+        noise_offset=0.05, pyramid_noise_iters=3, pyramid_noise_discount=0.5,
+    )
+    assert noise_params_from_args(both) == (0.05, 0, 0.5)
+
+    both.noise_enhancement_type = "pyramid"
+    assert noise_params_from_args(both) == (0.0, 3, 0.5)
+
+    both.noise_enhancement_type = "none"
+    assert noise_params_from_args(both) == (0.0, 0, 0.5)
+
+
 def test_migrate_explicit_type_offset_clears_pyramid() -> None:
     """显式 type=offset → pyramid_noise_iters 强制清零（issue #2599 教训）。"""
     out = migrate_noise_enhancement_type({
