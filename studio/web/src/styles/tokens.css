@@ -272,14 +272,16 @@ select option:checked {
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* pill radio — 互斥选项组（更新通道 / 显示设置的语言·主题·密度等）。
- * 原 version-section.css 的 .vs-channel-radio 泛化为通用类。 */
+ * 原 version-section.css 的 .vs-channel-radio 泛化为通用类。
+ * 布局：固定 120px 等宽；圆点绝对定位钉在左端，文字相对按钮居中
+ * （左右留白对称），不随文字长短漂移。 */
 .pill-radio {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  min-width: 72px;   /* 组内文字长短不一（中文/English 等）时按钮等宽整齐 */
-  padding: 4px 10px;
+  width: 120px;
+  padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--border-default);
   background: transparent;
@@ -297,6 +299,10 @@ select option:checked {
   color: var(--accent);
 }
 .pill-radio .pill-radio-dot {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 7px;
   height: 7px;
   border-radius: 50%;
