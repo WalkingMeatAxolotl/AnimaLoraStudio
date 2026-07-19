@@ -1,4 +1,4 @@
-# 全量测试门禁 — PR 与 dev/master push 自动跑后端 pytest + 前端 vitest/lint/tsc。
+# 全量测试门禁 — PR 与 dev/master push 自动跑 Python lint(ruff F821) + 后端 pytest + 前端 vitest/lint/tsc。
 #
 # 定位（见 CONTRIBUTING「提交前自检」）：本地开发只跑相关测试，全量由本 workflow
 # 在机器时间兜底；release 前的全量人工自检照旧。
@@ -17,6 +17,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Python 静态门禁：ruff F821（未定义名）——专抓 CI 跑不到的分支里的
+  # 「重构残留引用」类 NameError（v0.20.1 教训）。规则范围见 ruff.toml。
+  lint-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff==0.15.22
+
+      - name: ruff check
+        run: ruff check .
+
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 60

@@ -95,6 +95,9 @@ python -m pytest tests/test_xxx.py -q
 # (2) 横切安全网（秒级，改后端必带——专抓"改 A 坏 B"）：
 python -m pytest tests/test_route_snapshot.py tests/test_studio_configs.py -q
 
+# (3) Python lint（CI 同款，秒级；ruff 用 pip install ruff 装一次）：
+python -m ruff check .
+
 # 改了前端：
 cd studio/web
 npx vitest run                 # 前端全量也只要 ~20s

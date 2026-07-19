@@ -373,16 +373,19 @@ def sample_image(
                 # float32. For Anima multiplier=1.0, timestep == sigma.
                 x_model = x_in.to(device=x_in.device, dtype=dtype)
                 sigma_1d = sigma_in.reshape(1).to(device=x_in.device, dtype=torch.float32)
+                # noqa 说明：cross_cond / cross_uncond / pad_mask 在采样循环结束后
+                # 被 del 释放显存（见下方 VAE decode 前的清理）；本闭包只在循环内
+                # 调用，运行时引用有效。ruff F821 对 del+闭包流不敏感误报。
                 if float(cfg_scale) == 1.0:
                     return model(
                         x_model,
                         sigma_1d.expand(x_model.shape[0]),
-                        cross_cond,
-                        padding_mask=pad_mask.expand(x_model.shape[0], -1, -1, -1).contiguous(),
+                        cross_cond,  # noqa: F821
+                        padding_mask=pad_mask.expand(x_model.shape[0], -1, -1, -1).contiguous(),  # noqa: F821
                     )
                 x_batch = torch.cat([x_model, x_model], dim=0)
-                cross_batch = torch.cat([cross_uncond, cross_cond], dim=0)
-                pad_batch = pad_mask.expand(x_batch.shape[0], -1, -1, -1).contiguous()
+                cross_batch = torch.cat([cross_uncond, cross_cond], dim=0)  # noqa: F821
+                pad_batch = pad_mask.expand(x_batch.shape[0], -1, -1, -1).contiguous()  # noqa: F821
                 sigma_batch = sigma_1d.expand(x_batch.shape[0])
                 v_uncond, v_cond = model(
                     x_batch,

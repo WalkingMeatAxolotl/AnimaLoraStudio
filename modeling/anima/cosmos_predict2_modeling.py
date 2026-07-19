@@ -587,7 +587,9 @@ class Attention(nn.Module):
         self.output_dropout = nn.Dropout(dropout) if dropout > 1e-4 else nn.Identity()
 
         if self.backend == "transformer_engine":
-            self.attn_op = DotProductAttention(
+            # vendored 上游分支：transformer_engine 未 vendored（本应用只走 torch 后端），
+            # 走到这里会 NameError——保留上游结构不补 import
+            self.attn_op = DotProductAttention(  # noqa: F821
                 self.n_heads,
                 self.head_dim,
                 num_gqa_groups=self.n_heads,

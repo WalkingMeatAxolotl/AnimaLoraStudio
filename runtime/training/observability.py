@@ -14,7 +14,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ class WandBMonitor:
         self._upload_state_manual_policy = upload_state_manual_policy
         self._upload_state_auto_enabled = upload_state_auto
         self._upload_state_auto_policy = upload_state_auto_policy
-        self._last_artifact: dict[str, "Any"] = {}
+        self._last_artifact: dict[str, Any] = {}
 
     @property
     def enabled(self) -> bool:
