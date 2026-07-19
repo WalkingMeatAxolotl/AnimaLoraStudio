@@ -349,12 +349,11 @@
       "sampler": {
         "erSde": "ER SDE",
         "dpmpp3mSde": "DPM++ 3M SDE",
-        "euler": "Euler（FlowMatch）"
+        "euler": "Euler"
       },
       "scheduler": {
         "simple": "Simple",
-        "sgmUniform": "SGM Uniform",
-        "krea2Shift": "Krea2 动态 Shift"
+        "sgmUniform": "SGM Uniform"
       },
       "modelFamily": {
         "anima": "Anima",

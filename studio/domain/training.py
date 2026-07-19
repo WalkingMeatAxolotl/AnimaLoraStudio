@@ -1192,10 +1192,10 @@ class TrainingConfig(BaseModel):
             "sample", option_show_when=sampling_option_gates("samplers"),
         ),
     )
-    sample_scheduler: Literal["simple", "sgm_uniform", "krea2_shift"] = Field(
+    sample_scheduler: Literal["simple", "sgm_uniform"] = Field(
         "simple",
-        description="调度器。simple / sgm_uniform 为 Anima 的 ComfyUI 切分；"
-                    "krea2_shift 为 Krea 2 的分辨率感知动态 shift 时刻表",
+        description="调度器。与 ComfyUI 同名同义；sigma 表由模型族决定"
+                    "（Krea 2 的 simple 含固定 shift=1.15 口径）",
         json_schema_extra=_meta(
             "sample", option_show_when=sampling_option_gates("schedulers"),
         ),

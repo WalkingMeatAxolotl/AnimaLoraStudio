@@ -70,7 +70,7 @@ class GenerateConfig(BaseModel):
     steps: int = Field(25, ge=1, le=150)
     cfg_scale: float = Field(4.0, ge=0.0, le=20.0)
     sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = Field("er_sde")
-    scheduler: Literal["simple", "sgm_uniform", "krea2_shift"] = Field("simple")
+    scheduler: Literal["simple", "sgm_uniform"] = Field("simple")
     count: int = Field(1, ge=1, le=32, description="每个 prompt 生成张数")
     seed: int = Field(0, description="随机种子（0=随机）")
 

@@ -40,7 +40,7 @@ FAMILY_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "timestep_sampling": "krea2_shift",
         "timestep_shift_resolution_aware": False,
         "sample_sampler_name": "euler",
-        "sample_scheduler": "krea2_shift",
+        "sample_scheduler": "simple",
         "sample_infer_steps": 28,
         "sample_cfg_scale": 4.5,
     },
@@ -61,8 +61,11 @@ FAMILY_SAMPLING: dict[str, dict[str, tuple[str, ...]]] = {
         "schedulers": ("simple", "sgm_uniform"),
     },
     "krea2": {
+        # scheduler 名对齐 ComfyUI：Comfy 的 simple 挂 Krea2（ModelSamplingFlux）
+        # 时取的就是本项目 krea2 sigma 口径——shift 属模型口径不属 scheduler 名
+        # （曾名 krea2_shift；存量值经 Literal-外归并落回 simple）。
         "samplers": ("euler",),
-        "schedulers": ("krea2_shift",),
+        "schedulers": ("simple",),
     },
 }
 

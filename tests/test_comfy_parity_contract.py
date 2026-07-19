@@ -92,7 +92,7 @@ def test_training_config_sampler_scheduler_are_enums() -> None:
         "er_sde", "dpmpp_3m_sde", "euler",
     }
     assert set(schema["properties"]["sample_scheduler"]["enum"]) == {
-        "simple", "sgm_uniform", "krea2_shift",
+        "simple", "sgm_uniform",
     }
 
 

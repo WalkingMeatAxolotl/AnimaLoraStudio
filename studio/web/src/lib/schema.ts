@@ -175,7 +175,6 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
   sample_scheduler: {
     simple: 'schema.enums.scheduler.simple',
     sgm_uniform: 'schema.enums.scheduler.sgmUniform',
-    krea2_shift: 'schema.enums.scheduler.krea2Shift',
   },
 }
 

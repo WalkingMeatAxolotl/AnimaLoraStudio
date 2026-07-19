@@ -16,7 +16,7 @@ class GenerateRequest(BaseModel):
     steps: int = 25
     cfg_scale: float = 4.0
     sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = "er_sde"
-    scheduler: Literal["simple", "sgm_uniform", "krea2_shift"] = "simple"
+    scheduler: Literal["simple", "sgm_uniform"] = "simple"
     count: int = 1
     seed: int = 0
     lora_configs: list[LoraEntry] = []

@@ -30,7 +30,8 @@ export const SAMPLER_OPTIONS_BY_FAMILY = {
 
 export const SCHEDULER_OPTIONS_BY_FAMILY = {
   anima: ['simple', 'sgm_uniform'],
-  krea2: ['krea2_shift'],
+  // krea2 的 simple 含固定 shift 口径（曾名 krea2_shift，命名对齐 ComfyUI）
+  krea2: ['simple'],
 } as const satisfies Record<GenerateFamily, readonly string[]>
 
 /** 切族时应用的生成参数默认值（steps/cfg 对齐族 SamplingDefaults）。 */
@@ -47,6 +48,6 @@ export const SAMPLER_OPTIONS = ['er_sde', 'dpmpp_3m_sde', 'euler'] as const
 export type SamplerName = (typeof SAMPLER_OPTIONS)[number]
 export const DEFAULT_SAMPLER: SamplerName = 'er_sde'
 
-export const SCHEDULER_OPTIONS = ['simple', 'sgm_uniform', 'krea2_shift'] as const
+export const SCHEDULER_OPTIONS = ['simple', 'sgm_uniform'] as const
 export type SchedulerName = (typeof SCHEDULER_OPTIONS)[number]
 export const DEFAULT_SCHEDULER: SchedulerName = 'simple'

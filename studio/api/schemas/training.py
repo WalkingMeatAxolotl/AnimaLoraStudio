@@ -156,7 +156,7 @@ class RegAiRequest(BaseModel):
     steps: int = 25
     cfg_scale: float = 4.0
     # None = 未指定 → 端点按 version 的模型族解析默认（anima er_sde/simple，
-    # krea2 euler/krea2_shift）。显式给值则按族白名单严格校验
+    # krea2 euler/simple）。显式给值则按族白名单严格校验
     sampler_name: Optional[str] = None
     scheduler: Optional[str] = None
     seed: int = 0

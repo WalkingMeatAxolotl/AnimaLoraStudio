@@ -28,7 +28,10 @@ from .text_encoding import Krea2TextCondition
 
 
 KREA2_SAMPLER = "euler"
-KREA2_SCHEDULER = "krea2_shift"
+# scheduler 名对齐 ComfyUI（曾名 krea2_shift）：Comfy 的 simple 挂 Krea2
+# （ModelSamplingFlux shift=1.15）取出的 sigma 与 build_krea2_sigmas 恒等，
+# shift 属模型口径、不进 scheduler 命名——用户在 Comfy 复现时选 euler+simple。
+KREA2_SCHEDULER = "simple"
 KREA2_RAW_STEPS = 28
 KREA2_RAW_GUIDANCE = 4.5
 KREA2_TURBO_STEPS = 8
@@ -72,7 +75,7 @@ def resolve_sampling_settings(
     schedule = KREA2_SCHEDULER if scheduler is None else str(scheduler).lower().strip()
     if sampler != KREA2_SAMPLER or schedule != KREA2_SCHEDULER:
         raise ValueError(
-            "Krea2 仅支持 euler+krea2_shift，实际 "
+            "Krea2 仅支持 euler+simple，实际 "
             f"{sampler or '<empty>'}+{schedule or '<empty>'}"
         )
 

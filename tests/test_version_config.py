@@ -353,7 +353,7 @@ def test_fork_krea2_preset_syncs_krea2_paths(env, monkeypatch) -> None:
     # krea2 preset 必须是自洽的族内值：shuffle_caption 关（anima-only 能力）、
     # sampler/scheduler 用族白名单值（跨族值在 P4-2 起报错而非静默改写）
     _seed_preset(env, "tpl", model_family="krea2", shuffle_caption=False,
-                 sample_sampler_name="euler", sample_scheduler="krea2_shift",
+                 sample_sampler_name="euler", sample_scheduler="simple",
                  transformer_path=_custom_path())
     cfg = preset_flow.fork_preset_for_version("tpl", p, v)
     assert cfg["model_family"] == "krea2"

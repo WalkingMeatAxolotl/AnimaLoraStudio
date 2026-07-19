@@ -12,27 +12,28 @@ from studio.services.models.families import get_assets
 def test_generate_config_family_sampler_whitelist():
     """每任务临时 config 无 legacy 语料——越族 sampler 直接报错（422）。"""
     GenerateConfig(model_family="krea2", sampler_name="euler",
-                   scheduler="krea2_shift")
+                   scheduler="simple")
     with pytest.raises(ValueError, match="er_sde"):
         GenerateConfig(model_family="krea2", sampler_name="er_sde",
-                       scheduler="krea2_shift")
+                       scheduler="simple")
     with pytest.raises(ValueError, match="euler"):
         GenerateConfig(model_family="anima", sampler_name="euler")
-    with pytest.raises(ValueError, match="krea2_shift"):
-        GenerateConfig(model_family="anima", scheduler="krea2_shift")
+    with pytest.raises(ValueError, match="sgm_uniform"):
+        GenerateConfig(model_family="krea2", sampler_name="euler",
+                       scheduler="sgm_uniform")
 
 
 def test_reg_config_family_sampler_whitelist():
     RegAiConfig(model_family="krea2", sampler_name="euler",
-                scheduler="krea2_shift")
-    with pytest.raises(ValueError, match="simple"):
+                scheduler="simple")
+    with pytest.raises(ValueError, match="sgm_uniform"):
         RegAiConfig(model_family="krea2", sampler_name="euler",
-                    scheduler="simple")
+                    scheduler="sgm_uniform")
 
 
 def test_generate_config_carries_family_and_distilled_to_daemon():
     cfg = GenerateConfig(model_family="krea2", distilled=True,
-                         sampler_name="euler", scheduler="krea2_shift")
+                         sampler_name="euler", scheduler="simple")
     dumped = cfg.model_dump()
     assert dumped["model_family"] == "krea2"
     assert dumped["distilled"] is True

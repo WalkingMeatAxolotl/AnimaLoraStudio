@@ -121,7 +121,7 @@ def test_default_config_valid_and_yaml_roundtrip():
     assert krea2.attention_backend == "none"
     assert krea2.timestep_sampling == "krea2_shift"
     assert (krea2.sample_sampler_name, krea2.sample_scheduler) == (
-        "euler", "krea2_shift",
+        "euler", "simple",
     )
     assert (krea2.sample_infer_steps, krea2.sample_cfg_scale) == (28, 4.5)
 
@@ -174,8 +174,16 @@ def test_cross_family_sampler_asymmetric_grandfather():
     )
     with pytest.raises(ValueError, match="er_sde"):
         TrainingConfig(model_family="krea2", sample_sampler_name="er_sde")
-    with pytest.raises(ValueError, match="simple"):
-        TrainingConfig(model_family="krea2", sample_scheduler="simple")
+    with pytest.raises(ValueError, match="sgm_uniform"):
+        TrainingConfig(model_family="krea2", sample_scheduler="sgm_uniform")
+
+
+def test_krea2_shift_scheduler_value_renamed_to_simple():
+    """scheduler 值 krea2_shift → simple（命名对齐 ComfyUI）：改名前落盘的
+    krea2 config 经 Literal-外归并落回族默认 simple——语义等价（同一条 sigma
+    时刻表），不整份报废。"""
+    cfg = TrainingConfig(model_family="krea2", sample_scheduler="krea2_shift")
+    assert cfg.sample_scheduler == "simple"
 
 
 def test_legacy_garbage_sampler_still_migrates_to_family_default():
@@ -189,7 +197,7 @@ def test_legacy_garbage_sampler_still_migrates_to_family_default():
         sample_sampler_name="ancient_free_text", sample_scheduler="karras",
     )
     assert (krea2.sample_sampler_name, krea2.sample_scheduler) == (
-        "euler", "krea2_shift",
+        "euler", "simple",
     )
 
 

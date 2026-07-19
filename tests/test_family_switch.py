@@ -32,7 +32,7 @@ def test_switch_anima_to_krea2_rewrites_paths_and_flavor():
     assert new["transformer_path"].endswith("krea2-raw-bf16.safetensors")
     assert new["t5_tokenizer_path"] == ""
     assert new["sample_sampler_name"] == "euler"
-    assert new["sample_scheduler"] == "krea2_shift"
+    assert new["sample_scheduler"] == "simple"
     assert new["timestep_sampling"] == "krea2_shift"
     assert new["shuffle_caption"] is False
     # 目标族不支持的能力字段被关回，否则 validator 拒绝整份 config
