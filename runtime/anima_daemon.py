@@ -161,6 +161,67 @@ def _cuda_mem_info(device: str) -> tuple[int, int] | None:
         return None
 
 
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """Recognize CUDA allocator failures without hiding unrelated errors."""
+    return "cuda out of memory" in str(exc).lower()
+
+
+def _recover_cuda_allocator(device: str) -> None:
+    """Drop failed-forward temporaries before one deterministic retry."""
+    import gc
+
+    gc.collect()
+    try:
+        target = torch.device(device)
+    except Exception:
+        return
+    if target.type != "cuda" or not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize(target)
+    except Exception:
+        pass
+    try:
+        torch._C._cuda_clearCublasWorkspaces()
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+
+def _sample_with_cuda_oom_retry(
+    sample_once: Any,
+    *,
+    seed: int,
+    device: str,
+    before_retry: Any = None,
+) -> Any:
+    """Retry one transient CUDA OOM with the exact same random seed.
+
+    A large FP8 DiT consists of many CUDA allocations.  On Windows/WDDM, the
+    first forward immediately after a CPU -> GPU round-trip can occasionally
+    fail a small allocation even while ``mem_get_info`` reports many GiB free.
+    Once the failed-forward tensors are released, the same forward succeeds.
+    Keep this recovery narrow: CUDA OOM only, CUDA device only, one retry.
+    """
+    try:
+        return sample_once()
+    except Exception as exc:
+        if torch.device(device).type != "cuda" or not _is_cuda_oom(exc):
+            raise
+        logger.warning(
+            "transient CUDA OOM during generation; clearing allocator state "
+            "and retrying once with seed=%d",
+            seed,
+        )
+
+    if callable(before_retry):
+        before_retry()
+    _recover_cuda_allocator(device)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    return sample_once()
+
+
 def _te_auto_safety_margin(total_bytes: int) -> int:
     """Keep residency headroom to avoid WDDM paging before CUDA OOM.
 
@@ -633,6 +694,11 @@ class ModelCache:
         for adapter in self.adapters:
             _move_adapter_to_device(adapter, device, self.lora_dtype)
         if torch.cuda.is_available():
+            # ``Module.to(cuda)`` schedules thousands of FP8 parameter copies.
+            # Establish an explicit hand-off boundary before the first large
+            # attention allocation; this is especially important under WDDM.
+            if torch.device(device).type == "cuda":
+                torch.cuda.synchronize(torch.device(device))
             torch.cuda.empty_cache()
 
     def unload(self, *, keep_text: bool = False) -> None:
@@ -1197,23 +1263,33 @@ def _run_generate(
             try:
                 vram_policy = str(cfg.get("vram_policy") or "auto")
                 try:
-                    img = CACHE.family.sample_image(
-                        CACHE.model, CACHE.vae, CACHE.text_stack,
-                        prompt,
-                        height=height,
-                        width=width,
-                        steps=steps,
-                        cfg_scale=cfg_scale,
-                        negative_prompt=negative_prompt,
-                        sampler_name=sampler_name,
-                        scheduler=scheduler,
-                        distilled=distilled,
-                        device=CACHE.device,
-                        dtype=CACHE.dtype,
-                        step_callback=preview_callback,
-                        phase_callback=_phase_cb,
+                    def _sample_once():
+                        return CACHE.family.sample_image(
+                            CACHE.model, CACHE.vae, CACHE.text_stack,
+                            prompt,
+                            height=height,
+                            width=width,
+                            steps=steps,
+                            cfg_scale=cfg_scale,
+                            negative_prompt=negative_prompt,
+                            sampler_name=sampler_name,
+                            scheduler=scheduler,
+                            distilled=distilled,
+                            device=CACHE.device,
+                            dtype=CACHE.dtype,
+                            step_callback=preview_callback,
+                            phase_callback=_phase_cb,
+                            seed=seed,
+                            vram_policy=vram_policy,
+                        )
+
+                    img = _sample_with_cuda_oom_retry(
+                        _sample_once,
                         seed=seed,
-                        vram_policy=vram_policy,
+                        device=CACHE.device,
+                        before_retry=lambda: release_vae_after_decode(
+                            CACHE.vae, vram_policy,
+                        ),
                     )
                 finally:
                     release_vae_after_decode(CACHE.vae, vram_policy)
@@ -1340,23 +1416,33 @@ def _run_xy(
             try:
                 vram_policy = str(cfg.get("vram_policy") or "auto")
                 try:
-                    img = CACHE.family.sample_image(
-                        CACHE.model, CACHE.vae, CACHE.text_stack,
-                        prompt,
-                        height=height,
-                        width=width,
-                        steps=cur_steps,
-                        step_callback=preview_callback,
-                        phase_callback=phase_callback,
-                        cfg_scale=cur_cfg_scale,
-                        negative_prompt=negative_prompt,
-                        sampler_name=base_sampler,
-                        scheduler=scheduler,
-                        distilled=distilled,
-                        device=CACHE.device,
-                        dtype=CACHE.dtype,
+                    def _sample_once():
+                        return CACHE.family.sample_image(
+                            CACHE.model, CACHE.vae, CACHE.text_stack,
+                            prompt,
+                            height=height,
+                            width=width,
+                            steps=cur_steps,
+                            step_callback=preview_callback,
+                            phase_callback=phase_callback,
+                            cfg_scale=cur_cfg_scale,
+                            negative_prompt=negative_prompt,
+                            sampler_name=base_sampler,
+                            scheduler=scheduler,
+                            distilled=distilled,
+                            device=CACHE.device,
+                            dtype=CACHE.dtype,
+                            seed=cur_seed,
+                            vram_policy=vram_policy,
+                        )
+
+                    img = _sample_with_cuda_oom_retry(
+                        _sample_once,
                         seed=cur_seed,
-                        vram_policy=vram_policy,
+                        device=CACHE.device,
+                        before_retry=lambda: release_vae_after_decode(
+                            CACHE.vae, vram_policy,
+                        ),
                     )
                 finally:
                     release_vae_after_decode(CACHE.vae, vram_policy)

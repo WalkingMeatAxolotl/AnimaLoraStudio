@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 _REPO = Path(__file__).resolve().parent.parent
 for _p in (_REPO, _REPO / "runtime"):
     s = str(_p)
@@ -180,6 +182,94 @@ def test_second_task_lru_hit_skips_dit_yield(monkeypatch):
     anima_daemon.CACHE.text_stack.cached = True
     anima_daemon._precache_prompts_and_release(["cached"], "save_vram")
     assert events == ["precache", "release_te"]
+
+
+def test_dit_restore_waits_for_cuda_copies_before_sampling(monkeypatch):
+    events: list[str] = []
+
+    class _Model:
+        def to(self, device):
+            events.append(f"dit:{device}")
+            return self
+
+    cache = anima_daemon.ModelCache()
+    cache.model = _Model()
+    cache.adapters = []
+    monkeypatch.setattr(anima_daemon.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        anima_daemon.torch.cuda, "synchronize",
+        lambda device: events.append(f"sync:{device}"),
+    )
+    monkeypatch.setattr(
+        anima_daemon.torch.cuda, "empty_cache",
+        lambda: events.append("empty_cache"),
+    )
+
+    cache._move_dit_and_adapters("cuda")
+
+    assert events == ["dit:cuda", "sync:cuda", "empty_cache"]
+
+
+def test_cuda_oom_retries_once_with_same_seed(monkeypatch):
+    events: list[str] = []
+    attempts = 0
+
+    def sample_once():
+        nonlocal attempts
+        attempts += 1
+        events.append(f"sample:{attempts}")
+        if attempts == 1:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 100 MiB")
+        return "image"
+
+    monkeypatch.setattr(
+        anima_daemon, "_recover_cuda_allocator",
+        lambda device: events.append(f"recover:{device}"),
+    )
+    monkeypatch.setattr(
+        anima_daemon.torch, "manual_seed",
+        lambda seed: events.append(f"torch_seed:{seed}"),
+    )
+    monkeypatch.setattr(
+        anima_daemon.random, "seed",
+        lambda seed: events.append(f"random_seed:{seed}"),
+    )
+
+    result = anima_daemon._sample_with_cuda_oom_retry(
+        sample_once,
+        seed=123,
+        device="cuda",
+        before_retry=lambda: events.append("release_vae"),
+    )
+
+    assert result == "image"
+    assert events == [
+        "sample:1", "release_vae", "recover:cuda",
+        "torch_seed:123", "random_seed:123", "sample:2",
+    ]
+
+
+def test_cuda_oom_retry_is_bounded_and_does_not_mask_other_errors(monkeypatch):
+    recoveries: list[str] = []
+    monkeypatch.setattr(
+        anima_daemon, "_recover_cuda_allocator", recoveries.append,
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        anima_daemon._sample_with_cuda_oom_retry(
+            lambda: (_ for _ in ()).throw(RuntimeError("CUDA out of memory")),
+            seed=1,
+            device="cuda",
+        )
+    assert recoveries == ["cuda"]
+
+    with pytest.raises(RuntimeError, match="bad sampler"):
+        anima_daemon._sample_with_cuda_oom_retry(
+            lambda: (_ for _ in ()).throw(RuntimeError("bad sampler")),
+            seed=1,
+            device="cuda",
+        )
+    assert recoveries == ["cuda"]
 
 
 def test_initial_te_peak_calibration_spans_load_and_encode(monkeypatch):
