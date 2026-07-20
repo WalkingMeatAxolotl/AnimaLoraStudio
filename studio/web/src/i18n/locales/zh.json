@@ -1254,10 +1254,15 @@
     "selectTeVariant": "设为默认文本编码器（训练与测试出图共用）",
     "teVariantNotDownloaded": "下载完成后可选中",
     "vaePrecision": {
-      "title": "VAE 解码精度",
+      "title": "测试出图精度",
       "label": "测试出图 VAE 精度",
       "desc": "默认 bf16（与 ComfyUI 在现代显卡上的默认一致）",
       "help": "测试出图最后一步 VAE 解码使用的精度。bf16 与 ComfyUI 在现代显卡上自动选择的 VAE 精度一致，为默认值。fp32 全精度解码：显存峰值更高，daemon 会在解码前后临时把 DiT/Qwen 模型挪到内存腾显存（每张图更慢）。"
+    },
+    "loraMergePrecision": {
+      "label": "LoRA merge 精度",
+      "desc": "默认 fp32（与 ComfyUI 一致）；bf16 降低 delta 计算精度，通常更快",
+      "help": "只控制 FP8 底模加载或切换 LoRA 时，LoRA delta 的临时计算精度。fp32 与 ComfyUI 的计算方式一致；bf16 通常更快，但合并结果可能有轻微数值差异。总体显存峰值主要由底模、VAE、fp16 层工作区和备份决定，因此不保证下降。采样阶段仍使用合并后的 FP8 权重，不增加采样显存。Anima/bf16 底模的动态 LoRA 不受此选项影响。"
     },
     "saveTestImages": {
       "title": "测试出图自动落盘",

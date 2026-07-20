@@ -95,6 +95,22 @@ class VAEWrapper:
         self._logged_once.add(key)
         log_fn(msg, *args)
 
+    def to(self, device):
+        """Move the complete VAE wrapper, including non-module scale tensors.
+
+        ``mean``/``std`` are plain tensors rather than registered buffers on the
+        underlying WAN VAE.  Moving only ``model`` therefore leaves decode with
+        tensors on mixed devices.  Test generation uses this method to park the
+        VAE in system RAM between decodes without keeping any VAE weights in
+        VRAM.
+        """
+        target = torch.device(device)
+        self.model.to(target)
+        self.mean = self.mean.to(target)
+        self.std = self.std.to(target)
+        self.scale = [self.mean, 1.0 / self.std]
+        return self
+
     def _est_decode_peak_bytes(self, z) -> int:
         b, _c, t, H, W = z.shape
         out_px = (H * self._UPSAMPLE) * (W * self._UPSAMPLE)

@@ -383,10 +383,13 @@ def test_model_cache_moves_offloaded_model_before_injecting_lora(tmp_path: Path,
         def load_state_dict(self, *_args, **_kwargs):
             return MagicMock(missing_keys=[], unexpected_keys=[])
 
-    def fake_apply_loras(model, specs, device, dtype, family_id="anima"):
+    def fake_apply_loras(
+        model, specs, device, dtype, family_id="anima", lora_merge_precision="fp32",
+    ):
         events.append("apply_loras")
         assert "model.to:cuda" in events
         assert dtype == torch.float32
+        assert lora_merge_precision == "fp32"
         return [FakeAdapter()]
 
     cache = mod.ModelCache()
@@ -436,6 +439,43 @@ def test_model_cache_reinjects_when_lora_topology_changes(tmp_path: Path) -> Non
     created[1].inject.assert_called_once_with(cache.model)
 
 
+def test_model_cache_remerges_fp8_lora_when_merge_precision_changes(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """同一 LoRA 从 fp32 切 bf16 只 detach/remerge，不把旧 merge 当 cache hit。"""
+    p = tmp_path / "a.safetensors"
+    _write_lora_safetensors(p, rank=16, alpha=8.0, algo="lokr", factor=8)
+
+    from runtime import anima_daemon as mod
+
+    calls: list[str] = []
+    handles: list[MagicMock] = []
+
+    def fake_apply_loras(
+        model, specs, device, dtype, family_id="anima", lora_merge_precision="fp32",
+    ):
+        calls.append(lora_merge_precision)
+        handle = MagicMock()
+        handle.supports_hot_reload = False
+        handle.detach.return_value = True
+        handles.append(handle)
+        return [handle]
+
+    cache = mod.ModelCache()
+    cache.model = MagicMock()
+    cache.device = "cpu"
+    monkeypatch.setattr(mod, "apply_loras", fake_apply_loras)
+
+    config = [{"path": str(p), "scale": 1.0}]
+    cache.apply_loras(config)
+    cache.lora_merge_precision = "bf16"
+    cache.apply_loras(config)
+
+    assert calls == ["fp32", "bf16"]
+    handles[0].detach.assert_called_once()
+    assert cache.last_lora_merge_precision == "bf16"
+
+
 # ---------------------------------------------------------------------------
 # generate tempdir helpers
 # ---------------------------------------------------------------------------
@@ -451,6 +491,57 @@ def test_generate_tempdir_path() -> None:
     d = generate_tempdir(42)
     assert d.parent == Path(tempfile.gettempdir())
     assert d.name == f"{GENERATE_TEMP_PREFIX}42"
+
+
+def test_deferred_vae_loads_on_decode_and_parks_on_cpu() -> None:
+    from studio.services.inference.core import DeferredVAE, release_vae_after_decode
+
+    events: list[str] = []
+
+    class FakeVAE:
+        def to(self, device):
+            events.append(f"to:{device}")
+            return self
+
+        def decode(self, latent):
+            events.append("decode")
+            return latent
+
+    def load():
+        events.append("load")
+        return FakeVAE()
+
+    vae = DeferredVAE(load, device="cuda", label="test VAE")
+    assert vae.is_loaded is False
+    assert events == []
+
+    assert vae.decode("latent") == "latent"
+    assert events == ["load", "decode"]
+    release_vae_after_decode(vae, "auto")
+    assert events[-1] == "to:cpu"
+    assert vae.resident_device == "cpu"
+
+    vae.decode("next")
+    assert events[-2:] == ["to:cuda", "decode"]
+
+
+def test_deferred_vae_performance_policy_keeps_gpu_resident() -> None:
+    from studio.services.inference.core import DeferredVAE, release_vae_after_decode
+
+    moves: list[str] = []
+
+    class FakeVAE:
+        def to(self, device):
+            moves.append(str(device))
+            return self
+
+        ready = True
+
+    vae = DeferredVAE(lambda: FakeVAE(), device="cuda")
+    assert vae.ready is True
+    release_vae_after_decode(vae, "performance")
+    assert moves == []
+    assert vae.resident_device == "cuda"
 
 
 def test_cleanup_generate_tempdir_removes_dir() -> None:

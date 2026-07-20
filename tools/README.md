@@ -67,6 +67,37 @@ python tools/validate_local_models.py
 
 ## 诊断 / benchmark
 
+### `vram_trace.py`
+测试出图显存时序探针。默认每 50ms 记录整卡显存、相对启动基线的净增量、GPU
+利用率和 NVML 可提供的进程显存；同时跟随最新的 `studio_data/tasks/*/run.log`，把
+TE / DiT / VAE 加载阶段写进同一份 CSV。适合核对任务管理器 Usage、NVML 整卡数值
+和 Studio 模型生命周期不一致的问题。
+
+```text
+venv\Scripts\python tools\vram_trace.py
+venv\Scripts\python tools\vram_trace.py --duration 120 --out tmp/vram.csv
+venv\Scripts\python tools\vram_trace.py --pid <daemon-pid> --interval-ms 20
+```
+
+建议先启动探针，再在 Studio 点「开始生成」，完成后按 `Ctrl+C`。Windows WDDM
+有时不提供 per-PID 显存，此时 `target_gpu_mib` 为空，但整卡峰值仍有效。
+
+### `benchmark_lora_merge_chunks.py`
+
+Krea 2 FP8 普通 LoRA 完整 delta / 行分块 merge 的真卡 A/B。推荐用
+`stream-compare`：逐层加载底模权重，覆盖所有 merge 层但不让整模型占用干扰
+工作集峰值，同时报告最终 FP8 权重/scale 是否 bit 一致、耗时和 CUDA peak。
+
+```powershell
+venv\Scripts\python tools\benchmark_lora_merge_chunks.py `
+  --model models\diffusion_models\krea2-turbo-fp8-scaled.safetensors `
+  --lora path\a.safetensors --lora path\b.safetensors `
+  --precision fp32 --chunk-rows 1024 --mode stream-compare
+```
+
+`full` / `chunked` 模式加载完整模型，用于分别测生产形态；Windows WDDM 可能
+按进程预算拒绝仍低于整卡空闲量的大块分配，遇到这种情况不要把 OOM 当峰值结果。
+
 ### `diagnose_onnx_gpu.py`
 WD14 打标遇到 "CUDA EP 静默降级到 CPU" 警告时跑这个定位根因。在 studio 同一个 venv 里执行，把 stdout 全文贴到 PR / issue。
 

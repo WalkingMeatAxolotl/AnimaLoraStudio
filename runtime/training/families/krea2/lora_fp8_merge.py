@@ -6,7 +6,7 @@ ComfyUI 从不在量化存储上算 LoRA：加载时把 LoRA merge 进权重
 eager 路径，docs/design/krea2-fp8-inference.md §1.5）：
 
     W16    = W_fp8.to(fp16) [* scale.to(fp16)]            # dequant 到 fp16
-    W16   += ((strength * alpha/dim) * ΔW_fp32).to(fp16)   # 逐 LoRA，fp32 中间
+    W16   += ((strength * alpha/dim) * ΔW_compute).to(fp16) # 逐 LoRA，可选 fp32/bf16
     scale' = amax(|W16|).to(fp32) / 448（fp16 防下溢 clamp）
     W16   *= (1/scale').to(fp16)
     W_fp8' = stochastic_round(W16, seed=CRC32(key))        # ck eager SR
@@ -21,9 +21,9 @@ eager 路径，docs/design/krea2-fp8-inference.md §1.5）：
 - dequant 直落 fp16 域：QuantizedTensor.to(fp16) 只改 orig_dtype 标记
   （ck tensor/base.py _handle_to），dequantize 即 qdata.to(fp16)*scale.to(fp16)，
   无 bf16 中转；fp16 = comfy lora_compute_dtype（should_use_fp16 现代卡）
-- delta 域：comfy weight_adapter lokr/lora/loha——因子 cast fp32 做
-  mm/kron/Hadamard，``weight += ((strength * alpha) * diff).type(fp16)``，
-  加法在 fp16 域
+- delta 域：默认按 comfy weight_adapter lokr/lora/loha 把因子 cast fp32 做
+  mm/kron/Hadamard；可选 bf16 以降低 merge 峰值与计算量。两者最终都执行
+  ``weight += ((strength * alpha) * diff).type(fp16)``，加法仍在 fp16 域
 - requantize：quant_ops._TensorCoreFP8LayoutBase.quantize 的
   scale="recalculate" + stochastic_rounding 分支
 - SR：comfy/float.py（Generator(device)+manual_seed → randint(0,256,uint8)）
@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 _LORA_PREFIX = "lora_unet_"
 _COMFY_PREFIX = "diffusion_model."
+# Keep the merge bounded to one layer's live workspace.  NVML tracing showed
+# that even an eight-layer interval adds about 2.4 GiB to the high-water mark.
+_CUDA_CACHE_TRIM_EVERY_LAYERS = 1
 # PEFT/comfy 键后缀 → kohya/lycoris 命名（civitai 生态 krea2 LoRA 常见形态：
 # ``diffusion_model.{点分层名}.lora_A/lora_B``，lora_A=down、lora_B=up，
 # 通常无 alpha 键——comfy 对缺省 alpha 按缩放 1.0 处理，与 _apply_lora_delta
@@ -184,8 +187,10 @@ def _apply_lora_delta(
     strength: float,
     layer: str,
     source: str,
+    compute_dtype: torch.dtype = torch.float32,
+    chunk_rows: int | None = None,
 ) -> Tensor:
-    """单层单 LoRA 的 comfy 顺序 merge：fp32 算 diff，fp16 域相加。"""
+    """单层单 LoRA merge：可选 fp32/bf16 算 diff，fp16 域相加。"""
     device = w16.device
     if "dora_scale" in tensors:
         raise ValueError(
@@ -196,25 +201,41 @@ def _apply_lora_delta(
     if "lora_down.weight" in tensors:  # plain LoRA / LoCon Linear
         if "lora_mid.weight" in tensors:
             raise ValueError(f"fp8 merge 不支持 LoCon mid（tucker）形态：{source} 层 {layer}")
-        mat1 = tensors["lora_up.weight"].to(device=device, dtype=torch.float32)
-        mat2 = tensors["lora_down.weight"].to(device=device, dtype=torch.float32)
+        mat1 = tensors["lora_up.weight"].to(device=device, dtype=compute_dtype)
+        mat2 = tensors["lora_down.weight"].to(device=device, dtype=compute_dtype)
         alpha = float(tensors["alpha"]) / mat2.shape[0] if "alpha" in tensors else 1.0
-        lora_diff = torch.mm(
-            mat1.flatten(start_dim=1), mat2.flatten(start_dim=1),
-        ).reshape(w16.shape)
-        w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
+        mat1 = mat1.flatten(start_dim=1)
+        mat2 = mat2.flatten(start_dim=1)
+        rows = int(mat1.shape[0])
+        if chunk_rows is not None and 0 < int(chunk_rows) < rows:
+            # A rank-r LoRA is small, but materializing its out×in dense delta
+            # can consume almost 1 GiB for Krea2's tproj layer.  Compute row
+            # slices and add them immediately so peak workspace is bounded by
+            # chunk_rows×in instead of the full weight.  Only plain Linear LoRA
+            # uses this path; LoHa/LoKr retain their exact legacy algorithms.
+            w_rows = w16.reshape(rows, -1)
+            for start in range(0, rows, int(chunk_rows)):
+                end = min(start + int(chunk_rows), rows)
+                lora_diff = torch.mm(mat1[start:end], mat2)
+                w_rows[start:end] += (
+                    (strength * alpha) * lora_diff
+                ).type(w16.dtype)
+                del lora_diff
+        else:
+            lora_diff = torch.mm(mat1, mat2).reshape(w16.shape)
+            w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
         return w16
 
     if "hada_w1_a" in tensors:  # LoHa
         if "hada_t1" in tensors or "hada_t2" in tensors:
             raise ValueError(f"fp8 merge 不支持 LoHa tucker（t1/t2）形态：{source} 层 {layer}")
         m1 = torch.mm(
-            tensors["hada_w1_a"].to(device=device, dtype=torch.float32),
-            tensors["hada_w1_b"].to(device=device, dtype=torch.float32),
+            tensors["hada_w1_a"].to(device=device, dtype=compute_dtype),
+            tensors["hada_w1_b"].to(device=device, dtype=compute_dtype),
         )
         m2 = torch.mm(
-            tensors["hada_w2_a"].to(device=device, dtype=torch.float32),
-            tensors["hada_w2_b"].to(device=device, dtype=torch.float32),
+            tensors["hada_w2_a"].to(device=device, dtype=compute_dtype),
+            tensors["hada_w2_b"].to(device=device, dtype=compute_dtype),
         )
         # dim 语义照 comfy weight_adapter/loha.py：divisor = w1_b 的 rank 维
         alpha = float(tensors["alpha"]) / tensors["hada_w1_b"].shape[0] if "alpha" in tensors else 1.0
@@ -230,20 +251,20 @@ def _apply_lora_delta(
         # None → alpha 系数取 1.0
         dim = None
         if "lokr_w1" in tensors:
-            w1 = tensors["lokr_w1"].to(device=device, dtype=torch.float32)
+            w1 = tensors["lokr_w1"].to(device=device, dtype=compute_dtype)
         else:
             dim = tensors["lokr_w1_b"].shape[0]
             w1 = torch.mm(
-                tensors["lokr_w1_a"].to(device=device, dtype=torch.float32),
-                tensors["lokr_w1_b"].to(device=device, dtype=torch.float32),
+                tensors["lokr_w1_a"].to(device=device, dtype=compute_dtype),
+                tensors["lokr_w1_b"].to(device=device, dtype=compute_dtype),
             )
         if "lokr_w2" in tensors:
-            w2 = tensors["lokr_w2"].to(device=device, dtype=torch.float32)
+            w2 = tensors["lokr_w2"].to(device=device, dtype=compute_dtype)
         else:
             dim = tensors["lokr_w2_b"].shape[0]
             w2 = torch.mm(
-                tensors["lokr_w2_a"].to(device=device, dtype=torch.float32),
-                tensors["lokr_w2_b"].to(device=device, dtype=torch.float32),
+                tensors["lokr_w2_a"].to(device=device, dtype=compute_dtype),
+                tensors["lokr_w2_b"].to(device=device, dtype=compute_dtype),
             )
         if "alpha" in tensors and dim is not None:
             alpha = float(tensors["alpha"]) / dim
@@ -291,12 +312,23 @@ class Fp8LoraMergeAdapter:
 def merge_loras_into_fp8_model(
     model: torch.nn.Module,
     sources: list[tuple[dict[str, Tensor], float, str]],
+    *,
+    compute_dtype: torch.dtype = torch.float32,
+    chunk_rows: int | None = None,
 ) -> Fp8LoraMergeAdapter:
     """把多份 LoRA 按 comfy merge 语义烘进（部分）fp8 模型的 Linear 权重。
 
     ``sources``：[(state_dict, strength, 来源名), ...]，顺序 = 挂载顺序 =
-    comfy patches 顺序。返回持有原始权重 CPU 备份的还原句柄。
+    comfy patches 顺序。``compute_dtype`` 只允许 fp32（ComfyUI 默认）或
+    bf16（低峰值模式）。``chunk_rows`` 为正数时，普通 Linear LoRA 按输出
+    行分块计算 dense delta；LoHa/LoKr 暂不分块。返回持有原始权重 CPU 备份
+    的还原句柄。
     """
+    if compute_dtype not in (torch.float32, torch.bfloat16):
+        raise ValueError(f"LoRA merge compute_dtype 仅支持 fp32/bf16，收到：{compute_dtype}")
+    if chunk_rows is not None and int(chunk_rows) < 0:
+        raise ValueError(f"LoRA merge chunk_rows 不能为负数，收到：{chunk_rows}")
+    normalized_chunk_rows = None if not chunk_rows else int(chunk_rows)
     module_index = {
         name.replace(".", "_"): (name, module)
         for name, module in model.named_modules()
@@ -325,7 +357,8 @@ def merge_loras_into_fp8_model(
         )
 
     backup: dict[str, tuple[Tensor, Tensor | None]] = {}
-    for layer_key, layer_sources in per_layer.items():
+    layer_count = len(per_layer)
+    for layer_index, (layer_key, layer_sources) in enumerate(per_layer.items(), 1):
         name, module = module_index[layer_key]
         weight = module.weight
         scale = getattr(module, "weight_scale", None)
@@ -343,7 +376,10 @@ def merge_loras_into_fp8_model(
             w16 = w16 * scale.to(torch.float16)
 
         for tensors, strength, source in layer_sources:
-            w16 = _apply_lora_delta(w16, tensors, strength, name, source)
+            w16 = _apply_lora_delta(
+                w16, tensors, strength, name, source, compute_dtype,
+                normalized_chunk_rows,
+            )
 
         if is_fp8 and scale is not None:
             seed = string_to_seed(f"diffusion_model.{name}.weight")
@@ -359,8 +395,25 @@ def merge_loras_into_fp8_model(
             # 直接 cast 回存储 dtype，无 SR
             weight.data.copy_(w16.to(weight.dtype))
 
+        # Drop live per-layer temporaries before trimming.  Otherwise CUDA's
+        # caching allocator accumulates dead fp16/qdata segments over all 264
+        # Linear layers and raises the process high-water mark by several GiB.
+        del w16
+        if is_fp8 and scale is not None:
+            del qdata, new_scale
+        if (
+            weight.device.type == "cuda"
+            and torch.cuda.is_available()
+            and (
+                layer_index % _CUDA_CACHE_TRIM_EVERY_LAYERS == 0
+                or layer_index == layer_count
+            )
+        ):
+            torch.cuda.empty_cache()
+
     logger.info(
-        "Krea2 fp8 merge：%d 份 LoRA 烘进 %d 个 Linear（含备份，可 detach 还原）",
-        len(sources), len(per_layer),
+        "Krea2 fp8 merge：%d 份 LoRA 烘进 %d 个 Linear（delta=%s；chunk_rows=%s；含备份，可 detach 还原）",
+        len(sources), len(per_layer), str(compute_dtype).removeprefix("torch."),
+        normalized_chunk_rows or "off",
     )
     return Fp8LoraMergeAdapter(model, backup)

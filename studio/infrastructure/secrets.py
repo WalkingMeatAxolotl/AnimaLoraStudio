@@ -574,6 +574,10 @@ class GenerateConfig(BaseModel):
     - `vae_precision`：测试出图 VAE decode 精度。`'bf16'`（默认）对齐 ComfyUI
       在现代 GPU 上的 auto VAE dtype；`'fp32'` 全精度 decode（显存高峰更大，
       daemon 会在 decode 前临时 offload DiT/Qwen 腾显存）。
+    - `lora_merge_precision`：FP8 底模 LoRA merge 的临时 delta 计算精度。
+      `'fp32'`（默认）对齐 ComfyUI；`'bf16'` 降低 delta 计算量、通常更快，
+      但总体峰值未必下降，结果也可能与 ComfyUI 有轻微数值差异。只影响
+      加载/切换 LoRA，不影响采样精度。
     - `save_test_images`：开关测试出图自动落盘。默认关；开后每次出完图前端
       会调 /api/generate/save 把成图存到 studio_data/test/<date>/{single,xy}/
       image_N.png（N 按当前文件夹已有最大编号+1）。compare 模式不落盘。
@@ -591,6 +595,7 @@ class GenerateConfig(BaseModel):
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
     vae_precision: str = "bf16"
+    lora_merge_precision: Literal["fp32", "bf16"] = "fp32"
     idle_timeout_minutes: int = 10
     save_test_images: bool = False
     vram_policy: str = "auto"
