@@ -547,6 +547,7 @@ def _default_generator(
             sys.path.insert(0, text)
 
     import anima_train as _T  # noqa: WPS433
+    from studio import secrets
     from studio.services import version_config
     from studio.services.inference.core import LoRASpec, apply_loras
 
@@ -574,6 +575,12 @@ def _default_generator(
     _raw_scale = generation.get("lora_scale")
     lora_scale = float(_raw_scale) if _raw_scale is not None else 1.0
     precision = str(cfg.get("mixed_precision") or "bf16")
+    try:
+        lora_merge_precision = str(
+            getattr(secrets.load().generate, "lora_merge_precision", "fp32") or "fp32"
+        )
+    except Exception:
+        lora_merge_precision = "fp32"
     backend = str(cfg.get("attention_backend") or "flash_attn")
     use_flash = backend == "flash_attn"
     use_xformers = backend == "xformers"
@@ -638,6 +645,7 @@ def _default_generator(
     adapters = apply_loras(
         model, [LoRASpec(path=str(checkpoint), scale=lora_scale)], device, dtype,
         family_id=family.spec.family_id,
+        lora_merge_precision=lora_merge_precision,
     )
     _ = adapters  # keep adapter references alive for forward hooks
     model.eval()

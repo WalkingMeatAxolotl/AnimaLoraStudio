@@ -43,7 +43,12 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.domain.comfy_parity import force_comfy_parity_runtime_config  # noqa: E402
-from studio.services.inference.core import LoRASpec, apply_loras  # noqa: E402
+from studio.services.inference.core import (  # noqa: E402
+    DeferredVAE,
+    LoRASpec,
+    apply_loras,
+    release_vae_after_decode,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,6 +106,7 @@ def main() -> None:
     lora_configs: list[dict] = cfg.get("lora_configs", [])
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
     vae_precision: str = cfg.get("vae_precision", mixed_precision)
+    lora_merge_precision: str = str(cfg.get("lora_merge_precision") or "fp32")
     vram_policy: str = str(cfg.get("vram_policy") or "auto")
     text_encoder_backend: str = cfg.get("text_encoder_backend", "hf")
     t5_tokenizer_backend: str = cfg.get("t5_tokenizer_backend", "slow")
@@ -144,9 +150,16 @@ def main() -> None:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
     family = _T.resolve_family(cfg)  # D8'：旁路调用方经 family 派发
-    logger.info("加载 VAE...")
-    vae = family.load_vae(vae_path, device, vae_dtype,
-                          tiling=str(cfg.get("vae_tiling", "auto")))
+    # Keep VAE weights out of VRAM through DiT load, LoRA merge and sampling.
+    # The proxy performs the real load on the first decode-side attribute read.
+    vae = DeferredVAE(
+        lambda: family.load_vae(
+            vae_path, device, vae_dtype,
+            tiling=str(cfg.get("vae_tiling", "auto")),
+        ),
+        device=device,
+        label=f"VAE {vae_path}",
+    )
 
     logger.info("加载文本编码器...")
     # 族 opaque 文本栈不拆包；ad-hoc prompt 关缓存（cached_varlen 族 TE 常驻）
@@ -196,7 +209,8 @@ def main() -> None:
         for lc in lora_configs
     ]
     _adapters = apply_loras(model, specs, device, torch.float32,  # noqa: F841 — 保持引用
-                            family_id=family.spec.family_id)
+                            family_id=family.spec.family_id,
+                            lora_merge_precision=lora_merge_precision)
 
     model.eval()
 
@@ -239,22 +253,25 @@ def main() -> None:
 
             logger.info(f"[{img_idx + 1}/{total}] seed={seed}  prompt={prompt[:60]}...")
             try:
-                img = family.sample_image(
-                    model, vae, text_stack,
-                    prompt,
-                    height=height,
-                    width=width,
-                    steps=steps,
-                    cfg_scale=cfg_scale,
-                    negative_prompt=negative_prompt,
-                    sampler_name=sampler_name,
-                    scheduler=scheduler,
-                    distilled=distilled,
-                    device=device,
-                    dtype=dtype,
-                    seed=seed,
-                    vram_policy=vram_policy,
-                )
+                try:
+                    img = family.sample_image(
+                        model, vae, text_stack,
+                        prompt,
+                        height=height,
+                        width=width,
+                        steps=steps,
+                        cfg_scale=cfg_scale,
+                        negative_prompt=negative_prompt,
+                        sampler_name=sampler_name,
+                        scheduler=scheduler,
+                        distilled=distilled,
+                        device=device,
+                        dtype=dtype,
+                        seed=seed,
+                        vram_policy=vram_policy,
+                    )
+                finally:
+                    release_vae_after_decode(vae, vram_policy)
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 out_path = output_dir / fname
                 img.save(out_path)
@@ -422,22 +439,25 @@ def _run_xy_matrix(
                 f"steps={cur_steps} cfg={cur_cfg_scale} seed={cur_seed} sampler={cur_sampler}"
             )
             try:
-                img = family.sample_image(
-                    model, vae, text,
-                    prompt,
-                    height=height,
-                    width=width,
-                    steps=cur_steps,
-                    cfg_scale=cur_cfg_scale,
-                    negative_prompt=negative_prompt,
-                    sampler_name=cur_sampler,
-                    scheduler=scheduler,
-                    distilled=distilled,
-                    device=device,
-                    dtype=dtype,
-                    seed=cur_seed,
-                    vram_policy=vram_policy,
-                )
+                try:
+                    img = family.sample_image(
+                        model, vae, text,
+                        prompt,
+                        height=height,
+                        width=width,
+                        steps=cur_steps,
+                        cfg_scale=cur_cfg_scale,
+                        negative_prompt=negative_prompt,
+                        sampler_name=cur_sampler,
+                        scheduler=scheduler,
+                        distilled=distilled,
+                        device=device,
+                        dtype=dtype,
+                        seed=cur_seed,
+                        vram_policy=vram_policy,
+                    )
+                finally:
+                    release_vae_after_decode(vae, vram_policy)
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 out_path = output_dir / fname
                 img.save(out_path)

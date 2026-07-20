@@ -212,12 +212,16 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             attn_default = gen_cfg.attention_backend
             preview_n = int(gen_cfg.preview_every_n_steps or 0)
             vae_precision = str(getattr(gen_cfg, "vae_precision", "bf16") or "bf16")
+            lora_merge_precision = str(
+                getattr(gen_cfg, "lora_merge_precision", "fp32") or "fp32"
+            )
             vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
             ram_guard = bool(getattr(gen_cfg, "ram_guard", True))
         except Exception:
             attn_default = "auto"
             preview_n = 0
             vae_precision = "bf16"
+            lora_merge_precision = "fp32"
             vram_policy = "auto"
             ram_guard = True
         attn = body.attention_backend or attn_default
@@ -243,6 +247,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             lora_configs=[lc.model_dump() for lc in body.lora_configs],
             mixed_precision="bf16",
             vae_precision=vae_precision,
+            lora_merge_precision=lora_merge_precision,
             attention_backend=attn,
             vram_policy=vram_policy,
             ram_guard=ram_guard,

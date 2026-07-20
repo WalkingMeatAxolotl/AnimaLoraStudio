@@ -93,6 +93,10 @@ class GenerateConfig(BaseModel):
         "bf16",
         description="VAE decode 精度：bf16 对齐 ComfyUI 现代 GPU 默认；fp32 全精度（decode 前会 offload 腾显存）",
     )
+    lora_merge_precision: Literal["fp32", "bf16"] = Field(
+        "fp32",
+        description="FP8 底模 LoRA merge 临时精度：fp32 对齐 ComfyUI；bf16 降低 delta 计算量、通常更快",
+    )
     vae_tiling: Literal["auto", "on", "off"] = Field(
         "auto",
         description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"

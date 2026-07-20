@@ -232,6 +232,67 @@ def test_merge_multiple_loras_apply_in_mount_order():
     assert torch.equal(block.m.weight.detach(), w16.to(torch.bfloat16))
 
 
+@pytest.mark.parametrize("compute_dtype", [torch.float32, torch.bfloat16])
+def test_plain_lora_chunked_merge_matches_full_merge_on_cpu(compute_dtype):
+    """分块只改变 dense delta 的物化范围，不改变小矩阵 merge 结果。"""
+    model = _make_fp8_model()
+    sd_a = _plain_lora_sd(["blocks.0.q", "blocks.0.m"], seed=41)
+    sd_b = _plain_lora_sd(["blocks.0.q", "blocks.0.m"], seed=42)
+    sources = [(sd_a, 0.75, "a"), (sd_b, -0.2, "b")]
+
+    full = merge_loras_into_fp8_model(
+        model, sources, compute_dtype=compute_dtype,
+    )
+    q_full = model.blocks[0].q.weight.detach().view(torch.uint8).clone()
+    scale_full = model.blocks[0].q.weight_scale.detach().clone()
+    m_full = model.blocks[0].m.weight.detach().clone()
+    full.detach()
+
+    merge_loras_into_fp8_model(
+        model, sources, compute_dtype=compute_dtype, chunk_rows=2,
+    )
+    assert torch.equal(model.blocks[0].q.weight.view(torch.uint8), q_full)
+    assert torch.equal(model.blocks[0].q.weight_scale, scale_full)
+    assert torch.equal(model.blocks[0].m.weight, m_full)
+
+
+def test_merge_rejects_negative_chunk_rows():
+    model = _make_fp8_model()
+    sd = _plain_lora_sd(["blocks.0.q"])
+    with pytest.raises(ValueError, match="chunk_rows"):
+        merge_loras_into_fp8_model(
+            model, [(sd, 1.0, "bad")], chunk_rows=-1,
+        )
+
+
+def test_merge_bf16_compute_dtype_matches_bf16_delta_formula():
+    """bf16 选项只降低 delta 的 mm 精度；权重累加仍落在 fp16 域。"""
+    model = _make_fp8_model()
+    sd = _plain_lora_sd(["blocks.0.m"], seed=31)
+    block = model.blocks[0]
+    original = block.m.weight.detach().clone()
+
+    merge_loras_into_fp8_model(
+        model, [(sd, 0.75, "bf16")], compute_dtype=torch.bfloat16,
+    )
+
+    up = sd["lora_unet_blocks_0_m.lora_up.weight"].to(torch.bfloat16)
+    down = sd["lora_unet_blocks_0_m.lora_down.weight"].to(torch.bfloat16)
+    alpha = float(sd["lora_unet_blocks_0_m.alpha"]) / down.shape[0]
+    expected = original.to(torch.float16)
+    expected += ((0.75 * alpha) * torch.mm(up, down)).to(torch.float16)
+    assert torch.equal(block.m.weight.detach(), expected.to(torch.bfloat16))
+
+
+def test_merge_rejects_unsupported_compute_dtype():
+    model = _make_fp8_model()
+    sd = _plain_lora_sd(["blocks.0.q"])
+    with pytest.raises(ValueError, match="fp32/bf16"):
+        merge_loras_into_fp8_model(
+            model, [(sd, 1.0, "bad")], compute_dtype=torch.float16,
+        )
+
+
 def test_merge_lokr_matches_comfy_kron_order():
     model = _make_fp8_model()
     block = model.blocks[0]
@@ -361,7 +422,7 @@ def _write_lora_file(tmp_path, sd, *, network_args: dict) -> str:
     return str(path)
 
 
-def test_apply_loras_routes_fp8_model_to_merge(tmp_path):
+def test_apply_loras_routes_fp8_model_to_merge(tmp_path, monkeypatch):
     from studio.services.inference.core import LoRASpec, apply_loras
 
     model = _make_fp8_model()
@@ -369,6 +430,9 @@ def test_apply_loras_routes_fp8_model_to_merge(tmp_path):
         tmp_path, _plain_lora_sd(["blocks.0.q"]), network_args={"algo": "lora"},
     )
     before = model.blocks[0].q.weight.detach().view(torch.uint8).clone()
+    cache_clears: list[bool] = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: cache_clears.append(True))
 
     adapters = apply_loras(
         model, [LoRASpec(path=path, scale=0.7)], "cpu", torch.float32,
@@ -377,9 +441,39 @@ def test_apply_loras_routes_fp8_model_to_merge(tmp_path):
 
     assert len(adapters) == 1
     assert isinstance(adapters[0], Fp8LoraMergeAdapter)
+    assert cache_clears == [True]
     assert not torch.equal(model.blocks[0].q.weight.view(torch.uint8), before)
     assert adapters[0].detach() is True
     assert torch.equal(model.blocks[0].q.weight.view(torch.uint8), before)
+
+
+def test_apply_loras_routes_bf16_merge_precision(tmp_path, monkeypatch):
+    from studio.services.inference.core import LoRASpec, apply_loras
+    from training.families.krea2 import lora_fp8_merge as merge_mod
+
+    model = _make_fp8_model()
+    path = _write_lora_file(
+        tmp_path, _plain_lora_sd(["blocks.0.q"]), network_args={"algo": "lora"},
+    )
+    observed: list[tuple[torch.dtype, int | None]] = []
+    real_merge = merge_mod.merge_loras_into_fp8_model
+
+    def recording_merge(
+        model, sources, *, compute_dtype=torch.float32, chunk_rows=None,
+    ):
+        observed.append((compute_dtype, chunk_rows))
+        return real_merge(
+            model, sources, compute_dtype=compute_dtype, chunk_rows=chunk_rows,
+        )
+
+    monkeypatch.setattr(merge_mod, "merge_loras_into_fp8_model", recording_merge)
+    adapters = apply_loras(
+        model, [LoRASpec(path=path, scale=1.0)], "cpu", torch.float32,
+        family_id="krea2", lora_merge_precision="bf16",
+    )
+
+    assert observed == [(torch.bfloat16, 1024)]
+    assert isinstance(adapters[0], Fp8LoraMergeAdapter)
 
 
 def test_apply_loras_fp8_rejects_dora_meta(tmp_path):

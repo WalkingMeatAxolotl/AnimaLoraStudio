@@ -21,20 +21,38 @@ import anima_daemon  # noqa: E402
 
 
 class _Stack:
-    def __init__(self, fail: bool = False):
+    def __init__(
+        self, fail: bool = False, *, cached: bool = False,
+        events: list[str] | None = None,
+    ):
         self.fail = fail
+        self.cached = cached
+        self.events = events
         self.precached: list[list[str]] = []
         self.released = 0
         self.is_model_loaded = False
+        self.is_model_on_device = False
+        self.is_fp8_storage = True
 
     def precache_online_prompts(self, prompts):
         if self.fail:
             raise RuntimeError("boom")
+        if self.events is not None:
+            self.events.append("precache")
         self.precached.append(list(prompts))
         return len(prompts)
 
     def release_model(self):
+        if self.events is not None:
+            self.events.append("release_te")
         self.released += 1
+
+    def offload_model(self):
+        if self.events is not None:
+            self.events.append("offload_te")
+
+    def online_conditions_cached(self, _prompts):
+        return self.cached
 
 
 def _with_stack(monkeypatch, stack):
@@ -80,6 +98,117 @@ def test_precache_skips_stacks_without_api(monkeypatch):
         raising=False,
     )
     anima_daemon._precache_prompts_and_release(["p"], "auto")  # 不抛
+
+
+def test_task_level_te_budget_policies(monkeypatch):
+    gib = 1024 ** 3
+    monkeypatch.setattr(
+        anima_daemon, "_cuda_mem_info", lambda _device: (6 * gib, 24 * gib),
+    )
+    assert anima_daemon._should_yield_dit_for_te(
+        "performance", "cuda", 7 * gib,
+    )[0] is False
+    assert anima_daemon._should_yield_dit_for_te(
+        "save_vram", "cuda", 1,
+    )[0] is True
+    # auto: 7 GiB TE + 9.6 GiB WDDM residency reserve > 6 GiB free
+    should_yield, budget = anima_daemon._should_yield_dit_for_te(
+        "auto", "cuda", 7 * gib,
+    )
+    assert should_yield is True
+    assert budget is not None and budget["margin"] == int(24 * gib * 0.40)
+
+
+def _set_second_task_runtime(
+    monkeypatch, *, free_gib: int, calibrated_gib: int, total_gib: int = 24,
+):
+    events: list[str] = []
+
+    class _Model:
+        def to(self, device):
+            events.append(f"dit:{device}")
+            return self
+
+    stack = _Stack(events=events)
+    key = ("krea2", "te")
+    monkeypatch.setattr(anima_daemon.CACHE, "text_stack", stack)
+    monkeypatch.setattr(anima_daemon.CACHE, "model", _Model())
+    monkeypatch.setattr(anima_daemon.CACHE, "adapters", [])
+    monkeypatch.setattr(anima_daemon.CACHE, "device", "cuda")
+    monkeypatch.setattr(anima_daemon.CACHE, "text_encoder_path", "te")
+    monkeypatch.setattr(anima_daemon.CACHE, "_text_ready_key", key)
+    monkeypatch.setattr(
+        anima_daemon.CACHE, "_te_peak_calibration",
+        {key: (calibrated_gib * 1024 ** 3, 512 * 1024 ** 2)},
+    )
+    monkeypatch.setattr(anima_daemon.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        anima_daemon, "_cuda_mem_info",
+        lambda _device: (free_gib * 1024 ** 3, total_gib * 1024 ** 3),
+    )
+    return events
+
+
+def test_second_task_save_vram_yields_dit_around_te(monkeypatch):
+    events = _set_second_task_runtime(
+        monkeypatch, free_gib=20, calibrated_gib=7,
+    )
+    anima_daemon._precache_prompts_and_release(["new"], "save_vram")
+    assert events == ["dit:cpu", "precache", "release_te", "dit:cuda"]
+
+
+def test_second_task_auto_uses_calibrated_peak(monkeypatch):
+    events = _set_second_task_runtime(
+        monkeypatch, free_gib=6, calibrated_gib=7,
+    )
+    anima_daemon._precache_prompts_and_release(["new"], "auto")
+    assert events == ["dit:cpu", "precache", "release_te", "dit:cuda"]
+
+
+def test_second_task_auto_keeps_dit_when_calibrated_peak_fits(monkeypatch):
+    events = _set_second_task_runtime(
+        monkeypatch, free_gib=30, calibrated_gib=7, total_gib=48,
+    )
+    anima_daemon._precache_prompts_and_release(["new"], "auto")
+    assert events == ["precache", "release_te"]
+
+
+def test_second_task_lru_hit_skips_dit_yield(monkeypatch):
+    events = _set_second_task_runtime(
+        monkeypatch, free_gib=1, calibrated_gib=7,
+    )
+    anima_daemon.CACHE.text_stack.cached = True
+    anima_daemon._precache_prompts_and_release(["cached"], "save_vram")
+    assert events == ["precache", "release_te"]
+
+
+def test_initial_te_peak_calibration_spans_load_and_encode(monkeypatch):
+    gib = 1024 ** 3
+    key = ("krea2", "te")
+    monkeypatch.setattr(anima_daemon.CACHE, "model", None)
+    monkeypatch.setattr(anima_daemon.CACHE, "_text_ready_key", None)
+    monkeypatch.setattr(anima_daemon.CACHE, "_te_peak_calibration", {})
+    monkeypatch.setattr(anima_daemon.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(anima_daemon.torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(anima_daemon.torch.cuda, "synchronize", lambda _device: None)
+    monkeypatch.setattr(
+        anima_daemon.torch.cuda, "reset_peak_memory_stats", lambda _device: None,
+    )
+    monkeypatch.setattr(
+        anima_daemon.torch.cuda, "memory_allocated", lambda _device: 2 * gib,
+    )
+    monkeypatch.setattr(
+        anima_daemon.torch.cuda, "max_memory_allocated", lambda _device: 9 * gib,
+    )
+
+    start = anima_daemon._begin_initial_te_peak_calibration(
+        {"model_family": "krea2"},
+    )
+    monkeypatch.setattr(anima_daemon.CACHE, "_text_ready_key", key)
+    anima_daemon._finish_initial_te_peak_calibration(start)
+
+    assert start == 2 * gib
+    assert anima_daemon.CACHE._te_peak_calibration[key] == (7 * gib, 0)
 
 
 # ---------------------------------------------------------------------------

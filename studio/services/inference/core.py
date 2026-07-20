@@ -37,6 +37,87 @@ logger = logging.getLogger(__name__)
 GENERATE_TEMP_PREFIX = "anima_gen_"
 
 
+class DeferredVAE:
+    """Load a test-generation VAE only when sampling reaches decode.
+
+    The family sampling functions intentionally keep their existing API: they
+    receive this proxy in place of the real VAE.  No VAE attribute is touched
+    during diffusion sampling, so the first ``decode``-side lookup is the exact
+    lazy-load boundary.  Non-performance policies park the loaded wrapper on
+    CPU after every image, keeping it in RAM while releasing its VRAM.
+    """
+
+    def __init__(self, loader, *, device: str, label: str = "VAE") -> None:
+        self._loader = loader
+        self._device = str(device)
+        self._label = label
+        self._value: Any = None
+        self._resident_device: Optional[str] = None
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._value is not None
+
+    @property
+    def resident_device(self) -> Optional[str]:
+        return self._resident_device
+
+    @staticmethod
+    def _move(value: Any, device: str) -> None:
+        mover = getattr(value, "to", None)
+        if callable(mover):
+            mover(device)
+            return
+        model = getattr(value, "model", None)
+        model_mover = getattr(model, "to", None)
+        if callable(model_mover):
+            model_mover(device)
+            return
+        raise TypeError(f"{type(value).__name__} 不支持在 CPU/GPU 间移动")
+
+    def _ready(self) -> Any:
+        if self._value is None:
+            logger.info("采样完成，开始加载 %s", self._label)
+            self._value = self._loader()
+            self._resident_device = self._device
+        elif self._resident_device != self._device:
+            logger.info("将 %s 从 CPU 移回 %s 用于 decode", self._label, self._device)
+            self._move(self._value, self._device)
+            self._resident_device = self._device
+        return self._value
+
+    def release_after_decode(self, vram_policy: str) -> None:
+        """Park the VAE in RAM unless the user selected performance mode."""
+        if self._value is None or str(vram_policy or "auto") == "performance":
+            return
+        if self._resident_device == "cpu":
+            return
+        self._move(self._value, "cpu")
+        self._resident_device = "cpu"
+        logger.info("%s decode 完成，已按 %s 策略移到 CPU RAM", self._label, vram_policy)
+        try:
+            import gc
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            logger.warning("VAE decode 后释放 CUDA cache 失败", exc_info=True)
+
+    def __getattr__(self, name: str) -> Any:
+        # Only called after normal proxy attributes fail, so the loader itself
+        # is never triggered by introspection of ``is_loaded``/policy state.
+        return getattr(self._ready(), name)
+
+
+def release_vae_after_decode(vae: Any, vram_policy: str) -> None:
+    """Release a deferred VAE when present; remain compatible with test fakes."""
+    release = getattr(vae, "release_after_decode", None)
+    if callable(release):
+        release(vram_policy)
+
+
 # 缺 metadata 时的回退值。与 AnimaLycorisAdapter 默认对齐。
 _DEFAULT_RANK = 32
 _DEFAULT_ALPHA = 16.0
@@ -229,11 +310,15 @@ def apply_loras(
     device: str,
     dtype: Any,
     family_id: str = "anima",
+    lora_merge_precision: str = "fp32",
+    lora_merge_chunk_rows: int = 1024,
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
-    dtype 是 LoRA network / tensor 的计算 dtype。ComfyUI weight adapter 会用
-    fp32 中间精度计算 LoRA delta；测试生成 parity 路径应传 torch.float32。
+    dtype 是动态 LoRA network / tensor 的计算 dtype。FP8 底模不用 hook，改走
+    权重 merge；其 delta 临时精度由 lora_merge_precision 控制（fp32/bf16）。
+    普通 Linear LoRA 默认按 1024 输出行分块，避免物化整层 dense delta；
+    LoHa/LoKr 暂时保留原算法。
 
     multiplier 字段控制每份 LoRA 贡献权重（用户传的 scale）：
       - LycorisNetwork.multiplier 是 forward 内取的全局倍率
@@ -350,13 +435,44 @@ def apply_loras(
         adapters.append(adapter)
 
     if merge_sources:
+        import torch
+
         from training.families.krea2.lora_fp8_merge import (  # noqa: PLC0415
             merge_loras_into_fp8_model,
         )
 
+        precision = str(lora_merge_precision or "fp32").lower()
+        if precision == "fp32":
+            merge_dtype = torch.float32
+        elif precision == "bf16":
+            merge_dtype = torch.bfloat16
+        else:
+            raise ValueError(
+                f"LoRA merge 精度仅支持 fp32/bf16，收到：{lora_merge_precision!r}"
+            )
+
         # 单个句柄对应全部 LoRA（merge 一次完成）；daemon 换 LoRA / 变
         # scale 时 detach() 从备份还原后重 merge
-        return [merge_loras_into_fp8_model(model, merge_sources)]
+        merged = merge_loras_into_fp8_model(
+            model,
+            merge_sources,
+            compute_dtype=merge_dtype,
+            chunk_rows=lora_merge_chunk_rows,
+        )
+
+        # The merge dequantizes fp8 weights to temporary fp16 tensors one layer
+        # at a time.  Trim only after the merge frame (and its last w16/qdata
+        # references) is gone, otherwise the allocator can retain several GiB
+        # until the first decode.  This shared boundary covers every caller.
+        try:
+            import gc
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            logger.warning("failed to trim CUDA cache after fp8 LoRA merge", exc_info=True)
+        return [merged]
     return adapters
 
 

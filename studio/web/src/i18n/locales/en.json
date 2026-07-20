@@ -1254,10 +1254,15 @@
     "selectTeVariant": "Set as default text encoder (shared by training and test generation)",
     "teVariantNotDownloaded": "Available after download completes",
     "vaePrecision": {
-      "title": "VAE decode precision",
+      "title": "Test generation precision",
       "label": "Test generation VAE precision",
       "desc": "Default: bf16 (matches ComfyUI on modern GPUs)",
       "help": "Precision used for the final VAE decode in test generation. bf16 matches ComfyUI's automatic VAE dtype on modern GPUs and is the default. fp32 decodes in full precision: peak VRAM is higher, so the daemon temporarily offloads the DiT/Qwen models to CPU around the decode (slower per image)."
+    },
+    "loraMergePrecision": {
+      "label": "LoRA merge precision",
+      "desc": "Default: fp32 (matches ComfyUI); bf16 lowers delta precision and is usually faster",
+      "help": "Controls only the temporary LoRA delta calculation when loading or switching LoRAs on an FP8 base model. fp32 matches ComfyUI; bf16 is usually faster, but the merged result may differ slightly. The overall VRAM peak is dominated by the base model, VAE, fp16 layer workspace, and backups, so it may not decrease. Sampling still uses the merged FP8 weights and does not gain extra VRAM use. Dynamic LoRA adapters on Anima/bf16 base models are unaffected."
     },
     "saveTestImages": {
       "title": "Save test images to disk",

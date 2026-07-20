@@ -305,6 +305,15 @@ Krea 2 走 Qwen3-VL 自然语言 caption，不是 booru tag 生态：
 
 出图显存策略在 **设置 → 测试** 的「显存策略」三档：默认（用后释放）/ 省显存（强制顺序化）/
 性能优先（全常驻）。大权重加载期另有 RAM 护栏，内存不足时给出可操作报错而不是整机换页。
+默认与省显存档不会在采样期间加载 VAE：采样结束进入 decode 时才加载，decode 后移到
+CPU RAM；性能优先档则让 VAE 留在 GPU。Krea 2 FP8 的普通 LoRA merge 默认按 1024 行
+分块，避免为大层物化完整 dense delta；该优化不改变最终 FP8 权重结果。
+
+Krea 2 遇到未缓存的新 prompt 时，省显存档总会先把 DiT 移到 CPU RAM，再加载并运行
+TE；默认档会记录首次 TE `load + encode` 的实际 CUDA 峰值，并结合当前空闲显存和
+WDDM 预留量决定是否执行同样的顺序化。32 GB 显卡通常会顺序化，48/64 GB 显卡在余量
+充足时可让 TE 与 DiT 同驻。性能优先档不移动 DiT。prompt LRU 命中时不重新加载 TE，
+因此不会触发 DiT 搬运。
 
 ---
 
