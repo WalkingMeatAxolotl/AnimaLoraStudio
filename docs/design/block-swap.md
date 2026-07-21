@@ -444,9 +444,42 @@ LoRA** —— 训练会静默地什么都没学到。
 1. ✅ **刀 1（core）**：`runtime/training/block_swap.py` 的 `PinnedBlockSwap` + 单测。
 2. ✅ **刀 2（K2 接线）**：能力位 + `blocks_to_swap` 字段（默认 0）+ pinned 预算护栏
    + loader/family/phases 接线。
-3. ⬜ **刀 3（fp8 叠加 + 12/16GB 真机验收）**：B7/B12。需要用户的 16GB/12GB 卡。
+3. 🔄 **刀 3（fp8 叠加 + 12/16GB 验收）**：B7/B12。代码侧完成（fp8 组合已端到端
+   验证、预算折扣、可观测性），**真机验收待用户的 16GB/12GB 卡**。
+4. ⬜ **刀 4（推理侧接线）**：B4 的欠账，见 §9.6。
 
 Anima 接线按 B3 留到 K2 验证成熟之后。
+
+### 9.5 显存预算必须折扣换出部分（刀 3 修的真问题）
+
+`check_load_budget` 按权重文件全尺寸预算显存。开 swap 后 DiT 不全上卡，**16GB 卡设
+`blocks_to_swap=28` 会被这个护栏按「完整模型 25.8GB 装不下」误拒**，而实际常驻只有
+3.2GB —— B12 的目标会被自家护栏挡死。
+
+已加 `vram_discount_bytes`：**只折扣显存侧**，RAM 侧照算（换出层仍占内存，且是锁定
+的，由 `check_pinned_budget` 单独把关）。折扣量由 family 报告
+（`Krea2Family.estimate_swapped_bytes` → meta 模型数参数，不读盘不占显存）：
+14 层 → 11.32GB、28 层 → 22.64GB，与 §5.1 探针实测吻合。
+
+### 9.6 推理侧尚未接线（B4 欠账）
+
+B4 裁定「推理侧同期做」、§6 也写了落点，但 §9.2 分刀时只切了训练侧三刀，推理侧漏了。
+组件是 family 无关的、`attach()` 也通用，`load_dit` 已带 `blocks_to_swap` 参数
+（`purpose="generate"` 走同一 loader），所以接线成本不高。**但推理侧的 LoRA 语义与
+训练侧不同，这是接线前必须处理的**：
+
+| 底模 | 推理侧 LoRA 方式 | 与 swap 的关系 |
+|---|---|---|
+| bf16 | lycoris hook（adapter），不改权重 | 与训练侧同构，直接可用 |
+| fp8 | **merge 进权重**（ComfyUI 语义：dequant → 加 delta → stochastic rounding 回写） | merge 会写 `module.weight`，而换出层此刻是 CPU pinned 张量 |
+
+fp8 那条只要**顺序对**就正确：loader 落 CPU pinned → `apply_loras` merge 写进主副本
+→ 构造 `PinnedBlockSwap` 就地接管 → 后续换入的即 merged 权重。前提是 fp8 在 CPU 上
+可算 —— 已验证：`pin_memory` / H2D 逐位一致 / `to(bf16)` dequant / `fp32→fp8` 回写
+全部可用。
+
+另需注意：推理每个 step 都要搬一遍全模型（§4），30 步 = 30 遍，swap 对象应随 daemon
+的模型缓存常驻、跨 step 复用，不要每步重建。
 
 ### 9.3 接线方式：forward hook（刀 2 实施结论，优于原计划）
 
