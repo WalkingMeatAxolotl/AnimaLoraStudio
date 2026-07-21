@@ -147,10 +147,13 @@ def check_load_budget(
         )
 
 
-#: pinned（页锁定）内存的安全上限占可用物理内存的比例。
+#: pinned（页锁定）内存的安全上限占**可用**物理内存的比例。
 #: 页锁定内存**不可换页、trim_working_set 对它无效**，占满会拖垮整机（与
-#: mmap working set 卡死同源但更硬），所以留足余量。
-_PINNED_SAFE_FRACTION = 0.6
+#: mmap working set 卡死同源但更硬）。
+#: 分母是 available 而非 total —— 其他应用占的已不在分母里，所以这里是
+#: 「训练进程能吃掉当前空闲的几成」，留出的部分只为吸收波动（用户口径：
+#: 训练期间不应同时做其他重内存工作）。
+_PINNED_SAFE_FRACTION = 0.8
 
 
 def check_pinned_budget(need_bytes: int, *, blocks: int) -> None:
@@ -168,7 +171,14 @@ def check_pinned_budget(need_bytes: int, *, blocks: int) -> None:
     avail = available_ram_bytes()
     if avail is None:
         return
-    safe = int(avail * _PINNED_SAFE_FRACTION)
+    # 比例 + 绝对下限取更严者。纯比例在小内存机器上会失效：可用 10GB 时 80%
+    # 允许 pin 8GB，只剩 2GB 给训练进程自身的非 pinned 部分（Python/torch 基底、
+    # dataset、latent，_RAM_BASE_BYTES 已标定 ≈4GB）→ 直接换页。而小内存机器
+    # 恰恰是 block swap 要服务的人群，不能在这里破功。
+    safe = min(
+        int(avail * _PINNED_SAFE_FRACTION),
+        max(avail - _RAM_BASE_BYTES, 0),
+    )
     if need_bytes > safe:
         raise RuntimeError(
             f"内存不足以换出 {blocks} 层：需锁定 {need_bytes / 1024**3:.1f}GB，"

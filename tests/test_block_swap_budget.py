@@ -140,11 +140,36 @@ def test_swapped_bytes_falls_back_when_header_unreadable(tmp_path):
 
 
 def test_pinned_budget_rejects_over_safe_fraction(monkeypatch):
-    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 16 * _GIB)
-    # 安全上限 = 16 × 0.6 = 9.6GB
-    sysmem.check_pinned_budget(int(9 * _GIB), blocks=14)
+    """大内存机器：80% 比例是生效的那一侧。"""
+    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 40 * _GIB)
+    # 安全上限 = min(40 × 0.8, 40 - 4) = min(32, 36) = 32GB
+    sysmem.check_pinned_budget(int(31 * _GIB), blocks=28)
     with pytest.raises(RuntimeError, match="内存不足以换出"):
-        sysmem.check_pinned_budget(int(12 * _GIB), blocks=28)
+        sysmem.check_pinned_budget(int(33 * _GIB), blocks=28)
+
+
+def test_pinned_budget_absolute_floor_protects_small_ram(monkeypatch):
+    """**小内存机器**：4GB 绝对下限是生效的那一侧，纯比例会把机器压垮。
+
+    可用 10GB 时纯 80% 允许 pin 8GB，只剩 2GB 给训练进程自身的非 pinned 部分
+    （基底 ≈4GB）→ 换页。取 min 后上限是 6GB。
+    """
+    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 10 * _GIB)
+    # 安全上限 = min(10 × 0.8, 10 - 4) = min(8, 6) = 6GB
+    sysmem.check_pinned_budget(int(5.5 * _GIB), blocks=14)
+    with pytest.raises(RuntimeError, match="内存不足以换出"):
+        sysmem.check_pinned_budget(int(7 * _GIB), blocks=14)
+
+
+def test_pinned_budget_real_scenario_fp8_28_layers(monkeypatch):
+    """用户真机场景回归：37.5GB 可用 + fp8 28 层（11.3GB）应放行。
+
+    旧口径（60% + 按 bf16 估的 22.6GB）在这里误拒，两处都修完才通过。
+    """
+    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: int(37.5 * _GIB))
+    sysmem.check_pinned_budget(int(11.32 * _GIB), blocks=28)
+    # bf16 28 层 22.65GB 在同一台机器上现在也放行（上限 30GB）
+    sysmem.check_pinned_budget(int(22.65 * _GIB), blocks=28)
 
 
 def test_pinned_budget_message_is_actionable(monkeypatch):
