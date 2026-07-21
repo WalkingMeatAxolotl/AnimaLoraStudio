@@ -23,6 +23,7 @@ import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
 import StepShell from '../../../components/StepShell'
 import type { SaveStatus } from '../../../lib/SettingsData'
 import { useToast } from '../../../components/Toast'
+import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../../lib/useAdvancedMode'
 import {
   PRESET_NAME_RE,
@@ -51,6 +52,7 @@ export default function TrainPage() {
   const { toast } = useToast()
   const { confirm, prompt } = useDialog()
   const navigate = useNavigate()
+  const settingsDrawer = useSettingsDrawer()
 
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [presets, setPresets] = useState<PresetSummary[]>([])
@@ -165,8 +167,9 @@ export default function TrainPage() {
   //   - 项目特定字段（data_dir / output_name 等）：创建 version 时按项目结构预填，
   //     挂「自动 · 项目设置」说明这是预填的，不是预设里来的。
   //   - 4 个模型路径：创建时按 auto_sync_paths 取全局设置作初值，之后归用户所有。
-  //     全局设置再变也不回头改写本 version（重现性）；值与全局当前值不一致时挂
-  //     「恢复默认」链接，让对齐成为用户的一次显式动作。
+  //     全局设置再变也不回头改写本 version（重现性）。徽章里「全局设置」可点，
+  //     跳 Settings 模型区；值与全局当前值不一致时再挂「恢复默认」，让对齐成为
+  //     用户的一次显式动作。
   const makeAutoHints = useCallback(
     (
       formValues: ConfigData | null,
@@ -183,7 +186,13 @@ export default function TrainPage() {
           typeof dv === 'string' && !!dv && String(formValues?.[f] ?? '') !== dv
         h[f] = (
           <>
-            {t('train.globalDefaultHint')}
+            <button
+              type="button"
+              onClick={() => settingsDrawer.open({ section: 'models' })}
+              className="bg-transparent border-none p-0 underline text-warn hover:opacity-80 cursor-pointer"
+            >
+              {t('train.globalAutoLockedLink')}
+            </button>
             {differs && formValues && (
               <>
                 {' · '}
@@ -202,7 +211,7 @@ export default function TrainPage() {
       }
       return h
     },
-    [configResp?.project_specific_fields, configResp?.project_specific_defaults, t],
+    [configResp?.project_specific_fields, configResp?.project_specific_defaults, t, settingsDrawer],
   )
 
   /** 落盘 cfg。串行化保证：如果上一次 save 还在飞，等它跑完再决定是否要再

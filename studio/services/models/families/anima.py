@@ -223,6 +223,49 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
     }
 
 
+def path_choices(root: Path, models_cfg: Any) -> dict[str, list[dict[str, Any]]]:
+    """Train 页 4 个模型路径字段的 dropdown 候选（Anima 族）。
+
+    **只列磁盘上已就绪的**：没下载的选了也训不起来，下载是 Settings 页的职责。
+    label 一律取 basename（文件名 / 目录名），与用户在 Settings 看到的一致；
+    `group` / `note` 是给前端翻译的 id，不是显示文案。
+    """
+    transformer: list[dict[str, Any]] = []
+    for vname in ANIMA_VARIANTS:
+        target = anima_main_target(root, vname)
+        if target.exists():
+            transformer.append({
+                "label": target.name,
+                "path": str(target),
+                "group": "official",
+                "note": "latest" if vname == LATEST_ANIMA else "",
+            })
+    for registered in models_cfg.custom_anima_paths:
+        target = Path(str(registered)).expanduser()
+        if target.exists():
+            transformer.append({
+                "label": target.name, "path": str(target),
+                "group": "custom", "note": "",
+            })
+
+    def _ready_dir(d: Path, files: list[str]) -> list[dict[str, Any]]:
+        """目录型资产：必需文件齐全才算就绪（与 catalog 的「已下载」同口径）。"""
+        if not all((d / f).exists() for f in files):
+            return []
+        return [{"label": d.name, "path": str(d), "group": "official", "note": ""}]
+
+    vae = qwen_image_vae_target(root)
+    return {
+        "transformer_path": transformer,
+        "vae_path": (
+            [{"label": vae.name, "path": str(vae), "group": "official", "note": ""}]
+            if vae.exists() else []
+        ),
+        "text_encoder_path": _ready_dir(qwen_dir(root), QWEN_FILES),
+        "t5_tokenizer_path": _ready_dir(t5_tokenizer_dir(root), T5_FILES),
+    }
+
+
 class _AnimaAssets:
     """duck-typed 族资产对象（families/__init__.py 注册）。"""
 
@@ -235,6 +278,7 @@ class _AnimaAssets:
     transformer_path_for = staticmethod(anima_transformer_path_for)
     selected_variant = staticmethod(selected_anima_variant)
     catalog_sections = staticmethod(catalog_sections)
+    path_choices = staticmethod(path_choices)
     # Anima 无蒸馏推理 variant
     is_distilled_path = staticmethod(lambda path: False)
 

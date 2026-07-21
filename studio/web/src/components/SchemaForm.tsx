@@ -232,6 +232,7 @@ export default function SchemaForm({
                       hint={hint}
                       descriptionOverride={descriptionOverride}
                       suffix={suffixes[name]}
+                      modelFamily={String(values.model_family ?? 'anima')}
                       enumOptions={enumOptions}
                       disabledEnumOptions={disabledEnumOptions}
                       disabledOptionHint={schemaDisableHint(name, prop.disable_hint, t)}

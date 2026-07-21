@@ -55,6 +55,23 @@ def get_models_path_defaults(family: str = "anima") -> dict[str, str]:
         ) from exc
 
 
+@router.get("/api/models/path-choices")
+def get_models_path_choices(family: str = "anima") -> dict[str, Any]:
+    """Train / 预设页模型路径字段的 dropdown 候选（按 `family` 解析）。
+
+    只含磁盘上已就绪的资产；每项是 `{label, path, group, note}`，前端直接渲染
+    并把 `path` 写回字段。候选怎么算是族知识，留在 `families/*.py`。
+    """
+    try:
+        return {"choices": model_downloader.path_choices(family=family)}
+    except ValueError as exc:
+        raise ValidationError(
+            f"Unknown model family: {family}",
+            code="model.family_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
+
+
 @router.post("/api/models/family-switch")
 def switch_model_family(body: FamilySwitchRequest) -> dict[str, Any]:
     """训练配置切换模型族的预览计算（多模型 P4-3）。
