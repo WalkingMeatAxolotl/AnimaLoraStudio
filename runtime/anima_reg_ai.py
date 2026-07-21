@@ -391,7 +391,7 @@ def main() -> None:
     sampler_name: str = cfg.get("sampler_name", "er_sde")
     scheduler: str = cfg.get("scheduler", "simple")
     base_seed: int = int(cfg.get("seed", 0))
-    incremental: bool = bool(cfg.get("incremental", False))
+    incremental: bool = bool(cfg.get("incremental", True))
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
     backend: str = cfg.get("attention_backend", "flash_attn")
     use_flash = (backend == "flash_attn")

@@ -113,7 +113,7 @@ export default function RegularizationPage() {
   const [aiSteps, setAiSteps] = useState(25)
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
-  const [aiIncremental, setAiIncremental] = useState(false)
+  const [aiIncremental, setAiIncremental] = useState(true)
   // 本次先验生成临时选用的底模（null = 跟随设置页该族 selected）。
   const [aiBaseModel, setAiBaseModel] = useState<string | null>(null)
   // 先验生成的模型族跟随 version 训练配置（服务端权威解析；这里只为

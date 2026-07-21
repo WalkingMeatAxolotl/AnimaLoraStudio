@@ -160,7 +160,7 @@ class RegAiRequest(BaseModel):
     sampler_name: Optional[str] = None
     scheduler: Optional[str] = None
     seed: int = 0
-    incremental: bool = False
+    incremental: bool = True
     mixed_precision: str = "bf16"
 
 

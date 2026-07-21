@@ -53,7 +53,7 @@ class RegAiConfig(BaseModel):
     scheduler: Literal["simple", "sgm_uniform"] = Field("simple")
     seed: int = Field(0, description="随机种子（0=随机）")
     incremental: bool = Field(
-        False,
+        True,
         description="补足模式：跳过 reg 子文件夹中已有以 train_stem 开头的图（重启续跑用）",
     )
     mixed_precision: str = Field("bf16")
