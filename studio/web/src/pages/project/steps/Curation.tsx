@@ -16,6 +16,7 @@ import PaneResizer from '../../../components/PaneResizer'
 import StepShell from '../../../components/StepShell'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
+import { compareImageName } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
@@ -35,18 +36,11 @@ const DEFAULT_SORT: SortMode = 'id-asc'
 type Bucket = 'train' | 'validation'
 const BUCKET_STORAGE_KEY = 'curation:bucket'
 
-function numericIdKey(name: string): number {
-  const stem = name.replace(/\.[^.]+$/, '')
-  return /^\d+$/.test(stem) ? Number(stem) : Number.POSITIVE_INFINITY
-}
-
 function compareItems(a: CurationItem, b: CurationItem, mode: SortMode): number {
   switch (mode) {
     case 'id-asc':
     case 'id-desc': {
-      const ka = numericIdKey(a.name)
-      const kb = numericIdKey(b.name)
-      const d = ka === kb ? a.name.localeCompare(b.name) : ka - kb
+      const d = compareImageName(a.name, b.name)
       return mode === 'id-asc' ? d : -d
     }
     case 'name-asc':

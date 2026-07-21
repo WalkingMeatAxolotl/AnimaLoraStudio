@@ -30,6 +30,7 @@ import ImageGrid, { type ImageGridItem } from '../../components/ImageGrid'
 import ImagePreviewModal from '../../components/ImagePreviewModal'
 import { OutputsTab } from '../QueueDetail'
 import { arBucket } from '../../lib/aspectRatio'
+import { compareImageName } from '../../lib/imageSort'
 import { computePixelHist } from '../../lib/pixelBins'
 import { useProjectCtx } from '../../context/ProjectContext'
 import { useEventStream } from '../../lib/useEventStream'
@@ -761,7 +762,9 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
     const out: Array<ImageGridItem & { folder: string; pureName: string }> = []
     const list = selectedFolder === 'all' ? view.folders : [selectedFolder]
     for (const folder of list) {
-      const arr = view.right[folder] ?? []
+      const arr = [...(view.right[folder] ?? [])].sort((a, b) =>
+        compareImageName(a.name, b.name)
+      )
       for (const it of arr) {
         out.push({
           name: `${folder}/${it.name}`,

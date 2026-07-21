@@ -18,6 +18,7 @@ import InpaintCanvas, {
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { compareImagePath } from '../../../lib/imageSort'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
 interface Ctx {
@@ -67,7 +68,7 @@ export default function PreprocessInpaintPage() {
     if (!vid) return
     try {
       const r = await api.listCropWorkspaceTrain(project.id, vid)
-      setImages(r.images)
+      setImages([...r.images].sort((a, b) => compareImagePath(a.name, b.name)))
     } catch {
       /* ignore */
     } finally {
