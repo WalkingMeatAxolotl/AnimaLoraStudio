@@ -23,7 +23,6 @@ import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
 import StepShell from '../../../components/StepShell'
 import type { SaveStatus } from '../../../lib/SettingsData'
 import { useToast } from '../../../components/Toast'
-import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../../lib/useAdvancedMode'
 import {
   PRESET_NAME_RE,
@@ -52,7 +51,6 @@ export default function TrainPage() {
   const { toast } = useToast()
   const { confirm, prompt } = useDialog()
   const navigate = useNavigate()
-  const settingsDrawer = useSettingsDrawer()
 
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [presets, setPresets] = useState<PresetSummary[]>([])
@@ -162,69 +160,49 @@ export default function TrainPage() {
   }, [project.id, vid])
 
 
-  // auto_sync_paths ON（默认 / 多数用户）：4 个模型路径字段 disabled，fork 时
-  // 后端自动用 Settings 全局值覆盖；OFF（独立模型用户）：字段可编辑 + reset
-  // 按钮，fork 时尊重预设里的绝对路径。
-  const disabledFields = autoSyncPaths ? GLOBAL_MODEL_FIELDS : []
-  const disabledHints = useMemo(() => {
-    const h: Record<string, React.ReactNode> = {}
-    if (autoSyncPaths) {
-      const node = (
-        <>
-          {t('train.globalAutoLockedPrefix')} ·{' '}
-          <button
-            type="button"
-            onClick={() => settingsDrawer.open({ section: 'models' })}
-            className="bg-transparent border-none p-0 underline text-warn hover:opacity-80 cursor-pointer"
-          >
-            {t('train.globalAutoLockedLink')}
-          </button>
-        </>
-      )
-      for (const f of GLOBAL_MODEL_FIELDS) h[f] = node
-    }
-    return h
-  }, [t, autoSyncPaths, settingsDrawer])
-  // 项目特定字段（data_dir / reg_data_dir / output_dir 等）：值由项目预填，但
-  // 不锁定，挂「自动 · 项目设置」徽章让用户知道这是预填的，不是预设里来的。
-  // toggle OFF 时全局模型字段也挂 hint「默认来自 Settings · 可改」。
-  const autoHints = useMemo(() => {
-    const h: Record<string, string> = {}
-    for (const f of configResp?.project_specific_fields ?? []) {
-      if (!GLOBAL_MODEL_FIELDS.includes(f)) h[f] = t('train.projectAutoHint')
-    }
-    if (!autoSyncPaths) {
-      for (const f of GLOBAL_MODEL_FIELDS) h[f] = t('train.globalAutoEditableHint')
-    }
-    return h
-  }, [configResp?.project_specific_fields, t, autoSyncPaths])
-
-  // toggle OFF 时给 4 个模型字段加「↺ 重置为全局默认」按钮。值取自
-  // configResp.project_specific_defaults（后端已用 default_paths_for_new_version
-  // 算好的绝对路径）。
-  const makeResetSuffixes = useCallback(
-    (formValues: ConfigData | null, setForm: (v: ConfigData) => void): Record<string, React.ReactNode> => {
-      if (autoSyncPaths) return {}
+  // config 里的值就是训练实际用的值：字段一律可编辑，系统不在背后改写已保存的
+  // config（docs/design/version-config-ownership.md）。
+  //   - 项目特定字段（data_dir / output_name 等）：创建 version 时按项目结构预填，
+  //     挂「自动 · 项目设置」说明这是预填的，不是预设里来的。
+  //   - 4 个模型路径：创建时按 auto_sync_paths 取全局设置作初值，之后归用户所有。
+  //     全局设置再变也不回头改写本 version（重现性）；值与全局当前值不一致时挂
+  //     「恢复默认」链接，让对齐成为用户的一次显式动作。
+  const makeAutoHints = useCallback(
+    (
+      formValues: ConfigData | null,
+      setForm: (v: ConfigData) => void,
+    ): Record<string, React.ReactNode> => {
+      const h: Record<string, React.ReactNode> = {}
+      for (const f of configResp?.project_specific_fields ?? []) {
+        h[f] = t('train.projectAutoHint')
+      }
       const psd = configResp?.project_specific_defaults
-      if (!psd || !formValues) return {}
-      const out: Record<string, React.ReactNode> = {}
       for (const f of GLOBAL_MODEL_FIELDS) {
-        const dv = psd[f]
-        if (typeof dv !== 'string' || !dv) continue
-        out[f] = (
-          <button
-            type="button"
-            onClick={() => setForm({ ...formValues, [f]: dv })}
-            className="btn btn-ghost btn-sm shrink-0"
-            title={t('train.resetToGlobalDefaultTitle')}
-          >
-            {t('train.resetToGlobalDefault')}
-          </button>
+        const dv = psd?.[f]
+        const differs =
+          typeof dv === 'string' && !!dv && String(formValues?.[f] ?? '') !== dv
+        h[f] = (
+          <>
+            {t('train.globalDefaultHint')}
+            {differs && formValues && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...formValues, [f]: dv })}
+                  title={t('train.restoreGlobalDefaultTitle')}
+                  className="bg-transparent border-none p-0 underline text-warn hover:opacity-80 cursor-pointer"
+                >
+                  {t('train.restoreGlobalDefault')}
+                </button>
+              </>
+            )}
+          </>
         )
       }
-      return out
+      return h
     },
-    [autoSyncPaths, configResp?.project_specific_defaults, t],
+    [configResp?.project_specific_fields, configResp?.project_specific_defaults, t],
   )
 
   /** 落盘 cfg。串行化保证：如果上一次 save 还在飞，等它跑完再决定是否要再
@@ -411,8 +389,8 @@ export default function TrainPage() {
    *
    * 步骤：
    *   1. version 已有 config → 弹覆盖确认（跟 onForkPreset 一致）
-   *   2. 拉最新 project_specific_defaults（用户常见路径是 fork 之后才跑 reg
-   *      build，缓存的 configResp 里 reg 状态过期）
+   *   2. 拉最新 project_specific_defaults（缓存的 configResp 可能早于用户在
+   *      Settings 里换模型，模型路径初值要取当前值）
    *   3. 配置 = schema 默认 + 项目路径预填（仅 autoSyncPaths 开时）
    *   4. 自动名 = `<slug>_<label>`（PRESET_NAME_RE 兼容），重名加 _1 _2 后缀
    *   5. savePreset → forkPresetForVersion → 刷三处状态
@@ -809,10 +787,7 @@ export default function TrainPage() {
                   schema={schema}
                   values={config}
                   onChange={onFormChange}
-                  disabledFields={disabledFields}
-                  disabledHints={disabledHints}
-                  autoHints={autoHints}
-                  fieldSuffixes={makeResetSuffixes(config, setConfigSync)}
+                  autoHints={makeAutoHints(config, setConfigSync)}
                   advancedMode={advancedMode}
                 />
                 {familySwitchTarget && config && (

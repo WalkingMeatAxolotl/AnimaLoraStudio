@@ -319,6 +319,26 @@ def test_enqueue_creates_task_with_ids_and_config_path(
     # ADR-0007 PR-5: version.status 由 supervisor 在 spawn 时推 training；enqueue 时仍 preparing
 
 
+def test_project_specific_defaults_paths_match_config_form(
+    client: TestClient, env
+) -> None:
+    """psd 的模型路径与 config 里的形态逐字相等 —— 前端「恢复默认」靠这个比较。
+
+    config 读取面把 4 个模型路径归一成 POSIX 斜杠；psd 若直接给 `str(Path)`
+    （Windows 反斜杠），比较永远不等，入口会一直挂着。
+    """
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset", json={"name": "tpl"},
+    )
+    body = client.get(f"/api/projects/{pid}/versions/{vid}/config").json()
+    cfg, psd = body["config"], body["project_specific_defaults"]
+    for f in ("transformer_path", "vae_path", "text_encoder_path", "t5_tokenizer_path"):
+        assert psd[f] == cfg[f], f
+        assert "\\" not in psd[f], f
+
+
 def test_enqueue_does_not_rewrite_config(client: TestClient, env) -> None:
     """issue #458 回归：入队是纯消费，一个字节都不改 config.yaml。
 

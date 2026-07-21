@@ -666,11 +666,17 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
     psf = sorted(version_config.PROJECT_SPECIFIC_FIELDS)
 
     def _psd(family: str) -> dict[str, Any]:
-        """这些字段「重新初始化会得到的值」—— 前端据此渲染「恢复默认」入口。"""
-        return {
+        """这些字段「重新初始化会得到的值」—— 前端据此渲染「恢复默认」入口。
+
+        4 个模型路径过 `_absolutize_model_paths`：config 读取面已把它们归一成
+        POSIX 斜杠，而 `default_paths_for_new_version` 给的是 `str(Path)`
+        （Windows 上是反斜杠）。不归一，前端「值 == 默认值」的比较在 Windows
+        上永远不成立，「恢复默认」入口会一直挂着。
+        """
+        return presets_io._absolutize_model_paths({
             **version_config.initial_project_field_values(project, ver),
             **model_downloader.default_paths_for_new_version(family=family),
-        }
+        })
 
     if not version_config.has_version_config(project, ver):
         return {
