@@ -133,6 +133,37 @@ def check_load_budget(enabled: bool, *, weight_paths, stage: str) -> None:
         )
 
 
+#: pinned（页锁定）内存的安全上限占可用物理内存的比例。
+#: 页锁定内存**不可换页、trim_working_set 对它无效**，占满会拖垮整机（与
+#: mmap working set 卡死同源但更硬），所以留足余量。
+_PINNED_SAFE_FRACTION = 0.6
+
+
+def check_pinned_budget(need_bytes: int, *, blocks: int) -> None:
+    """block swap 的 pinned 内存预算护栏（docs/design/block-swap.md §3.2 ①）。
+
+    **不能复用 check_load_budget**：那套按「文件大小 ≈ mmap 瞬时峰值」预算，
+    假设内存可回收；pinned 是**永久锁定**、``trim_working_set`` 对它无效，
+    同样字节数的危害等级不同。
+
+    只在训练启动期调用一次（B6：失败即报错、不静默降级；分配失败只可能发生
+    在启动那一刻，见 §8.1）。查询失败静默放行，与既有护栏口径一致。
+    """
+    if need_bytes <= 0:
+        return
+    avail = available_ram_bytes()
+    if avail is None:
+        return
+    safe = int(avail * _PINNED_SAFE_FRACTION)
+    if need_bytes > safe:
+        raise RuntimeError(
+            f"内存不足以换出 {blocks} 层：需锁定 {need_bytes / 1024**3:.1f}GB，"
+            f"当前可用 {avail / 1024**3:.1f}GB（安全上限 {safe / 1024**3:.1f}GB）。"
+            f"换出的层权重会**锁定**在内存里不可换页，占满会拖慢整机。"
+            f"请调小 blocks_to_swap，或关闭其他占用内存的应用后重试。"
+        )
+
+
 def gpu_free_bytes_global() -> int | None:
     """全卡真实空闲显存；查询失败返回 None。
 

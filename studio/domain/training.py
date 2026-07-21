@@ -346,6 +346,18 @@ class TrainingConfig(BaseModel):
         description="梯度累积步数（有效 batch = batch_size × grad_accum）",
         json_schema_extra=_meta("training"),
     )
+    blocks_to_swap: int = Field(
+        0, ge=0,
+        description="换出到内存的 DiT 层数（0=关闭）。被换出的层权重常驻内存，"
+                    "算到该层才搬进显存，用时间换显存。每层约省 0.8GB 显存、"
+                    "增加约 8ms 计算；1024 分辨率下换出全部 28 层约慢 7%。"
+                    "需要等量的可用内存（每层约 0.8GB），且内存会被锁定不可换页",
+        json_schema_extra=_meta(
+            "training",
+            show_when=cap_gate("block_swap"),
+            advanced=True,
+        ),
+    )
     learning_rate: float = Field(
         1e-4, gt=0.0,
         description="学习率。Automagic 作为初始每参数学习率，推荐 1e-6（切换 optimizer 到 automagic 时会自动改写）；Lion 推荐为 AdamW lr / 3；Prodigy / PPSF 必须 1.0",

@@ -57,12 +57,26 @@ def _load_dit(ctx: TrainingContext) -> None:
             "attention_backend=none，flash_attn / xformers 都不启用，走 PyTorch SDPA"
         )
     logger.info("加载 Transformer...")
+    extra = {}
+    blocks_to_swap = int(getattr(args, "blocks_to_swap", 0) or 0)
+    if blocks_to_swap > 0:
+        # 能力位在 schema 侧已用 cap_gate 门控；裸 CLI / 旧 yaml 仍可能带上，
+        # 这里 fail-fast 而非静默忽略（否则用户以为省了显存其实没有）
+        if "block_swap" not in ctx.family.spec.capabilities:
+            raise RuntimeError(
+                f"model_family='{ctx.family.spec.family_id}' 不支持 block swap，"
+                f"但 blocks_to_swap={blocks_to_swap}。请置 0。"
+            )
+        # 换出层由 loader 直接落 CPU pinned，不经过显存（12/16GB 目标的前提）
+        extra["blocks_to_swap"] = blocks_to_swap
+        logger.info("block swap：末尾 %d 层将常驻内存，不载入显存", blocks_to_swap)
     ctx.model = ctx.family.load_dit(
         args.transformer_path,
         ctx.device,
         ctx.dtype,
         attention_backend=backend,
         repo_root=ctx.repo_root,
+        **extra,
     )
     # 大权重 mmap 缓存页归还系统（13-26GB；真机换页卡死案例，训练同样受益）
     from training.sysmem import trim_working_set
@@ -93,6 +107,28 @@ def _load_text(ctx: TrainingContext) -> None:
     )
 
 
+def _setup_block_swap(ctx: TrainingContext) -> None:
+    """构造并挂载 block swap（docs/design/block-swap.md 刀 2）。
+
+    **必须在 LoRA 注入之后**：LyCORIS ``apply_to()`` 会读基权重的 shape 建适配器，
+    此时换出层的权重是 loader 落下的 CPU pinned 张量（shape/dtype 完好，只是不在
+    显存），注入正常；反过来若先 attach 再注入也可行，但没有理由把顺序搞复杂。
+
+    挂载走 forward hook（``attach()``），不改模型 forward 循环 —— krea2 的循环在
+    parity 敏感的 ``modeling/`` 内。开 gradient checkpointing 后反向的重算会再次
+    触发 hook，逆序换入自动成立（已由 tests/test_block_swap.py 钉死）。
+    """
+    blocks_to_swap = int(getattr(ctx.args, "blocks_to_swap", 0) or 0)
+    if blocks_to_swap <= 0:
+        return
+    from training.block_swap import PinnedBlockSwap
+
+    ctx.block_swap = PinnedBlockSwap(
+        ctx.model.blocks, blocks_to_swap, ctx.device,
+    )
+    ctx.block_swap.attach()
+
+
 def _inject_adapter(ctx: TrainingContext) -> None:
     args = ctx.args
     logger.info("注入 %s...", args.lora_type.upper())
@@ -111,6 +147,8 @@ def _inject_adapter(ctx: TrainingContext) -> None:
             )
         ctx.injector.load(args.resume_lora)
         logger.info("将从已有 LoRA 继续训练: %s", args.resume_lora)
+
+    _setup_block_swap(ctx)
 
     if getattr(args, "sra_enabled", False):
         from training.families.anima.sra_align import SRAAligner

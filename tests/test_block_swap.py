@@ -47,8 +47,14 @@ class _Tiny(nn.Module):
 
 
 def _make_blocks(n: int, dim: int, device) -> nn.ModuleList:
+    """底模 frozen —— 与真实流程一致（loader 里 model.requires_grad_(False)）。
+
+    组件只管理冻结的基权重，可训练参数（LoRA）不归它管，所以测试基线必须冻结，
+    否则什么都不会被换出。
+    """
     torch.manual_seed(0)
     blocks = nn.ModuleList([_Tiny(dim) for _ in range(n)])
+    blocks.requires_grad_(False)
     return blocks.to(device)
 
 
@@ -126,33 +132,22 @@ def test_lora_style_forward_hook_not_bypassed():
     assert marker["calls"] == 4
 
 
-def test_backward_grad_reaches_all_blocks():
-    """反向逆序预取：换出层的可训练参数（模拟 LoRA）应拿到梯度。"""
+def test_backward_grad_flows_through_swapped_blocks():
+    """底模 frozen 时梯度仍须穿过换出层传到输入（LoRA 训练依赖这条链路）。"""
     PinnedBlockSwap, _ = _import()
     device = torch.device("cuda")
     blocks = _make_blocks(6, 16, device)
     swap = PinnedBlockSwap(blocks, num_swap=4, device=device)
+    swap.attach()
 
-    x = torch.randn(3, 16, device=device)
-    # 前向
+    x = torch.randn(3, 16, device=device, requires_grad=True)
     h = x
-    swap.reset()
-    saved = []
-    for i in range(swap.total):
-        swap.ensure_resident(i, prefetch_next=i + 1)
-        saved.append(h)
-        h = blocks[i](h)
-        swap.release(i)
-    loss = h.sum()
-    # 反向逆序：确保权重在位再算 grad
-    swap.reset()
-    for i in reversed(range(swap.total)):
-        swap.ensure_resident(i, prefetch_next=i - 1)
-        swap.release(i)
-    loss.backward()
+    for block in blocks:
+        h = block(h)
+    h.sum().backward()
 
-    for i, block in enumerate(blocks):
-        assert block.lin1.weight.grad is not None, f"block {i} 无梯度"
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    assert x.grad.abs().sum() > 0
 
 
 def test_num_swap_validation():
@@ -226,6 +221,164 @@ def test_fp8_scale_stays_paired():
     torch.testing.assert_close(got, expected)
     for b in blocks:
         assert b.lin.weight_scale.item() == 2.0
+
+
+def test_shape_readable_after_construct():
+    """构造后（权重已下 CPU）仍能读到正确 shape/dtype —— LyCORIS 在 swap 之后
+    注入时要读基权重形状，指向 empty(0) 会让它读到错误形状（doc §9.1）。"""
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    dim = 24
+    blocks = _make_blocks(4, dim, device)
+    shapes_before = [tuple(b.lin1.weight.shape) for b in blocks]
+
+    swap = PinnedBlockSwap(blocks, num_swap=3, device=device)
+
+    for i, block in enumerate(blocks):
+        assert tuple(block.lin1.weight.shape) == shapes_before[i]
+        assert block.lin1.weight.dtype == torch.float32
+    # 换出层的权重此刻应在 CPU（显存已释放），常驻层仍在 GPU
+    assert blocks[swap.first_swapped].lin1.weight.device.type == "cpu"
+    assert blocks[0].lin1.weight.device.type == "cuda"
+
+
+def test_attach_hooks_forward_matches_resident():
+    """attach() 的钩子路径：前向数值与全常驻一致，且不需要改模型循环。"""
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(6, 32, device)
+    x = torch.randn(2, 32, device=device)
+    expected = _run_resident(blocks, x)
+
+    swap = PinnedBlockSwap(blocks, num_swap=4, device=device)
+    swap.attach()
+    got = _run_resident(blocks, x)  # 普通循环，钩子自动接管
+
+    torch.testing.assert_close(got, expected)
+
+
+def test_attach_with_gradient_checkpointing_backward():
+    """**核心 claim 验证**：开 gradient checkpointing 后，反向的重算会再次触发
+    block forward，pre-hook 随之按逆序换回权重 —— 所以反向无需单独编排。
+
+    对照组是同一份权重的全常驻模型，比较 LoRA-style 可训练参数的梯度。
+    """
+    from torch.utils.checkpoint import checkpoint
+
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    dim, n = 32, 6
+    blocks = _make_blocks(n, dim, device)
+
+    # 模拟 LoRA：每个 block 挂一个可训练小参数，底模 frozen
+    for b in blocks:
+        b.lora = nn.Parameter(torch.ones(dim, device=device) * 0.1)
+    for b in blocks:
+        b.lin1.requires_grad_(False)
+        b.lin2.requires_grad_(False)
+
+    def run(use_checkpoint: bool):
+        h = torch.randn(2, dim, device=device, generator=torch.Generator(device).manual_seed(7))
+        for b in blocks:
+            def fwd(t, blk=b):
+                return blk(t) * blk.lora
+            h = checkpoint(fwd, h, use_reentrant=False) if use_checkpoint else fwd(h)
+        return h.sum()
+
+    # 基线：全常驻 + checkpoint
+    run(True).backward()
+    expected = [b.lora.grad.clone() for b in blocks]
+    for b in blocks:
+        b.lora.grad = None
+
+    # swap + attach + checkpoint
+    swap = PinnedBlockSwap(blocks, num_swap=4, device=device)
+    swap.attach()
+    run(True).backward()
+
+    for i, b in enumerate(blocks):
+        assert b.lora.grad is not None, f"block {i} 无梯度"
+        torch.testing.assert_close(b.lora.grad, expected[i], msg=f"block {i} 梯度不一致")
+
+
+def test_trainable_params_are_not_managed():
+    """可训练参数（LoRA）必须原地不动、常驻 GPU —— 不被当基权重换出。"""
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(4, 16, device)
+    for b in blocks:
+        b.lin1.requires_grad_(False)
+        b.lin2.requires_grad_(False)
+        b.lora = nn.Parameter(torch.ones(16, device=device))  # 可训练
+
+    swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
+
+    for b in list(blocks)[swap.first_swapped:]:
+        assert b.lora.device.type == "cuda", "LoRA 参数被错误地换到了 CPU"
+        assert b.lin1.weight.device.type == "cpu", "冻结基权重应已下 CPU"
+    # 登记的 spec 里不应出现 lora
+    for rel in range(swap.num_swap):
+        names = [n for n, _s, _d in swap._param_specs[rel]]
+        assert "lora" not in names
+
+
+def test_params_added_after_construct_do_not_break_rebind():
+    """构造后新增参数（LoRA 在 block 内建子模块的情形）不应让换入崩溃。
+
+    回归：_rebind 曾遍历 named_parameters() 直接查 buf[name] → KeyError。
+    """
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(4, 16, device)
+    for b in blocks:
+        b.requires_grad_(False)
+
+    swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
+    # 构造之后再挂参数
+    for b in blocks:
+        b.late = nn.Parameter(torch.ones(16, device=device))
+    swap.attach()
+
+    x = torch.randn(1, 16, device=device)
+    h = x
+    for b in blocks:
+        h = b(h)
+    assert torch.isfinite(h).all()
+
+
+def test_detach_removes_hooks():
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(4, 16, device)
+    swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
+    swap.attach()
+    swap.attach()  # 幂等
+    n_handles = len(swap._handles)
+    assert n_handles == 2 * 2  # 每个换出 block 2 个钩子
+    swap.detach()
+    assert swap._handles == []
+
+
+def test_adopts_cpu_weights_without_recopy():
+    """loader 已把尾部层放到 CPU pinned 时，组件就地接管不重复拷贝。"""
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(4, 16, device)
+    # 模拟 loader：把末尾 2 层放到 CPU pinned
+    for b in list(blocks)[2:]:
+        for p in b.parameters():
+            p.data = p.detach().to("cpu").pin_memory()
+    ptrs = {id(p): p.data_ptr() for b in list(blocks)[2:] for p in b.parameters()}
+
+    swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
+
+    # 主副本应就是原来那批 pinned 张量（未重新分配）
+    for rel in range(swap.num_swap):
+        for _name, t in swap._cpu_weights[rel].items():
+            assert t.is_pinned()
+    for b in list(blocks)[2:]:
+        for p in b.parameters():
+            assert p.data_ptr() == ptrs[id(p)]
 
 
 def test_allocation_error_carries_context():

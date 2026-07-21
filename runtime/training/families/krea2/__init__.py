@@ -139,7 +139,7 @@ class Krea2Family:
 
     def load_dit(self, path, device, dtype, *,
                  attention_backend: str = "flash_attn", repo_root=None,
-                 purpose: str = "train"):
+                 purpose: str = "train", blocks_to_swap: int = 0):
         from training.families.krea2.loader import load_krea2_model
 
         if attention_backend != "none":
@@ -147,7 +147,9 @@ class Krea2Family:
                 "Krea2 当前固定使用 PyTorch SDPA；忽略 attention_backend=%s",
                 attention_backend,
             )
-        return load_krea2_model(path, device, dtype, purpose=purpose)
+        return load_krea2_model(
+            path, device, dtype, purpose=purpose, blocks_to_swap=blocks_to_swap,
+        )
 
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         from training.vae import load_vae

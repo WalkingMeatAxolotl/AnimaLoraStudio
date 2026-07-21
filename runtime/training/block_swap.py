@@ -105,6 +105,7 @@ class PinnedBlockSwap:
         self._done = [torch.cuda.Event() for _ in range(num_slots)]
 
         self._pinned_bytes = 0
+        self._handles: list = []
         self._build(blocks)
 
     # ------------------------------------------------------------------ 构造
@@ -119,14 +120,28 @@ class PinnedBlockSwap:
                 cpu_w: dict[str, torch.Tensor] = {}
                 specs: list[tuple[str, torch.Size, torch.dtype]] = []
                 for name, param in block.named_parameters():
-                    pinned = param.detach().to("cpu").pin_memory()
+                    # **只管理冻结的基权重**。可训练参数（LoRA）必须原地不动、
+                    # 常驻 GPU：它们是优化器的目标，被搬走会破坏训练；而且它们
+                    # 相对底模极小，没有换出的价值。
+                    if param.requires_grad:
+                        continue
+                    # 已在 CPU 就地接管（loader 可直接把尾部层载到 CPU，让 GPU
+                    # 峰值从不经过完整模型——12/16GB 目标的前提）；已 pinned 则
+                    # 不重复拷贝。否则从 GPU 搬下来再 pin。
+                    src = param.detach()
+                    if src.device.type == "cpu":
+                        pinned = src if src.is_pinned() else src.pin_memory()
+                    else:
+                        pinned = src.to("cpu").pin_memory()
                     cpu_w[name] = pinned
                     specs.append((name, param.shape, param.dtype))
                     self._pinned_bytes += pinned.numel() * pinned.element_size()
                     # 权重主副本已在 CPU pinned——立即释放 GPU 上的原权重（显存
-                    # 收益所在，否则要到首次 forward rebind 才兑现）。指向 0 元素
-                    # 占位；后续 ensure_resident 会把 .data 指向 GPU 槽。
-                    param.data = torch.empty(0, dtype=param.dtype, device=self.device)
+                    # 收益所在，否则要到首次 forward rebind 才兑现）。.data 指向
+                    # 这份 pinned CPU 张量（而非 empty(0)）：保留 shape/dtype，
+                    # 让**构造后**才注入的 LyCORIS 能正确读到基权重形状；后续
+                    # ensure_resident 再把 .data 切到 GPU 槽。
+                    param.data = pinned
                 self._cpu_weights.append(cpu_w)
                 self._param_specs.append(specs)
             torch.cuda.empty_cache()  # 归还刚释放的原权重段给分配器
@@ -178,11 +193,19 @@ class PinnedBlockSwap:
         self._rebind(rel, slot)
 
     def _rebind(self, rel: int, slot: int) -> None:
-        """把该 block 的 parameter ``.data`` 指到槽 buffer（原地换，不换 module）。"""
+        """把该 block 的基权重 ``.data`` 指到槽 buffer（原地换，不换 module）。
+
+        只重绑**构造时登记过的**参数名：构造之后新增的参数（LoRA 注入在
+        block 内建子模块的情形）不归本组件管，遍历 named_parameters() 会
+        撞上它们。
+        """
         block = self.blocks[self.first_swapped + rel]
         buf = self._slot_buffers[slot]
-        for name, param in block.named_parameters():
-            param.data = buf[name]
+        params = dict(block.named_parameters())
+        for name, _shape, _dtype in self._param_specs[rel]:
+            param = params.get(name)
+            if param is not None:
+                param.data = buf[name]
 
     def ensure_resident(self, absolute_index: int, *, prefetch_next: int | None = None) -> None:
         """确保第 ``absolute_index`` 个 block 的权重已在 GPU 且计算流可安全读取。
@@ -218,6 +241,44 @@ class PinnedBlockSwap:
         不释放显存，只清 hold 标记。
         """
         self._slot_holds = [-1] * self.num_slots
+
+    def attach(self) -> None:
+        """给每个换出 block 注册 forward pre/post hook，接管换入换出。
+
+        这是**推荐的接线方式**：完全从外部生效，不需要改模型的 forward 循环
+        （krea2 的循环在 parity 敏感的 ``modeling/`` 内，不宜改动，doc §7.1）。
+
+        反向为什么也自动成立：开 gradient checkpointing 后，反向阶段会**重算
+        前向**，即再次调用该 block 的 forward —— pre-hook 随之触发，按反向的
+        逆序把权重换回来。所以不需要为反向单独编排时序（doc §2.4 说的「重算与
+        反向在同一驻留窗口内完成」在这里是自然结果）。
+
+        幂等：重复调用不会重复注册。
+        """
+        if self._handles:
+            return
+        for rel in range(self.num_swap):
+            absolute = self.first_swapped + rel
+            block = self.blocks[absolute]
+
+            def pre_hook(_module, _args, idx=absolute):
+                # 前向：算 idx 时预取 idx+1；反向重算时该预取落空（越界或已在位），
+                # 由 _fetch 的边界与命中检查静默吸收
+                self.ensure_resident(idx, prefetch_next=idx + 1)
+
+            def post_hook(_module, _args, output, idx=absolute):
+                self.release(idx)
+                return output
+
+            self._handles.append(block.register_forward_pre_hook(pre_hook))
+            self._handles.append(block.register_forward_hook(post_hook))
+        logger.info("block swap 已挂载：%d 个 block 的前向钩子", self.num_swap)
+
+    def detach(self) -> None:
+        """移除 attach 注册的钩子（权重不还原，需要时自行 ensure_resident）。"""
+        for handle in self._handles:
+            handle.remove()
+        self._handles.clear()
 
     def iter_forward(self) -> Iterator[tuple[int, nn.Module]]:
         """前向遍历便捷封装：yield (index, block)，自动 ensure_resident+预取+release。
