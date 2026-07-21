@@ -96,6 +96,49 @@ def test_vram_discount_does_not_relax_ram_side(fake_env):
         )
 
 
+def test_swapped_bytes_use_checkpoint_dtype_not_compute_dtype(tmp_path):
+    """**回归**：pinned 预算必须按 checkpoint 实际 dtype 算，不能按计算 dtype。
+
+    fp8 checkpoint 只有 bf16 的一半。按 bf16 估会把 28 层算成两倍，在内存
+    充足的机器上撞 60% 安全线被**误拒** —— 恰好挡死 B12 的目标配置。
+    高估在这里不是保守，是假阴性。
+    """
+    import torch
+    from safetensors.torch import save_file
+
+    from training.families.krea2 import loader as L
+
+    # 造一个 fp8 与一个 bf16 的迷你 checkpoint，键名带 blocks.N. 前缀
+    n2s = {}
+    fp8_t, bf16_t = {}, {}
+    for i in range(4):
+        key = f"blocks.{i}.w"
+        n2s[key] = key
+        fp8_t[key] = torch.zeros(256, 256, dtype=torch.float8_e4m3fn)
+        bf16_t[key] = torch.zeros(256, 256, dtype=torch.bfloat16)
+    fp8_path = tmp_path / "fp8.safetensors"
+    bf16_path = tmp_path / "bf16.safetensors"
+    save_file(fp8_t, str(fp8_path))
+    save_file(bf16_t, str(bf16_path))
+
+    prefixes = ("blocks.2.", "blocks.3.")  # 末尾 2 层
+    fp8_bytes = L._swapped_bytes_from_checkpoint(fp8_path, prefixes, n2s)
+    bf16_bytes = L._swapped_bytes_from_checkpoint(bf16_path, prefixes, n2s)
+
+    assert fp8_bytes == 2 * 256 * 256 * 1
+    assert bf16_bytes == 2 * 256 * 256 * 2
+    assert bf16_bytes == 2 * fp8_bytes  # 正是被搞错的那个倍数
+
+
+def test_swapped_bytes_falls_back_when_header_unreadable(tmp_path):
+    """header 读不出时返回 0，由调用方回退到按计算 dtype 估（不静默放行）。"""
+    from training.families.krea2 import loader as L
+
+    bogus = tmp_path / "not-a-safetensors.bin"
+    bogus.write_bytes(b"garbage")
+    assert L._swapped_bytes_from_checkpoint(bogus, ("blocks.0.",), {"blocks.0.w": "w"}) == 0
+
+
 def test_pinned_budget_rejects_over_safe_fraction(monkeypatch):
     monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 16 * _GIB)
     # 安全上限 = 16 × 0.6 = 9.6GB
