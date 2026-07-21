@@ -1,0 +1,248 @@
+"""Block swap —— DiT 的逐层权重换入换出（消费级卡下探 K2 显存门槛）。
+
+设计与实测：``docs/design/block-swap.md``。一句话：DiT 的 N 个 transformer block
+串行堆叠、任一时刻只算一个，所以把其中若干层的权重常驻 CPU pinned memory、算到
+才搬进显存，可用「约 8ms/block 的固定时间」换回「每层约 0.8GB 显存」（krea2 实测），
+把 K2 LoRA 训练的显存下限从 32GB 拉到 24GB 以下，且不付精度代价。
+
+本模块是 **family 无关的机制核心**（doc §9.2 刀 1）：只认一个 ``nn.ModuleList``，
+不认 krea2/anima。接线（哪个 family、哪个循环）在各 family 的行为适配层完成。
+
+关键实现约束（doc §9.1，务必先读）：
+
+- **原地换 ``param.data``，不是 buffer 轮转**。LyCORIS ``apply_to()`` 让 LoRA 模块
+  持有原 Linear 引用并包住其 forward；若前向走另一个 module 实例，会**完全绕过
+  LoRA**，训练静默学不到东西。所以 module 对象自始至终不变，只切换 ``.data`` 指向。
+- 由此**自动正确**处理 fp8：``weight_scale`` 是绑在 module 上的非持久 buffer，module
+  不变则 scale 恒与权重配对；换权重只换 ``.data``，fp8 张量原样搬（dtype 不变）。
+- pinned 主副本**启动时一次性分配**，运行期不再 alloc（分配失败只可能发生在启动、
+  可 fail-fast，doc §8.1）。
+
+前向/反向的预取时序不在本模块——本模块只提供「把某层权重搬到某个 GPU 槽位」和
+「某层算完、其 GPU 槽位可回收」两个原语，循环编排留给调用方（family 的 forward）。
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Iterator
+
+import torch
+from torch import nn
+
+
+logger = logging.getLogger(__name__)
+
+_GIB = 1024 ** 3
+
+
+class PinnedBlockSwap:
+    """管理一个 ``nn.ModuleList`` 中末尾 ``num_swap`` 个 block 的权重换入换出。
+
+    "末尾" 而非任意子集：DiT 前向从 0 到 N-1，把靠后的层换出可让前面的层先跑完、
+    为后面腾出的时间窗口最大（且与 musubi ``blocks_to_swap`` 语义一致——它也是从
+    尾部数）。前 ``N - num_swap`` 个 block 权重常驻 GPU 不受影响。
+
+    生命周期：
+        swap = PinnedBlockSwap(blocks, num_swap, device)   # 分配 pinned + GPU 槽
+        # 每步前向：
+        for i, block in enumerate(blocks):
+            swap.ensure_resident(i)      # 换出层 → 确保权重在 GPU（含预取等待）
+            h = block(h, ...)
+            swap.release(i)              # 换出层 → 标记其 GPU 槽可被下一层复用
+        # 反向逆序同理（调用方按 reversed 顺序调 ensure_resident/release）
+
+    非换出层（``i < first_swapped``）的 ensure_resident/release 是 no-op，调用方
+    可以无条件调用，不必自己判断边界。
+    """
+
+    def __init__(
+        self,
+        blocks: nn.ModuleList,
+        num_swap: int,
+        device: torch.device | str,
+        *,
+        num_slots: int = 2,
+    ) -> None:
+        total = len(blocks)
+        if num_swap <= 0:
+            raise ValueError("PinnedBlockSwap 的 num_swap 必须为正（0 = 不该构造本对象）")
+        if num_swap > total:
+            raise ValueError(
+                f"num_swap={num_swap} 超过 block 总数 {total}"
+            )
+        if num_slots < 2:
+            raise ValueError("num_slots 至少为 2（双缓冲：算当前 + 预取下一）")
+
+        self.device = torch.device(device)
+        if self.device.type != "cuda":
+            raise ValueError(
+                f"block swap 需要 CUDA 设备，收到 {self.device}"
+            )
+        self.blocks = blocks
+        self.total = total
+        self.num_swap = num_swap
+        self.first_swapped = total - num_swap  # 第一个被换出的 block index
+
+        # 每个被换出 block 的 CPU pinned 权重主副本：
+        #   [block 相对序号] -> {param 名: pinned CPU tensor}
+        # 用相对序号（0 .. num_swap-1）避免和绝对 index 混淆。
+        self._cpu_weights: list[dict[str, torch.Tensor]] = []
+        # 每个 param 的形状/dtype 元信息，用于在 GPU 槽里建对应 buffer
+        self._param_specs: list[list[tuple[str, torch.Size, torch.dtype]]] = []
+
+        # GPU 槽位：num_slots 份，每份能放下任一被换出 block 的全部 param。
+        #   _slot_buffers[slot] = {param 名: GPU tensor}
+        self._slot_buffers: list[dict[str, torch.Tensor]] = []
+        # 每个槽当前装着哪个相对序号的 block（-1 = 空）
+        self._slot_holds: list[int] = [-1] * num_slots
+        self.num_slots = num_slots
+
+        self._copy_stream = torch.cuda.Stream(device=self.device)
+        # ready[slot]：该槽的权重搬运已完成（计算流 wait 它才能读）
+        self._ready = [torch.cuda.Event() for _ in range(num_slots)]
+        # done[slot]：该槽上一次计算已完成（拷贝流 wait 它才能覆盖，防数据竞争）
+        self._done = [torch.cuda.Event() for _ in range(num_slots)]
+
+        self._pinned_bytes = 0
+        self._build(blocks)
+
+    # ------------------------------------------------------------------ 构造
+    def _build(self, blocks: nn.ModuleList) -> None:
+        """把被换出的 block 权重搬到 CPU pinned，并在 GPU 上预留槽位。
+
+        pinned 分配失败在此抛出（启动期，可 fail-fast，doc §8.1）。
+        """
+        try:
+            for rel, absolute in enumerate(range(self.first_swapped, self.total)):
+                block = blocks[absolute]
+                cpu_w: dict[str, torch.Tensor] = {}
+                specs: list[tuple[str, torch.Size, torch.dtype]] = []
+                for name, param in block.named_parameters():
+                    pinned = param.detach().to("cpu").pin_memory()
+                    cpu_w[name] = pinned
+                    specs.append((name, param.shape, param.dtype))
+                    self._pinned_bytes += pinned.numel() * pinned.element_size()
+                    # 权重主副本已在 CPU pinned——立即释放 GPU 上的原权重（显存
+                    # 收益所在，否则要到首次 forward rebind 才兑现）。指向 0 元素
+                    # 占位；后续 ensure_resident 会把 .data 指向 GPU 槽。
+                    param.data = torch.empty(0, dtype=param.dtype, device=self.device)
+                self._cpu_weights.append(cpu_w)
+                self._param_specs.append(specs)
+            torch.cuda.empty_cache()  # 归还刚释放的原权重段给分配器
+
+            # 预留 GPU 槽：容量 = 被换出 block 里最大的那个（同构 DiT 里都一样大）
+            for _slot in range(self.num_slots):
+                buf: dict[str, torch.Tensor] = {}
+                for name, shape, dtype in self._param_specs[0]:
+                    buf[name] = torch.empty(shape, dtype=dtype, device=self.device)
+                self._slot_buffers.append(buf)
+        except RuntimeError as exc:  # pinned / GPU 分配失败
+            self._pinned_bytes = 0
+            raise BlockSwapAllocationError(
+                self.num_swap, self.first_swapped, str(exc)
+            ) from exc
+
+        logger.info(
+            "block swap 就绪：换出末尾 %d/%d block，pinned %.2f GB，%d 个 GPU 槽",
+            self.num_swap, self.total, self._pinned_bytes / _GIB, self.num_slots,
+        )
+
+    @property
+    def pinned_bytes(self) -> int:
+        """CPU pinned 主副本总字节（护栏预算依据）。"""
+        return self._pinned_bytes
+
+    # ------------------------------------------------------------------ 原语
+    def _slot_for(self, rel: int) -> int:
+        """相对序号 → 使用的 GPU 槽（双缓冲下 rel 的奇偶）。"""
+        return rel % self.num_slots
+
+    def _fetch(self, rel: int) -> None:
+        """在拷贝流上把第 rel 个换出 block 的权重搬进它的槽（若尚未在位）。"""
+        if rel < 0 or rel >= self.num_swap:
+            return
+        slot = self._slot_for(rel)
+        if self._slot_holds[slot] == rel:
+            return  # 已在位（通常是上一步预取命中）
+        with torch.cuda.stream(self._copy_stream):
+            # 该槽上一次计算必须先完成，否则覆盖正在被读的权重（数据竞争）。
+            # 未 record 过的 Event.wait 是 no-op，首轮天然安全。
+            self._copy_stream.wait_event(self._done[slot])
+            buf = self._slot_buffers[slot]
+            src = self._cpu_weights[rel]
+            for name, dst in buf.items():
+                dst.copy_(src[name], non_blocking=True)
+            self._ready[slot].record(self._copy_stream)
+        self._slot_holds[slot] = rel
+        self._rebind(rel, slot)
+
+    def _rebind(self, rel: int, slot: int) -> None:
+        """把该 block 的 parameter ``.data`` 指到槽 buffer（原地换，不换 module）。"""
+        block = self.blocks[self.first_swapped + rel]
+        buf = self._slot_buffers[slot]
+        for name, param in block.named_parameters():
+            param.data = buf[name]
+
+    def ensure_resident(self, absolute_index: int, *, prefetch_next: int | None = None) -> None:
+        """确保第 ``absolute_index`` 个 block 的权重已在 GPU 且计算流可安全读取。
+
+        对非换出层（常驻）是 no-op。``prefetch_next`` 若给出（下一个要用的 block
+        绝对序号），顺带发起它的预取——这是遮蔽传输的关键，调用方应传前向的 i+1
+        或反向的 i-1。
+        """
+        rel = absolute_index - self.first_swapped
+        if rel < 0:
+            return  # 常驻层
+        self._fetch(rel)
+        if prefetch_next is not None:
+            nxt = prefetch_next - self.first_swapped
+            if 0 <= nxt < self.num_swap:
+                self._fetch(nxt)
+        torch.cuda.current_stream().wait_event(self._ready[self._slot_for(rel)])
+
+    def release(self, absolute_index: int) -> None:
+        """标记该 block 计算已在计算流上发起完毕，其 GPU 槽可被后续 block 覆盖。
+
+        对非换出层是 no-op。必须在该 block 的 forward 调用之后调用。
+        """
+        rel = absolute_index - self.first_swapped
+        if rel < 0:
+            return
+        self._done[self._slot_for(rel)].record(torch.cuda.current_stream())
+
+    def reset(self) -> None:
+        """一步（前向或反向）开始前重置槽占用状态。
+
+        双缓冲槽在上一步末尾装着最后两层；新的一步从头/尾开始，需要重新预取。
+        不释放显存，只清 hold 标记。
+        """
+        self._slot_holds = [-1] * self.num_slots
+
+    def iter_forward(self) -> Iterator[tuple[int, nn.Module]]:
+        """前向遍历便捷封装：yield (index, block)，自动 ensure_resident+预取+release。
+
+        调用方：``for i, block in swap.iter_forward(): h = block(h, ...)``
+        注意 release 在 yield 返回后调用，所以调用方必须在循环体内完成 forward。
+        """
+        self.reset()
+        for i in range(self.total):
+            self.ensure_resident(i, prefetch_next=i + 1)
+            yield i, self.blocks[i]
+            self.release(i)
+
+
+class BlockSwapAllocationError(RuntimeError):
+    """pinned / GPU 槽分配失败（doc §8.1 / B6：报错不静默降级）。
+
+    只可能在启动期 ``PinnedBlockSwap`` 构造时抛出。携带足够上下文让上层给出
+    可操作的用户文案（关掉占内存的应用 / 调小 blocks_to_swap）。
+    """
+
+    def __init__(self, num_swap: int, first_swapped: int, detail: str) -> None:
+        self.num_swap = num_swap
+        self.first_swapped = first_swapped
+        self.detail = detail
+        super().__init__(
+            f"block swap 预分配失败（换出末尾 {num_swap} 个 block）：{detail}"
+        )
