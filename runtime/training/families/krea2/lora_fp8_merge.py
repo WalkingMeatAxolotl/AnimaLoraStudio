@@ -356,6 +356,16 @@ def merge_loras_into_fp8_model(
             len(missing), missing[:5], " ..." if len(missing) > 5 else "",
         )
 
+    # 运算设备：block swap 下换出层的权重是 **CPU pinned 主副本**，而
+    # weight_scale 恒在计算设备（swap 的前向需要，见 quant_fp8.patch_fp8_linears）。
+    # 若就地按权重所在设备算，`w16 * scale` 会跨设备崩；退一步全在 CPU 上算又
+    # 慢得离谱（264 层 6144² 的 fp32 delta）。故统一到 GPU 算，写回时靠
+    # `weight.data.copy_()` 跨设备落回主副本 —— 主副本才是持久的那份，之后每次
+    # 换入带的都是 merged 权重（docs/design/block-swap.md §9.6）。
+    merge_device = next(
+        (p.device for p in model.parameters() if p.device.type == "cuda"), None,
+    )
+
     backup: dict[str, tuple[Tensor, Tensor | None]] = {}
     layer_count = len(per_layer)
     for layer_index, (layer_key, layer_sources) in enumerate(per_layer.items(), 1):
@@ -372,8 +382,10 @@ def merge_loras_into_fp8_model(
         # dequant 到 fp16（comfy lora_compute_dtype 域，QuantizedTensor 无
         # bf16 中转）；非量化 Linear 同样 cast fp16 参与 merge
         w16 = weight.detach().to(torch.float16)
+        if merge_device is not None and w16.device != merge_device:
+            w16 = w16.to(merge_device)
         if scale is not None:
-            w16 = w16 * scale.to(torch.float16)
+            w16 = w16 * scale.to(device=w16.device, dtype=torch.float16)
 
         for tensors, strength, source in layer_sources:
             w16 = _apply_lora_delta(
