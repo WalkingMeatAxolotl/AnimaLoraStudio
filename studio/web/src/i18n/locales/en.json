@@ -2377,7 +2377,7 @@
     "globalAutoLockedPrefix": "Auto",
     "globalAutoLockedLink": "Global settings",
     "globalAutoEditableHint": "Default from Settings · editable",
-    "globalDefaultHint": "Default from global settings",
+    "globalDefaultPrefix": "Default from",
     "restoreGlobalDefault": "Restore default",
     "restoreGlobalDefaultTitle": "Replace with the model path currently selected in global settings",
     "projectAutoHint": "Auto · Project settings",

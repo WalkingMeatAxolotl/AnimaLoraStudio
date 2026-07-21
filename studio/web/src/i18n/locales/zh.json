@@ -2377,7 +2377,7 @@
     "globalAutoLockedPrefix": "自动",
     "globalAutoLockedLink": "全局设置",
     "globalAutoEditableHint": "默认来自 Settings · 可改",
-    "globalDefaultHint": "默认来自全局设置",
+    "globalDefaultPrefix": "默认来自",
     "restoreGlobalDefault": "恢复默认",
     "restoreGlobalDefaultTitle": "用全局设置里当前选择的模型路径替换",
     "projectAutoHint": "自动 · 项目设置",

@@ -596,24 +596,49 @@ function PathStringField({
         {hintNode}
       </div>
       <div className="flex gap-2">
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className={'input' + (kind === 'path' ? ' input-mono' : '')} style={fieldStyle(disabled)}
-        />
-        {useModelPicker && (
-          <button
-            ref={modelBtnRef}
-            type="button"
-            onClick={() => { setModelPicking((p) => !p); setPicking(false) }}
+        {/* 模型路径字段：input 末尾内嵌下箭头开 dropdown，不额外占一个按钮位 */}
+        <div className="relative flex-1 min-w-0">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => onChange(e.target.value)}
             disabled={disabled}
-            className="btn btn-secondary btn-sm shrink-0"
-          >
-            {t('field.pickModel')}
-          </button>
-        )}
+            className={'input' + (kind === 'path' ? ' input-mono' : '')}
+            style={{
+              ...fieldStyle(disabled),
+              ...(useModelPicker ? { paddingRight: 30 } : null),
+            }}
+          />
+          {useModelPicker && (
+            <button
+              ref={modelBtnRef}
+              type="button"
+              onClick={() => { setModelPicking((p) => !p); setPicking(false) }}
+              disabled={disabled}
+              title={t('field.pickModel')}
+              aria-label={t('field.pickModel')}
+              className={
+                'absolute right-0 top-0 h-full px-2 flex items-center bg-transparent border-none ' +
+                (disabled
+                  ? 'opacity-40 cursor-not-allowed'
+                  : 'text-fg-tertiary hover:text-fg-primary cursor-pointer')
+              }
+            >
+              <span aria-hidden className="text-[10px] leading-none">▾</span>
+            </button>
+          )}
+          {/* 候选列表贴着输入框展开（锚到本容器而非整个字段块） */}
+          {useModelPicker && modelPicking && !disabled && (
+            <ModelPathPicker
+              field={name}
+              family={modelFamily!}
+              value={text}
+              onChange={onChange as (v: string) => void}
+              onClose={() => setModelPicking(false)}
+              anchorRef={modelBtnRef}
+            />
+          )}
+        </div>
         {kind === 'path' && (
           <button
             ref={browseBtnRef}
@@ -648,17 +673,6 @@ function PathStringField({
             setPicking(false)
           }}
           onClose={() => setPicking(false)}
-        />
-      )}
-      {/* 4 个模型路径：贴字段的 dropdown，列模型设置里已就绪的资产 */}
-      {useModelPicker && modelPicking && !disabled && (
-        <ModelPathPicker
-          field={name}
-          family={modelFamily!}
-          value={text}
-          onChange={onChange as (v: string) => void}
-          onClose={() => setModelPicking(false)}
-          anchorRef={modelBtnRef}
         />
       )}
     </div>
