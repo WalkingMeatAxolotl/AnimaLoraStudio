@@ -82,6 +82,23 @@ venv\Scripts\python tools\vram_trace.py --pid <daemon-pid> --interval-ms 20
 建议先启动探针，再在 Studio 点「开始生成」，完成后按 `Ctrl+C`。Windows WDDM
 有时不提供 per-PID 显存，此时 `target_gpu_mib` 为空，但整卡峰值仍有效。
 
+### `block_swap_probe.py`
+
+block swap（逐层权重换入换出）的可行性 Gate-0 探针，配套 `docs/design/block-swap.md`。
+六段依次测：PCIe 链路是否降级、pinned/pageable 有效带宽、真实 krea2
+`SingleStreamBlock` 的前向/反向耗时、遮蔽判据、真双 stream swap 循环 vs 全常驻的
+wall clock 差、以及持续负载下的温度/功耗/PCIe replay 增量/内存漂移。
+
+```powershell
+venv\Scripts\python tools\block_swap_probe.py
+venv\Scripts\python tools\block_swap_probe.py --stages ABCD      # 跳过耗时段
+venv\Scripts\python tools\block_swap_probe.py --resolution 1536 --soak-seconds 120
+venv\Scripts\python tools\block_swap_probe.py --out tmp\block_swap.csv
+```
+
+不需要任何权重文件（按 `KREA2_CONFIG` 随机初始化，只测时间与规模）。无 CUDA 时只跑
+链路体检段。实测结果与判读见 doc §5。
+
 ### `benchmark_lora_merge_chunks.py`
 
 Krea 2 FP8 普通 LoRA 完整 delta / 行分块 merge 的真卡 A/B。推荐用
