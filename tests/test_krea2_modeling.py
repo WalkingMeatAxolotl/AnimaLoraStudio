@@ -100,6 +100,31 @@ def test_tiny_forward_preserves_5d_shape_and_crops_patch_padding() -> None:
     assert torch.isfinite(output).all()
 
 
+def test_batched_forward_matches_per_sample_forward() -> None:
+    """Modulation is broadcast per sample, never across the token axis.
+
+    ``tproj`` emits (B, 1, 6*features); a missing token axis would broadcast
+    (B, features) against (B, L, features) and silently pass only when B == 1.
+    """
+    torch.manual_seed(11)
+    model = SingleStreamDiT(_tiny_config()).eval()
+    x, timesteps, context, mask = _tiny_inputs()
+    with torch.no_grad():
+        batched = model(x, timesteps, context, mask)
+        per_sample = torch.cat(
+            [
+                model(
+                    x[i : i + 1],
+                    timesteps[i : i + 1],
+                    context[i : i + 1],
+                    mask[i : i + 1],
+                )
+                for i in range(x.shape[0])
+            ]
+        )
+    torch.testing.assert_close(batched, per_sample, rtol=1e-5, atol=1e-5)
+
+
 def test_flattened_and_layered_text_context_are_equivalent() -> None:
     model = SingleStreamDiT(_tiny_config()).eval()
     x, timesteps, context, mask = _tiny_inputs()
