@@ -784,9 +784,11 @@ class ModelCache:
                     pass
             return
         logger.info("unloading model")
-        if self.block_swap is not None:
-            # 摘钩子并丢弃管理对象——pinned 主副本（可达 11GB+）随之释放。
-            # 页锁定内存不会被 GC 之外的任何机制回收，漏掉这步等于常驻泄漏。
+        had_block_swap = self.block_swap is not None
+        if had_block_swap:
+            # 摘钩子并丢弃管理对象。注意**丢引用不等于还内存**：pinned 走
+            # PyTorch 的 host caching allocator，del + gc 之后实测归还 0 字节，
+            # 必须显式清 host cache（见下方 _release_pinned_host_cache）。
             try:
                 self.block_swap.detach()
             except Exception:  # noqa: BLE001
@@ -815,8 +817,28 @@ class ModelCache:
                 except Exception:
                     pass
                 torch.cuda.empty_cache()
+                if had_block_swap:
+                    _release_pinned_host_cache()
         except Exception:
             pass
+
+
+def _release_pinned_host_cache() -> None:
+    """把 pinned（页锁定）内存还给操作系统。
+
+    与 ``torch.cuda.empty_cache()`` 是**两件事**：后者只管设备侧。pinned 走
+    PyTorch 独立的 host caching allocator，释放张量只是还给那个缓存池 —— 真机
+    实测 pin 6GB 后 ``del`` + ``gc.collect()`` 归还 **0 字节**，调用本函数才
+    归还 8GB。block swap 的主副本可达 11GB+，漏掉这步就是卸载后仍长期占着内存，
+    其他程序用不到（页锁定内存连换页都不行）。
+
+    与同函数里的 ``_cuda_clearCublasWorkspaces`` 是同一类问题的 host 侧版本。
+    内部 API，缺失/失败静默跳过（下轮加载会复用缓存，只是内存不还系统）。
+    """
+    try:
+        torch._C._host_emptyCache()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 CACHE = ModelCache()
