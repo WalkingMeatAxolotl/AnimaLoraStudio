@@ -23,6 +23,7 @@ import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
+import { compareImagePath } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
 
@@ -155,7 +156,9 @@ export default function RegularizationPage() {
     if (!vid) return
     try {
       const s = await api.getRegStatus(project.id, vid)
-      setReg(s)
+      // 在源头排序：预览 modal 的 onPick(idx) 直接索引 reg.files，
+      // 缩略图网格也从 reg.files 顺序派生，两者必须同序。
+      setReg({ ...s, files: [...s.files].sort(compareImagePath) })
     } catch (e) {
       toast(t('reg.loadFailed', { error: String(e) }), 'error')
     }

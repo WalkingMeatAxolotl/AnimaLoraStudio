@@ -16,6 +16,7 @@ import StepShell from '../../../components/StepShell'
 import UploadProgressBar from '../../../components/UploadProgressBar'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
+import { compareImageName } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useUploadProgress } from '../../../lib/useUploadProgress'
 
@@ -73,7 +74,7 @@ export default function DownloadPage() {
   const refreshFiles = useCallback(async () => {
     try {
       const r = await api.listFiles(project.id)
-      setFiles(r.items)
+      setFiles([...r.items].sort((a, b) => compareImageName(a.name, b.name)))
     } catch {
       /* ignore */
     }

@@ -17,6 +17,7 @@ import TagEditor from '../../../components/TagEditor'
 import TagStatsPanel from '../../../components/TagStatsPanel'
 import { useToast } from '../../../components/Toast'
 import ZoomableImage from '../../../components/ZoomableImage'
+import { compareImagePath } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
@@ -78,7 +79,10 @@ export default function TagEditPage() {
       const c = new Map<string, string[]>()
       const m = new Map<string, CaptionMeta>()
       const ks: string[] = []
-      for (const it of r.items) {
+      const sorted = [...r.items].sort((a, b) =>
+        compareImagePath(keyOf(a.folder, a.name), keyOf(b.folder, b.name))
+      )
+      for (const it of sorted) {
         const k = keyOf(it.folder, it.name)
         c.set(k, it.tags)
         m.set(k, { folder: it.folder, name: it.name, format: it.format })
