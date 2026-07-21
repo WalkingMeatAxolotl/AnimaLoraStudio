@@ -186,7 +186,6 @@ export default function TrainPage() {
           typeof dv === 'string' && !!dv && String(formValues?.[f] ?? '') !== dv
         h[f] = (
           <>
-            {t('train.globalDefaultPrefix')}{' '}
             <button
               type="button"
               onClick={() => settingsDrawer.open({ section: 'models' })}

@@ -621,10 +621,18 @@ function PathStringField({
                 'absolute right-0 top-0 h-full px-2 flex items-center bg-transparent border-none ' +
                 (disabled
                   ? 'opacity-40 cursor-not-allowed'
-                  : 'text-fg-tertiary hover:text-fg-primary cursor-pointer')
+                  : 'text-fg-secondary hover:text-fg-primary cursor-pointer')
               }
             >
-              <span aria-hidden className="text-[10px] leading-none">▾</span>
+              {/* 形状对齐 select 的原生箭头（V 形线条，不是实心三角） */}
+              <svg
+                aria-hidden
+                width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.5"
+                strokeLinecap="round" strokeLinejoin="round"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
             </button>
           )}
           {/* 候选列表贴着输入框展开（锚到本容器而非整个字段块） */}
