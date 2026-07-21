@@ -438,6 +438,127 @@ def test_fp8_base_with_swap_forward_matches_resident():
             assert t.is_pinned()
 
 
+def test_restore_masters_points_params_back_to_cpu():
+    """restore_masters 把参数指回 CPU 主副本 —— fp8 merge 前必须先做。"""
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(5, 16, device)
+    swap = PinnedBlockSwap(blocks, num_swap=3, device=device)
+    swap.attach()
+
+    # 跑一次前向：换出层的 .data 此刻指向 GPU 槽
+    _run_resident(blocks, torch.randn(1, 16, device=device))
+    assert blocks[swap.first_swapped].lin1.weight.device.type == "cuda"
+
+    swap.restore_masters()
+    for b in list(blocks)[swap.first_swapped:]:
+        assert b.lin1.weight.device.type == "cpu"
+        assert b.lin1.weight.is_pinned()
+
+
+def test_write_after_restore_masters_takes_effect_in_forward():
+    """**核心保证**：restore 后写进权重的改动（= fp8 merge 的 delta）会被后续
+    换入带上卡、真实影响前向输出，不会被 GPU 槽轮转吞掉。
+
+    注意断言的是**前向输出**而不是换出层的 `.data` —— 一次 pass 结束后，某个
+    换出层的 `.data` 仍指向它当时用的槽，而那个槽早已被后面的层覆盖（双缓冲
+    轮转）。换出层的权重只在它自己的 forward 窗口内有效；窗口外要读权重必须
+    先 restore_masters()。
+    """
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(5, 16, device)
+    swap = PinnedBlockSwap(blocks, num_swap=3, device=device)
+    swap.attach()
+
+    x = torch.randn(1, 16, device=device)
+    before = _run_resident(blocks, x).clone()
+
+    # 模拟 fp8 merge：restore 后就地改主副本
+    swap.restore_masters()
+    blocks[swap.first_swapped].lin1.weight.data.add_(1.0)
+
+    after = _run_resident(blocks, x)
+    assert not torch.allclose(before, after), "merge 的改动没有生效（被槽轮转吞了）"
+
+    # 主副本是那份持久的：restore 后应仍带着改动
+    swap.restore_masters()
+    w = blocks[swap.first_swapped].lin1.weight
+    assert w.device.type == "cpu" and w.is_pinned()
+
+
+def test_swapped_weight_outside_forward_window_is_stale():
+    """钉死上面那条语义：pass 结束后换出层的 .data 是被覆盖过的槽，不可信。
+
+    这不是 bug 而是双缓冲的必然结果 —— 记录下来防止后来者按 `.data` 读权重。
+    """
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(5, 16, device)
+    swap = PinnedBlockSwap(blocks, num_swap=3, device=device)
+    swap.attach()
+    _run_resident(blocks, torch.randn(1, 16, device=device))
+
+    first, last = swap.first_swapped, swap.total - 1
+    # rel=0 与 rel=2 共用槽 0（rel % 2）→ pass 后 rel=0 的 .data 里其实是 rel=2
+    torch.testing.assert_close(
+        blocks[first].lin1.weight.data, blocks[last].lin1.weight.data,
+    )
+    # restore 之后各归各位
+    swap.restore_masters()
+    assert not torch.allclose(
+        blocks[first].lin1.weight.data, blocks[last].lin1.weight.data,
+    )
+
+
+def test_move_module_excluding_keeps_swapped_on_cpu():
+    """一刀切 module.to(device) 会把主副本搬上卡、swap 白做；本 helper 必须跳过。"""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for p in (root, root / "runtime"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    from training.block_swap import move_module_excluding
+
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(5, 16, device)
+    model = nn.Sequential(blocks)
+    swap = PinnedBlockSwap(blocks, num_swap=3, device=device)
+    swap.restore_masters()
+
+    # 先把一个常驻层挪到 CPU，模拟 offload 后要搬回的场景
+    blocks[0].lin1.weight.data = blocks[0].lin1.weight.data.cpu()
+
+    move_module_excluding(model, device, swap)
+
+    assert blocks[0].lin1.weight.device.type == "cuda", "常驻层应被搬回 GPU"
+    for b in list(blocks)[swap.first_swapped:]:
+        assert b.lin1.weight.device.type == "cpu", "换出层必须留在 CPU"
+        assert b.lin1.weight.is_pinned()
+
+
+def test_move_module_excluding_without_swap_is_plain_move():
+    """swap=None 时退化为普通 .to()，零行为变化。"""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for p in (root, root / "runtime"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    from training.block_swap import move_module_excluding
+
+    device = torch.device("cuda")
+    blocks = _make_blocks(3, 16, torch.device("cpu"))
+    model = nn.Sequential(blocks)
+    move_module_excluding(model, device, None)
+    for b in blocks:
+        assert b.lin1.weight.device.type == "cuda"
+
+
 def test_allocation_error_carries_context():
     """BlockSwapAllocationError 携带 num_swap/first_swapped/detail（供上层文案）。"""
     _, BlockSwapAllocationError = _import()

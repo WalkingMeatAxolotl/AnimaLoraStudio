@@ -20,6 +20,12 @@
 
 前向/反向的预取时序不在本模块——本模块只提供「把某层权重搬到某个 GPU 槽位」和
 「某层算完、其 GPU 槽位可回收」两个原语，循环编排留给调用方（family 的 forward）。
+
+**换出层的权重只在它自己的 forward 窗口内有效。** 一次 pass 结束后，某换出层的
+``param.data`` 仍指向它当时用的 GPU 槽位，而那个槽位早已被后面的层覆盖（双缓冲
+轮转：rel 0 与 rel 2 共用槽 0）。这不是 bug 而是设计的必然结果 —— 窗口外要读或改
+权重（导出、检查、推理侧的 fp8 LoRA merge）**必须先 ``restore_masters()``**，
+CPU pinned 主副本才是持久且完整的那份。tests 里有专门一条钉死这个语义。
 """
 
 from __future__ import annotations
@@ -242,6 +248,44 @@ class PinnedBlockSwap:
         """
         self._slot_holds = [-1] * self.num_slots
 
+    def restore_masters(self) -> None:
+        """把所有被管理的参数 ``.data`` 指回 CPU pinned 主副本。
+
+        推理侧必需（doc §9.6）。两个场景：
+
+        1. **fp8 LoRA merge**：merge 会写 ``module.weight``。若此刻 ``.data`` 指向
+           GPU 槽，写进去的 delta 会被下一层的换入**直接覆盖** —— merge 静默丢失。
+           先 restore 再 merge，delta 落在主副本上，之后每次换入带的都是 merged 权重。
+        2. **任何要读/改权重的外部操作**（导出、检查、重新量化）：主副本是唯一
+           完整且稳定的那份，GPU 槽只是轮转窗口。
+        """
+        for rel in range(self.num_swap):
+            block = self.blocks[self.first_swapped + rel]
+            params = dict(block.named_parameters())
+            master = self._cpu_weights[rel]
+            for name, _shape, _dtype in self._param_specs[rel]:
+                param = params.get(name)
+                if param is not None:
+                    param.data = master[name]
+        # 槽内容已与 param 解绑，标记为空避免下次误判命中
+        self._slot_holds = [-1] * self.num_slots
+
+    def managed_data_ptrs(self) -> set[int]:
+        """被本组件管理的张量**存储地址**集合（CPU 主副本 + GPU 槽）。
+
+        给外部的「搬运整个模型」操作用：这些张量**不能**被 ``module.to(device)``
+        之类的一刀切搬上 GPU，否则 block swap 白做（见 ``move_module_excluding``）。
+
+        用 ``data_ptr()`` 而非 ``id()``：``param.data`` 每次访问都返回**新的**
+        Python 包装对象，``id()`` 不稳定，拿它比对会全部漏判。
+        """
+        ptrs = set()
+        for weights in self._cpu_weights:
+            ptrs.update(t.data_ptr() for t in weights.values())
+        for buf in self._slot_buffers:
+            ptrs.update(t.data_ptr() for t in buf.values())
+        return ptrs
+
     def attach(self) -> None:
         """给每个换出 block 注册 forward pre/post hook，接管换入换出。
 
@@ -291,6 +335,37 @@ class PinnedBlockSwap:
             self.ensure_resident(i, prefetch_next=i + 1)
             yield i, self.blocks[i]
             self.release(i)
+
+
+def move_module_excluding(module: nn.Module, device, swap: "PinnedBlockSwap | None") -> None:
+    """把 ``module`` 搬到 ``device``，但**跳过 block swap 管理的参数**。
+
+    推理侧的 daemon 会在每个任务前把整个模型搬回 GPU（采样期 offload 之后要搬
+    回来）。那是个一刀切的 ``module.to(device)`` —— 在 block swap 下会把换出层的
+    CPU pinned 主副本一起搬上卡，swap 白做，而且瞬时占用等于完整模型，在 12GB
+    卡上直接 OOM。
+
+    ``swap`` 为 None 时退化为普通的 ``module.to(device)``（零行为变化）。
+    """
+    if module is None or not hasattr(module, "to"):
+        return
+    if swap is None:
+        module.to(device)
+        return
+    managed = swap.managed_data_ptrs()
+    target = torch.device(device)
+    for _name, param in module.named_parameters(recurse=True):
+        if param.data.data_ptr() in managed or param.data.device == target:
+            continue
+        param.data = param.data.to(target)
+        if param.grad is not None:
+            param.grad = param.grad.to(target)
+    for _name, buf in module.named_buffers(recurse=True):
+        if buf.data_ptr() in managed or buf.device == target:
+            continue
+        # buffer 要经所属 module 重新注册才能换实例；直接改 .data 对
+        # 非 Parameter 的 Tensor 同样生效（buffer 存的就是 Tensor）
+        buf.data = buf.data.to(target)
 
 
 class BlockSwapAllocationError(RuntimeError):
