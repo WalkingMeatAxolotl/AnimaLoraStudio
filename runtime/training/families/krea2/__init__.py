@@ -151,11 +151,15 @@ class Krea2Family:
             path, device, dtype, purpose=purpose, blocks_to_swap=blocks_to_swap,
         )
 
-    def estimate_swapped_bytes(self, blocks_to_swap: int, dtype) -> int:
-        """block swap 换出层的字节数（显存预算折扣用；见 loader 同名函数）。"""
-        from training.families.krea2.loader import estimate_swapped_bytes
+    def swapped_param_ratio(self, blocks_to_swap: int) -> float:
+        """换出层占全模型参数的比例（显存预算折扣用；见 loader 同名函数）。
 
-        return estimate_swapped_bytes(blocks_to_swap, dtype)
+        刻意是比例不是字节数 —— fp8 与 bf16 的文件大小差一倍，按字节折扣会在
+        fp8 场景把护栏折扣穿。
+        """
+        from training.families.krea2.loader import swapped_param_ratio
+
+        return swapped_param_ratio(blocks_to_swap)
 
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         from training.vae import load_vae

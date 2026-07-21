@@ -41,7 +41,7 @@ def fake_env(monkeypatch):
 
 
 def test_vram_discount_lets_small_card_pass(fake_env):
-    """16GB 卡 + 25.8GB 模型 + 换出 22.6GB → 应放行（这正是 B12 的场景）。
+    """16GB 卡 + 25.8GB bf16 模型 + 换出 94.8% → 应放行（这正是 B12 的场景）。
 
     不折扣的话按完整模型算需 25.8+3=28.8GB，会被误拒。
     """
@@ -51,11 +51,31 @@ def test_vram_discount_lets_small_card_pass(fake_env):
     with pytest.raises(RuntimeError, match="GPU 空闲显存不足"):
         sysmem.check_load_budget(True, weight_paths=["x"], stage="测试")
 
-    # 折扣掉换出的 22.64GB：常驻仅 3.2GB + 基底 3GB < 15GB，放行
+    # 折扣掉换出的 94.8%（28 层全换）：常驻 1.3GB + 基底 3GB < 15GB，放行
     sysmem.check_load_budget(
-        True, weight_paths=["x"], stage="测试",
-        vram_discount_bytes=int(22.64 * _GIB),
+        True, weight_paths=["x"], stage="测试", vram_discount_ratio=0.9482,
     )
+
+
+def test_vram_discount_is_ratio_so_fp8_is_not_over_discounted(fake_env):
+    """**回归**：折扣必须按比例，不能按计算 dtype 的字节数。
+
+    fp8 checkpoint 文件只有 bf16 的一半（13GB）。若折扣按 bf16 估的字节数
+    （22.64GB）去减，vram_need 会被压到 0 —— 护栏对 fp8 完全失效。
+    按比例则 fp8 常驻 = 13 × (1-0.948) = 0.7GB，与实际相符。
+    """
+    fake_env(ram_gb=64, vram_gb=3.0, file_gb=13.0)  # fp8 文件 13GB，卡只剩 3.0GB
+
+    # 比例折扣：需 0.7+3=3.7GB > 3.0GB 可用 → 正确拒绝
+    with pytest.raises(RuntimeError, match="GPU 空闲显存不足"):
+        sysmem.check_load_budget(
+            True, weight_paths=["x"], stage="测试", vram_discount_ratio=0.9482,
+        )
+    # 比例被 clamp 到 [0,1]，不会因传入异常值把护栏折扣穿
+    with pytest.raises(RuntimeError, match="GPU 空闲显存不足"):
+        sysmem.check_load_budget(
+            True, weight_paths=["x"], stage="测试", vram_discount_ratio=-5.0,
+        )
 
 
 def test_vram_discount_still_rejects_when_genuinely_short(fake_env):
@@ -63,8 +83,7 @@ def test_vram_discount_still_rejects_when_genuinely_short(fake_env):
     fake_env(ram_gb=64, vram_gb=4.0, file_gb=25.8)
     with pytest.raises(RuntimeError, match="GPU 空闲显存不足"):
         sysmem.check_load_budget(
-            True, weight_paths=["x"], stage="测试",
-            vram_discount_bytes=int(14 * _GIB),
+            True, weight_paths=["x"], stage="测试", vram_discount_ratio=0.5,
         )
 
 
@@ -73,8 +92,7 @@ def test_vram_discount_does_not_relax_ram_side(fake_env):
     fake_env(ram_gb=8, vram_gb=80, file_gb=25.8)
     with pytest.raises(RuntimeError, match="系统可用内存不足"):
         sysmem.check_load_budget(
-            True, weight_paths=["x"], stage="测试",
-            vram_discount_bytes=int(22.64 * _GIB),
+            True, weight_paths=["x"], stage="测试", vram_discount_ratio=0.9482,
         )
 
 

@@ -98,7 +98,7 @@ def _file_bytes(paths) -> int:
 
 
 def check_load_budget(
-    enabled: bool, *, weight_paths, stage: str, vram_discount_bytes: int = 0,
+    enabled: bool, *, weight_paths, stage: str, vram_discount_ratio: float = 0.0,
 ) -> None:
     """双预算水位护栏：按即将加载的文件实际大小预算 RAM 与 VRAM。
 
@@ -106,10 +106,15 @@ def check_load_budget(
     - RAM 需求 ≈ 文件总大小（mmap 读文件的瞬时峰值，真机实测 ≈1:1）+ 基底
     - VRAM 需求 ≈ 文件总大小（权重上卡）+ 基底。GPU free 检查天然拦住
       多进程叠加（另一个 daemon 驻留模型时第二个加载入口 fail-fast）
-    ``vram_discount_bytes``：**不会进显存**的那部分权重字节数。block swap 把末尾
-    N 层留在内存，这些字节永远不上卡 —— 不扣掉的话，16GB 卡开满 swap 会被本护栏
-    按「完整模型 25.8GB 装不下」误拒，而实际是装得下的。只扣显存侧：RAM 侧那份
-    照算（换出层仍要占内存，且是**锁定**的，另有 check_pinned_budget 单独把关）。
+    ``vram_discount_ratio``：**不会进显存**的那部分权重占全模型参数的**比例**。
+    block swap 把末尾 N 层留在内存，这些权重永远不上卡 —— 不扣的话，16GB 卡开满
+    swap 会被本护栏按「完整模型装不下」误拒，而实际是装得下的。只扣显存侧：RAM
+    侧照算（换出层仍占内存，且是**锁定**的，另有 check_pinned_budget 把关）。
+
+    为什么是比例而不是字节数：``need`` 来自权重文件的**实际**大小，fp8 checkpoint
+    只有 bf16 的一半。若折扣按计算 dtype 的字节数算，fp8 场景会折扣过头（need
+    13GB 减掉按 bf16 估的 11.3GB → 以为只要 1.7GB，实际常驻 7.2GB），护栏形同
+    虚设。按比例乘文件实际大小，两种精度都正确。
 
     ``enabled`` 来自用户配置（Settings → 显存策略）；查询失败静默放行。
     """
@@ -118,7 +123,8 @@ def check_load_budget(
     need = _file_bytes(weight_paths)
     if need <= 0:
         return
-    vram_need = max(need - max(vram_discount_bytes, 0), 0)
+    ratio = min(max(vram_discount_ratio, 0.0), 1.0)
+    vram_need = int(need * (1.0 - ratio))
 
     avail = available_ram_bytes()
     if avail is not None and avail < need + _RAM_BASE_BYTES:

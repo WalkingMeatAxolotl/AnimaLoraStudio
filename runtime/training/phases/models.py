@@ -50,21 +50,22 @@ def _resolve_paths(ctx: TrainingContext) -> None:
         args.reg_data_dir = resolve_path_best_effort(reg_data_dir, bases)
 
 
-def _swap_vram_discount(ctx: TrainingContext) -> int:
-    """开 block swap 时不会进显存的权重字节数（预算折扣，见 check_load_budget）。
+def _swap_vram_discount(ctx: TrainingContext) -> float:
+    """开 block swap 时不会进显存的权重**比例**（预算折扣，见 check_load_budget）。
 
+    比例而非字节：fp8 与 bf16 文件大小差一倍，按字节折扣会在 fp8 场景折扣穿。
     族未实现估算就返回 0（护栏退化成保守，不会误放行）。
     """
     blocks_to_swap = int(getattr(ctx.args, "blocks_to_swap", 0) or 0)
     if blocks_to_swap <= 0:
-        return 0
-    estimate = getattr(ctx.family, "estimate_swapped_bytes", None)
-    if estimate is None:
-        return 0
+        return 0.0
+    ratio_fn = getattr(ctx.family, "swapped_param_ratio", None)
+    if ratio_fn is None:
+        return 0.0
     try:
-        return int(estimate(blocks_to_swap, ctx.dtype))
+        return float(ratio_fn(blocks_to_swap))
     except Exception:  # noqa: BLE001
-        return 0
+        return 0.0
 
 
 def _load_dit(ctx: TrainingContext) -> None:
@@ -287,7 +288,7 @@ def run(ctx: TrainingContext) -> None:
             getattr(ctx.args, "text_encoder_path", ""),
         ],
         stage="训练模型加载",
-        vram_discount_bytes=_swap_vram_discount(ctx),
+        vram_discount_ratio=_swap_vram_discount(ctx),
     )
     _load_dit(ctx)
     _load_vae(ctx)
@@ -307,7 +308,7 @@ def finish(ctx: TrainingContext) -> None:
         True,
         weight_paths=[getattr(ctx.args, "transformer_path", "")],
         stage="训练模型加载（Transformer）",
-        vram_discount_bytes=_swap_vram_discount(ctx),
+        vram_discount_ratio=_swap_vram_discount(ctx),
     )
     _load_dit(ctx)
     _inject_adapter(ctx)

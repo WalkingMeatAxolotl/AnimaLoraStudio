@@ -272,30 +272,53 @@ def _swapped_block_prefixes(config: Krea2Config, blocks_to_swap: int) -> tuple[s
     return tuple(f"blocks.{i}." for i in range(first, config.layers))
 
 
+def _swapped_param_counts(
+    blocks_to_swap: int, config: Krea2Config,
+) -> tuple[int, int]:
+    """(换出层参数量, 全模型参数量)。meta 模型数参数，不读盘、不占显存。"""
+    prefixes = _swapped_block_prefixes(config, blocks_to_swap)
+    with torch.device("meta"):
+        probe = SingleStreamDiT(config)
+    swapped = total = 0
+    for name, param in probe.named_parameters():
+        total += param.numel()
+        if prefixes and name.startswith(prefixes):
+            swapped += param.numel()
+    return swapped, total
+
+
+def swapped_param_ratio(
+    blocks_to_swap: int, *, config: Krea2Config = KREA2_CONFIG,
+) -> float:
+    """换出层占全模型参数的比例 —— **显存预算折扣用这个，不要用字节数**。
+
+    折扣必须 dtype 无关：`check_load_budget` 的 need 来自权重文件实际大小，
+    fp8 checkpoint 只有 bf16 的一半。若折扣按 bf16 字节算，会把 fp8 场景的
+    需求折扣过头（need 13GB 减掉 11.3GB → 以为只要 1.7GB，实际常驻 7.2GB），
+    护栏就形同虚设。按比例乘文件实际大小则两种精度都正确。
+    """
+    if blocks_to_swap <= 0:
+        return 0.0
+    swapped, total = _swapped_param_counts(blocks_to_swap, config)
+    return (swapped / total) if total else 0.0
+
+
 def estimate_swapped_bytes(
     blocks_to_swap: int,
     dtype: torch.dtype,
     *,
     config: Krea2Config = KREA2_CONFIG,
 ) -> int:
-    """换出层的权重字节数估算（meta 模型数参数，不读盘、不占显存）。
+    """换出层的权重字节数（**pinned 内存预算专用**）。
 
-    两处用它：加载前的显存预算折扣（这些字节永不上卡）、pinned 内存预算。
-    fp8 底模实际更小，按 ``dtype`` 估是**高估**，护栏方向安全。
+    这里按计算 dtype 估，对 fp8 底模是高估 —— 对 pinned 预算而言高估是安全方向
+    （提前拒绝，不会让用户在锁定内存上翻车）。显存折扣不能用它，见
+    ``swapped_param_ratio`` 的说明。
     """
     if blocks_to_swap <= 0:
         return 0
-    prefixes = _swapped_block_prefixes(config, blocks_to_swap)
-    if not prefixes:
-        return 0
-    with torch.device("meta"):
-        probe = SingleStreamDiT(config)
-    element = torch.empty(0, dtype=dtype).element_size()
-    return sum(
-        param.numel() * element
-        for name, param in probe.named_parameters()
-        if name.startswith(prefixes)
-    )
+    swapped, _total = _swapped_param_counts(blocks_to_swap, config)
+    return swapped * torch.empty(0, dtype=dtype).element_size()
 
 
 def _check_swap_budget(
