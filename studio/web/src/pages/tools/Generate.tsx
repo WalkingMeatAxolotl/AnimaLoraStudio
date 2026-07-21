@@ -660,7 +660,10 @@ export default function GeneratePage() {
       // 跟 dispatch 一起送 snapshot 给 server：image_done 时塞进加密 cache
       // payload header（save=false）+ list_index 时返还回填用。落盘 save=true
       // 分支仍用各自 saveSingleSamples/saveXYMatrix 自己构造；两边字段对齐。
-      const snapshotLoras: SnapshotLora[] = loras.map((l) => ({
+      // snapshot 记录实际送进 daemon 的 LoRA，而不是 sidebar 原始桶。XY 构建会
+      // 丢弃未被轴引用的孤儿 anchor；继续从 loras 取会让 PNG 声称用了实际未
+      // 加载的资源，也会把错误 hash 交给 Civitai。
+      const snapshotLoras: SnapshotLora[] = loraConfigs.map((l) => ({
         name: loraBasename(l.path),
         scale: l.scale,
         project_id: l.project_id ?? null,

@@ -93,6 +93,12 @@ View tasks on the **Queue** page; open **task detail** for logs / monitoring / o
 
 After training, the sidebar **Test** page runs single-image / XY matrix / inference daemon for LoRA evaluation. Prompts can be pulled directly from the training set, eliminating round trips to ComfyUI.
 
+When Settings → Testing → Save test images is enabled, newly saved single images and
+XY cell PNGs include A1111 / Civitai-compatible metadata: the effective prompt,
+sampling parameters, base model, VAE, LoRA weights, and resource SHA256 hashes. An
+XY composite represents multiple parameter sets, so its full external metadata is
+kept on the individual cell PNGs while the composite retains Studio's structured data.
+
 The LoRA weights produced are already in `lora_unet_*` format and can be **dropped directly into ComfyUI** without any conversion.
 
 ## Next

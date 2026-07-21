@@ -93,6 +93,11 @@ python tools/download_models.py --modelscope      # 走魔搭社区
 
 训完后侧栏 **测试**：跑单图 / XY 矩阵 / 推理 daemon 评测 LoRA，prompt 可从训练集直接拉，不用切 ComfyUI 反复测。
 
+开启 Settings → Testing → 保存测试图片后，新落盘的单图与 XY cell PNG 会携带
+A1111 / Civitai 兼容 metadata，包括实际 prompt、采样参数、底模、VAE、LoRA
+权重与资源 SHA256。XY 合成图包含多组参数，因此只保留 Studio 的结构化参数；
+完整的外部兼容 metadata 写在每个 cell 原图中。
+
 输出的 LoRA 权重已经是 `lora_unet_*` 格式，**直接拖进 ComfyUI 即可**，不需要任何转换。
 
 ## 进一步
