@@ -49,13 +49,13 @@ def fork_preset_for_version_with_warnings(
     """从全局 preset 复制一份进 version 私有 config，返回兼容性警告。"""
     src, dropped, defaulted = presets_io.read_preset_with_warnings(src_preset_name)
     new_data = deepcopy(src)
-    new_data.update(version_config.project_specific_overrides(project, version))
+    new_data.update(version_config.initial_project_field_values(project, version))
     if _auto_sync_paths():
         # 按 preset 声明的族取路径——krea2 preset 覆成 anima 路径就是把 config 改坏
         family = str(new_data.get("model_family") or "anima")
         new_data.update(model_downloader.default_paths_for_new_version(family=family))
     version_config.write_version_config(
-        project, version, new_data, force_project_overrides=True
+        project, version, new_data, initialize_project_fields=True
     )
     return version_config.read_version_config(project, version), dropped, defaulted
 

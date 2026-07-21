@@ -666,8 +666,9 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
     psf = sorted(version_config.PROJECT_SPECIFIC_FIELDS)
 
     def _psd(family: str) -> dict[str, Any]:
+        """这些字段「重新初始化会得到的值」—— 前端据此渲染「恢复默认」入口。"""
         return {
-            **version_config.project_specific_overrides(project, ver),
+            **version_config.initial_project_field_values(project, ver),
             **model_downloader.default_paths_for_new_version(family=family),
         }
 
@@ -732,16 +733,13 @@ def put_version_config_endpoint(
 ) -> dict[str, Any]:
     """直接写 version 私有 config（全量替换）。
 
-    PP10.4：项目特定字段（data_dir / output_dir / output_name 等）**不**强制
-    覆盖。fork_preset 时已经预填好；用户在 Train 页可以自由改（例如
-    `resume_lora` 接续训练、自定义 output_name）。改坏了再换一次预设回到
-    默认。
+    项目特定字段（data_dir / output_dir / output_name 等）**不**回填：创建 config
+    时已填好初值，此后归用户所有（改 output_name、填 resume_lora 接续训练、指定
+    自己的模型路径）。改坏了再换一次预设回到默认。
     """
     project, ver = _project_and_version_or_404(pid, vid)
     try:
-        version_config.write_version_config(
-            project, ver, body, force_project_overrides=False,
-        )
+        version_config.write_version_config(project, ver, body)
         cfg = version_config.read_version_config(project, ver)
     except version_config.VersionConfigError as exc:
         raise ValidationError(
@@ -818,18 +816,9 @@ def enqueue_version_training(
             "Training configuration is not set for this version",
             code="version.config_missing", http_status=400,
         )
+    # 入队**不写** config：yaml 里的值就是用户在 Train 页看到并保存的值，
+    # trainer 子进程直接读它。见 docs/design/version-config-ownership.md。
     cfg_path = version_config.version_config_path(project, ver)
-    # auto_sync_paths=ON：入队时把全局模型路径同步落盘——trainer 子进程
-    # 直接读 yaml（不经 studio 读取面的 overlay），全局 selected /
-    # selected_te 切换后训练必须用当前值（Train 页字段锁定并承诺
-    # 「自动 · 全局设置」）。OFF 时 read 不 overlay，写回幂等。
-    try:
-        synced = version_config.read_version_config(project, ver)
-        version_config.write_version_config(
-            project, ver, synced, force_project_overrides=True,
-        )
-    except version_config.VersionConfigError:
-        pass  # 坏 config 由下游校验报错，不在此处中断
     scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:

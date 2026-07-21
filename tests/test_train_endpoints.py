@@ -70,11 +70,11 @@ def test_get_config_no_config_returns_project_specific_defaults(
     assert body["has_config"] is False
     defaults = body.get("project_specific_defaults")
     assert defaults is not None, "缺 project_specific_defaults"
-    # 项目特定路径填好了（reg 不存在时 reg_data_dir 是 None）
+    # 项目特定路径填好了（reg_data_dir 无条件填，不看 reg 是否已 build）
     assert defaults["data_dir"].endswith("train")
     assert defaults["output_dir"].endswith("output")
     assert defaults["output_name"], "output_name 不能为空"
-    assert defaults["reg_data_dir"] is None  # reg 还没 build
+    assert defaults["reg_data_dir"].endswith("reg")
     assert defaults["resume_lora"] is None
     # 全局模型路径也填好了（绝对路径，from secrets.models.root）
     assert defaults["transformer_path"], "transformer_path 应填默认模型路径"
@@ -317,6 +317,42 @@ def test_enqueue_creates_task_with_ids_and_config_path(
     assert task["version_id"] == vid
     assert task["config_path"] and task["config_path"].endswith("config.yaml")
     # ADR-0007 PR-5: version.status 由 supervisor 在 spawn 时推 training；enqueue 时仍 preparing
+
+
+def test_enqueue_does_not_rewrite_config(client: TestClient, env) -> None:
+    """issue #458 回归：入队是纯消费，一个字节都不改 config.yaml。
+
+    自定义 output_name / resume_lora 曾在入队瞬间被 project 默认值覆盖
+    （output_name 被报为 bug，resume_* 静默清空无人报）。
+    """
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl", lora_rank=64)
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+    cfg = client.get(f"/api/projects/{pid}/versions/{vid}/config").json()["config"]
+    cfg["output_name"] = "我的模型名"
+    cfg["resume_lora"] = "/some/lora.safetensors"
+    assert client.put(
+        f"/api/projects/{pid}/versions/{vid}/config", json=cfg
+    ).status_code == 200
+
+    from studio.services import version_config
+    with db.connection_for(env["db"]) as conn:
+        cfg_path = version_config.version_config_path(
+            projects.get_project(conn, pid), versions.get_version(conn, vid)
+        )
+    before = cfg_path.read_bytes()
+
+    r = client.post(f"/api/projects/{pid}/versions/{vid}/queue")
+    assert r.status_code == 200, r.text
+    assert Path(r.json()["config_path"]) == cfg_path
+
+    assert cfg_path.read_bytes() == before, "入队重写了 config.yaml"
+    after = client.get(f"/api/projects/{pid}/versions/{vid}/config").json()["config"]
+    assert after["output_name"] == "我的模型名"
+    assert after["resume_lora"] == "/some/lora.safetensors"
 
 
 def test_enqueue_rejects_active_task(client: TestClient, env) -> None:
