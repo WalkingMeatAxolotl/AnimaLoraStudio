@@ -823,6 +823,15 @@ export interface FamilySwitchResponse {
   changes: FamilySwitchChange[]
 }
 
+/** Train / 预设页模型路径字段的 dropdown 候选（GET /api/models/path-choices）。
+ * 只含磁盘上已就绪的资产；`group` / `note` 是翻译 id，不是显示文案。 */
+export interface ModelPathChoice {
+  label: string
+  path: string
+  group: 'official' | 'custom'
+  note: string
+}
+
 export interface ModelsCatalog {
   models_root: string
   anima_main: FamilyMainCatalog
@@ -2093,6 +2102,11 @@ export const api = {
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   /** 当前 Settings 算出的 4 个模型字段绝对路径。预设页 reset / 新建用。 */
   getModelPathDefaults: () => req<Record<string, string>>('/api/models/path-defaults'),
+  /** 模型路径字段的 dropdown 候选（按族）。候选怎么算是后端族知识。 */
+  getModelPathChoices: (family: string) =>
+    req<{ choices: Record<string, ModelPathChoice[]> }>(
+      `/api/models/path-choices?family=${encodeURIComponent(family)}`,
+    ),
   /** YAML 预览（R4）：当前表单 config → 与保存后落盘文件同一序列化路径的
    * yaml 文本。纯计算不落盘；tolerant 修复语义与保存一致。 */
   previewConfigYaml: (config: ConfigData) =>

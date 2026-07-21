@@ -197,3 +197,75 @@ def test_secrets_legacy_custom_anima_paths_migrate_to_family_map(tmp_path: Path)
     cfg = ModelsConfig.model_validate({"custom_anima_paths": [path]})
     assert cfg.custom == {"anima": [path]}
     assert cfg.custom_anima_paths == [path]
+
+
+# ---------------------------------------------------------------------------
+# path_choices —— Train 页模型路径 dropdown 候选（刀 2）
+# ---------------------------------------------------------------------------
+
+
+def _touch(p: Path, content: bytes = b"x") -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+
+
+def test_path_choices_only_lists_ready_assets(tmp_path: Path) -> None:
+    """没下载的资产不进候选 —— 选了也训不起来，下载是 Settings 页的职责。"""
+    from studio.services.models.families import anima
+
+    empty = anima.path_choices(tmp_path, ModelsConfig())
+    assert empty["transformer_path"] == []
+    assert empty["vae_path"] == []
+    assert empty["text_encoder_path"] == []
+
+    _touch(anima.anima_main_target(tmp_path, anima.LATEST_ANIMA))
+    _touch(tmp_path / "vae" / "qwen_image_vae.safetensors")
+    for f in anima.QWEN_FILES:
+        _touch(anima.qwen_dir(tmp_path) / f)
+
+    ready = anima.path_choices(tmp_path, ModelsConfig())
+    assert [c["label"] for c in ready["transformer_path"]] == [
+        anima.anima_main_target(tmp_path, anima.LATEST_ANIMA).name
+    ]
+    assert ready["transformer_path"][0]["note"] == "latest"
+    assert ready["transformer_path"][0]["group"] == "official"
+    assert [c["label"] for c in ready["vae_path"]] == ["qwen_image_vae.safetensors"]
+    # 目录型资产：必需文件齐全才算就绪
+    assert len(ready["text_encoder_path"]) == 1
+    assert ready["t5_tokenizer_path"] == []  # T5 文件一个都没放
+
+
+def test_path_choices_includes_registered_custom_models(tmp_path: Path) -> None:
+    custom = tmp_path / "elsewhere" / "my-finetune.safetensors"
+    _touch(custom)
+    missing = tmp_path / "elsewhere" / "deleted.safetensors"
+
+    from studio.services.models.families import anima
+
+    choices = anima.path_choices(
+        tmp_path, ModelsConfig(custom_anima_paths=[str(custom), str(missing)])
+    )
+    assert [(c["label"], c["group"]) for c in choices["transformer_path"]] == [
+        ("my-finetune.safetensors", "custom")
+    ]
+
+
+def test_krea2_path_choices_text_encoder_variants_and_no_t5(tmp_path: Path) -> None:
+    """krea2 的 TE 有 bf16 / fp8 两个候选；T5 不适用 → 空。"""
+    from studio.services.models.families import krea2
+
+    for f in krea2.QWEN3_VL_FILES:
+        _touch(krea2.qwen3_vl_dir(tmp_path) / f)
+    for f in [krea2.QWEN3_VL_FP8_FILE, *krea2.QWEN3_VL_FP8_SMALL_FILES]:
+        _touch(krea2.qwen3_vl_fp8_dir(tmp_path) / f)
+
+    choices = krea2.path_choices(tmp_path, ModelsConfig())
+    assert [c["note"] for c in choices["text_encoder_path"]] == ["bf16", "fp8"]
+    assert choices["t5_tokenizer_path"] == []
+
+
+def test_path_choices_registry_dispatch_rejects_unknown_family() -> None:
+    from studio.services.models import path_choices
+
+    with pytest.raises(ValueError, match="anima"):
+        path_choices(family="no-such-family")

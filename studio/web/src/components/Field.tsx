@@ -4,6 +4,7 @@ import type { SchemaProperty } from '../api/client'
 import { useProjectCtx } from '../context/ProjectContext'
 import { controlKind, fieldLabel, schemaEnumLabel } from '../lib/schema'
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea'
+import ModelPathPicker from './ModelPathPicker'
 import PathPicker from './PathPicker'
 import ResumeFieldPicker from './ResumeFieldPicker'
 
@@ -24,6 +25,9 @@ interface Props {
   /** path 字段右侧额外按钮槽（如「↺ 重置为全局默认」）。仅对 string/path
    * 字段渲染；其他类型字段忽略。 */
   suffix?: React.ReactNode
+  /** 当前 config 的 model_family（由 SchemaForm 从 values 传下来）。4 个模型
+   * 路径字段据此拉本族的 dropdown 候选；缺省时不渲染「选择模型」入口。 */
+  modelFamily?: string
   /** select 的可见选项覆盖（option_show_when 过滤后的 enum 子集，由
    * SchemaForm 按当前 values 计算）。缺省渲染 prop.enum 全量。 */
   enumOptions?: unknown[]
@@ -58,7 +62,7 @@ const FieldHint = ({ children }: { children: React.ReactNode }) => (
 /** 单个表单字段，按 control kind 分发渲染。 */
 export default function Field({
   name, prop, value, onChange, disabled = false, hint, descriptionOverride, suffix,
-  enumOptions, disabledEnumOptions, disabledOptionHint,
+  modelFamily, enumOptions, disabledEnumOptions, disabledOptionHint,
 }: Props) {
   const { t } = useTranslation()
   const kind = controlKind(prop)
@@ -239,6 +243,7 @@ export default function Field({
       disabled={disabled}
       hintNode={hintNode}
       suffix={suffix}
+      modelFamily={modelFamily}
     />
   )
 }
@@ -549,15 +554,25 @@ interface PathFieldProps {
   hintNode?: React.ReactNode
   /** 输入行右侧额外按钮槽（如重置按钮）。 */
   suffix?: React.ReactNode
+  /** 当前 config 的 model_family —— 4 个模型路径字段据此拉 dropdown 候选。 */
+  modelFamily?: string
 }
+
+/** 有「选择模型」dropdown 的 4 个字段（候选内容由后端按族给）。 */
+const MODEL_PATH_FIELDS = [
+  'transformer_path', 'vae_path', 'text_encoder_path', 't5_tokenizer_path',
+]
 
 function PathStringField({
   name, label, kind, help, value, onChange, disabled = false, hintNode, suffix,
+  modelFamily,
 }: PathFieldProps) {
   const { t } = useTranslation()
   const [picking, setPicking] = useState(false)
+  const [modelPicking, setModelPicking] = useState(false)
   const text = value === null || value === undefined ? '' : String(value)
   const browseBtnRef = useRef<HTMLButtonElement | null>(null)
+  const modelBtnRef = useRef<HTMLButtonElement | null>(null)
   const projectCtx = useProjectCtx()
 
   // resume_state / resume_lora：走项目内语义 picker（dropdown），用户看不到深路径。
@@ -566,6 +581,10 @@ function PathStringField({
     name === 'resume_state' ? 'state' :
     name === 'resume_lora' ? 'lora' : null
   const useResumePicker = kind === 'path' && resumeKind !== null && projectCtx !== null
+
+  // 4 个模型路径：从模型设置里已就绪的资产直接选，免得手填绝对路径。
+  const useModelPicker =
+    kind === 'path' && !!modelFamily && MODEL_PATH_FIELDS.includes(name)
 
   return (
     <div className="py-1.5 relative">
@@ -584,11 +603,22 @@ function PathStringField({
           disabled={disabled}
           className={'input' + (kind === 'path' ? ' input-mono' : '')} style={fieldStyle(disabled)}
         />
+        {useModelPicker && (
+          <button
+            ref={modelBtnRef}
+            type="button"
+            onClick={() => { setModelPicking((p) => !p); setPicking(false) }}
+            disabled={disabled}
+            className="btn btn-secondary btn-sm shrink-0"
+          >
+            {t('field.pickModel')}
+          </button>
+        )}
         {kind === 'path' && (
           <button
             ref={browseBtnRef}
             type="button"
-            onClick={() => setPicking((p) => !p)}
+            onClick={() => { setPicking((p) => !p); setModelPicking(false) }}
             disabled={disabled}
             className="btn btn-secondary btn-sm shrink-0"
           >
@@ -618,6 +648,17 @@ function PathStringField({
             setPicking(false)
           }}
           onClose={() => setPicking(false)}
+        />
+      )}
+      {/* 4 个模型路径：贴字段的 dropdown，列模型设置里已就绪的资产 */}
+      {useModelPicker && modelPicking && !disabled && (
+        <ModelPathPicker
+          field={name}
+          family={modelFamily!}
+          value={text}
+          onChange={onChange as (v: string) => void}
+          onClose={() => setModelPicking(false)}
+          anchorRef={modelBtnRef}
         />
       )}
     </div>

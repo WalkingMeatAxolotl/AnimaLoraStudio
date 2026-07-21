@@ -46,3 +46,15 @@ def default_paths_for_new_version(
     把 config 里的 `model_family` 传进来；未知族抛 ValueError（列已注册项）。
     """
     return get_assets(family).default_paths_for_new_version(base_model)
+
+
+def path_choices(*, family: str = "anima") -> dict[str, list[dict[str, Any]]]:
+    """按族解析 4 个模型路径字段的 dropdown 候选（registry 派发）。
+
+    族知识只此一处：前端拿到的是「label + 绝对路径」的现成列表，不需要知道
+    哪个字段该从 catalog 的哪个区块拼候选。未知族抛 ValueError。
+    """
+    from ..paths import models_root
+    from .... import secrets
+
+    return get_assets(family).path_choices(models_root(), secrets.load().models)

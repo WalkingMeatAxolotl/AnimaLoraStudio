@@ -306,6 +306,53 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
     }
 
 
+def path_choices(root: Path, models_cfg: Any) -> dict[str, list[dict[str, Any]]]:
+    """Train 页 4 个模型路径字段的 dropdown 候选（Krea 2 族）。
+
+    口径同 Anima：只列磁盘上已就绪的，label 取 basename。文本编码器有 bf16 /
+    官方 fp8 两个目录，各自就绪才列（note 标出是哪一版）。Krea 2 不用 T5
+    tokenizer（`default_paths_for_new_version` 给空串），候选也为空。
+    """
+    transformer: list[dict[str, Any]] = []
+    for name in KREA2_VARIANTS:
+        target = krea2_main_target(root, name)
+        if target.exists():
+            transformer.append({
+                "label": target.name,
+                "path": str(target),
+                "group": "official",
+                "note": "latest" if name == LATEST_KREA2 else "",
+            })
+    for registered in models_cfg.custom.get("krea2", []):
+        target = Path(str(registered)).expanduser()
+        if target.exists():
+            transformer.append({
+                "label": target.name, "path": str(target),
+                "group": "custom", "note": "",
+            })
+
+    text_encoder: list[dict[str, Any]] = []
+    for variant, d, files in (
+        ("bf16", qwen3_vl_dir(root), QWEN3_VL_FILES),
+        ("fp8", qwen3_vl_fp8_dir(root), [QWEN3_VL_FP8_FILE, *QWEN3_VL_FP8_SMALL_FILES]),
+    ):
+        if all((d / f).exists() for f in files):
+            text_encoder.append({
+                "label": d.name, "path": str(d), "group": "official", "note": variant,
+            })
+
+    vae = qwen_image_vae_target(root)
+    return {
+        "transformer_path": transformer,
+        "vae_path": (
+            [{"label": vae.name, "path": str(vae), "group": "official", "note": ""}]
+            if vae.exists() else []
+        ),
+        "text_encoder_path": text_encoder,
+        "t5_tokenizer_path": [],
+    }
+
+
 class _Krea2Assets:
     family_id = "krea2"
     display_name = "Krea 2"
@@ -316,6 +363,7 @@ class _Krea2Assets:
     transformer_path_for = staticmethod(krea2_transformer_path_for)
     selected_variant = staticmethod(selected_krea2_variant)
     catalog_sections = staticmethod(catalog_sections)
+    path_choices = staticmethod(path_choices)
     is_distilled_path = staticmethod(is_distilled_path)
 
 

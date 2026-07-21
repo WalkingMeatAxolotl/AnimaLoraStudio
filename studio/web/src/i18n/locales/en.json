@@ -269,10 +269,22 @@
     "pathHintAuto": "(path)",
     "browse": "Browse",
     "browseProject": "Project files",
+    "pickModel": "Pick model",
     "multilineHint": "(one per line)",
     "useGlobal": "— Use global settings —",
     "yes": "Yes",
     "no": "No"
+  },
+  "modelPicker": {
+    "loading": "Loading…",
+    "empty": "No downloaded models available — download one in Settings, or type a path directly",
+    "group": {
+      "official": "Official",
+      "custom": "Custom"
+    },
+    "note": {
+      "latest": "latest"
+    }
   },
   "schema": {
     "fieldCount": "{{n}} items",

@@ -269,10 +269,22 @@
     "pathHintAuto": "（路径）",
     "browse": "浏览",
     "browseProject": "从项目选择",
+    "pickModel": "选择模型",
     "multilineHint": "（每行一项）",
     "useGlobal": "— 使用全局设置 —",
     "yes": "是",
     "no": "否"
+  },
+  "modelPicker": {
+    "loading": "加载中…",
+    "empty": "模型设置里还没有已下载的可选模型 —— 去设置页下载，或在输入框手填路径",
+    "group": {
+      "official": "官方",
+      "custom": "自定义"
+    },
+    "note": {
+      "latest": "最新"
+    }
   },
   "schema": {
     "fieldCount": "{{n}} 项",
