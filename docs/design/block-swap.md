@@ -441,9 +441,36 @@ LoRA** —— 训练会静默地什么都没学到。
 
 ### 9.2 分刀
 
-1. **刀 1（core）**：family 无关的 swap 组件 + 单测。不接线，不改任何现有行为。
-2. **刀 2（K2 接线）**：loader 支持部分 block 权重留 CPU pinned；配置字段
-   `blocks_to_swap`（默认 0，B11）；pinned 预算护栏（B6 报错语义）。
-3. **刀 3（fp8 叠加 + 12/16GB 验收）**：B7/B12。
+1. ✅ **刀 1（core）**：`runtime/training/block_swap.py` 的 `PinnedBlockSwap` + 单测。
+2. ✅ **刀 2（K2 接线）**：能力位 + `blocks_to_swap` 字段（默认 0）+ pinned 预算护栏
+   + loader/family/phases 接线。
+3. ⬜ **刀 3（fp8 叠加 + 12/16GB 真机验收）**：B7/B12。需要用户的 16GB/12GB 卡。
 
 Anima 接线按 B3 留到 K2 验证成熟之后。
+
+### 9.3 接线方式：forward hook（刀 2 实施结论，优于原计划）
+
+原计划是「在 family 的 forward 循环里插预取钩子」。实际实施取**给每个换出 block
+注册 forward pre/post hook**（`PinnedBlockSwap.attach()`），更好：
+
+- **完全不改 `modeling/krea2/`** —— 那里对 ComfyUI 有逐字 parity 要求（§7.1）。
+- **反向自动成立**：开 gradient checkpointing 后，反向阶段会重算前向，即再次调用
+  block 的 forward → pre-hook 随之触发，按逆序换回权重。§2.4 说的「重算与反向在同
+  一驻留窗口内完成」在这里是自然结果，**不需要为反向单独编排时序**。
+  该结论由 `tests/test_block_swap.py::test_attach_with_gradient_checkpointing_backward`
+  实测钉死（与全常驻的梯度逐位一致），不是推断。
+- Anima 接线因此也只是「构造 + attach」，连它的手工展开循环都不必改。
+
+### 9.4 实施中实测抓出的三个坑（都已有回归测试）
+
+1. **`_rebind` 不能遍历 `named_parameters()`**：构造之后新增的参数（LoRA 在 block
+   内建子模块的情形）会让 `buf[name]` 直接 KeyError。只能重绑构造时登记过的名字。
+2. **可训练参数不能被换出**：LoRA 参数是优化器的目标，被搬走会破坏训练；且相对底模
+   极小、没有换出价值。组件按 `requires_grad` 跳过，只管理冻结的基权重。
+3. **fp8 `weight_scale` 的 device**：`patch_fp8_linears` 原本让 scale 跟随
+   `module.weight.device`，而换出层的权重在 patch 时正在 CPU → scale 落 CPU，前向时
+   权重已被搬到 GPU，`weight * scale` device 不匹配（`scale.to()` 只改 dtype 不改
+   device）。已加 `device` 参数，scale 恒放计算设备（per-layer 标量，开销可忽略）。
+
+另一条已在设计中避开、但值得记：**loader 必须直接把末尾 N 层载到 CPU pinned**，而
+不是「全量上卡再搬下来」—— 后者峰值仍等于完整模型，B12 的 12/16GB 目标不成立。
