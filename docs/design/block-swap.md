@@ -446,7 +446,7 @@ LoRA** —— 训练会静默地什么都没学到。
    + loader/family/phases 接线。
 3. 🔄 **刀 3（fp8 叠加 + 12/16GB 验收）**：B7/B12。代码侧完成（fp8 组合已端到端
    验证、预算折扣、可观测性），**真机验收待用户的 16GB/12GB 卡**。
-4. ⬜ **刀 4（推理侧接线）**：B4 的欠账，见 §9.6。
+4. ✅ **刀 4（推理侧接线）**：B4 欠账已清偿，见 §9.6。
 
 Anima 接线按 B3 留到 K2 验证成熟之后。
 
@@ -514,7 +514,7 @@ B12 目标在 32GB 上的外推已达成，待小卡实测确认。
 注意 `reserved`(10.2GB) 高于峰值 `alloc`(8.4GB)：32GB 卡上 allocator 乐得多留，
 小卡上会主动回收 —— 小卡实测值应更贴近 8.4GB 而非 13.4GB。
 
-### 9.6 推理侧尚未接线（B4 欠账）
+### 9.6 推理侧接线（刀 4，已完成）
 
 B4 裁定「推理侧同期做」、§6 也写了落点，但 §9.2 分刀时只切了训练侧三刀，推理侧漏了。
 组件是 family 无关的、`attach()` 也通用，`load_dit` 已带 `blocks_to_swap` 参数
@@ -531,8 +531,27 @@ fp8 那条只要**顺序对**就正确：loader 落 CPU pinned → `apply_loras`
 可算 —— 已验证：`pin_memory` / H2D 逐位一致 / `to(bf16)` dequant / `fp32→fp8` 回写
 全部可用。
 
-另需注意：推理每个 step 都要搬一遍全模型（§4），30 步 = 30 遍，swap 对象应随 daemon
-的模型缓存常驻、跨 step 复用，不要每步重建。
+另需注意：推理每个 step 都要搬一遍全模型（§4），30 步 = 30 遍，swap 对象随 daemon
+的模型缓存常驻、跨 step 复用，不每步重建。
+
+**实施结论**：daemon 是按「整个模型常驻 GPU」写的，有三个训练侧没有的敌对交互，
+都已处理：
+
+| 交互 | 后果 | 处理 |
+|---|---|---|
+| `_move_runtime_to_device` 的一刀切 `module.to(device)` | 连 CPU pinned 主副本一起搬上卡 → swap 白做，且瞬时占用 = 完整模型（小卡 OOM） | `move_module_excluding` 跳过被管理张量。实测两种时序（刚加载 / 跑过前向）均零显存消耗 |
+| fp8 LoRA merge 写 `module.weight` | 跑过前向后 `.data` 指向会被下一层覆盖的 GPU 槽位 → merge **静默丢失** | `apply_loras` 开头 `restore_masters()`，delta 落主副本 |
+| `unload` 未释放 pinned | 页锁定内存不会被除 GC 外任何机制回收 → 常驻泄漏 11GB+ | `unload` 里 `detach()` + 置空 |
+
+`blocks_to_swap` 进 `ModelCache` 身份比较（换出哪些层是 loader 期决定的，改了必须
+重载 DiT）；显存预算走与训练侧同款的比例折扣。
+
+实现踩坑：**张量身份判定必须用 `data_ptr()` 不能用 `id()`** —— `param.data` 每次访问
+返回新的 Python 包装对象，按 `id` 比对会全部漏判（测试直接抓到）。
+
+另记一条易踩语义：**换出层的权重只在自己的 forward 窗口内有效**。一次 pass 结束后
+它的 `.data` 指向的槽位早被后面的层覆盖（rel 0 与 rel 2 共用槽 0）。窗口外要读或改
+权重必须先 `restore_masters()`。已写进模块 docstring + 专门一条测试。
 
 ### 9.3 接线方式：forward hook（刀 2 实施结论，优于原计划）
 
