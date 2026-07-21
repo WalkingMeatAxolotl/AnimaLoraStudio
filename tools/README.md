@@ -85,9 +85,10 @@ venv\Scripts\python tools\vram_trace.py --pid <daemon-pid> --interval-ms 20
 ### `block_swap_probe.py`
 
 block swap（逐层权重换入换出）的可行性 Gate-0 探针，配套 `docs/design/block-swap.md`。
-六段依次测：PCIe 链路是否降级、pinned/pageable 有效带宽、真实 krea2
+七段依次测：PCIe 链路是否降级、pinned/pageable 有效带宽、真实 krea2
 `SingleStreamBlock` 的前向/反向耗时、遮蔽判据、真双 stream swap 循环 vs 全常驻的
-wall clock 差、以及持续负载下的温度/功耗/PCIe replay 增量/内存漂移。
+wall clock 差（前向口径）、持续负载下的温度/功耗/PCIe replay 增量/内存漂移，
+以及 `G` 段的训练口径端到端（gradient checkpointing + 反向逆序预取，交错 A/B）。
 
 ```powershell
 venv\Scripts\python tools\block_swap_probe.py

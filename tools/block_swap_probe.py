@@ -636,6 +636,171 @@ def stage_e(args, compute: dict) -> dict:
     }
 
 
+# ------------------------------------------------------------------ G 训练口径
+def stage_g(args, compute: dict) -> dict:
+    """训练口径端到端：gradient checkpointing + 反向逆序预取（B10）。
+
+    E 段只测前向，训练口径此前是由 D 段公式外推的（doc §5.3-1）。本段实测
+    完整一步的时序，模拟的是 **LoRA + gradient checkpointing** 这个本仓唯一
+    的真实场景：
+
+      前向  底模 frozen、不保存中间激活（checkpoint 语义），逐 block 换入
+      反向  逆序 N-1→0，每个 block 换入后「重算前向 + 反向」在同一驻留窗口
+            内完成（doc §2.4 说的合流），只求 grad_input 不求权重梯度
+
+    数值正确性不在本段范围内（buffer 权重被轮转覆盖，梯度无意义）——只测时序。
+    LoRA 参数本身常驻 GPU 不参与 swap，其计算量相对底模可忽略。
+    """
+    section("G · 训练口径端到端（checkpoint + 反向逆序预取）")
+    import torch
+    from modeling.krea2 import KREA2_CONFIG
+    from modeling.krea2.krea2_modeling import PositionalEncoding, SingleStreamBlock
+
+    device = torch.device("cuda")
+    dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float16
+    cfg = KREA2_CONFIG
+    n = args.swap_blocks
+
+    x0, vec, freqs, _ = _krea2_inputs(
+        cfg, PositionalEncoding, args.resolution, args.batch, device, dtype
+    )
+
+    def make_block(dev):
+        blk = SingleStreamBlock(
+            cfg.features, cfg.heads, cfg.multiplier, cfg.bias, cfg.kvheads
+        ).to(device=dev, dtype=dtype)
+        blk.requires_grad_(False)  # 底模 frozen（LoRA 场景）
+        return blk
+
+    need = compute["param_bytes"] * n / GIB
+    free = torch.cuda.mem_get_info()[0] / GIB
+    print(f"对照组需常驻 {n} block ≈ {need:.1f} GB，当前空闲 {free:.1f} GB")
+    if need + 4 > free:
+        print("显存不足以建立全常驻对照组，请减小 --swap-blocks")
+        return {}
+
+    def step(get_block, after=None):
+        """一步 checkpoint 训练的时序。get_block(i) 返回第 i 层就绪的 module，
+        after(i) 在该层算完后调用（swap 路径用它记录「该 slot 可以被覆盖了」）。"""
+        saved = []
+        h = x0
+        for i in range(n):
+            saved.append(h)
+            with torch.no_grad():
+                h = get_block(i, forward=True)(h, vec, freqs)
+            if after is not None:
+                after(i)
+        grad = torch.ones_like(h)
+        for i in reversed(range(n)):
+            inp = saved[i].detach().requires_grad_(True)
+            with torch.enable_grad():
+                out = get_block(i, forward=False)(inp, vec, freqs)
+            grad = torch.autograd.grad(out, inp, grad)[0]
+            if after is not None:
+                after(i)
+        return grad
+
+    # 两条路径**交错**测量：顺序测会被 GPU 时钟状态差异污染（先跑的那条在冷态
+    # 时钟未 boost）—— 首版顺序测量给出 -2.2% 的荒谬负开销就是这么来的
+    def measure_ab(fn_a, fn_b) -> tuple[list[float], list[float]]:
+        for _ in range(2):
+            fn_a()
+            fn_b()
+        torch.cuda.synchronize()
+        a_samples: list[float] = []
+        b_samples: list[float] = []
+        for _ in range(args.iters):
+            for fn, bucket in ((fn_a, a_samples), (fn_b, b_samples)):
+                start = time.perf_counter()
+                fn()
+                torch.cuda.synchronize()
+                bucket.append(time.perf_counter() - start)
+        return a_samples, b_samples
+
+    # ---- 基线：全常驻 + 同样的 checkpoint 重算语义（与 swap 同时驻留以便交错）
+    resident = [make_block(device) for _ in range(n)]
+
+    def resident_step():
+        return step(lambda i, forward: resident[i])
+
+    # ---- swap：前向顺序预取 + 反向逆序预取
+    cpu_weights = [
+        {k: v.detach().to("cpu").pin_memory() for k, v in blk.state_dict().items()}
+        for blk in resident
+    ]
+
+    buffers = [make_block(device), make_block(device)]
+    buf_params = [dict(b.state_dict()) for b in buffers]
+    copy_stream = torch.cuda.Stream()
+    ready = [torch.cuda.Event() for _ in range(2)]
+    done = [torch.cuda.Event() for _ in range(2)]
+    fetched = [-1, -1]  # 每个 slot 当前装着哪一层，避免重复搬运
+
+    def prefetch(idx: int, slot: int) -> None:
+        """把第 idx 层权重搬进 slot。未 record 过的 done event wait 是 no-op，
+        所以首轮不需要特判。"""
+        if idx < 0 or idx >= n or fetched[slot] == idx:
+            return
+        with torch.cuda.stream(copy_stream):
+            # 该 slot 上一次的计算必须先完成，否则会覆盖正在被读的权重
+            copy_stream.wait_event(done[slot])
+            for key, dst in buf_params[slot].items():
+                dst.copy_(cpu_weights[idx][key], non_blocking=True)
+            ready[slot].record(copy_stream)
+        fetched[slot] = idx
+
+    def get_swapped(i: int, forward: bool):
+        slot = i % 2
+        prefetch(i, slot)                       # 本层（通常已被上一轮预取命中）
+        prefetch(i + 1 if forward else i - 1, (i + 1) % 2 if forward else (i - 1) % 2)
+        torch.cuda.current_stream().wait_event(ready[slot])
+        return buffers[slot]
+
+    def swap_step():
+        # 每步重置：模拟权重不在 GPU 常驻，反向阶段也必须重新搬
+        # （真实实现可复用前向末尾还在位的那两层，此处取保守估计）
+        fetched[0] = fetched[1] = -1
+        return step(get_swapped, after=lambda i: done[i % 2].record(
+            torch.cuda.current_stream()
+        ))
+
+    res_samples, swap_samples = measure_ab(resident_step, swap_step)
+    t_resident = statistics.median(res_samples)
+    t_swap = statistics.median(swap_samples)
+    spread = (
+        statistics.stdev(res_samples) / t_resident * 100
+        if len(res_samples) > 1 else 0.0
+    )
+
+    overhead = (t_swap - t_resident) / t_resident * 100
+    saved_gb = compute["param_bytes"] * n / GIB
+    print(f"全常驻+checkpoint : {t_resident * 1000:.1f} ms / {n} block"
+          f"   (min {min(res_samples) * 1000:.1f}, 抖动 ±{spread:.1f}%)")
+    print(f"block swap        : {t_swap * 1000:.1f} ms / {n} block"
+          f"   (min {min(swap_samples) * 1000:.1f})")
+    print(f"\n训练口径实测开销  : {overhead:+.1f}%")
+    if abs(overhead) < spread:
+        print(f"  ! 开销小于基线自身抖动（±{spread:.1f}%）—— 结论是「在噪声内」，"
+              f"不是精确值")
+    print(f"换来省显存        : {saved_gb:.2f} GB")
+    record("G", "resident_ms", round(t_resident * 1000, 1), "ms", f"{n} blocks")
+    record("G", "swap_ms", round(t_swap * 1000, 1), "ms", f"{n} blocks")
+    record("G", "overhead_pct", round(overhead, 1), "%")
+    record("G", "baseline_spread_pct", round(spread, 1), "%")
+
+    per_block_ms = (t_swap - t_resident) / n * 1000
+    print(f"每 block 额外     : {per_block_ms:+.2f} ms（前向+反向两个驻留窗口合计）")
+    record("G", "per_block_extra_ms", round(per_block_ms, 2), "ms")
+
+    # 不显式 del：resident / buffers 被上面两个闭包持有，函数返回后一并回收
+    return {
+        "overhead": overhead,
+        "t_swap": t_swap,
+        "t_resident": t_resident,
+        "spread": spread,
+    }
+
+
 # ------------------------------------------------------------------ F 稳定性
 def stage_f(args, nvml: Nvml, e_result: dict) -> None:
     """持续负载下的温度 / 功耗 / replay 增量 / 可用 RAM（doc §3.2）。"""
@@ -737,15 +902,19 @@ def main() -> int:
         if "D" in stages and bandwidth and compute:
             stage_d(bandwidth, compute)
         e_result = stage_e(args, compute) if "E" in stages and compute else {}
+        g_result = stage_g(args, compute) if "G" in stages and compute else {}
         if "F" in stages and e_result:
             stage_f(args, nvml, e_result)
 
         section("结论摘要")
         if e_result:
-            print(f"实测开销 {e_result['overhead']:+.1f}% / 省显存 "
-                  f"{compute['param_bytes'] * args.swap_blocks / GIB:.2f} GB "
-                  f"（{args.swap_blocks} block, {args.resolution}²）")
-            print(f"全 {compute['layers']} 层 swap 可省 {compute['total_bytes'] / GIB:.2f} GB")
+            print(f"推理口径（前向）实测开销 {e_result['overhead']:+.1f}%")
+        if g_result:
+            print(f"训练口径（checkpoint+反向逆序）实测开销 {g_result['overhead']:+.1f}%")
+        if compute:
+            print(f"省显存 {compute['param_bytes'] * args.swap_blocks / GIB:.2f} GB "
+                  f"（{args.swap_blocks} block, {args.resolution}²）；"
+                  f"全 {compute['layers']} 层可省 {compute['total_bytes'] / GIB:.2f} GB")
         print("判读见 docs/design/block-swap.md §5 门槛与 §7 开放问题")
 
         if args.out:
