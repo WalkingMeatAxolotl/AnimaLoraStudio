@@ -13,6 +13,7 @@ from pathlib import Path
 from training.context import TrainingContext
 from training.families import resolve_family
 from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
+from training.sysmem import log_vram
 from training.model_loading import (
     find_diffusion_pipe_root,
     resolve_path_best_effort,
@@ -49,6 +50,23 @@ def _resolve_paths(ctx: TrainingContext) -> None:
         args.reg_data_dir = resolve_path_best_effort(reg_data_dir, bases)
 
 
+def _swap_vram_discount(ctx: TrainingContext) -> int:
+    """开 block swap 时不会进显存的权重字节数（预算折扣，见 check_load_budget）。
+
+    族未实现估算就返回 0（护栏退化成保守，不会误放行）。
+    """
+    blocks_to_swap = int(getattr(ctx.args, "blocks_to_swap", 0) or 0)
+    if blocks_to_swap <= 0:
+        return 0
+    estimate = getattr(ctx.family, "estimate_swapped_bytes", None)
+    if estimate is None:
+        return 0
+    try:
+        return int(estimate(blocks_to_swap, ctx.dtype))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _load_dit(ctx: TrainingContext) -> None:
     args = ctx.args
     backend = getattr(args, "attention_backend", "flash_attn")
@@ -82,6 +100,18 @@ def _load_dit(ctx: TrainingContext) -> None:
     from training.sysmem import trim_working_set
 
     trim_working_set()
+    log_vram("DiT 加载后", ctx.device)
+
+
+def _log_train_start_vram(ctx: TrainingContext) -> None:
+    """训练循环开始前的显存基线 —— 判断 blocks_to_swap 实际效果的读数点。"""
+    swap = getattr(ctx, "block_swap", None)
+    if swap is not None:
+        logger.info(
+            "block swap 生效：换出 %d/%d 层，pinned %.2fGB",
+            swap.num_swap, swap.total, swap.pinned_bytes / 1024**3,
+        )
+    log_vram("训练开始前", ctx.device)
 
 
 def _load_vae(ctx: TrainingContext) -> None:
@@ -127,6 +157,7 @@ def _setup_block_swap(ctx: TrainingContext) -> None:
         ctx.model.blocks, blocks_to_swap, ctx.device,
     )
     ctx.block_swap.attach()
+    log_vram("block swap 挂载后", ctx.device)
 
 
 def _inject_adapter(ctx: TrainingContext) -> None:
@@ -256,11 +287,13 @@ def run(ctx: TrainingContext) -> None:
             getattr(ctx.args, "text_encoder_path", ""),
         ],
         stage="训练模型加载",
+        vram_discount_bytes=_swap_vram_discount(ctx),
     )
     _load_dit(ctx)
     _load_vae(ctx)
     _load_text(ctx)
     _inject_adapter(ctx)
+    _log_train_start_vram(ctx)
 
 
 def finish(ctx: TrainingContext) -> None:
@@ -274,9 +307,11 @@ def finish(ctx: TrainingContext) -> None:
         True,
         weight_paths=[getattr(ctx.args, "transformer_path", "")],
         stage="训练模型加载（Transformer）",
+        vram_discount_bytes=_swap_vram_discount(ctx),
     )
     _load_dit(ctx)
     _inject_adapter(ctx)
+    _log_train_start_vram(ctx)
 
 
 def _read_lora_family(path) -> str:

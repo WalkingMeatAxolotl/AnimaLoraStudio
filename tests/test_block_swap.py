@@ -381,6 +381,63 @@ def test_adopts_cpu_weights_without_recopy():
             assert p.data_ptr() == ptrs[id(p)]
 
 
+def test_fp8_base_with_swap_forward_matches_resident():
+    """fp8 底模 + block swap（B7 的核心组合）：走真的 patch_fp8_linears。
+
+    钉死两件事：
+    - fp8 权重能 pin / H2D 搬运（dtype 原样，不 cast）
+    - weight_scale 必须常驻计算设备。它跟随 module.weight.device 的话，换出层
+      patch 时权重在 CPU → scale 落 CPU → 前向时权重已上 GPU，device 不匹配。
+    """
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for p in (root, root / "runtime"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    from training.families.krea2.quant_fp8 import patch_fp8_linears
+
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    dim, n = 32, 6
+
+    class _Fp8Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin = nn.Linear(dim, dim, bias=False)
+
+        def forward(self, x):
+            return x + self.lin(x)
+
+    torch.manual_seed(3)
+    blocks = nn.ModuleList([_Fp8Block() for _ in range(n)]).to(device)
+    blocks.requires_grad_(False)
+    # 转 fp8 存储 + per-layer scale（模拟 fp8_scaled checkpoint）
+    scales = {}
+    for i, b in enumerate(blocks):
+        b.lin.weight.data = b.lin.weight.data.to(torch.float8_e4m3fn)
+        scales[f"{i}.lin"] = torch.tensor(0.5, device=device)
+    patch_fp8_linears(blocks, scales, device=device)
+
+    x = torch.randn(2, dim, device=device, dtype=torch.bfloat16)
+    expected = _run_resident(blocks, x)
+
+    swap = PinnedBlockSwap(blocks, num_swap=4, device=device)
+    swap.attach()
+    got = _run_resident(blocks, x)
+
+    torch.testing.assert_close(got, expected)
+    # scale 全程在 GPU（不随权重下 CPU）
+    for b in blocks:
+        assert b.lin.weight_scale.device.type == "cuda"
+    # 换出层的 fp8 权重主副本确实是 fp8 且 pinned
+    for rel in range(swap.num_swap):
+        for _name, t in swap._cpu_weights[rel].items():
+            assert t.dtype == torch.float8_e4m3fn
+            assert t.is_pinned()
+
+
 def test_allocation_error_carries_context():
     """BlockSwapAllocationError 携带 num_swap/first_swapped/detail（供上层文案）。"""
     _, BlockSwapAllocationError = _import()

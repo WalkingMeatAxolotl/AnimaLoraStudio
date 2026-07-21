@@ -272,6 +272,32 @@ def _swapped_block_prefixes(config: Krea2Config, blocks_to_swap: int) -> tuple[s
     return tuple(f"blocks.{i}." for i in range(first, config.layers))
 
 
+def estimate_swapped_bytes(
+    blocks_to_swap: int,
+    dtype: torch.dtype,
+    *,
+    config: Krea2Config = KREA2_CONFIG,
+) -> int:
+    """换出层的权重字节数估算（meta 模型数参数，不读盘、不占显存）。
+
+    两处用它：加载前的显存预算折扣（这些字节永不上卡）、pinned 内存预算。
+    fp8 底模实际更小，按 ``dtype`` 估是**高估**，护栏方向安全。
+    """
+    if blocks_to_swap <= 0:
+        return 0
+    prefixes = _swapped_block_prefixes(config, blocks_to_swap)
+    if not prefixes:
+        return 0
+    with torch.device("meta"):
+        probe = SingleStreamDiT(config)
+    element = torch.empty(0, dtype=dtype).element_size()
+    return sum(
+        param.numel() * element
+        for name, param in probe.named_parameters()
+        if name.startswith(prefixes)
+    )
+
+
 def _check_swap_budget(
     config: Krea2Config,
     blocks_to_swap: int,
@@ -284,15 +310,10 @@ def _check_swap_budget(
     """
     from training.sysmem import check_pinned_budget
 
-    prefixes = _swapped_block_prefixes(config, blocks_to_swap)
-    with torch.device("meta"):
-        probe = SingleStreamDiT(config)
-    need = 0
-    for name, param in probe.named_parameters():
-        if name.startswith(prefixes):
-            # 实际落盘 dtype 未知时按目标 dtype 估（fp8 会更小，估高不估低）
-            need += param.numel() * torch.empty(0, dtype=dtype).element_size()
-    check_pinned_budget(need, blocks=blocks_to_swap)
+    check_pinned_budget(
+        estimate_swapped_bytes(blocks_to_swap, dtype, config=config),
+        blocks=blocks_to_swap,
+    )
 
 
 def load_krea2_model(

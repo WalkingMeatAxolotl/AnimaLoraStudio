@@ -151,6 +151,12 @@ class Krea2Family:
             path, device, dtype, purpose=purpose, blocks_to_swap=blocks_to_swap,
         )
 
+    def estimate_swapped_bytes(self, blocks_to_swap: int, dtype) -> int:
+        """block swap 换出层的字节数（显存预算折扣用；见 loader 同名函数）。"""
+        from training.families.krea2.loader import estimate_swapped_bytes
+
+        return estimate_swapped_bytes(blocks_to_swap, dtype)
+
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         from training.vae import load_vae
 
