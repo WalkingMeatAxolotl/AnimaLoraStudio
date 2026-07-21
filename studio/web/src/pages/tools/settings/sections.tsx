@@ -1366,6 +1366,24 @@ export function VramPolicySection({
           onChange={(v) => update('generate', 'ram_guard', v)}
         />
       </SettingsField>
+      <SettingsField
+        label={t('settings.vramPolicy.blocksToSwapLabel')}
+        desc={t('settings.vramPolicy.blocksToSwapDesc')}
+        helpTooltip={<p>{t('settings.vramPolicy.blocksToSwapHelp')}</p>}
+      >
+        <input
+          type="number"
+          min={0}
+          max={28}
+          step={1}
+          value={draft.generate.blocks_to_swap ?? 0}
+          onChange={(e) => {
+            const n = Number.parseInt(e.target.value, 10)
+            update('generate', 'blocks_to_swap', Number.isFinite(n) && n > 0 ? n : 0)
+          }}
+          className={`${textInputClass} max-w-24`}
+        />
+      </SettingsField>
     </SettingsSection>
   )
 }
