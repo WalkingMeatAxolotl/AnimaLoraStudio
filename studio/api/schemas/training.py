@@ -67,8 +67,9 @@ class TagJobRequest(BaseModel):
     wd14_overrides: Optional[Wd14Overrides] = None
     cltagger_overrides: Optional[CLTaggerOverrides] = None
     llm_overrides: Optional[LLMTaggerOverrides] = None
-    # 触发词；空串 / None = 不启用。打标时作为第一个 tag prepend 到 caption；
-    # 同时持久化到 version.trigger_word，后续 train 阶段从私有 yaml 读出。
+    # 触发词；空串 / None = 不启用。打标时作为第一个 tag prepend 到 caption，
+    # 并记到 version.trigger_word 供页面回显 —— 它是一次打标操作的参数，不外溢
+    # 到训练 config（采样图要带 trigger 请自己写进 sample prompt）。
     trigger_word: Optional[str] = None
     # 打标范围："all"（默认，train 全部文件夹 + validation）| "validation"（只打
     # held-out 验证集）|  某个 train 子文件夹名（如 "1_data"，只打那一个）。

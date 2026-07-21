@@ -151,19 +151,19 @@ def test_prune_keeps_disable_when_and_plain_fields() -> None:
 
 def test_prune_drops_hidden_fields_at_default() -> None:
     """hidden 字段（UI 永不渲染）等于 schema 默认值时不落盘 —— 终端体验旋钮
-    与空 trigger_word 都属于纯噪音；yaml 缺键后 runtime 落回同一默认值。"""
+    属于纯噪音；yaml 缺键后 runtime 落回同一默认值。"""
     pruned = prune_inactive_fields(_dump())
-    for name in ("loss_curve_steps", "no_progress", "log_every", "trigger_word"):
+    for name in ("loss_curve_steps", "no_progress", "log_every"):
         assert name not in pruned, name
 
 
 def test_prune_keeps_hidden_fields_with_override() -> None:
-    """hidden 字段的非默认值必须保留：裸 CLI 手写覆盖 / Tagging 页写入的触发词。"""
-    pruned = prune_inactive_fields(_dump(no_progress=False, trigger_word="miku"))
+    """hidden 字段的非默认值必须保留（裸 CLI 用户手写覆盖）。"""
+    pruned = prune_inactive_fields(_dump(no_progress=False, log_every=999))
     assert pruned["no_progress"] is False
-    assert pruned["trigger_word"] == "miku"
+    assert pruned["log_every"] == 999
     # 同组里仍是默认值的照裁
-    assert "log_every" not in pruned
+    assert "loss_curve_steps" not in pruned
 
 
 def test_prune_roundtrip_is_stable() -> None:

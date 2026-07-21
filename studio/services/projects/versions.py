@@ -507,9 +507,9 @@ def create_version(
             if src_file.exists():
                 shutil.copy2(src_file, vdir / fname)
         # config.yaml 复制过来后，data_dir / reg_data_dir / output_dir /
-        # output_name 还指向源 version；用 force_project_overrides=True 重写
-        # 一次刷成新 version 的路径。reg_data_dir 由 project_specific_overrides
-        # 自动检测新 version 的 reg/meta.json 是否存在 → 跟随复制结果。
+        # output_name 还指向源 version —— 这是一次**创建**，用
+        # initialize_project_fields=True 把这些字段刷成新 version 的初值。
+        # 源 version 上用户自定义的 output_name 不跟随复制（新 version 是新产物）。
         v_for_rewrite = _must_get(conn, vid)
         new_cfg_path = vdir / "config.yaml"
         if new_cfg_path.exists():
@@ -517,7 +517,7 @@ def create_version(
             try:
                 cfg = _vc.read_version_config(p, v_for_rewrite)
                 _vc.write_version_config(
-                    p, v_for_rewrite, cfg, force_project_overrides=True
+                    p, v_for_rewrite, cfg, initialize_project_fields=True
                 )
             except _vc.VersionConfigError:
                 # 源 config 损坏不阻断新建；用户去 Train 页换预设

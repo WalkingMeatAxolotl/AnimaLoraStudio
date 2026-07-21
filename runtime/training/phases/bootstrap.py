@@ -79,33 +79,6 @@ def _resolve_sample_seed(args) -> None:
     logger.info(f"sample_seed=0 → 训练用随机种子: {args.sample_seed}")
 
 
-def _prepend_trigger_to_sample_prompts(args) -> None:
-    """trigger_word 非空 → prepend 到 sample_prompt / sample_prompts 每条。
-
-    与 caption 端行为一致（tag_worker 也把 trigger 写为第一个 tag）：训练
-    采样图必带 trigger，能直观验证 LoRA 是否激活。判定"已含 trigger"用 token
-    级匹配（按逗号 split 后等值比较，不区分大小写），避免被 substring 误判。
-    空 prompt 不注入，防止生成残缺的 ``"trigger, "`` 字符串。
-    """
-    trigger = (getattr(args, "trigger_word", "") or "").strip()
-    if not trigger:
-        return
-    lower = trigger.lower()
-
-    def _contains(prompt: str) -> bool:
-        return any(t.strip().lower() == lower for t in prompt.split(",") if t.strip())
-
-    sp = getattr(args, "sample_prompt", "") or ""
-    if sp and not _contains(sp):
-        args.sample_prompt = f"{trigger}, {sp}"
-
-    sps = getattr(args, "sample_prompts", None) or []
-    if sps:
-        args.sample_prompts = [
-            (f"{trigger}, {p}" if (p and not _contains(p)) else p) for p in sps
-        ]
-
-
 def run(ctx: TrainingContext) -> None:
     """完成训练前一切非模型/数据的准备：
 
@@ -177,10 +150,6 @@ def run(ctx: TrainingContext) -> None:
             args.batch_size,
         )
 
-    # 触发词注入：caption 端 tag_worker 把 trigger 写为第一个 tag，这里同步
-    # 注入 sample_prompt(s)，让采样图天然带 trigger。pause snapshot 已 freeze
-    # trigger_word（写在 args 里），resume 也照此 normalize 一次幂等。
-    _prepend_trigger_to_sample_prompts(args)
     ctx.args = args
 
     # 依赖检测

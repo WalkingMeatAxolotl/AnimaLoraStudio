@@ -1230,14 +1230,6 @@ class TrainingConfig(BaseModel):
         description="多 prompt 轮换（优先于 sample_prompt）",
         json_schema_extra=_meta("sample", "string-list"),
     )
-    trigger_word: str = Field(
-        "",
-        description="触发词（version 级，由 Step 4 Tagging 页面写入；空串=不启用）。"
-                    "训练时 bootstrap_phase 会自动 prepend 到 sample_prompt / "
-                    "sample_prompts，确保采样图能反映 LoRA 是否激活。",
-        json_schema_extra=_meta("sample", hidden=True),
-    )
-
     # ----------------------------------------------------------- 训练后指标评估
     eval_validation_enabled: bool = Field(
         False,
