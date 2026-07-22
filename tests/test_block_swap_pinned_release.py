@@ -37,17 +37,18 @@ def test_unload_releases_pinned_host_cache_when_swap_was_active(monkeypatch):
 
     class _FakeSwap:
         def __init__(self):
-            self.detached = False
+            self.closed = False
 
-        def detach(self):
-            self.detached = True
+        def close(self):
+            self.closed = True
 
     swap = _FakeSwap()
     cache.block_swap = swap
 
     cache.unload()
 
-    assert swap.detached, "必须摘钩子"
+    # close() 而非 detach()：光摘钩子不放开 param.data，主副本仍被模型钉住
+    assert swap.closed, "必须 close（摘钩子 + 参数指走 + 丢主副本）"
     assert cache.block_swap is None and cache.blocks_to_swap == 0
     assert calls, "block swap 用过就必须归还 pinned host cache"
 

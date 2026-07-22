@@ -324,6 +324,36 @@ class PinnedBlockSwap:
             handle.remove()
         self._handles.clear()
 
+    def close(self) -> None:
+        """彻底放手：摘钩子 + 把被管理参数指向空张量 + 丢弃主副本与 GPU 槽。
+
+        （名字刻意不叫 ``release`` —— 那个已经是「某层算完、槽位可复用」的
+        每层原语，语义完全不同。）
+
+        **调用后模型不可再用**，只在确定用完时调（训练收尾 / 模型卸载）。
+
+        为什么需要它，而不是「把 model 引用丢掉就行」：pinned 主副本被 param.data
+        引用着，而持有 block 的不只有 `ctx.model` —— LyCORIS injector 持 org_module、
+        optimizer 持参数、hook 闭包也可能持有。真机实测只丢 swap 对象归还 0 字节，
+        丢 model 之后才归还。与其到处找持有者，不如本对象主动把参数指走。
+
+        注意仍需再调 ``release_pinned_host_cache()`` 才真正还给操作系统（那是
+        host caching allocator 的另一层，doc §9.7）。
+        """
+        self.detach()
+        for rel in range(min(self.num_swap, len(self._param_specs))):  # 幂等
+            block = self.blocks[self.first_swapped + rel]
+            params = dict(block.named_parameters())
+            for name, _shape, dtype in self._param_specs[rel]:
+                param = params.get(name)
+                if param is not None:
+                    param.data = torch.empty(0, dtype=dtype, device=self.device)
+        self._cpu_weights.clear()
+        self._slot_buffers.clear()
+        self._param_specs.clear()
+        self._slot_holds = []
+        self._pinned_bytes = 0
+
     def iter_forward(self) -> Iterator[tuple[int, nn.Module]]:
         """前向遍历便捷封装：yield (index, block)，自动 ensure_resident+预取+release。
 
@@ -335,6 +365,29 @@ class PinnedBlockSwap:
             self.ensure_resident(i, prefetch_next=i + 1)
             yield i, self.blocks[i]
             self.release(i)
+
+
+def release_pinned_host_cache() -> None:
+    """把 pinned（页锁定）内存还给操作系统。
+
+    与 ``torch.cuda.empty_cache()`` 是**两件事**：后者只管设备侧。pinned 走
+    PyTorch 独立的 host caching allocator，释放张量只是还给那个缓存池 —— 真机
+    实测 pin 6GB 后 ``del`` + ``gc.collect()`` 归还 **0 字节**，调用本函数才
+    归还 8GB（doc §9.7）。
+
+    block swap 的主副本可达 11GB+，漏掉这步就是「卸载了但内存没还」，而且页
+    锁定内存连换页都不行，其他程序完全用不到。与 ``_cuda_clearCublasWorkspaces``
+    是同一类问题（C++/分配器层常驻，Python GC 看不见）的 host 侧版本。
+
+    **调用时机**：只在确定不再需要那批权重时（模型卸载 / 训练收尾）。出图或训练
+    过程中绝不能调 —— pinned 里装的就是模型权重本身。
+
+    内部 API，缺失/失败静默跳过（下轮加载会复用缓存，只是内存不还系统）。
+    """
+    try:
+        torch._C._host_emptyCache()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def move_module_excluding(module: nn.Module, device, swap: "PinnedBlockSwap | None") -> None:

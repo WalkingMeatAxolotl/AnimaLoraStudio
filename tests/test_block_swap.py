@@ -559,6 +559,64 @@ def test_move_module_excluding_without_swap_is_plain_move():
         assert b.lin1.weight.device.type == "cuda"
 
 
+def test_close_drops_masters_even_with_other_holders():
+    """close() 必须在**别人还持有 block 时**也能放掉 pinned 主副本。
+
+    真机实测：只丢 swap 对象归还 0 字节 —— pinned 被 param.data 引用着，而持有
+    block 的不止 ctx.model（LyCORIS injector 持 org_module、optimizer 持参数）。
+    逐个去找持有者不可靠，所以由组件自己把参数指走。
+    """
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(5, 32, device)
+    swap = PinnedBlockSwap(blocks, num_swap=3, device=device)
+    swap.attach()
+
+    holder = [b.lin1 for b in blocks]        # 模拟 LyCORIS 持 org_module
+    masters = [swap._cpu_weights[r]["lin1.weight"] for r in range(swap.num_swap)]
+    assert all(m.is_pinned() for m in masters)
+    assert swap.pinned_bytes > 0
+
+    swap.close()
+
+    # 内部存储清空、记账归零、钩子摘掉
+    assert swap._cpu_weights == [] and swap._slot_buffers == []
+    assert swap.pinned_bytes == 0
+    assert swap._handles == []
+    # 被管理的参数已指向空张量 → 主副本不再被模型引用
+    for b in list(blocks)[swap.first_swapped:]:
+        assert b.lin1.weight.numel() == 0
+    assert holder  # 持有者仍在，但已不再钉住 pinned
+
+
+def test_close_is_idempotent():
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(4, 16, device)
+    swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
+    swap.attach()
+    swap.close()
+    swap.close()  # 不应抛出
+
+
+def test_release_pinned_host_cache_is_silent_without_api(monkeypatch):
+    """内部 API 缺失/失败要静默 —— 清理失败不该让训练收尾崩掉。"""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for p in (root, root / "runtime"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    from training.block_swap import release_pinned_host_cache
+
+    def _boom():
+        raise RuntimeError("no such API")
+
+    monkeypatch.setattr(torch._C, "_host_emptyCache", _boom, raising=False)
+    release_pinned_host_cache()
+
+
 def test_allocation_error_carries_context():
     """BlockSwapAllocationError 携带 num_swap/first_swapped/detail（供上层文案）。"""
     _, BlockSwapAllocationError = _import()

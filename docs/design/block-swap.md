@@ -611,3 +611,34 @@ fp8 那条只要**顺序对**就正确：loader 落 CPU pinned → `apply_loras`
 只归还自己分配的，不动别处（如 dataloader）的 pinned 缓存。
 
 训练侧不需要同等处理：训练是独立子进程，跑完退出由操作系统回收。
+
+### 9.8 三个「训练侧内存」问题的答案
+
+**Q：训练的内存有释放吗？** 此前**没有** —— 训练是独立子进程，靠退出让 OS 回收。
+但退出前有一段尾巴：`finalize` 里 wandb 上传最终 LoRA（可能几十秒到几分钟），而
+此时 `eval_training_finished` 已经发出、supervisor 已排训练后评估 job，评估进程要
+加载模型却撞上本进程还占着 11GB+ 页锁定内存（连换页都不行）。在内存紧张的机器上
+（正是 block swap 要服务的那批）这会直接把评估拖垮。已在 `finalize` 主动释放。
+
+**Q：训练时的 sample 走 swap 吗？** **走。** `sample_image(ctx.model, ...)` 拿的就是
+挂了钩子的同一个 model，前向照常触发换入。实测佐证：28 层换出时采样期峰值仅
+7.1GB —— 若采样不走 swap，完整 fp8 DiT（≈12.9GB）必须常驻，峰值不可能低于它。
+
+**Q：训练时的 sample swap 有释放吗？** 采样与训练**共用同一个 swap 对象**，没有额外
+的东西要释放，而且训练还要继续、也**不能**释放。`sample_runner` 前后的
+`empty_cache()` 只回收设备侧缓存，swap 的 GPU 槽是活引用不受影响 —— 这是正确的。
+
+### 9.9 `close()` 与 `release()` 是两回事（命名陷阱）
+
+组件有两个语义完全不同的方法，实施时撞过车（新方法覆盖了旧方法，17 个测试同时红）：
+
+| 方法 | 语义 | 何时调 |
+|---|---|---|
+| `release(absolute_index)` | 某层算完，它的 GPU 槽位可被后续层覆盖 | 每层前向后（post-hook 内） |
+| `close()` | 彻底放手：摘钩子 + 参数指向空张量 + 丢弃主副本与槽 | 训练收尾 / 模型卸载，**之后模型不可用** |
+
+`close()` 而非「丢掉 model 引用」的理由：pinned 主副本被 `param.data` 引用，而持有
+block 的不止 `ctx.model` —— LyCORIS injector 持 `org_module`、optimizer 持参数、
+hook 闭包也可能持有。真机实测只丢 swap 对象归还 **0 字节**，丢 model 之后才归还。
+与其到处找持有者，不如让组件自己把参数指走。`close()` 之后仍需
+`release_pinned_host_cache()` 才真正还给操作系统（§9.7 的另一层）。
