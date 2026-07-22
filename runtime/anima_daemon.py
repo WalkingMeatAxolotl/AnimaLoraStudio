@@ -806,9 +806,16 @@ class ModelCache:
         self.last_lora_specs = []
         self.last_lora_metas = []
         self.last_lora_merge_precision = None
+        # 分步埋点：卸载后仍有大块内存不还系统时，这几行直接指出是哪一步的问题
+        # （真机报告：峰值 50GB → 手动释放 39GB → 退出才回 22GB，中间 17GB 待定位）
+        from training.sysmem import available_ram_bytes, trim_working_set
+
+        _ram_marks: list[tuple[str, int | None]] = [("卸载前", available_ram_bytes())]
+
         try:
             import gc
             gc.collect()
+            _ram_marks.append(("丢引用+gc", available_ram_bytes()))
             if torch.cuda.is_available():
                 try:
                     # cuBLAS workspace 是 C++ 级常驻分配（Python gc 不可见，
@@ -820,9 +827,32 @@ class ModelCache:
                 except Exception:
                     pass
                 torch.cuda.empty_cache()
+                _ram_marks.append(("empty_cache", available_ram_bytes()))
                 if had_block_swap:
                     _release_pinned_host_cache()
+                    _ram_marks.append(("pinned 归还", available_ram_bytes()))
+            # 大权重的 mmap 文件缓存页（DiT 13-26GB + TE）在 working set 里赖着
+            # 不走 —— 加载后 trim 过一次，卸载后同样要 trim（此前漏了）
+            trim_working_set()
+            _ram_marks.append(("trim working set", available_ram_bytes()))
         except Exception:
+            pass
+
+        try:
+            parts = []
+            prev = _ram_marks[0][1]
+            for label, value in _ram_marks[1:]:
+                if value is None or prev is None:
+                    continue
+                parts.append(f"{label} +{(value - prev) / 1024**3:.2f}GB")
+                prev = value
+            tail = _ram_marks[-1][1]
+            if tail is not None:
+                logger.info(
+                    "[卸载] 可用内存 %.1fGB（%s）",
+                    tail / 1024**3, "，".join(parts) or "无变化",
+                )
+        except Exception:  # noqa: BLE001
             pass
 
 
