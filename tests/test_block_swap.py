@@ -353,8 +353,9 @@ def test_detach_removes_hooks():
     swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
     swap.attach()
     swap.attach()  # 幂等
-    n_handles = len(swap._handles)
-    assert n_handles == 2 * 2  # 每个换出 block 2 个钩子
+    # 每个换出 block 4 个钩子：前向 pre/post + 反向 pre/post。反向那两个不能省，
+    # 少了梯度会静默算错（见 test_block_swap_grad_fidelity.py）
+    assert len(swap._handles) == 2 * 4
     swap.detach()
     assert swap._handles == []
 

@@ -287,15 +287,25 @@ class PinnedBlockSwap:
         return ptrs
 
     def attach(self) -> None:
-        """给每个换出 block 注册 forward pre/post hook，接管换入换出。
+        """给每个换出 block 注册前向 + 反向钩子，接管换入换出。
 
         这是**推荐的接线方式**：完全从外部生效，不需要改模型的 forward 循环
         （krea2 的循环在 parity 敏感的 ``modeling/`` 内，不宜改动，doc §7.1）。
 
-        反向为什么也自动成立：开 gradient checkpointing 后，反向阶段会**重算
-        前向**，即再次调用该 block 的 forward —— pre-hook 随之触发，按反向的
-        逆序把权重换回来。所以不需要为反向单独编排时序（doc §2.4 说的「重算与
-        反向在同一驻留窗口内完成」在这里是自然结果）。
+        **四个钩子缺一不可**（前向 pre/post + 反向 pre/post）：
+
+        - 前向 pre 取回权重、post 放开槽位；
+        - **反向 pre 必须再取一次** —— 前向 post 已经放开了槽位（不放开的话前向
+          期间没有任何 done 事件、双缓冲失去保护），到本 block 反向时槽里装的
+          早已是别的层。
+
+        曾经以为「开 gradient checkpointing 后反向重算会触发 forward hook，逆序
+        换入自动成立」，**那是错的**：重算的 forward_hook 根本不触发（实测
+        checkpoint 下 pre 触发 2N 次而 post 只 N 次），且重算之后本 block 的反向
+        仍要读权重。少了反向钩子，梯度会**静默**算错 —— 不报错、不 NaN，只是数值
+        不对，真机实测偏差达非确定性噪声底的 300 倍，PPSF 的 d 估计随即炸掉。
+        回归见 ``tests/test_block_swap_grad_fidelity.py``（必须用真实尺寸 +
+        噪声底校准，小张量测试对此完全不敏感）。
 
         幂等：重复调用不会重复注册。
         """
@@ -306,17 +316,28 @@ class PinnedBlockSwap:
             block = self.blocks[absolute]
 
             def pre_hook(_module, _args, idx=absolute):
-                # 前向：算 idx 时预取 idx+1；反向重算时该预取落空（越界或已在位），
-                # 由 _fetch 的边界与命中检查静默吸收
                 self.ensure_resident(idx, prefetch_next=idx + 1)
 
             def post_hook(_module, _args, output, idx=absolute):
                 self.release(idx)
                 return output
 
+            def backward_pre_hook(_module, _gout, idx=absolute):
+                # **反向必须自己把权重取回来。** 前向结束就放开了槽位，到本 block
+                # 反向时槽里装的早已是别的层 —— 少了这一步梯度会**静默**算错
+                # （不报错、不 NaN，只是数值不对；真机实测偏差达噪声底 300 倍，
+                # PPSF 的 d 估计直接炸掉）。开 checkpoint 时紧邻的重算刚把权重
+                # 放好，这里命中直接返回、零额外传输。
+                self.ensure_resident(idx, prefetch_next=idx - 1)
+
+            def backward_hook(_module, _gin, _gout, idx=absolute):
+                self.release(idx)
+
             self._handles.append(block.register_forward_pre_hook(pre_hook))
             self._handles.append(block.register_forward_hook(post_hook))
-        logger.info("block swap 已挂载：%d 个 block 的前向钩子", self.num_swap)
+            self._handles.append(block.register_full_backward_pre_hook(backward_pre_hook))
+            self._handles.append(block.register_full_backward_hook(backward_hook))
+        logger.info("block swap 已挂载：%d 个 block 的前向/反向钩子", self.num_swap)
 
     def detach(self) -> None:
         """移除 attach 注册的钩子（权重不还原，需要时自行 ensure_resident）。"""
