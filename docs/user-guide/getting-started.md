@@ -81,7 +81,7 @@ python tools/download_models.py --modelscope      # 走魔搭社区
 1. **下载** — Booru 抓图（先在 Settings 填 Gelbooru / Danbooru 凭据）或本地 jpg / png / zip 上传。
 2. **筛选** — download / train 双面板，多选复制要训的图到 train/，子文件夹管理。
 3. **预处理** ✱ — 总览（多选 + 一键撤销）+ 去重审核 + 放大（ESRGAN / Real-ESRGAN 多预设）+ 裁剪（手动框选 + 自动 AR 聚类预填）+ 涂抹。不需要可直接跳过。
-4. **打标** — WD14 / CLTagger / LLM（OpenAI 兼容，含 JoyCaption preset）三选一 + 阈值，GPU EP 自动 fallback；顶部填 trigger_word 自动注入每张 caption 与采样图 prompt。
+4. **打标** — WD14 / CLTagger / LLM（OpenAI 兼容，含 JoyCaption preset）三选一 + 阈值，GPU EP 自动 fallback；顶部填 trigger_word 自动注入每张 caption。
 5. **标签编辑** — 缓存模式 + 还原点，批量加 / 删 / 替换，单图修。
 6. **正则集** ✱ — 两种生成方式：**AI 先验生成**（默认，无 LoRA 直接用底模出图当 reg 集）或 **Booru 反向搜**（按 tag 分布反搜 booru + 自动 WD14 打标 + 分辨率 AR 聚类）。mirror / flat 结构，可编辑 / 删图 / 自动去重 / 双 tagger 可选。
 7. **训练** — 选 preset 复制进 version 私有 config，改参数（debounce 600ms 自动落盘，无需点保存），入队即开始训练。Picker 标签显示「· 已自定义」表示和原预设已分叉，预设池不会被改。Simple / Advanced 模式。**模型族**默认 Anima；下拉切到 Krea 2 会弹确认框逐项列出将重算的权重路径与族默认值，确认后整个版本按 Krea 2 训练（详见 [training-tips → Krea 2 训练](training-tips.md#krea-2-训练)）。
