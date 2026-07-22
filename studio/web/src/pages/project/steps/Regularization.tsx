@@ -23,6 +23,7 @@ import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
+import { compareImagePath } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
 
@@ -113,7 +114,7 @@ export default function RegularizationPage() {
   const [aiSteps, setAiSteps] = useState(25)
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
-  const [aiIncremental, setAiIncremental] = useState(false)
+  const [aiIncremental, setAiIncremental] = useState(true)
   // 本次先验生成临时选用的底模（null = 跟随设置页该族 selected）。
   const [aiBaseModel, setAiBaseModel] = useState<string | null>(null)
   // 先验生成的模型族跟随 version 训练配置（服务端权威解析；这里只为
@@ -155,7 +156,9 @@ export default function RegularizationPage() {
     if (!vid) return
     try {
       const s = await api.getRegStatus(project.id, vid)
-      setReg(s)
+      // 在源头排序：预览 modal 的 onPick(idx) 直接索引 reg.files，
+      // 缩略图网格也从 reg.files 顺序派生，两者必须同序。
+      setReg({ ...s, files: [...s.files].sort(compareImagePath) })
     } catch (e) {
       toast(t('reg.loadFailed', { error: String(e) }), 'error')
     }

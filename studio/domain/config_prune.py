@@ -5,9 +5,8 @@
 
 1. show_when 求值为假 —— 当前配置下 UI 不可见、值不生效的字段
    （求值器 eval_show_when 逐字镜像前端 evalShowWhen）。
-2. hidden=True 且值等于 schema 默认值 —— UI 永不渲染的字段（终端体验旋钮、
-   trigger_word 等），默认值落盘纯属噪音；非默认值（裸 CLI 用户手写覆盖 /
-   Tagging 页写入的 trigger_word）照常保留。
+2. hidden=True 且值等于 schema 默认值 —— UI 永不渲染的字段（终端体验旋钮等），
+   默认值落盘纯属噪音；非默认值（裸 CLI 用户手写覆盖）照常保留。
 
 runtime 侧的安全性（config 管线刀 1 / R1 起）：trainer 加载 yaml 走与 Studio
 同一条 TrainingConfig 构造路径（argparse_bridge.namespace_from_config），缺失

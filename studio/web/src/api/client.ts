@@ -527,6 +527,9 @@ export interface GenerateSecretsConfig {
   /** 测试出图 VAE decode 精度。bf16（默认）对齐 ComfyUI 现代 GPU 的 auto
    * VAE dtype；fp32 全精度（decode 前 daemon 临时 offload DiT/Qwen 腾显存）。 */
   vae_precision: 'bf16' | 'fp32'
+  /** FP8 base-model LoRA merge temporary compute precision. fp32 matches
+   * ComfyUI; bf16 reduces delta compute and is usually faster. */
+  lora_merge_precision: 'fp32' | 'bf16'
   /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
    * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
   idle_timeout_minutes: number
@@ -540,6 +543,10 @@ export interface GenerateSecretsConfig {
   /** 系统内存水位保护：加载大模型前可用物理内存不足 6GB 时中止并报错
    * （默认开）；关闭后继续加载，可能触发整机换页卡顿。 */
   ram_guard: boolean
+  /** 换出到内存的 DiT 层数（0=关闭，krea2 生效）。与 vram_policy 分工不同：
+   * vram_policy 管模型之间谁让位，本项管单个 DiT 内部——单个模型自己就装不下
+   * 显存时唯一的办法。每步出图都要搬一遍换出的层。 */
+  blocks_to_swap: number
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean
@@ -818,6 +825,15 @@ export interface FamilySwitchChange {
 export interface FamilySwitchResponse {
   config: ConfigData
   changes: FamilySwitchChange[]
+}
+
+/** Train / 预设页模型路径字段的 dropdown 候选（GET /api/models/path-choices）。
+ * 只含磁盘上已就绪的资产；`group` / `note` 是翻译 id，不是显示文案。 */
+export interface ModelPathChoice {
+  label: string
+  path: string
+  group: 'official' | 'custom'
+  note: string
 }
 
 export interface ModelsCatalog {
@@ -2090,6 +2106,11 @@ export const api = {
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   /** 当前 Settings 算出的 4 个模型字段绝对路径。预设页 reset / 新建用。 */
   getModelPathDefaults: () => req<Record<string, string>>('/api/models/path-defaults'),
+  /** 模型路径字段的 dropdown 候选（按族）。候选怎么算是后端族知识。 */
+  getModelPathChoices: (family: string) =>
+    req<{ choices: Record<string, ModelPathChoice[]> }>(
+      `/api/models/path-choices?family=${encodeURIComponent(family)}`,
+    ),
   /** YAML 预览（R4）：当前表单 config → 与保存后落盘文件同一序列化路径的
    * yaml 文本。纯计算不落盘；tolerant 修复语义与保存一致。 */
   previewConfigYaml: (config: ConfigData) =>

@@ -11,3 +11,19 @@
   .banner-shell-icon { width: 26px; height: 26px; font-size: 13px; }
   .phase-timeline-label { display: none; }
 }
+
+/* 可拖分栏（PaneResizer 配套），给"窄屏堆叠 / 宽屏并排"的页面用。
+ * 窄屏堆叠时必须不吃 --split-pct：column 方向下 flex-basis 量的是高度，
+ * 直接套百分比会把面板高度锁死。故固定栏宽 + handle 只在 ≥1280px 生效
+ * （对齐 tailwind xl 断点）。一直并排的页面不需要本套 class，直接 inline
+ * flex 即可（见 TagEdit）。*/
+.split-row { display: flex; flex-direction: column; min-height: 0; }
+.split-row > .split-pane-fixed,
+.split-row > .split-pane-flex { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.split-row > .split-resizer { display: none; }
+
+@media (min-width: 1280px) {
+  .split-row { flex-direction: row; }
+  .split-row > .split-pane-fixed { flex: 0 0 var(--split-pct, 50%); }
+  .split-row > .split-resizer { display: block; }
+}

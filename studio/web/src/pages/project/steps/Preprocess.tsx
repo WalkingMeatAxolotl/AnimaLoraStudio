@@ -9,6 +9,7 @@ import {
   type Version,
 } from '../../../api/client'
 import { parseFolderMeta } from '../../../lib/folderMeta'
+import { compareImagePath } from '../../../lib/imageSort'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
@@ -206,7 +207,7 @@ export default function PreprocessPage() {
         mtime: img.mtime,
       })
     }
-    out.sort((a, b) => a.name.localeCompare(b.name))
+    out.sort((a, b) => compareImagePath(a.name, b.name))
     return out
   }, [files])
 

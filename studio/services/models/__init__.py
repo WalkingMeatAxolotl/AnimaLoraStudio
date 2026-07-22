@@ -38,6 +38,7 @@ from .families import (
     FAMILY_ASSETS,
     default_paths_for_new_version,
     get_assets,
+    path_choices,
 )
 from .families.anima import (
     ANIMA_REPO,
@@ -133,6 +134,7 @@ __all__ = [
     "cltagger_required_files",
     "cltagger_target_root",
     "default_paths_for_new_version",
+    "path_choices",
     "download_anima_main",
     "download_anima_vae",
     "download_cltagger",

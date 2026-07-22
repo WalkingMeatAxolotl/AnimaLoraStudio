@@ -142,7 +142,12 @@ const initialServerState = {
   queue: { light_tasks_during_train: true },
   download_source: 'huggingface',
   modelscope: { token: '' },
-  generate: { preview_every_n_steps: 0, attention_backend: 'sdpa' },
+  generate: {
+    preview_every_n_steps: 0,
+    attention_backend: 'sdpa',
+    vae_precision: 'bf16',
+    lora_merge_precision: 'fp32',
+  },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: { enabled: false, http_proxy: '', https_proxy: '', no_proxy: '' },
 }
@@ -472,6 +477,32 @@ describe('SettingsPage (PP0)', () => {
       const body = JSON.parse(String(putCall![1].body))
       // 只有 user_id 被改动；api_key 仍是 *** ⇒ 不应该出现在 body 里
       expect(body).toEqual({ gelbooru: { user_id: 'bob' } })
+    })
+  })
+
+  it('changes LoRA merge precision independently from VAE precision', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '测试' }))
+
+    const mergeLabel = await screen.findByText('LoRA merge 精度')
+    const mergeRow = mergeLabel.closest('.grid') as HTMLElement
+    const mergeSelect = mergeRow.querySelector('select') as HTMLSelectElement
+    expect(mergeSelect.value).toBe('fp32')
+    await user.selectOptions(mergeSelect, 'bf16')
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        try {
+          return JSON.parse(String(init.body)).generate?.lora_merge_precision === 'bf16'
+        } catch {
+          return false
+        }
+      })
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body).toEqual({ generate: { lora_merge_precision: 'bf16' } })
     })
   })
 

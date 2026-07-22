@@ -3,7 +3,9 @@ GET /api/generate/disk/history 扫 PNG metadata、GET /api/generate/disk/image/*
 静态返回的覆盖测试。"""
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -43,9 +45,15 @@ def _params(**overrides) -> dict:
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, Path]:
     from studio.api.routers import generate as _gen
+    from studio.services import generation_metadata as _meta
 
     test_dir = tmp_path / "test"
     monkeypatch.setattr(_gen, "TEST_IMAGES_DIR", test_dir)
+    monkeypatch.setattr(
+        _meta, "manifest_path", lambda task_id: tmp_path / "tasks" / str(task_id) / _meta.MANIFEST_FILENAME,
+    )
+    monkeypatch.setattr(_meta, "HASH_CACHE_PATH", tmp_path / ".cache" / "resource-hashes.json")
+    _meta._reset_hash_cache_for_tests()
 
     class _FakeGenCfg:
         save_test_images = True
@@ -147,6 +155,168 @@ def test_save_writes_a1111_parameters_text_block(client) -> None:
     assert "CFG scale: 7.0" in a1111
     assert "Seed: 42" in a1111
     assert "Size: 1024x1024" in a1111
+
+
+def test_save_a1111_uses_effective_dataset_prompt_without_manifest(client) -> None:
+    """旧客户端/无 task 档案也不能把 dataset picker 实际 prompt 写成空。"""
+    tc, _ = client
+    p = _params(
+        prompts=[],
+        dataset_pick={"tags": ["trigger", "orange hair", "flower crown"]},
+    )
+    r = tc.post(
+        "/api/generate/save",
+        data={"mode": "single", "params": json.dumps(p)},
+        files={"image": ("a.png", _png_bytes(), "image/png")},
+    )
+    assert r.status_code == 200
+    a1111 = _open_png_text(Path(r.json()["path"]))["parameters"]
+    assert a1111.splitlines()[0] == "trigger, orange hair, flower crown"
+
+
+def test_save_writes_civitai_resource_hashes_from_private_task_manifest(
+    client, tmp_path: Path,
+) -> None:
+    """实际 prompt + model/VAE/LoRA SHA256 写 parameters，绝对路径不进 PNG。"""
+    from studio.services import generation_metadata as meta
+
+    tc, _ = client
+    model = tmp_path / "models" / "krea2-turbo.safetensors"
+    vae = tmp_path / "models" / "qwen-vae.safetensors"
+    lora = tmp_path / "loras" / "artist-style.safetensors"
+    for path, payload in ((model, b"model"), (vae, b"vae"), (lora, b"lora")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+    task_id = 123
+    meta.write_manifest(
+        task_id,
+        prompts=["first prompt", "actual second prompt"],
+        model_family="krea2",
+        model_path=str(model),
+        vae_path=str(vae),
+        text_encoder="fp8",
+        loras=[{"path": str(lora), "scale": 0.75}],
+        xy_matrix=None,
+    )
+    p = _params(
+        prompts=["UI raw prompt"],
+        model_family="krea2",
+        text_encoder="fp8",
+        loras=[{"name": lora.name, "scale": 0.75}],
+    )
+    r = tc.post(
+        "/api/generate/save",
+        data={
+            "mode": "single",
+            "params": json.dumps(p),
+            "task_id": str(task_id),
+            "source_filename": "gen_0001_p1_c0_s7.png",
+        },
+        files={"image": ("a.png", _png_bytes(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    text = _open_png_text(Path(r.json()["path"]))
+    a1111 = text["parameters"]
+    assert a1111.splitlines()[0] == "actual second prompt <lora:artist-style:0.75>"
+    assert "Model: krea2-turbo" in a1111
+    assert f"Model hash: {hashlib.sha256(b'model').hexdigest()}" in a1111
+    assert "VAE: qwen-vae" in a1111
+    assert f"VAE hash: {hashlib.sha256(b'vae').hexdigest()}" in a1111
+    assert f"artist-style: {hashlib.sha256(b'lora').hexdigest()}" in a1111
+    assert '"lora:artist-style"' in a1111
+    assert "Model family: krea2" in a1111
+    assert "Text encoder: fp8" in a1111
+    assert "Software: AnimaLoraStudio" in a1111
+    match = re.search(r", Hashes: (\{.*?\})(?:,|$)", a1111)
+    assert match is not None
+    assert json.loads(match.group(1)) == {
+        "model": hashlib.sha256(b"model").hexdigest(),
+        "vae": hashlib.sha256(b"vae").hexdigest(),
+        "lora:artist-style": hashlib.sha256(b"lora").hexdigest(),
+    }
+    assert str(tmp_path) not in a1111
+    assert str(tmp_path) not in text["anima_params"]
+
+
+def test_resource_metadata_failure_does_not_block_png_save(
+    client, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.api.routers import generate as generate_router
+
+    tc, _ = client
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("hash backend unavailable")
+
+    monkeypatch.setattr(generate_router, "build_external_metadata", fail)
+    r = tc.post(
+        "/api/generate/save",
+        data={"mode": "single", "params": json.dumps(_params())},
+        files={"image": ("a.png", _png_bytes(), "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    assert "parameters" in _open_png_text(Path(r.json()["path"]))
+
+
+def test_resource_hash_cache_reuses_and_invalidates_by_stat(
+    client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.services import generation_metadata as meta
+
+    path = tmp_path / "resource.safetensors"
+    path.write_bytes(b"v1")
+    first = meta.file_sha256(path)
+    assert first == hashlib.sha256(b"v1").hexdigest()
+
+    def should_not_open(*args, **kwargs):
+        raise AssertionError("cache hit unexpectedly reopened the resource")
+
+    original_open = Path.open
+    monkeypatch.setattr(Path, "open", should_not_open)
+    assert meta.file_sha256(path) == first
+    monkeypatch.setattr(Path, "open", original_open)
+
+    path.write_bytes(b"version two")
+    second = meta.file_sha256(path)
+    assert second == hashlib.sha256(b"version two").hexdigest()
+    assert second != first
+
+
+def test_xy_cell_external_metadata_tracks_checkpoint_and_scale(
+    client, tmp_path: Path,
+) -> None:
+    from studio.services import generation_metadata as meta
+
+    first = tmp_path / "lora-a.safetensors"
+    second = tmp_path / "lora-b.safetensors"
+    first.write_bytes(b"a")
+    second.write_bytes(b"b")
+    meta.write_manifest(
+        456,
+        prompts=["xy prompt"],
+        model_family="anima",
+        model_path="",
+        vae_path=None,
+        text_encoder=None,
+        loras=[{"path": str(first), "scale": 1.0}],
+        xy_matrix={
+            "x": {"axis": "lora_ckpt", "values": [str(first), str(second)], "lora_index": 0},
+            "y": {"axis": "lora_scale", "values": [0.4, 0.8], "lora_index": None},
+        },
+    )
+    params = _params(
+        mode="single",
+        xy_origin={"xi": 1, "yi": 0},
+        loras=[{"name": second.name, "scale": 0.4}],
+    )
+    external = meta.build_external_metadata(456, params)
+    assert external["prompt"] == "xy prompt"
+    assert external["loras"] == [{
+        "name": "lora-b",
+        "scale": 0.4,
+        "hash": hashlib.sha256(b"b").hexdigest(),
+    }]
 
 
 def test_save_does_not_write_sidecar(client) -> None:

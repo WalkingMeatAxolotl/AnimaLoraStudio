@@ -20,6 +20,23 @@ def test_generate_config_default_is_flash_attn() -> None:
     """无字段 → 默认 flash_attn（与历史 flash_attn=True 默认一致）。"""
     g = GenerateConfig(transformer_path="", vae_path="", text_encoder_path="")
     assert g.attention_backend == "flash_attn"
+    assert g.lora_merge_precision == "fp32"
+
+
+def test_generate_config_accepts_bf16_lora_merge_precision() -> None:
+    g = GenerateConfig(
+        transformer_path="", vae_path="", text_encoder_path="",
+        lora_merge_precision="bf16",
+    )
+    assert g.lora_merge_precision == "bf16"
+
+
+def test_generate_config_rejects_invalid_lora_merge_precision() -> None:
+    with pytest.raises(ValueError):
+        GenerateConfig(
+            transformer_path="", vae_path="", text_encoder_path="",
+            lora_merge_precision="fp16",
+        )
 
 
 def test_generate_config_new_field() -> None:

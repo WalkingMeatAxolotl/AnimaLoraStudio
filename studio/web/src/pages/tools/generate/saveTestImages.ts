@@ -47,6 +47,9 @@ export async function saveSingleSamples(
       fd.append('mode', 'single')
       fd.append('image', blob, 'single.png')
       fd.append('params', JSON.stringify(params))
+      // server 由 daemon 文件名里的 _pN_ 选择这张图实际对应的 prompt；POST
+      // upload filename 固定 single.png，若不单独传会让多 prompt 全写第一条。
+      fd.append('source_filename', fn)
       // 0.17 item3：带上 task_id，server enrich 进 PNG anima_params，`?task=` 深链
       // 回看才能按 task_id 命中该磁盘条目（此前漏发 → 落盘图都无 task_id → 回看失败）。
       fd.append('task_id', String(taskId))
@@ -73,7 +76,13 @@ export async function saveXYMatrix(
     const yLoraIndex = xySnapshot.xy_draft?.y?.loraIndex ?? null
 
     // 1) 拉所有 cell PNG bytes + 构 per-cell single-snapshot
-    type CellEntry = { xi: number; yi: number; blob: Blob; params: GenerateParamsSnapshot }
+    type CellEntry = {
+      xi: number
+      yi: number
+      blob: Blob
+      sourceFilename: string
+      params: GenerateParamsSnapshot
+    }
     const cellEntries: CellEntry[] = []
     for (const s of samples) {
       const fn = s.path.split(/[\\/]/).pop()
@@ -88,7 +97,9 @@ export async function saveXYMatrix(
           x: { axis: xAxis, loraIndex: xLoraIndex, value: xv },
           y: yAxis ? { axis: yAxis, loraIndex: yLoraIndex, value: yv ?? '' } : null,
         })
-        cellEntries.push({ xi: s.xy.xi, yi: s.xy.yi, blob, params: cellParams })
+        cellEntries.push({
+          xi: s.xy.xi, yi: s.xy.yi, blob, sourceFilename: fn, params: cellParams,
+        })
       } catch {
         // 单 cell 拉失败跳过；server 会按 manifest 校验，缺 cell 就不发送
       }
@@ -104,7 +115,9 @@ export async function saveXYMatrix(
     fd.append('image', composite, 'xy plot.png')
     fd.append('params', JSON.stringify(xySnapshot))
     fd.append('task_id', String(taskId))  // 0.17 item3：同 single，供 ?task= 深链回看命中
-    const manifest = cellEntries.map(({ xi, yi, params }) => ({ xi, yi, params }))
+    const manifest = cellEntries.map(({ xi, yi, sourceFilename, params }) => ({
+      xi, yi, source_filename: sourceFilename, params,
+    }))
     fd.append('cells_manifest', JSON.stringify(manifest))
     for (const { xi, yi, blob } of cellEntries) {
       fd.append('cells', blob, `cell x${xi} y${yi}.png`)

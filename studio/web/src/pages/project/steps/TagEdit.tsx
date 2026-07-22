@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useBlocker, useOutletContext } from 'react-router-dom'
 import {
@@ -10,13 +10,16 @@ import {
 import BulkActionBar from '../../../components/BulkActionBar'
 import { useDialog } from '../../../components/Dialog'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
+import PaneResizer from '../../../components/PaneResizer'
 import SaveBar from '../../../components/SaveBar'
 import StepShell from '../../../components/StepShell'
 import TagEditor from '../../../components/TagEditor'
 import TagStatsPanel from '../../../components/TagStatsPanel'
 import { useToast } from '../../../components/Toast'
 import ZoomableImage from '../../../components/ZoomableImage'
+import { compareImagePath } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
 interface Ctx {
   project: ProjectDetail
@@ -58,6 +61,17 @@ export default function TagEditPage() {
   // editing 时用的 `activeFolder`（那个是当前编辑图所在 folder，纯展示）。
   const [folderFilter, setFolderFilter] = useState<string>('')
 
+  // 左栏（图片网格）/ 右栏（标签工作区）各占整行宽度的百分比，两条分隔条可拖；
+  // 中间预览栏 flex-1 吃掉剩余空间。默认 40 / 32 = 改造前写死的 flex 1.5 : 1 : 32%。
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [gridPct, setGridPct] = useLocalStorageState('studio:tagEdit:grid_pct', 40)
+  const [sidePct, setSidePct] = useLocalStorageState('studio:tagEdit:side_pct', 32)
+
+  // 两栏共享同一条宽度预算，各自的上限得看对方吃掉多少，否则中间预览栏会被挤没。
+  const MIN_PREVIEW_PCT = 15
+  const gridMax = Math.max(15, 100 - sidePct - MIN_PREVIEW_PCT)
+  const sideMax = Math.max(20, 100 - gridPct - MIN_PREVIEW_PCT)
+
   const reloadCache = useCallback(async () => {
     if (versionId == null) return
     try {
@@ -65,7 +79,10 @@ export default function TagEditPage() {
       const c = new Map<string, string[]>()
       const m = new Map<string, CaptionMeta>()
       const ks: string[] = []
-      for (const it of r.items) {
+      const sorted = [...r.items].sort((a, b) =>
+        compareImagePath(keyOf(a.folder, a.name), keyOf(b.folder, b.name))
+      )
+      for (const it of sorted) {
         const k = keyOf(it.folder, it.name)
         c.set(k, it.tags)
         m.set(k, { folder: it.folder, name: it.name, format: it.format })
@@ -358,11 +375,11 @@ export default function TagEditPage() {
         </>
       }
     >
-      <div className="flex flex-1 min-h-0 gap-2.5">
+      <div ref={rowRef} className="flex flex-1 min-h-0 gap-2.5">
 
         <section
           className="rounded-md border border-subtle bg-surface flex flex-col min-w-0 overflow-hidden"
-          style={{ flex: isEditing ? 1.5 : 1 }}
+          style={{ flex: isEditing ? `0 0 ${gridPct}%` : 1 }}
         >
           {folderNames.length > 1 && (
             <div className="px-2 pt-2 pb-1.5 flex items-center gap-1 flex-wrap shrink-0 border-b border-subtle">
@@ -407,6 +424,17 @@ export default function TagEditPage() {
         </section>
 
         {isEditing && (
+          <PaneResizer
+            containerRef={rowRef}
+            value={gridPct}
+            onChange={setGridPct}
+            min={15}
+            max={gridMax}
+            ariaLabel={t('tagEdit.resizeGrid')}
+          />
+        )}
+
+        {isEditing && (
           <section className="flex-1 rounded-md border border-subtle bg-surface flex flex-col min-w-0 overflow-hidden">
             <div className="px-3 py-2 border-b border-subtle shrink-0 flex items-center gap-2">
               <span className="text-xs text-fg-tertiary">{t('tagEdit.singleEdit')}</span>
@@ -427,7 +455,17 @@ export default function TagEditPage() {
           </section>
         )}
 
-        <div className="flex flex-col gap-2.5 min-w-0 flex-1 min-h-0" style={{ flex: '0 0 32%' }}>
+        <PaneResizer
+          containerRef={rowRef}
+          value={sidePct}
+          onChange={setSidePct}
+          min={20}
+          max={sideMax}
+          anchor="end"
+          ariaLabel={t('tagEdit.resizeSide')}
+        />
+
+        <div className="flex flex-col gap-2.5 min-w-0 min-h-0" style={{ flex: `0 0 ${sidePct}%` }}>
           {isEditing ? (
             // editing 时：bulk + 标签分布 都和"调单图标签"无关，整个侧栏让位给
             // TagEditor。退出 editing 后自动回来，sel / folderFilter 等 state

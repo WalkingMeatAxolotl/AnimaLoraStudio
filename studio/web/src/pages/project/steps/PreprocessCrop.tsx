@@ -17,6 +17,7 @@ import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 import { arBucket, arLabel } from '../../../lib/aspectRatio'
 import { clusterByAspectRatio } from '../../../lib/cropClustering'
+import { compareImagePath } from '../../../lib/imageSort'
 
 interface Ctx {
   project: ProjectDetail
@@ -73,7 +74,7 @@ export default function PreprocessCropPage() {
     if (!vid) return
     try {
       const r = await api.listCropWorkspaceTrain(project.id, vid)
-      setImages(r.images)
+      setImages([...r.images].sort((a, b) => compareImagePath(a.name, b.name)))
     } catch {
       /* ignore */
     } finally {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
@@ -12,10 +12,13 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
+import PaneResizer from '../../../components/PaneResizer'
 import StepShell from '../../../components/StepShell'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
+import { compareImageName } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
 // ---------- 排序 ----------
 type SortMode =
@@ -33,18 +36,11 @@ const DEFAULT_SORT: SortMode = 'id-asc'
 type Bucket = 'train' | 'validation'
 const BUCKET_STORAGE_KEY = 'curation:bucket'
 
-function numericIdKey(name: string): number {
-  const stem = name.replace(/\.[^.]+$/, '')
-  return /^\d+$/.test(stem) ? Number(stem) : Number.POSITIVE_INFINITY
-}
-
 function compareItems(a: CurationItem, b: CurationItem, mode: SortMode): number {
   switch (mode) {
     case 'id-asc':
     case 'id-desc': {
-      const ka = numericIdKey(a.name)
-      const kb = numericIdKey(b.name)
-      const d = ka === kb ? a.name.localeCompare(b.name) : ka - kb
+      const d = compareImageName(a.name, b.name)
       return mode === 'id-asc' ? d : -d
     }
     case 'name-asc':
@@ -126,6 +122,11 @@ export default function CurationPage() {
     { value: 'mtime-asc', label: t('curate.downloadTime') + ' ↑' },
     { value: 'mtime-desc', label: t('curate.downloadTime') + ' ↓' },
   ]
+
+  // 左栏（候选池）占整行宽度的百分比，中间分隔条可拖；右栏吃剩余空间。
+  // 默认 50 = 改造前的 xl:grid-cols-2 等分。窄屏（<1280px）堆叠时该值不生效。
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [leftPct, setLeftPct] = useLocalStorageState('studio:curate:left_pct', 50)
 
   const [leftSel, setLeftSel] = useState<Set<string>>(new Set())
   const [leftAnchor, setLeftAnchor] = useState<string | null>(null)
@@ -640,8 +641,13 @@ export default function CurationPage() {
     >
     <div className="flex flex-col h-full gap-3">
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch flex-1 min-h-0">
+      <div
+        ref={rowRef}
+        className="split-row gap-3 items-stretch flex-1 min-h-0"
+        style={{ '--split-pct': `${leftPct}%` } as React.CSSProperties}
+      >
         <PanelCard
+          className="split-pane-fixed"
           accent="emerald"
           title={t('curate.downloadPanelTitle')}
           subtitle={t('curate.downloadSubtitle', { unused: currentLeft.length, total: downloadTotal, sel: leftSel.size })}
@@ -695,7 +701,18 @@ export default function CurationPage() {
           </div>
         </PanelCard>
 
+        <PaneResizer
+          containerRef={rowRef}
+          value={leftPct}
+          onChange={setLeftPct}
+          min={25}
+          max={70}
+          ariaLabel={t('curate.resizePanels')}
+          className="split-resizer"
+        />
+
         <PanelCard
+          className="split-pane-flex"
           accent="cyan"
           title={isVal ? t('curate.valPanelTitle') : t('curate.trainPanelTitle')}
           subtitle={
@@ -923,16 +940,17 @@ const ACCENT_BAR_CLS: Record<'emerald' | 'cyan', string> = {
 }
 
 function PanelCard({
-  accent, title, subtitle, actions, children,
+  accent, title, subtitle, actions, children, className = '',
 }: {
   accent: 'emerald' | 'cyan'
   title: string
   subtitle: string
   actions: React.ReactNode
   children: React.ReactNode
+  className?: string
 }) {
   return (
-    <section className="flex flex-col min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
+    <section className={`flex flex-col min-h-0 rounded-md border border-subtle bg-surface overflow-hidden ${className}`}>
       <div className={`h-0.5 ${ACCENT_BAR_CLS[accent]}`} />
       <header className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 border-b border-subtle text-sm">
         <h3 className="font-semibold">{title}</h3>

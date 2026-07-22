@@ -269,10 +269,22 @@
     "pathHintAuto": "(path)",
     "browse": "Browse",
     "browseProject": "Project files",
+    "pickModel": "Pick model",
     "multilineHint": "(one per line)",
     "useGlobal": "— Use global settings —",
     "yes": "Yes",
     "no": "No"
+  },
+  "modelPicker": {
+    "loading": "Loading…",
+    "empty": "No downloaded models available — download one in Settings, or type a path directly",
+    "group": {
+      "official": "Official",
+      "custom": "Custom"
+    },
+    "note": {
+      "latest": "latest"
+    }
   },
   "schema": {
     "fieldCount": "{{n}} items",
@@ -1243,7 +1255,12 @@
       "ramGuardDesc": "Budget system RAM and free VRAM against weight file sizes before loading (on by default)",
       "ramGuardHelp": "Model weights must pass through system RAM (disk → RAM → VRAM) to reach the GPU, so loading temporarily uses RAM roughly equal to the file size. On: before loading, check available RAM and free VRAM against the actual size of the files about to be read, and abort with an error if either falls short — including when another process is holding VRAM (e.g. a leftover generation/training task) — avoiding a system-wide paging freeze. Off: keep loading under pressure, which may make the whole system unresponsive for a long time.",
       "ramGuardOn": "On",
-      "ramGuardOff": "Off"
+      "ramGuardOff": "Off",
+      "blocksToSwapLabel": "Block swap",
+      "blocksToSwapDesc": "0 = off (krea2 only). Keeps later layers in RAM, trading time for VRAM",
+      "blocksToSwapSuffix": "layers",
+      "blocksToSwapOffHint": "off",
+      "blocksToSwapHelp": "Keeps the weights of the last N DiT layers in system RAM, moving each one onto the GPU only when it is that layer's turn and releasing it right after. This is a different job from VRAM policy: that one decides which model yields to which, this one works inside a single model — when one model alone does not fit in VRAM, this is the only way. The cost is that every sampling step has to move all swapped layers again, so more steps means more total time. Needs an equal amount of free RAM (about 0.4GB per layer for an fp8 base model, 0.8GB for bf16), and that RAM is locked so other programs cannot use it. krea2 has 28 layers; enter 0 to 28, and start around 14 if you are short on VRAM."
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
     "deleteAsset": "Delete",
@@ -1254,10 +1271,15 @@
     "selectTeVariant": "Set as default text encoder (shared by training and test generation)",
     "teVariantNotDownloaded": "Available after download completes",
     "vaePrecision": {
-      "title": "VAE decode precision",
+      "title": "Test generation precision",
       "label": "Test generation VAE precision",
       "desc": "Default: bf16 (matches ComfyUI on modern GPUs)",
       "help": "Precision used for the final VAE decode in test generation. bf16 matches ComfyUI's automatic VAE dtype on modern GPUs and is the default. fp32 decodes in full precision: peak VRAM is higher, so the daemon temporarily offloads the DiT/Qwen models to CPU around the decode (slower per image)."
+    },
+    "loraMergePrecision": {
+      "label": "LoRA merge precision",
+      "desc": "Default: fp32 (matches ComfyUI); bf16 lowers delta precision and is usually faster",
+      "help": "Controls only the temporary LoRA delta calculation when loading or switching LoRAs on an FP8 base model. fp32 matches ComfyUI; bf16 is usually faster, but the merged result may differ slightly. The overall VRAM peak is dominated by the base model, VAE, fp16 layer workspace, and backups, so it may not decrease. Sampling still uses the merged FP8 weights and does not gain extra VRAM use. Dynamic LoRA adapters on Anima/bf16 base models are unaffected."
     },
     "saveTestImages": {
       "title": "Save test images to disk",
@@ -1495,13 +1517,13 @@
     "waitingImages": "Waiting for images…",
     "finishedNoImages": "Finished (no images)",
     "vramAlreadyFree": "VRAM is already free (model not loaded)",
-    "vramUnloadRequested": "VRAM cleanup requested",
+    "vramUnloadRequested": "Cache release requested",
     "daemonLoading": "Loading status…",
     "daemonBusy": "Cannot unload while generating",
     "daemonNoModel": "No model loaded; nothing to unload",
     "daemonUnloadTitle": "Release VRAM used by the inference daemon; it reloads on demand next time",
     "unloadingVram": "Unloading…",
-    "unloadVram": "Clear VRAM",
+    "unloadVram": "Release cache",
     "logDrawerTitle": "Inference logs",
     "logDrawerOpen": "Logs",
     "logDrawerClose": "Close",
@@ -1811,6 +1833,8 @@
     "saveThenDownloadToast": "Save tags first, then download",
     "downloadFailed": "Download failed: {{error}}",
     "singleEdit": "Single image edit",
+    "resizeGrid": "Drag to resize the image list; arrow keys also work",
+    "resizeSide": "Drag to resize the tag panel; arrow keys also work",
     "prevImage": "Previous",
     "nextImage": "Next",
     "closeEdit": "Close edit",
@@ -2106,6 +2130,7 @@
     "deleteFolderOkText": "Delete group",
     "sortLabel": "Sort",
     "sortTitle": "Sort applies to both grids",
+    "resizePanels": "Drag to resize the two panels; arrow keys also work",
     "downloadPanelTitle": "Dataset — All images",
     "downloadSubtitle": "{{unused}} unused / {{total}} total · {{sel}} selected",
     "selectAll": "Select all",
@@ -2357,7 +2382,9 @@
     "globalAutoLockedPrefix": "Auto",
     "globalAutoLockedLink": "Global settings",
     "globalAutoEditableHint": "Default from Settings · editable",
-    "projectAutoHint": "Auto · Project settings",
+    "restoreGlobalDefault": "Restore default",
+    "restoreGlobalDefaultTitle": "Replace with the model path currently selected in global settings",
+    "projectAutoHint": "Project settings",
     "resetToGlobalDefault": "↺ Reset to global default",
     "resetToGlobalDefaultTitle": "Replace with current value computed from Settings → Model management",
     "statsTitle": "Dataset Params",

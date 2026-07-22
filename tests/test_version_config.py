@@ -45,28 +45,31 @@ def _make_pv(env) -> tuple[dict, dict]:
 
 
 # ---------------------------------------------------------------------------
-# project_specific_overrides
+# initial_project_field_values
 # ---------------------------------------------------------------------------
 
 
-def test_project_specific_overrides_uses_version_dir(env) -> None:
+def test_initial_project_field_values_uses_version_dir(env) -> None:
     p, v = _make_pv(env)
-    ov = version_config.project_specific_overrides(p, v)
+    ov = version_config.initial_project_field_values(p, v)
     vdir = versions.version_dir(p["id"], p["slug"], "baseline")
     assert ov["data_dir"] == str(vdir / "train")
     assert ov["output_dir"] == str(vdir / "output")
     assert ov["output_name"] == f"{p['slug']}_baseline"
-    assert ov["reg_data_dir"] is None  # 没 reg meta
     assert ov["resume_lora"] is None
     assert ov["resume_state"] is None
 
 
-def test_project_specific_overrides_includes_reg_when_meta_exists(env) -> None:
+def test_initial_reg_data_dir_filled_before_reg_exists(env) -> None:
+    """reg_data_dir 无条件填，不看 reg/meta.json 存不存在。
+
+    「先建 config、后生成 reg 集」是常见顺序；条件填充会让后建的 reg 集永远不生效
+    （入队不再回填任何字段）。runtime 对空 / 不存在目录容错，填了也没副作用。
+    """
     p, v = _make_pv(env)
     vdir = versions.version_dir(p["id"], p["slug"], "baseline")
-    (vdir / "reg").mkdir(parents=True, exist_ok=True)
-    (vdir / "reg" / "meta.json").write_text("{}", encoding="utf-8")
-    ov = version_config.project_specific_overrides(p, v)
+    assert not (vdir / "reg" / "meta.json").exists()
+    ov = version_config.initial_project_field_values(p, v)
     assert ov["reg_data_dir"] == str(vdir / "reg")
 
 
@@ -145,20 +148,40 @@ def test_read_tolerates_stale_version_config(env) -> None:
     assert "future_field_from_other_branch" not in cfg_out
 
 
-def test_write_forces_project_overrides(env) -> None:
-    """用户传错的 data_dir / output_dir 都会被服务端覆盖回项目路径。"""
+def test_write_keeps_user_values_by_default(env) -> None:
+    """issue #458 回归：默认不回填项目特定字段 —— 用户设的值就是落盘的值。
+
+    `output_name` 与 `resume_*` 归用户所有；路径字段用户改了也照写（他自己负责）。
+    """
     p, v = _make_pv(env)
     cfg = _minimal_config(
-        data_dir="/some/wrong/path",
-        output_dir="/another/wrong/path",
-        output_name="hacker",
+        data_dir="/my/own/dataset",
+        output_name="我的模型名",
+        resume_lora="/some/lora.safetensors",
     )
     version_config.write_version_config(p, v, cfg)
+    out = version_config.read_version_config(p, v)
+    assert out["data_dir"] == "/my/own/dataset"
+    assert out["output_name"] == "我的模型名"
+    assert out["resume_lora"] == "/some/lora.safetensors"
+
+
+def test_write_initializes_project_fields_when_asked(env) -> None:
+    """创建期（fork / 复制 version / bundle 导入）显式传 initialize 才填初值。"""
+    p, v = _make_pv(env)
+    cfg = _minimal_config(
+        data_dir="/from/source/version",
+        output_name="from_source",
+        resume_lora="/stale/lora.safetensors",
+    )
+    version_config.write_version_config(p, v, cfg, initialize_project_fields=True)
     out = version_config.read_version_config(p, v)
     vdir = versions.version_dir(p["id"], p["slug"], "baseline")
     assert out["data_dir"] == str(vdir / "train")
     assert out["output_dir"] == str(vdir / "output")
+    assert out["reg_data_dir"] == str(vdir / "reg")
     assert out["output_name"] == f"{p['slug']}_baseline"
+    assert out["resume_lora"] is None
 
 
 def test_read_missing_raises(env) -> None:

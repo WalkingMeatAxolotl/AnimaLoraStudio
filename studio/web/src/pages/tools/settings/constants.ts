@@ -241,7 +241,7 @@ export const EMPTY: Secrets = {
   },
   models: { root: null, selected: { anima: '1.0', krea2: 'raw' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { light_tasks_during_train: true },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: true, task_timeout_minutes: 0 },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', lora_merge_precision: 'fp32', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: true, blocks_to_swap: 0, task_timeout_minutes: 0 },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,

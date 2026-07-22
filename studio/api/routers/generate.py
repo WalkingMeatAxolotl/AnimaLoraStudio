@@ -17,6 +17,7 @@ task 结束 supervisor 仍调 cleanup_generate_tempdir 清掉空目录。server 
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -48,6 +49,10 @@ from ...domain.errors import (
 from ...domain.comfy_parity import force_comfy_parity_runtime_config
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
+from ...services.generation_metadata import (
+    build_external_metadata,
+    write_manifest as write_generation_metadata_manifest,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -212,14 +217,20 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             attn_default = gen_cfg.attention_backend
             preview_n = int(gen_cfg.preview_every_n_steps or 0)
             vae_precision = str(getattr(gen_cfg, "vae_precision", "bf16") or "bf16")
+            lora_merge_precision = str(
+                getattr(gen_cfg, "lora_merge_precision", "fp32") or "fp32"
+            )
             vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
             ram_guard = bool(getattr(gen_cfg, "ram_guard", True))
+            blocks_to_swap = int(getattr(gen_cfg, "blocks_to_swap", 0) or 0)
         except Exception:
             attn_default = "auto"
             preview_n = 0
             vae_precision = "bf16"
+            lora_merge_precision = "fp32"
             vram_policy = "auto"
             ram_guard = True
+            blocks_to_swap = 0
         attn = body.attention_backend or attn_default
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
@@ -243,9 +254,11 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             lora_configs=[lc.model_dump() for lc in body.lora_configs],
             mixed_precision="bf16",
             vae_precision=vae_precision,
+            lora_merge_precision=lora_merge_precision,
             attention_backend=attn,
             vram_policy=vram_policy,
             ram_guard=ram_guard,
+            blocks_to_swap=blocks_to_swap,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
 
@@ -272,6 +285,24 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         # 子进程不读这个字段（cfg 透传不解析）。
         if body.params_snapshot:
             cfg_dict["_anima_params_snapshot_"] = body.params_snapshot
+
+        # Civitai/A1111 资源身份不能塞进可移植的 anima_params（其中禁止绝对
+        # 路径），单独写 task 私有档案。task 结束只清 anima_gen_<id> 临时目录，
+        # tasks/<id>/ 档案会保留到用户删任务；落盘接口凭 task_id 读取并算 hash。
+        try:
+            write_generation_metadata_manifest(
+                task_id,
+                prompts=list(body.prompts),
+                model_family=body.model_family,
+                model_path=str(model_paths.get("transformer_path") or ""),
+                vae_path=str(model_paths.get("vae_path") or "") or None,
+                text_encoder=body.text_encoder,
+                loras=[lc.model_dump() for lc in body.lora_configs],
+                xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
+            )
+        except (OSError, TypeError, ValueError):
+            # metadata 是附加能力，档案写入失败不能让已经校验通过的生成任务失败。
+            logger.warning("write generation metadata manifest failed", exc_info=True)
 
         cfg_path = tempdir / "config.json"
         cfg_path.write_text(
@@ -470,7 +501,9 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
 SCHEMA_VERSION = 2
 
 
-def _format_a1111_parameters(params: dict[str, Any]) -> str:
+def _format_a1111_parameters(
+    params: dict[str, Any], external: dict[str, Any] | None = None
+) -> str:
     """组装 a1111 兼容的 `parameters` tEXt 块（ComfyUI / WebUI / Civitai 等通用）。
 
     格式：
@@ -479,11 +512,16 @@ def _format_a1111_parameters(params: dict[str, Any]) -> str:
         Steps: N, Sampler: ..., Schedule type: ..., CFG scale: N, Seed: N, Size: WxH
 
     LoRA 用 <lora:basename-without-ext:scale> 语法（a1111/ComfyUI 标准）。
-    xy_draft / dataset_pick 不入此块（a1111 没标准字段；用 anima_params 取）。
+    xy_draft / dataset_pick 的 UI 上下文不入此块（a1111 没标准字段）；但实际送给
+    daemon 的合并 prompt 会从 task 私有档案写进第一行。
     """
+    external = external or {}
     prompts = params.get("prompts") or [""]
-    prompt = prompts[0] if isinstance(prompts, list) else str(prompts)
-    loras = params.get("loras") or []
+    prompt = external.get("prompt")
+    if prompt is None:
+        prompt = prompts[0] if isinstance(prompts, list) else str(prompts)
+    prompt = str(prompt)
+    loras = external.get("loras") or params.get("loras") or []
     lora_tags: list[str] = []
     for lo in loras:
         if not isinstance(lo, dict):
@@ -507,10 +545,54 @@ def _format_a1111_parameters(params: dict[str, Any]) -> str:
         f"Seed: {params.get('seed', '')}",
         f"Size: {width}x{height}",
     ]
+    model_family = external.get("model_family") or params.get("model_family")
+    if model_family:
+        parts.append(f"Model family: {model_family}")
+    text_encoder = external.get("text_encoder") or params.get("text_encoder")
+    if text_encoder:
+        parts.append(f"Text encoder: {text_encoder}")
+
+    hashes: dict[str, str] = {}
+    model = external.get("model")
+    if isinstance(model, dict) and model.get("name"):
+        parts.append(f"Model: {model['name']}")
+        if model.get("hash"):
+            model_hash = str(model["hash"])
+            parts.append(f"Model hash: {model_hash}")
+            hashes["model"] = model_hash
+    vae = external.get("vae")
+    if isinstance(vae, dict) and vae.get("name"):
+        parts.append(f"VAE: {vae['name']}")
+        if vae.get("hash"):
+            vae_hash = str(vae["hash"])
+            parts.append(f"VAE hash: {vae_hash}")
+            hashes["vae"] = vae_hash
+
+    lora_hashes: list[str] = []
+    for lo in loras:
+        if not isinstance(lo, dict) or not lo.get("hash"):
+            continue
+        name = str(lo.get("name") or "").rsplit(".", 1)[0]
+        if not name:
+            continue
+        digest = str(lo["hash"])
+        lora_hashes.append(f"{name}: {digest}")
+        hashes[f"lora:{name}"] = digest
+    if lora_hashes:
+        parts.append(f'Lora hashes: "{", ".join(lora_hashes)}"')
+    if hashes:
+        parts.append(f"Hashes: {json.dumps(hashes, separators=(',', ':'))}")
+    parts.append("Software: AnimaLoraStudio")
     return f"{prompt}\nNegative prompt: {neg}\n{', '.join(parts)}"
 
 
-def _inject_png_metadata(raw: bytes, params: dict[str, Any], *, mode: str) -> bytes:
+def _inject_png_metadata(
+    raw: bytes,
+    params: dict[str, Any],
+    *,
+    mode: str,
+    external: dict[str, Any] | None = None,
+) -> bytes:
     """注入 PNG tEXt 块到图：
        - `anima_params` —— 结构化 JSON，**zTXt 压缩**（决策 #17），本程序回填用
        - `parameters`   —— a1111 兼容文本（决策 #7：xy **不写**，矩阵图单图拖
@@ -526,7 +608,7 @@ def _inject_png_metadata(raw: bytes, params: dict[str, Any], *, mode: str) -> by
         # 压缩后通常 1-2KB，a1111 不识别 anima_params 反正会跳过
         info.add_text("anima_params", json.dumps(params, ensure_ascii=False), zip=True)
         if mode == "single":
-            info.add_text("parameters", _format_a1111_parameters(params))
+            info.add_text("parameters", _format_a1111_parameters(params, external))
         out = io.BytesIO()
         img.save(out, format="PNG", pnginfo=info)
         return out.getvalue()
@@ -689,12 +771,35 @@ def _decode_params_field(raw: str, field: str) -> dict[str, Any]:
     return decoded
 
 
+def _build_external_metadata_safe(
+    task_id: int | None,
+    params: dict[str, Any],
+    *,
+    source_filename: str,
+) -> dict[str, Any]:
+    """资源 metadata 是 best-effort；失败时仍允许按旧格式保存 PNG。"""
+    try:
+        return build_external_metadata(
+            task_id,
+            params,
+            source_filename=source_filename,
+        )
+    except Exception:
+        logger.warning(
+            "build Civitai resource metadata failed for task %s",
+            task_id,
+            exc_info=True,
+        )
+        return {}
+
+
 @router.post("/api/generate/save")
 async def save_test_image(
     mode: str = Form(...),
     image: UploadFile = File(...),
     params: str = Form(""),
     task_id: Optional[int] = Form(None),
+    source_filename: str = Form(""),
     cells: list[UploadFile] = File(default=[]),
     cells_manifest: str = Form(""),
 ) -> dict[str, Any]:
@@ -705,8 +810,9 @@ async def save_test_image(
 
     **xy mode** → `studio_data/test/<YYYY-MM-DD>/xy/xy plot <N>/{xy plot.png, cell x<i> y<j>.png ...}`
     - `image` = composite 大图（导出 + 缩略图来源），按 mode='xy' 注 anima_params，不写 a1111
-    - `cells` = 每格原图 N 张；`cells_manifest` = JSON 数组 [{xi:int, yi:int, params:dict}]，
-      与 `cells` 同序；每 cell 按 mode='single' 注 anima_params + a1111
+    - `cells` = 每格原图 N 张；`cells_manifest` = JSON 数组
+      [{xi:int, yi:int, params:dict, source_filename:str}]，与 `cells` 同序；每 cell
+      按 mode='single' 注 anima_params + a1111
     - 校验：len(cells)==len(manifest)，无重复 (xi,yi)
     - atomic：先写 sibling `.xy plot <N>.tmp/`，全部 cell 落盘后 `os.replace` 成正式名；
       任一步失败 → `shutil.rmtree(tmp)` 抛 500
@@ -738,7 +844,13 @@ async def save_test_image(
         if params:
             decoded = _decode_params_field(params, "params")
             enriched = _enrich_params_server_side(decoded, task_id=task_id, mode=mode)
-            raw = _inject_png_metadata(raw, enriched, mode=mode)
+            external = await asyncio.to_thread(
+                _build_external_metadata_safe,
+                task_id,
+                enriched,
+                source_filename=source_filename,
+            )
+            raw = _inject_png_metadata(raw, enriched, mode=mode, external=external)
 
         target_dir = TEST_IMAGES_DIR / date.today().isoformat() / mode
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -764,7 +876,7 @@ async def save_test_image(
 
     # 校验 manifest 条目 + 收集 (xi, yi) 防重
     seen_xy: set[tuple[int, int]] = set()
-    cell_specs: list[tuple[int, int, dict[str, Any]]] = []
+    cell_specs: list[tuple[int, int, dict[str, Any], str]] = []
     for i, entry in enumerate(manifest):
         if not isinstance(entry, dict):
             raise HTTPException(400, f"cells_manifest[{i}]: must be an object")
@@ -781,7 +893,8 @@ async def save_test_image(
         cell_params = entry.get("params")
         if cell_params is not None and not isinstance(cell_params, dict):
             raise HTTPException(400, f"cells_manifest[{i}].params: must be a JSON object")
-        cell_specs.append((xi, yi, cell_params or {}))
+        cell_source_filename = str(entry.get("source_filename") or "")
+        cell_specs.append((xi, yi, cell_params or {}, cell_source_filename))
 
     # composite 注入 anima_params（mode='xy'，不写 a1111）
     composite_bytes = raw
@@ -815,11 +928,21 @@ async def save_test_image(
         _atomic_write_png(tmp_dir / _XY_COMPOSITE_NAME, composite_bytes)
         # cells
         cell_paths: list[Path] = []
-        for (xi, yi, cell_params), cb in zip(cell_specs, cell_bytes_list):
+        for (xi, yi, cell_params, cell_source_filename), cb in zip(
+            cell_specs, cell_bytes_list
+        ):
             cell_payload = cb
             if cell_params:
                 enriched_cell = _enrich_params_server_side(cell_params, task_id=task_id, mode="single")
-                cell_payload = _inject_png_metadata(cell_payload, enriched_cell, mode="single")
+                external = await asyncio.to_thread(
+                    _build_external_metadata_safe,
+                    task_id,
+                    enriched_cell,
+                    source_filename=cell_source_filename,
+                )
+                cell_payload = _inject_png_metadata(
+                    cell_payload, enriched_cell, mode="single", external=external,
+                )
             cell_path = tmp_dir / f"cell x{xi} y{yi}.png"
             _atomic_write_png(cell_path, cell_payload)
             cell_paths.append(cell_path)

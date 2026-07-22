@@ -1311,6 +1311,20 @@ export function VaePrecisionSection({
           <option value="fp32">fp32</option>
         </select>
       </SettingsField>
+      <SettingsField
+        label={t('settings.loraMergePrecision.label')}
+        desc={t('settings.loraMergePrecision.desc')}
+        helpTooltip={<p>{t('settings.loraMergePrecision.help')}</p>}
+      >
+        <select
+          value={draft.generate.lora_merge_precision ?? 'fp32'}
+          onChange={(e) => update('generate', 'lora_merge_precision', e.target.value as 'fp32' | 'bf16')}
+          className={`${textInputClass} max-w-32`}
+        >
+          <option value="fp32">fp32</option>
+          <option value="bf16">bf16</option>
+        </select>
+      </SettingsField>
     </SettingsSection>
   )
 }
@@ -1351,6 +1365,29 @@ export function VramPolicySection({
           value={draft.generate.ram_guard ?? true}
           onChange={(v) => update('generate', 'ram_guard', v)}
         />
+      </SettingsField>
+      <SettingsField
+        label={t('settings.vramPolicy.blocksToSwapLabel')}
+        desc={t('settings.vramPolicy.blocksToSwapDesc')}
+        helpTooltip={<p>{t('settings.vramPolicy.blocksToSwapHelp')}</p>}
+      >
+        <div className="flex items-center gap-2">
+          <SettingsInput
+            type="number"
+            min={0}
+            max={28}
+            value={draft.generate.blocks_to_swap ?? 0}
+            onChange={(v) =>
+              update('generate', 'blocks_to_swap', Math.max(0, Number(v) || 0))
+            }
+            className={`${textInputClass} max-w-32`}
+          />
+          <span className="text-xs text-fg-tertiary">
+            {(draft.generate.blocks_to_swap ?? 0) === 0
+              ? t('settings.vramPolicy.blocksToSwapOffHint')
+              : t('settings.vramPolicy.blocksToSwapSuffix')}
+          </span>
+        </div>
       </SettingsField>
     </SettingsSection>
   )

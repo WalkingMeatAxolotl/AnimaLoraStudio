@@ -87,7 +87,9 @@ def run_sample(
     # 「训练 reserved + 采样新段」的瞬时提交可能顶穿 dedicated 上限，
     # 触发 WDDM 把训练张量 demote 到共享内存（=系统 RAM）——之后每步
     # 训练都走 PCIe，表现为采样后持续整机卡顿（显存/内存数字反而稳定）。
-    _log_vram_watermark("采样前")
+    # 采样前这次顺带结算「上一段训练步」的峰值并重置，于是采样后那次报出的
+    # 就是纯采样期峰值 —— 两个数字合起来才能回答「这张卡够不够」
+    _log_vram_watermark("采样前", peak_label="训练步")
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     try:
@@ -129,20 +131,29 @@ def run_sample(
         # 归还采样期的新形状分配，训练继续时 allocator 干净
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        _log_vram_watermark("采样后")
+        _log_vram_watermark("采样后", peak_label="采样期")
 
 
-def _log_vram_watermark(stage: str) -> None:
+def _log_vram_watermark(stage: str, *, peak_label: str = "") -> None:
     """采样前后水位一行日志：alloc/reserved（torch 视角）+ 全卡（NVML）。
 
     reserved 与全卡的差额变化用于定位 WDDM demote（共享内存曲线跳升时
-    torch 侧数字反而稳定）。失败静默——日志不阻塞训练。"""
+    torch 侧数字反而稳定）。
+
+    ``peak_label``：同时报告**上一段的峰值**（`max_memory_allocated` 高水位）
+    并重置计数。瞬时值读不出段内尖峰 —— 训练步稳态和采样期峰值可能差好几 GB，
+    而决定「这张卡够不够」的是峰值不是稳态（block swap 场景尤其关键：常驻降下来
+    之后，采样期就成了新的天花板）。失败静默——日志不阻塞训练。"""
     try:
         if not torch.cuda.is_available():
             return
         alloc = torch.cuda.memory_allocated() / 1e9
         reserved = torch.cuda.memory_reserved() / 1e9
         line = f"[{stage}] 显存 alloc={alloc:.1f}GB reserved={reserved:.1f}GB"
+        if peak_label:
+            peak = torch.cuda.max_memory_allocated() / 1e9
+            line += f" | {peak_label}峰值={peak:.1f}GB"
+            torch.cuda.reset_peak_memory_stats()
         try:
             import pynvml
 

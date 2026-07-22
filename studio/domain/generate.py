@@ -93,6 +93,10 @@ class GenerateConfig(BaseModel):
         "bf16",
         description="VAE decode 精度：bf16 对齐 ComfyUI 现代 GPU 默认；fp32 全精度（decode 前会 offload 腾显存）",
     )
+    lora_merge_precision: Literal["fp32", "bf16"] = Field(
+        "fp32",
+        description="FP8 底模 LoRA merge 临时精度：fp32 对齐 ComfyUI；bf16 降低 delta 计算量、通常更快",
+    )
     vae_tiling: Literal["auto", "on", "off"] = Field(
         "auto",
         description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
@@ -102,6 +106,15 @@ class GenerateConfig(BaseModel):
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention backend：none（SDPA）/ xformers / flash_attn",
+    )
+    blocks_to_swap: int = Field(
+        0, ge=0,
+        description="换出到内存的 DiT 层数（0=关闭，krea2 生效）。被换出的层权重常驻内存，"
+                    "算到该层才搬进显存，用时间换显存。与 vram_policy 分工不同："
+                    "vram_policy 管模型之间（文本编码器 / DiT 谁让位），本项管单个 DiT 内部，"
+                    "是「单个模型自己就装不下」时唯一的解法。"
+                    "出图每一步都要搬一遍全部换出层，步数越多累计耗时越长。"
+                    "需要等量的可用内存（每层约 0.4GB fp8 / 0.8GB bf16），且内存会被锁定不可换页",
     )
     vram_policy: Literal["auto", "save_vram", "performance"] = Field(
         "auto",

@@ -269,10 +269,22 @@
     "pathHintAuto": "（路径）",
     "browse": "浏览",
     "browseProject": "从项目选择",
+    "pickModel": "选择模型",
     "multilineHint": "（每行一项）",
     "useGlobal": "— 使用全局设置 —",
     "yes": "是",
     "no": "否"
+  },
+  "modelPicker": {
+    "loading": "加载中…",
+    "empty": "模型设置里还没有已下载的可选模型 —— 去设置页下载，或在输入框手填路径",
+    "group": {
+      "official": "官方",
+      "custom": "自定义"
+    },
+    "note": {
+      "latest": "最新"
+    }
   },
   "schema": {
     "fieldCount": "{{n}} 项",
@@ -1223,7 +1235,7 @@
       "title": "显存自动清理",
       "label": "闲置自动卸载（分钟）",
       "desc": "默认 10 分钟",
-      "help": "测试出图模型加载后会常驻显存，方便重复调参。超过指定时长没出图就自动卸载释放显存（下次出图重新加载约 30-60 秒）。0 = 关闭，模型常驻直到手动点\"清理显存\"。推荐 10 分钟。",
+      "help": "测试出图模型加载后会常驻显存，方便重复调参。超过指定时长没出图就自动卸载释放显存（下次出图重新加载约 30-60 秒）。0 = 关闭，模型常驻直到手动点\"释放缓存\"。推荐 10 分钟。",
       "minutesSuffix": "分",
       "offHint": "已关闭：模型常驻直到手动清理",
       "taskTimeoutLabel": "任务超时强制终止（分钟）",
@@ -1243,7 +1255,12 @@
       "ramGuardDesc": "加载前按权重文件大小预算系统内存与空闲显存（默认开启）",
       "ramGuardHelp": "模型权重必须经过系统内存（磁盘 → 内存 → 显存）才能上卡，大文件加载会临时占用与文件等量的内存。开启：加载前按即将读取的权重文件实际大小检查系统可用内存和 GPU 空闲显存，任一不足即中止并报错——包括其他进程占着显存的情形（例如另一个出图/训练任务未退出），避免整机换页卡死。关闭：资源不足时继续加载，可能导致系统长时间无响应。",
       "ramGuardOn": "开启",
-      "ramGuardOff": "关闭"
+      "ramGuardOff": "关闭",
+      "blocksToSwapLabel": "Block 交换",
+      "blocksToSwapDesc": "0=关闭（krea2 生效）。把靠后的层放内存，用时间换显存",
+      "blocksToSwapSuffix": "层",
+      "blocksToSwapOffHint": "关闭",
+      "blocksToSwapHelp": "把 DiT 靠后的若干层权重常驻内存，算到该层才搬进显存，算完立即让出。与「显存策略」分工不同：显存策略管多个模型之间谁让位，本项管单个模型内部——当单个模型自己就装不下显存时，这是唯一的办法。代价是每一步出图都要把换出的层搬一遍，步数越多累计耗时越长。需要等量的可用内存（每层约 0.4GB fp8 底模 / 0.8GB bf16 底模），且这部分内存会被锁定、其他程序无法使用。krea2 共 28 层，填 0 到 28；显存不够时从 14 开始试。"
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL 文本编码器",
     "deleteAsset": "删除",
@@ -1254,10 +1271,15 @@
     "selectTeVariant": "设为默认文本编码器（训练与测试出图共用）",
     "teVariantNotDownloaded": "下载完成后可选中",
     "vaePrecision": {
-      "title": "VAE 解码精度",
+      "title": "测试出图精度",
       "label": "测试出图 VAE 精度",
       "desc": "默认 bf16（与 ComfyUI 在现代显卡上的默认一致）",
       "help": "测试出图最后一步 VAE 解码使用的精度。bf16 与 ComfyUI 在现代显卡上自动选择的 VAE 精度一致，为默认值。fp32 全精度解码：显存峰值更高，daemon 会在解码前后临时把 DiT/Qwen 模型挪到内存腾显存（每张图更慢）。"
+    },
+    "loraMergePrecision": {
+      "label": "LoRA merge 精度",
+      "desc": "默认 fp32（与 ComfyUI 一致）；bf16 降低 delta 计算精度，通常更快",
+      "help": "只控制 FP8 底模加载或切换 LoRA 时，LoRA delta 的临时计算精度。fp32 与 ComfyUI 的计算方式一致；bf16 通常更快，但合并结果可能有轻微数值差异。总体显存峰值主要由底模、VAE、fp16 层工作区和备份决定，因此不保证下降。采样阶段仍使用合并后的 FP8 权重，不增加采样显存。Anima/bf16 底模的动态 LoRA 不受此选项影响。"
     },
     "saveTestImages": {
       "title": "测试出图自动落盘",
@@ -1495,13 +1517,13 @@
     "waitingImages": "等待生成图…",
     "finishedNoImages": "已结束（无图）",
     "vramAlreadyFree": "显存已释放（模型未加载）",
-    "vramUnloadRequested": "已请求清理显存",
+    "vramUnloadRequested": "已请求释放缓存",
     "daemonLoading": "加载状态中…",
     "daemonBusy": "生成中不可清理",
     "daemonNoModel": "模型未加载，无需清理",
     "daemonUnloadTitle": "释放推理 daemon 占用的 VRAM；下次出图按需重 load",
     "unloadingVram": "清理中…",
-    "unloadVram": "清理显存",
+    "unloadVram": "释放缓存",
     "logDrawerTitle": "推理日志",
     "logDrawerOpen": "日志",
     "logDrawerClose": "关闭",
@@ -1811,6 +1833,8 @@
     "saveThenDownloadToast": "先保存标签，再下载训练集",
     "downloadFailed": "下载失败: {{error}}",
     "singleEdit": "单图编辑",
+    "resizeGrid": "拖动调整图片列表宽度，也可用方向键",
+    "resizeSide": "拖动调整标签面板宽度，也可用方向键",
     "prevImage": "上一张",
     "nextImage": "下一张",
     "closeEdit": "关闭编辑",
@@ -2106,6 +2130,7 @@
     "deleteFolderOkText": "删分组",
     "sortLabel": "排序",
     "sortTitle": "排序作用于左右两个网格",
+    "resizePanels": "拖动调整左右面板宽度，也可用方向键",
     "downloadPanelTitle": "数据集 — 全量备份",
     "downloadSubtitle": "{{unused}} 未用 / {{total}} 全量 · 已选 {{sel}}",
     "selectAll": "全选",
@@ -2357,7 +2382,9 @@
     "globalAutoLockedPrefix": "自动",
     "globalAutoLockedLink": "全局设置",
     "globalAutoEditableHint": "默认来自 Settings · 可改",
-    "projectAutoHint": "自动 · 项目设置",
+    "restoreGlobalDefault": "恢复默认",
+    "restoreGlobalDefaultTitle": "用全局设置里当前选择的模型路径替换",
+    "projectAutoHint": "项目设置",
     "resetToGlobalDefault": "↺ 重置为全局默认",
     "resetToGlobalDefaultTitle": "用 Settings 模型管理算出的当前值替换",
     "statsTitle": "训练集参数",

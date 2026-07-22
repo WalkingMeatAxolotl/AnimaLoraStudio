@@ -45,7 +45,14 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.domain.comfy_parity import force_comfy_parity_runtime_config  # noqa: E402
-from studio.services.inference.core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
+from studio.services.inference.core import (  # noqa: E402
+    DeferredVAE,
+    LoRAMeta,
+    LoRASpec,
+    apply_loras,
+    read_lora_meta,
+    release_vae_after_decode,
+)
 
 # 预热 transformers.generation → sklearn → scipy.special import 链。
 # transformers 5.x 的 AutoModelForCausalLM.from_pretrained 在 load text encoder
@@ -65,6 +72,11 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("anima_daemon")
+
+_GIB = 1024 ** 3
+_TE_LOAD_FALLBACK_FP8 = 7 * _GIB
+_TE_LOAD_FALLBACK_FULL = 11 * _GIB
+_TE_ENCODE_FALLBACK = 2 * _GIB
 
 
 # ---------------------------------------------------------------------------
@@ -131,11 +143,138 @@ def _move_module_to_device(module: Any, device: str) -> None:
     module.to(device)
 
 
+def _swap_discount_ratio(family_id: str, blocks_to_swap: int) -> float:
+    """block swap 下不会进显存的权重比例（显存预算折扣）。
+
+    比例而非字节：fp8 与 bf16 的文件大小差一倍，按字节折扣会在 fp8 场景把护栏
+    折扣穿（训练侧同款，见 training/sysmem.check_load_budget）。
+    族不支持 / 查询失败返回 0，护栏退化成保守。
+    """
+    if blocks_to_swap <= 0:
+        return 0.0
+    try:
+        family = _T.get_family(family_id)
+        ratio_fn = getattr(family, "swapped_param_ratio", None)
+        return float(ratio_fn(blocks_to_swap)) if ratio_fn else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def _move_adapter_to_device(adapter: Any, device: str, dtype: Any) -> None:
     network = getattr(adapter, "network", None)
     if network is None or not hasattr(network, "to"):
         return
     network.to(device=device, dtype=dtype)
+
+
+def _cuda_mem_info(device: str) -> tuple[int, int] | None:
+    try:
+        target = torch.device(device)
+        if target.type != "cuda" or not torch.cuda.is_available():
+            return None
+        free, total = torch.cuda.mem_get_info(target)
+        return int(free), int(total)
+    except Exception:
+        return None
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """Recognize CUDA allocator failures without hiding unrelated errors."""
+    return "cuda out of memory" in str(exc).lower()
+
+
+def _recover_cuda_allocator(device: str) -> None:
+    """Drop failed-forward temporaries before one deterministic retry."""
+    import gc
+
+    gc.collect()
+    try:
+        target = torch.device(device)
+    except Exception:
+        return
+    if target.type != "cuda" or not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize(target)
+    except Exception:
+        pass
+    try:
+        torch._C._cuda_clearCublasWorkspaces()
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+
+def _sample_with_cuda_oom_retry(
+    sample_once: Any,
+    *,
+    seed: int,
+    device: str,
+    before_retry: Any = None,
+) -> Any:
+    """Retry one transient CUDA OOM with the exact same random seed.
+
+    A large FP8 DiT consists of many CUDA allocations.  On Windows/WDDM, the
+    first forward immediately after a CPU -> GPU round-trip can occasionally
+    fail a small allocation even while ``mem_get_info`` reports many GiB free.
+    Once the failed-forward tensors are released, the same forward succeeds.
+    Keep this recovery narrow: CUDA OOM only, CUDA device only, one retry.
+    """
+    try:
+        return sample_once()
+    except Exception as exc:
+        if torch.device(device).type != "cuda" or not _is_cuda_oom(exc):
+            raise
+        logger.warning(
+            "transient CUDA OOM during generation; clearing allocator state "
+            "and retrying once with seed=%d",
+            seed,
+        )
+
+    if callable(before_retry):
+        before_retry()
+    _recover_cuda_allocator(device)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    return sample_once()
+
+
+def _te_auto_safety_margin(total_bytes: int) -> int:
+    """Keep residency headroom to avoid WDDM paging before CUDA OOM.
+
+    ``mem_get_info`` describes allocatable CUDA memory, not the point where
+    Windows starts evicting GPU allocations. A measured 32 GiB run remained
+    below CUDA OOM yet made a 16 second TE load take more than three minutes.
+    Reserving 40% avoids that cliff; larger cards can still use co-residency.
+    """
+    return max(_GIB, int(total_bytes * 0.40))
+
+
+def _should_yield_dit_for_te(
+    policy: str,
+    device: str,
+    te_increment_bytes: int,
+) -> tuple[bool, dict[str, int] | None]:
+    """Return task-level DiT yield decision and its auditable memory budget."""
+    normalized = str(policy or "auto")
+    if normalized == "performance":
+        return False, None
+    if normalized == "save_vram":
+        return True, None
+    info = _cuda_mem_info(device)
+    if info is None:
+        # auto 的目标是保护峰值；读不到预算时保守顺序化。
+        return True, None
+    free, total = info
+    margin = _te_auto_safety_margin(total)
+    required = max(0, int(te_increment_bytes)) + margin
+    return free < required, {
+        "free": free,
+        "total": total,
+        "te_increment": max(0, int(te_increment_bytes)),
+        "margin": margin,
+        "required": required,
+    }
 
 
 class GenerationCanceled(BaseException):
@@ -207,16 +346,27 @@ class ModelCache:
         self.attention_backend: Optional[str] = None
         self.mixed_precision: Optional[str] = None
         self.vae_precision: Optional[str] = None
+        self.vae_tiling: str = "auto"
+        # 只控制 fp8 底模 LoRA merge 临时 delta；不属于底模 identity，切换时
+        # detach + 重 merge 即可，不应触发 DiT/VAE 全重载。
+        self.lora_merge_precision: str = "fp32"
         self.text_encoder_backend: Optional[str] = None
         self.t5_tokenizer_backend: Optional[str] = None
         self.ram_guard: bool = True
         #: TE 先行栈的身份键（family_id, text_encoder_path）——ensure_text_ready
         #: 据此复用/重建；_load 据此避免重复加载
         self._text_ready_key: Optional[tuple] = None
+        # 首次安全的 TE 先行加载用 CUDA allocator 实测校准。value =
+        # (load+encode 峰值增量, TE 已驻留时仅 encode 的额外增量)。
+        self._te_peak_calibration: dict[tuple, tuple[int, int]] = {}
         self.device: Optional[str] = None
         self.dtype: Any = None
         self.lora_dtype: Any = torch.float32
         self.model: Any = None
+        #: block swap（training.block_swap.PinnedBlockSwap）。属于底模 identity：
+        #: blocks_to_swap 改变要重载 DiT（换出层是在 loader 里就不上卡的）。
+        self.blocks_to_swap: int = 0
+        self.block_swap: Any = None
         self.vae: Any = None
         # 族 opaque 文本栈（anima=(qwen_model, qwen_tok, t5_tok) 三元组，
         # krea2=Krea2TextStack）——只经 family.sample_image 消费，daemon 不拆包
@@ -225,6 +375,7 @@ class ModelCache:
         self.adapters: list[Any] = []
         self.last_lora_specs: list[LoRASpec] = []
         self.last_lora_metas: list[LoRAMeta] = []
+        self.last_lora_merge_precision: Optional[str] = None
         # 中间步预览用 latent2rgb 线性投影（见 _decode_latent2rgb_preview）——
         # 无外部模型 / 无下载，故 CACHE 不再持任何 preview decoder 状态。
 
@@ -278,6 +429,11 @@ class ModelCache:
         backend = cfg.get("attention_backend", "none")
         precision = cfg.get("mixed_precision", "bf16")
         vae_precision = cfg.get("vae_precision", precision)
+        vae_tiling = str(cfg.get("vae_tiling") or "auto")
+        blocks_to_swap = int(cfg.get("blocks_to_swap") or 0)
+        self.lora_merge_precision = str(
+            cfg.get("lora_merge_precision") or "fp32"
+        ).lower()
         text_encoder_backend = cfg.get("text_encoder_backend", "hf")
         t5_tokenizer_backend = cfg.get("t5_tokenizer_backend", "slow")
         transformer_path = cfg["transformer_path"]
@@ -307,6 +463,9 @@ class ModelCache:
             or self.attention_backend != backend
             or self.mixed_precision != precision
             or self.vae_precision != vae_precision
+            or self.vae_tiling != vae_tiling
+            # 换出哪些层是在 loader 里决定的（换出层根本不上卡），改了必须重载
+            or self.blocks_to_swap != blocks_to_swap
             or self.text_encoder_backend != text_encoder_backend
             or self.t5_tokenizer_backend != t5_tokenizer_backend
         )
@@ -318,6 +477,9 @@ class ModelCache:
                 self.ram_guard,
                 weight_paths=[transformer_path, vae_path],
                 stage="模型加载",
+                vram_discount_ratio=_swap_discount_ratio(
+                    family_id, blocks_to_swap,
+                ),
             )
             # keep_text：TE 先行栈刚编码完（LRU 已填充），重载不清它
             self.unload(keep_text=True)
@@ -332,6 +494,8 @@ class ModelCache:
                 vae_precision=vae_precision,
                 text_encoder_backend=text_encoder_backend,
                 t5_tokenizer_backend=t5_tokenizer_backend,
+                vae_tiling=vae_tiling,
+                blocks_to_swap=blocks_to_swap,
             )
             _emit_evt("loaded")
 
@@ -348,6 +512,8 @@ class ModelCache:
         vae_precision: str,
         text_encoder_backend: str,
         t5_tokenizer_backend: str,
+        vae_tiling: str = "auto",
+        blocks_to_swap: int = 0,
     ) -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _torch_dtype_from_precision(precision)
@@ -358,10 +524,21 @@ class ModelCache:
 
         family = _T.get_family(family_id)
         logger.info("loading transformer [%s] %s", family_id, transformer_path)
+        swap_extra: dict[str, Any] = {}
+        if blocks_to_swap > 0:
+            if "block_swap" not in family.spec.capabilities:
+                raise RuntimeError(
+                    f"model_family='{family_id}' 不支持 block swap，但 "
+                    f"blocks_to_swap={blocks_to_swap}。请置 0。"
+                )
+            # 换出层由 loader 直接落 CPU pinned，不经显存
+            swap_extra["blocks_to_swap"] = blocks_to_swap
+            logger.info("block swap: last %d blocks stay in RAM", blocks_to_swap)
         model = family.load_dit(
             transformer_path, device, dtype,
             attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
             purpose="generate",
+            **swap_extra,
         )
         if use_xformers and not _T.enable_xformers(model):
             raise RuntimeError(
@@ -369,8 +546,16 @@ class ModelCache:
                 "but xformers could not be enabled"
             )
 
-        logger.info("loading vae %s", vae_path)
-        vae = family.load_vae(vae_path, device, vae_dtype)
+        # VAE is deliberately absent from VRAM during model load, LoRA merge,
+        # prompt encoding and diffusion sampling.  The proxy loads it on the
+        # first decode-side attribute lookup inside family.sample_image().
+        vae = DeferredVAE(
+            lambda: family.load_vae(
+                vae_path, device, vae_dtype, tiling=vae_tiling,
+            ),
+            device=device,
+            label=f"VAE {vae_path}",
+        )
 
         # 族 opaque 文本栈，不拆包。krea2 的 TE 先行栈（ensure_text_ready）
         # 已就绪且身份匹配时复用——保住预编码 LRU，不重复加载。
@@ -391,6 +576,17 @@ class ModelCache:
                 cache_enabled=False,
             )
 
+        # block swap：换出层此刻已在 CPU pinned（loader 直接落的），这里建管理
+        # 对象并挂前向钩子。LoRA 在 apply_loras 里按任务注入/merge，那边会先
+        # restore_masters() 保证 merge 落在主副本上（doc §9.6）。
+        self.block_swap = None
+        self.blocks_to_swap = blocks_to_swap
+        if blocks_to_swap > 0:
+            from training.block_swap import PinnedBlockSwap
+
+            self.block_swap = PinnedBlockSwap(model.blocks, blocks_to_swap, device)
+            self.block_swap.attach()
+
         self.family_id = family_id
         self.family = family
         self.model = model
@@ -403,6 +599,7 @@ class ModelCache:
         self.attention_backend = backend
         self.mixed_precision = precision
         self.vae_precision = vae_precision
+        self.vae_tiling = vae_tiling
         self.text_encoder_backend = text_encoder_backend
         self.t5_tokenizer_backend = t5_tokenizer_backend
         self.device = device
@@ -411,6 +608,7 @@ class ModelCache:
         self.adapters = []
         self.last_lora_specs = []
         self.last_lora_metas = []
+        self.last_lora_merge_precision = None
         # 大权重加载完：mmap 文件缓存页（DiT 13-26GB + VAE）归还系统，
         # 防物理内存紧张机器换页卡死（TE lazy 加载后由 ensure_model 再 trim）
         from training.sysmem import trim_working_set
@@ -420,12 +618,31 @@ class ModelCache:
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
         """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
         self._move_runtime_to_device()
+        if self.block_swap is not None:
+            # 关键顺序（doc §9.6）：fp8 底模的 LoRA 走**权重 merge**，而跑过前向后
+            # 换出层的 .data 指向的是会被下一层换入覆盖的 GPU 槽位——直接 merge
+            # 会静默丢失。先把参数指回 CPU pinned 主副本，delta 落在主副本上，
+            # 之后每次换入带的都是 merged 权重。
+            # bf16 底模走 lycoris hook 不改权重，restore 对它是无害的 no-op 语义。
+            self.block_swap.restore_masters()
 
         specs = [
             LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
             for lc in lora_configs
         ]
-        if specs == self.last_lora_specs and self.adapters:
+        # 动态 adapter 不受 merge 精度影响；fp8 merge 句柄则在设置改变时
+        # 必须 detach 后按新精度重 merge。
+        adapters_are_dynamic = bool(self.adapters) and all(
+            getattr(a, "supports_hot_reload", True) for a in self.adapters
+        )
+        if (
+            specs == self.last_lora_specs
+            and self.adapters
+            and (
+                adapters_are_dynamic
+                or self.last_lora_merge_precision == self.lora_merge_precision
+            )
+        ):
             return self.adapters
 
         current_metas: list[LoRAMeta] = []
@@ -459,6 +676,7 @@ class ModelCache:
             else:
                 self.last_lora_specs = specs
                 self.last_lora_metas = current_metas
+                self.last_lora_merge_precision = self.lora_merge_precision
                 self.model.eval()
                 return self.adapters
 
@@ -479,11 +697,14 @@ class ModelCache:
                 self.text_encoder_path, self.t5_tokenizer_path,
                 self.attention_backend, self.mixed_precision,
                 self.vae_precision, self.text_encoder_backend,
-                self.t5_tokenizer_backend,
+                self.t5_tokenizer_backend, self.vae_tiling,
             )
             # family_id 在 unload() 里被清空，必须先存——漏传曾是隐性
-            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）
+            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）。
+            # blocks_to_swap 同理：unload() 会清零，漏传则重载后 block swap
+            # 静默消失、模型全量上卡（小显存直接 OOM）。
             saved_family = self.family_id or "anima"
+            saved_blocks_to_swap = self.blocks_to_swap
             self.unload()
             self._load(
                 family_id=saved_family,
@@ -496,24 +717,39 @@ class ModelCache:
                 vae_precision=saved_paths[6] or saved_paths[5],
                 text_encoder_backend=saved_paths[7] or "hf",
                 t5_tokenizer_backend=saved_paths[8] or "slow",
+                vae_tiling=saved_paths[9] or "auto",
+                blocks_to_swap=saved_blocks_to_swap,
             )
             _emit_evt("loaded")
         self.last_lora_specs = []
         self.last_lora_metas = []
+        self.last_lora_merge_precision = None
 
         self.adapters = apply_loras(
             self.model, specs, self.device, self.lora_dtype,
             family_id=self.family_id or "anima",
+            lora_merge_precision=self.lora_merge_precision,
+            # 开了 block swap = 用户内存本就紧张：不留那份与整个模型等大的 CPU
+            # 备份（krea2 fp8 实测 12.23GB），换 LoRA 改走「重载模型」兜底
+            keep_merge_backup=self.block_swap is None,
         )
         self.last_lora_specs = specs
         self.last_lora_metas = current_metas
+        self.last_lora_merge_precision = self.lora_merge_precision
         self.model.eval()
         return self.adapters
 
     def _move_runtime_to_device(self) -> None:
         if not self.device:
             return
-        _move_module_to_device(self.model, self.device)
+        if self.block_swap is not None:
+            # 一刀切 .to(device) 会把换出层的 CPU pinned 主副本一起搬上卡，
+            # swap 白做且瞬时占用等于完整模型（小卡直接 OOM）——跳过被管理的张量
+            from training.block_swap import move_module_excluding
+
+            move_module_excluding(self.model, self.device, self.block_swap)
+        else:
+            _move_module_to_device(self.model, self.device)
         # anima 文本栈是 (qwen_model, qwen_tok, t5_tok) 三元组——采样内部的
         # decode offload 会把 TE 挪去 CPU，这里搬回。自管 device 的栈
         # （krea2 的 Krea2TextStack）没有裸模块成员，循环自然 no-op。
@@ -523,6 +759,19 @@ class ModelCache:
                     _move_module_to_device(member, self.device)
         for adapter in self.adapters:
             _move_adapter_to_device(adapter, self.device, self.lora_dtype)
+
+    def _move_dit_and_adapters(self, device: str) -> None:
+        """Move only the sampling model side; leave TE/VAE orchestration alone."""
+        _move_module_to_device(self.model, device)
+        for adapter in self.adapters:
+            _move_adapter_to_device(adapter, device, self.lora_dtype)
+        if torch.cuda.is_available():
+            # ``Module.to(cuda)`` schedules thousands of FP8 parameter copies.
+            # Establish an explicit hand-off boundary before the first large
+            # attention allocation; this is especially important under WDDM.
+            if torch.device(device).type == "cuda":
+                torch.cuda.synchronize(torch.device(device))
+            torch.cuda.empty_cache()
 
     def unload(self, *, keep_text: bool = False) -> None:
         """卸载模型栈。``keep_text``：保留 TE 先行栈（含预编码 LRU）——
@@ -542,6 +791,24 @@ class ModelCache:
                     pass
             return
         logger.info("unloading model")
+        # 埋点必须在**丢引用之前**取基线，否则丢引用那一步的回收量测不到
+        from training.sysmem import available_ram_bytes, trim_working_set
+
+        _ram_marks: list[tuple[str, int | None]] = [("起点", available_ram_bytes())]
+        had_block_swap = self.block_swap is not None
+        if had_block_swap:
+            # 摘钩子并丢弃管理对象。注意**丢引用不等于还内存**：pinned 走
+            # PyTorch 的 host caching allocator，del + gc 之后实测归还 0 字节，
+            # 必须显式清 host cache（见下方 _release_pinned_host_cache）。
+            try:
+                # close() 而非 detach()：主副本被 param.data 引用，而持有 block
+                # 的不止 self.model（adapters 里的 LyCORIS 也持 org_module），
+                # 让组件自己把参数指走才可靠
+                self.block_swap.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.block_swap = None
+            self.blocks_to_swap = 0
         self.model = None
         self.vae = None
         self.family_id = None
@@ -549,9 +816,13 @@ class ModelCache:
         self.adapters = []
         self.last_lora_specs = []
         self.last_lora_metas = []
+        self.last_lora_merge_precision = None
+        _ram_marks.append(("丢引用", available_ram_bytes()))
+
         try:
             import gc
             gc.collect()
+            _ram_marks.append(("gc", available_ram_bytes()))
             if torch.cuda.is_available():
                 try:
                     # cuBLAS workspace 是 C++ 级常驻分配（Python gc 不可见，
@@ -563,8 +834,43 @@ class ModelCache:
                 except Exception:
                     pass
                 torch.cuda.empty_cache()
+                _ram_marks.append(("empty_cache", available_ram_bytes()))
+            # 刻意放在 CUDA 分支**外**：用过 block swap 就必然有 pinned 内存待还，
+            # 这件事不该取决于「卸载这一刻 CUDA 还可不可用」。函数本身对 API 缺失
+            # 静默，无 CUDA 环境下是安全 no-op。
+            if had_block_swap:
+                _release_pinned_host_cache()
+                _ram_marks.append(("pinned 归还", available_ram_bytes()))
+            # 大权重的 mmap 文件缓存页（DiT 13-26GB + TE）在 working set 里赖着
+            # 不走 —— 加载后 trim 过一次，卸载后同样要 trim（此前漏了）
+            trim_working_set()
+            _ram_marks.append(("trim working set", available_ram_bytes()))
         except Exception:
             pass
+
+        try:
+            parts = []
+            prev = _ram_marks[0][1]
+            for label, value in _ram_marks[1:]:
+                if value is None or prev is None:
+                    continue
+                parts.append(f"{label} +{(value - prev) / 1024**3:.2f}GB")
+                prev = value
+            tail = _ram_marks[-1][1]
+            if tail is not None:
+                logger.info(
+                    "[卸载] 可用内存 %.1fGB（%s）",
+                    tail / 1024**3, "，".join(parts) or "无变化",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _release_pinned_host_cache() -> None:
+    """把 pinned 内存还给操作系统（实现见 training.block_swap，训练侧共用）。"""
+    from training.block_swap import release_pinned_host_cache
+
+    release_pinned_host_cache()
 
 
 CACHE = ModelCache()
@@ -584,9 +890,9 @@ def _precache_prompts_and_release(
 
     XY / 多 prompt generate 的 prompt 集合在任务开始前就封闭——先把全部
     prompt 编进在线 LRU，再**彻底释放** TE（release，非 offload：不留
-    ~5GB CPU 副本；conditioning 已在 LRU，下个任务 LRU miss 再从盘载
-    ~3s）。与 ensure_text_ready 组成 TE 先行编排：首次任务在 DiT 加载前
-    编码，任一时刻 GPU 只有一个大模型。
+    CPU 权重副本；conditioning 已在 LRU，下个任务 LRU miss 再从盘载）。
+    与 ensure_text_ready 组成 TE 先行编排：首次任务在 DiT 加载前编码；后续
+    cache miss 时，auto/save_vram 可先让 DiT 到 CPU，避免 TE/DiT 叠峰。
 
     - performance 档不释放（用户显式要求全同驻零搬运）。
     - anima 文本栈（tuple）无此 API，安全跳过。
@@ -605,19 +911,146 @@ def _precache_prompts_and_release(
         else [CACHE.text_encoder_path]
     )
     check_load_budget(CACHE.ram_guard, weight_paths=te_paths, stage="文本编码器加载")
+    captions = [str(p) for p in prompts]
+    cached = getattr(CACHE.text_stack, "online_conditions_cached", None)
+    needs_encoding = not (callable(cached) and cached(captions))
+    te_resident = bool(getattr(CACHE.text_stack, "is_model_on_device", False))
+    calibration = CACHE._te_peak_calibration.get(CACHE._text_ready_key)
+    if calibration is not None:
+        te_increment = calibration[1] if te_resident else calibration[0]
+        estimate_source = "calibrated"
+    else:
+        if te_resident:
+            te_increment = _TE_ENCODE_FALLBACK
+        elif getattr(CACHE.text_stack, "is_fp8_storage", False):
+            te_increment = _TE_LOAD_FALLBACK_FP8
+        else:
+            te_increment = _TE_LOAD_FALLBACK_FULL
+        estimate_source = "fallback"
+
+    yielded_dit = False
+    if needs_encoding and CACHE.model is not None and CACHE.device:
+        yielded_dit, budget = _should_yield_dit_for_te(
+            vram_policy, CACHE.device, te_increment,
+        )
+        if budget is not None:
+            logger.info(
+                "TE/DiT auto 预算：free=%.1fGiB, TE=%s %.1fGiB, "
+                "margin=%.1fGiB → %s",
+                budget["free"] / _GIB,
+                estimate_source,
+                budget["te_increment"] / _GIB,
+                budget["margin"] / _GIB,
+                "DiT 让位" if yielded_dit else "允许同驻",
+            )
+        elif yielded_dit:
+            logger.info("TE 预编码：%s 策略先将 DiT 移到 CPU", vram_policy)
+        if yielded_dit:
+            CACHE._move_dit_and_adapters("cpu")
+
+    measure_cuda = bool(
+        needs_encoding
+        and CACHE.device
+        and torch.device(CACHE.device).type == "cuda"
+        and torch.cuda.is_available()
+    )
+    start_allocated = 0
+    if measure_cuda:
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(CACHE.device)
+        start_allocated = int(torch.cuda.memory_allocated(CACHE.device))
+        torch.cuda.reset_peak_memory_stats(CACHE.device)
+
+    encoded = 0
+    success = False
     try:
         if phase_callback is not None:
             phase_callback("clip")
-        encoded = precache([str(p) for p in prompts])
+        encoded = precache(captions)
+        success = True
+        if measure_cuda:
+            torch.cuda.synchronize(CACHE.device)
+            peak_delta = max(
+                0,
+                int(torch.cuda.max_memory_allocated(CACHE.device)) - start_allocated,
+            )
+            resident_delta = max(
+                0,
+                int(torch.cuda.memory_allocated(CACHE.device)) - start_allocated,
+            )
+            encode_delta = max(0, peak_delta - resident_delta)
+            previous = CACHE._te_peak_calibration.get(CACHE._text_ready_key, (0, 0))
+            CACHE._te_peak_calibration[CACHE._text_ready_key] = (
+                max(previous[0], peak_delta),
+                max(previous[1], encode_delta),
+            )
+            logger.info(
+                "TE 峰值校准：load+encode=%.1fGiB，resident encode=%.1fGiB",
+                peak_delta / _GIB,
+                encode_delta / _GIB,
+            )
     except Exception:
         logger.exception("prompt 预编码失败；退回逐格惰性编码")
+    finally:
+        if vram_policy != "performance" and success:
+            release = getattr(CACHE.text_stack, "release_model", None)
+            if callable(release):
+                release()
+        elif yielded_dit and not success:
+            # 避免失败后 TE 与即将恢复的 DiT 再次叠峰；保留 CPU 副本给
+            # family.sample_image 的逐格兜底路径。
+            offload = getattr(CACHE.text_stack, "offload_model", None)
+            if callable(offload):
+                offload()
+        if yielded_dit:
+            CACHE._move_dit_and_adapters(CACHE.device or "cuda")
+
+    if not success:
         return
-    if vram_policy != "performance":
-        release = getattr(CACHE.text_stack, "release_model", None)
-        if callable(release):
-            release()
     if encoded:
-        logger.info("krea2 预编码 %d 条 prompt；TE 已释放，采样期零占用", encoded)
+        if vram_policy == "performance":
+            logger.info("krea2 预编码 %d 条 prompt；performance 保持 TE 驻留", encoded)
+        else:
+            logger.info("krea2 预编码 %d 条 prompt；TE 已释放，采样期零占用", encoded)
+
+
+def _begin_initial_te_peak_calibration(cfg: dict[str, Any]) -> int | None:
+    """Start measuring the first Krea2 TE load before ``CACHE.device`` exists."""
+    if (
+        str(cfg.get("model_family") or "anima") != "krea2"
+        or CACHE.model is not None
+        or not torch.cuda.is_available()
+    ):
+        return None
+    try:
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize("cuda")
+        start_allocated = int(torch.cuda.memory_allocated("cuda"))
+        torch.cuda.reset_peak_memory_stats("cuda")
+        return start_allocated
+    except Exception:
+        logger.exception("failed to start initial TE peak calibration")
+        return None
+
+
+def _finish_initial_te_peak_calibration(start_allocated: int | None) -> None:
+    """Persist first-load TE peak for later task-level residency decisions."""
+    if start_allocated is None or CACHE._text_ready_key is None:
+        return
+    try:
+        torch.cuda.synchronize("cuda")
+        peak_delta = max(
+            0,
+            int(torch.cuda.max_memory_allocated("cuda")) - start_allocated,
+        )
+        previous = CACHE._te_peak_calibration.get(CACHE._text_ready_key, (0, 0))
+        CACHE._te_peak_calibration[CACHE._text_ready_key] = (
+            max(previous[0], peak_delta),
+            previous[1],
+        )
+        logger.info("initial TE peak calibrated: load+encode=%.1fGiB", peak_delta / _GIB)
+    except Exception:
+        logger.exception("failed to finish initial TE peak calibration")
 
 
 def _set_lora_multiplier(adapter: Any, scale: float) -> None:
@@ -902,15 +1335,16 @@ def _run_generate(
 
     # phase 上报：加载模型/LoRA 阶段（clip/sample/vae 由 sample_image 内部报）→ 进度条覆盖全流程
     _emit_for(req_id, "phase", name="load")
-    # TE 先行编排（krea2）：prompt 集合封闭——DiT 加载前先让 TE 栈就绪、
-    # 编码全部 prompt、彻底释放 TE。任一时刻 GPU 只有一个大模型（预编码期
-    # 三者同驻峰值 24.1GB → ~15GB；16GB 卡免让位）。anima 族两步均 no-op。
+    # TE 先行编排（krea2）：首次任务在 DiT 加载前编码并记录 TE 实际峰值；
+    # 后续 cache miss 由显存策略决定 DiT 是否先让位。anima 族两步均 no-op。
+    initial_te_measurement = _begin_initial_te_peak_calibration(cfg)
     CACHE.ensure_text_ready(cfg)
     _precache_prompts_and_release(
         [*prompts, negative_prompt],
         str(cfg.get("vram_policy") or "auto"),
         _phase_cb,
     )
+    _finish_initial_te_peak_calibration(initial_te_measurement)
     CACHE.ensure_loaded(cfg)
     adapters = CACHE.apply_loras(cfg.get("lora_configs", []))
 
@@ -955,24 +1389,38 @@ def _run_generate(
                 batch_idx=img_idx, batch_total=total, total_steps=steps,
             )
             try:
-                img = CACHE.family.sample_image(
-                    CACHE.model, CACHE.vae, CACHE.text_stack,
-                    prompt,
-                    height=height,
-                    width=width,
-                    steps=steps,
-                    cfg_scale=cfg_scale,
-                    negative_prompt=negative_prompt,
-                    sampler_name=sampler_name,
-                    scheduler=scheduler,
-                    distilled=distilled,
-                    device=CACHE.device,
-                    dtype=CACHE.dtype,
-                    step_callback=preview_callback,
-                    phase_callback=_phase_cb,
-                    seed=seed,
-                    vram_policy=str(cfg.get("vram_policy") or "auto"),
-                )
+                vram_policy = str(cfg.get("vram_policy") or "auto")
+                try:
+                    def _sample_once():
+                        return CACHE.family.sample_image(
+                            CACHE.model, CACHE.vae, CACHE.text_stack,
+                            prompt,
+                            height=height,
+                            width=width,
+                            steps=steps,
+                            cfg_scale=cfg_scale,
+                            negative_prompt=negative_prompt,
+                            sampler_name=sampler_name,
+                            scheduler=scheduler,
+                            distilled=distilled,
+                            device=CACHE.device,
+                            dtype=CACHE.dtype,
+                            step_callback=preview_callback,
+                            phase_callback=_phase_cb,
+                            seed=seed,
+                            vram_policy=vram_policy,
+                        )
+
+                    img = _sample_with_cuda_oom_retry(
+                        _sample_once,
+                        seed=seed,
+                        device=CACHE.device,
+                        before_retry=lambda: release_vae_after_decode(
+                            CACHE.vae, vram_policy,
+                        ),
+                    )
+                finally:
+                    release_vae_after_decode(CACHE.vae, vram_policy)
                 CACHE._move_runtime_to_device()
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 vpath = _virtual_path(task_id, fname)
@@ -1094,24 +1542,38 @@ def _run_xy(
                 batch_idx=img_idx, batch_total=total, total_steps=cur_steps,
             )
             try:
-                img = CACHE.family.sample_image(
-                    CACHE.model, CACHE.vae, CACHE.text_stack,
-                    prompt,
-                    height=height,
-                    width=width,
-                    steps=cur_steps,
-                    step_callback=preview_callback,
-                    phase_callback=phase_callback,
-                    cfg_scale=cur_cfg_scale,
-                    negative_prompt=negative_prompt,
-                    sampler_name=base_sampler,
-                    scheduler=scheduler,
-                    distilled=distilled,
-                    device=CACHE.device,
-                    dtype=CACHE.dtype,
-                    seed=cur_seed,
-                    vram_policy=str(cfg.get("vram_policy") or "auto"),
-                )
+                vram_policy = str(cfg.get("vram_policy") or "auto")
+                try:
+                    def _sample_once():
+                        return CACHE.family.sample_image(
+                            CACHE.model, CACHE.vae, CACHE.text_stack,
+                            prompt,
+                            height=height,
+                            width=width,
+                            steps=cur_steps,
+                            step_callback=preview_callback,
+                            phase_callback=phase_callback,
+                            cfg_scale=cur_cfg_scale,
+                            negative_prompt=negative_prompt,
+                            sampler_name=base_sampler,
+                            scheduler=scheduler,
+                            distilled=distilled,
+                            device=CACHE.device,
+                            dtype=CACHE.dtype,
+                            seed=cur_seed,
+                            vram_policy=vram_policy,
+                        )
+
+                    img = _sample_with_cuda_oom_retry(
+                        _sample_once,
+                        seed=cur_seed,
+                        device=CACHE.device,
+                        before_retry=lambda: release_vae_after_decode(
+                            CACHE.vae, vram_policy,
+                        ),
+                    )
+                finally:
+                    release_vae_after_decode(CACHE.vae, vram_policy)
                 CACHE._move_runtime_to_device()
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 vpath = _virtual_path(task_id, fname)

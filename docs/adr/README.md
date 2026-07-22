@@ -19,6 +19,8 @@
 | 0011 | [LoRA 评估指标体系与可审查 PR 拆分](0011-lora-eval-metrics.md) | Accepted | 2026-05-27 |
 | 0012 | [前端 SPA 从 /studio/ 子路径改为根路径挂载](0012-serve-spa-at-root.md) | Accepted | 2026-06-28 |
 | 0013 | [Changelog 迁入公告系统（移除 release_notes.yaml + 旧端点）](0013-changelog-into-announcements.md) | Accepted | 2026-06-28 |
+| 0014 | [测试出图延迟加载 VAE，并分块合并 FP8 LoRA](0014-lazy-vae-and-chunked-fp8-lora-merge.md) | Accepted | 2026-07-20 |
+| 0015 | [用实测峰值协调测试出图的 TE / DiT 驻留](0015-calibrated-te-dit-vram-orchestration.md) | Accepted | 2026-07-20 |
 
 ## 状态值
 

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 204,
+  "count": 205,
   "routes": [
     {
       "path": "/",
@@ -351,6 +351,14 @@
         "POST"
       ],
       "name": "switch_model_family",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/path-choices",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_models_path_choices",
       "type": "APIRoute"
     },
     {

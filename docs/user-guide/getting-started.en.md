@@ -81,7 +81,7 @@ Open <http://127.0.0.1:8765/>, click "+ New project" on the projects page, and t
 1. **Download** — Booru scraping (fill in Gelbooru / Danbooru credentials in Settings first) or local jpg / png / zip upload.
 2. **Curate** — download / train dual panels, multi-select to copy images into train/, subfolder management.
 3. **Preprocess** ✱ — overview (multi-select + one-click undo) + duplicate review + upscale (ESRGAN / Real-ESRGAN presets) + crop (manual box + auto AR-clustering prefill) + inpaint. Skip if not needed.
-4. **Tag** — WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset) + thresholds, automatic GPU EP fallback; a trigger word at the top is auto-injected into every caption and sample image.
+4. **Tag** — WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset) + thresholds, automatic GPU EP fallback; a trigger word at the top is auto-injected into every caption.
 5. **Tag editor** — cached mode + restore points, bulk add / delete / replace, per-image edits.
 6. **Regularization set** ✱ — two generation modes: **AI prior generation** (default, the base model produces the reg set with no LoRA) or **Booru reverse search** (reverse-search Booru by tag distribution + auto WD14 tagging + aspect-ratio clustering). mirror / flat structure, editable / deletable / auto-dedup / dual tagger.
 7. **Train** — pick a preset to copy into the version's private config, edit parameters (autosaved with 600ms debounce, no save button), submit to the queue. The picker label shows "· customized" once the config has diverged; the preset pool is never modified. Simple / Advanced modes. **Model family** defaults to Anima; switching the dropdown to Krea 2 opens a confirmation dialog listing every weight path and family default about to be recomputed — confirm and the whole version trains as Krea 2 (see [training-tips → Krea 2 training](training-tips.md#krea-2-训练)).
@@ -92,6 +92,12 @@ View tasks on the **Queue** page; open **task detail** for logs / monitoring / o
 ## Test your LoRA + ComfyUI
 
 After training, the sidebar **Test** page runs single-image / XY matrix / inference daemon for LoRA evaluation. Prompts can be pulled directly from the training set, eliminating round trips to ComfyUI.
+
+When Settings → Testing → Save test images is enabled, newly saved single images and
+XY cell PNGs include A1111 / Civitai-compatible metadata: the effective prompt,
+sampling parameters, base model, VAE, LoRA weights, and resource SHA256 hashes. An
+XY composite represents multiple parameter sets, so its full external metadata is
+kept on the individual cell PNGs while the composite retains Studio's structured data.
 
 The LoRA weights produced are already in `lora_unet_*` format and can be **dropped directly into ComfyUI** without any conversion.
 

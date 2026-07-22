@@ -47,39 +47,36 @@ PROJECT_SPECIFIC_FIELDS: frozenset[str] = frozenset({
     "output_name",
     "resume_lora",
     "resume_state",
-    "trigger_word",
 })
 
 
-def project_specific_overrides(
+def initial_project_field_values(
     project: dict[str, Any], version: dict[str, Any]
 ) -> dict[str, Any]:
-    """根据 project + version 算出项目特定字段的值。
+    """根据 project + version 算出项目特定字段的**初值**。
 
-    `data_dir` / `output_dir` / `output_name` 永远确定地填上；
-    `reg_data_dir` 只有 reg 集存在（meta.json）才填，否则空（让 trainer 走默认）。
-    `resume_lora` / `resume_state` 默认空 —— 用户要接续训练时显式 PUT 改写。
-    `trigger_word` 来自 version 表（Step 4 Tagging 写入），保证 yaml 与 caption
-    同源，runtime bootstrap_phase 会据此把 trigger 注入 sample_prompt。
+    只在创建 config 时写入一次（fork 预设 / 复制 version / bundle 导入）；此后这些
+    字段归用户所有，消费期（入队 / spawn）绝不回填 —— 见
+    `docs/design/version-config-ownership.md`。
+
+    `data_dir` / `output_dir` / `output_name` 按项目结构确定地填上。
+    `reg_data_dir` **无条件**填路径，不看 `reg/meta.json` 存不存在：runtime 对空目录
+    与不存在的目录完全容错（warning + skip），而先建 config、后生成 reg 集是常见顺序，
+    条件填充会让后建的 reg 集永远不生效。
+    `resume_lora` / `resume_state` 填空 —— 用户要接续训练时自己 PUT 改写。
     """
     pid = int(project["id"])
     slug = str(project["slug"])
     label = str(version["label"])
     vdir = version_dir(pid, slug, label)
-    overrides: dict[str, Any] = {
+    return {
         "data_dir": str(vdir / "train"),
+        "reg_data_dir": str(vdir / "reg"),
         "output_dir": str(vdir / "output"),
         "output_name": f"{slug}_{label}",
         "resume_lora": None,
         "resume_state": None,
-        "trigger_word": str(version.get("trigger_word") or ""),
     }
-    reg_meta = vdir / "reg" / "meta.json"
-    if reg_meta.exists():
-        overrides["reg_data_dir"] = str(vdir / "reg")
-    else:
-        overrides["reg_data_dir"] = None
-    return overrides
 
 
 # ---------------------------------------------------------------------------
@@ -133,52 +130,31 @@ def read_version_config_with_warnings(
             code="version.config_invalid",
         )
     cfg, dropped, defaulted = _tolerant_validate(raw)
-    # overlay 在 absolutize 之前——覆盖值与 yaml 值走同一套路径归一
-    data = apply_global_path_overlay(cfg.model_dump(mode="python"))
-    return _absolutize_model_paths(data), dropped, defaulted
+    return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
 
 
-#: auto_sync_paths=ON 时由全局设置管理的 4 个模型路径字段（Train 页对应
-#: 字段锁定并标「自动 · 全局设置」——读取出口 overlay 让徽标语义成立：
-#: 全局 selected / selected_te 变化后，已有 version 的显示与派生链
-#: （训练入队 / reg / eval）即时跟随，而非停留在创建时的快照）
+#: 创建 version 时初值取自全局设置（`auto_sync_paths=ON`）的 4 个模型路径字段。
+#: 只是**初值**：写进 config 后归用户所有，Train 页可自由编辑，全局设置之后再变也
+#: 不会回头改写已有 version（保重现性）。页面在值与全局当前设置不一致时给
+#: 「恢复默认」链接，让对齐是用户的一次显式动作。
 GLOBAL_MODEL_PATH_FIELDS = (
     "transformer_path", "vae_path", "text_encoder_path", "t5_tokenizer_path",
 )
 
 
-def apply_global_path_overlay(data: dict[str, Any]) -> dict[str, Any]:
-    """auto_sync_paths=ON 时用当前全局设置覆盖 4 个模型路径字段。
-
-    与 fork / save_preset / bundle 导入的「写入时覆盖」同一语义的读取面；
-    OFF（独立模型用户）原样返回。失败静默返回原值（读取不因 secrets /
-    catalog 异常而失败）。
-    """
-    try:
-        from . import models as model_downloader
-        from .presets import _auto_sync_paths
-
-        if not _auto_sync_paths():
-            return data
-        family = str(data.get("model_family") or "anima")
-        data.update(model_downloader.default_paths_for_new_version(family=family))
-    except Exception:
-        pass
-    return data
-
-
 def write_version_config(
     project: dict[str, Any], version: dict[str, Any], data: dict[str, Any],
-    *, force_project_overrides: bool = True,
+    *, initialize_project_fields: bool = False,
 ) -> Path:
     """写 version 私有 config。
 
-    `force_project_overrides=True`（默认）：用 `project_specific_overrides`
-    强制覆盖 PROJECT_SPECIFIC_FIELDS，防止用户绕过前端 disabled 改路径。
+    `initialize_project_fields=True` 只在**创建** config 时传（fork 预设 / 复制
+    version / bundle 导入）：用 `initial_project_field_values` 填 PROJECT_SPECIFIC_FIELDS
+    的初值。默认 False —— 编辑与消费期一律不回填，config 里的值就是用户的值。
     """
     payload = dict(data)
-    if force_project_overrides:
-        payload.update(project_specific_overrides(project, version))
+    if initialize_project_fields:
+        payload.update(initial_project_field_values(project, version))
     cfg, _, _ = _tolerant_validate(payload)
     # 落盘前裁掉 show_when 为假的字段（UI 不可见 = 不生效），读取时 pydantic
     # 会把缺失字段补回 schema 默认值，GET 返回给前端的仍是完整 config。

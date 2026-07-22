@@ -13,6 +13,7 @@ from pathlib import Path
 from training.context import TrainingContext
 from training.families import resolve_family
 from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
+from training.sysmem import log_vram
 from training.model_loading import (
     find_diffusion_pipe_root,
     resolve_path_best_effort,
@@ -49,6 +50,24 @@ def _resolve_paths(ctx: TrainingContext) -> None:
         args.reg_data_dir = resolve_path_best_effort(reg_data_dir, bases)
 
 
+def _swap_vram_discount(ctx: TrainingContext) -> float:
+    """开 block swap 时不会进显存的权重**比例**（预算折扣，见 check_load_budget）。
+
+    比例而非字节：fp8 与 bf16 文件大小差一倍，按字节折扣会在 fp8 场景折扣穿。
+    族未实现估算就返回 0（护栏退化成保守，不会误放行）。
+    """
+    blocks_to_swap = int(getattr(ctx.args, "blocks_to_swap", 0) or 0)
+    if blocks_to_swap <= 0:
+        return 0.0
+    ratio_fn = getattr(ctx.family, "swapped_param_ratio", None)
+    if ratio_fn is None:
+        return 0.0
+    try:
+        return float(ratio_fn(blocks_to_swap))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def _load_dit(ctx: TrainingContext) -> None:
     args = ctx.args
     backend = getattr(args, "attention_backend", "flash_attn")
@@ -57,17 +76,43 @@ def _load_dit(ctx: TrainingContext) -> None:
             "attention_backend=none，flash_attn / xformers 都不启用，走 PyTorch SDPA"
         )
     logger.info("加载 Transformer...")
+    extra = {}
+    blocks_to_swap = int(getattr(args, "blocks_to_swap", 0) or 0)
+    if blocks_to_swap > 0:
+        # 能力位在 schema 侧已用 cap_gate 门控；裸 CLI / 旧 yaml 仍可能带上，
+        # 这里 fail-fast 而非静默忽略（否则用户以为省了显存其实没有）
+        if "block_swap" not in ctx.family.spec.capabilities:
+            raise RuntimeError(
+                f"model_family='{ctx.family.spec.family_id}' 不支持 block swap，"
+                f"但 blocks_to_swap={blocks_to_swap}。请置 0。"
+            )
+        # 换出层由 loader 直接落 CPU pinned，不经过显存（12/16GB 目标的前提）
+        extra["blocks_to_swap"] = blocks_to_swap
+        logger.info("block swap：末尾 %d 层将常驻内存，不载入显存", blocks_to_swap)
     ctx.model = ctx.family.load_dit(
         args.transformer_path,
         ctx.device,
         ctx.dtype,
         attention_backend=backend,
         repo_root=ctx.repo_root,
+        **extra,
     )
     # 大权重 mmap 缓存页归还系统（13-26GB；真机换页卡死案例，训练同样受益）
     from training.sysmem import trim_working_set
 
     trim_working_set()
+    log_vram("DiT 加载后", ctx.device)
+
+
+def _log_train_start_vram(ctx: TrainingContext) -> None:
+    """训练循环开始前的显存基线 —— 判断 blocks_to_swap 实际效果的读数点。"""
+    swap = getattr(ctx, "block_swap", None)
+    if swap is not None:
+        logger.info(
+            "block swap 生效：换出 %d/%d 层，pinned %.2fGB",
+            swap.num_swap, swap.total, swap.pinned_bytes / 1024**3,
+        )
+    log_vram("训练开始前", ctx.device)
 
 
 def _load_vae(ctx: TrainingContext) -> None:
@@ -93,6 +138,29 @@ def _load_text(ctx: TrainingContext) -> None:
     )
 
 
+def _setup_block_swap(ctx: TrainingContext) -> None:
+    """构造并挂载 block swap（docs/design/block-swap.md 刀 2）。
+
+    **必须在 LoRA 注入之后**：LyCORIS ``apply_to()`` 会读基权重的 shape 建适配器，
+    此时换出层的权重是 loader 落下的 CPU pinned 张量（shape/dtype 完好，只是不在
+    显存），注入正常；反过来若先 attach 再注入也可行，但没有理由把顺序搞复杂。
+
+    挂载走 forward hook（``attach()``），不改模型 forward 循环 —— krea2 的循环在
+    parity 敏感的 ``modeling/`` 内。开 gradient checkpointing 后反向的重算会再次
+    触发 hook，逆序换入自动成立（已由 tests/test_block_swap.py 钉死）。
+    """
+    blocks_to_swap = int(getattr(ctx.args, "blocks_to_swap", 0) or 0)
+    if blocks_to_swap <= 0:
+        return
+    from training.block_swap import PinnedBlockSwap
+
+    ctx.block_swap = PinnedBlockSwap(
+        ctx.model.blocks, blocks_to_swap, ctx.device,
+    )
+    ctx.block_swap.attach()
+    log_vram("block swap 挂载后", ctx.device)
+
+
 def _inject_adapter(ctx: TrainingContext) -> None:
     args = ctx.args
     logger.info("注入 %s...", args.lora_type.upper())
@@ -111,6 +179,8 @@ def _inject_adapter(ctx: TrainingContext) -> None:
             )
         ctx.injector.load(args.resume_lora)
         logger.info("将从已有 LoRA 继续训练: %s", args.resume_lora)
+
+    _setup_block_swap(ctx)
 
     if getattr(args, "sra_enabled", False):
         from training.families.anima.sra_align import SRAAligner
@@ -218,11 +288,13 @@ def run(ctx: TrainingContext) -> None:
             getattr(ctx.args, "text_encoder_path", ""),
         ],
         stage="训练模型加载",
+        vram_discount_ratio=_swap_vram_discount(ctx),
     )
     _load_dit(ctx)
     _load_vae(ctx)
     _load_text(ctx)
     _inject_adapter(ctx)
+    _log_train_start_vram(ctx)
 
 
 def finish(ctx: TrainingContext) -> None:
@@ -236,9 +308,11 @@ def finish(ctx: TrainingContext) -> None:
         True,
         weight_paths=[getattr(ctx.args, "transformer_path", "")],
         stage="训练模型加载（Transformer）",
+        vram_discount_ratio=_swap_vram_discount(ctx),
     )
     _load_dit(ctx)
     _inject_adapter(ctx)
+    _log_train_start_vram(ctx)
 
 
 def _read_lora_family(path) -> str:

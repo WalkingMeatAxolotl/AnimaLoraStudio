@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import traceback
 from pathlib import Path
 from typing import Any
 

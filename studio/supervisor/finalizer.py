@@ -6,6 +6,7 @@ task=paused 时 version 仍 training，UI 派生显示）。
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .. import db
@@ -52,9 +53,19 @@ def _maybe_finalize_version(
     fields: dict[str, Any] = {"status": new_status}
 
     if task_status == "done":
-        output_name = f"{p['slug']}_{v['label']}"
+        # output_name / output_dir 归用户所有（Train 页可改），产物名以 config 为准。
+        # config 读不到（损坏 / 已删）时回退到创建时的初值拼法。
         vdir = _versions.version_dir(int(pid), p["slug"], v["label"])
-        candidate = vdir / "output" / f"{output_name}_final.safetensors"
+        output_dir = vdir / "output"
+        output_name = f"{p['slug']}_{v['label']}"
+        try:
+            from ..services import version_config as _vc
+            cfg = _vc.read_version_config(p, v)
+            output_name = str(cfg.get("output_name") or output_name)
+            output_dir = Path(str(cfg.get("output_dir") or output_dir))
+        except Exception:
+            pass
+        candidate = output_dir / f"{output_name}_final.safetensors"
         if candidate.exists():
             fields["output_lora_path"] = str(candidate)
     elif task_status == "failed":

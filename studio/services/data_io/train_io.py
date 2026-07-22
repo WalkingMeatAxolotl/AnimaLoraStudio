@@ -540,7 +540,7 @@ def export_bundle(
 
     # --- version 私有训练配置 ---
     # 导出 version 自己的 config.yaml，剔除 PROJECT_SPECIFIC_FIELDS（路径字段），
-    # 保留超参数等可移植内容。导入时 write_version_config(force_project_overrides=True)
+    # 保留超参数等可移植内容。导入时 write_version_config(initialize_project_fields=True)
     # 会自动填好目标环境的正确路径。
     config_included = False
     if opts.include_config:
@@ -863,7 +863,7 @@ def import_bundle(
                 os.utime(t, None)
 
             # --- 写入 version 训练配置 / 其他预设 ---
-            # presets/config.yaml → 应用到新 version（force_project_overrides 自动填路径）
+            # presets/config.yaml → 应用到新 version（initialize_project_fields 自动填路径）
             # 其他 .yaml → 写入全局预设目录（冲突加 _imported_{n}）
             config_imported = False
             preset_count = 0
@@ -901,7 +901,7 @@ def import_bundle(
                                     # write_version_config 的 schema 校验拒绝
                                     pass
                             try:
-                                _vc.write_version_config(p, v, raw, force_project_overrides=True)
+                                _vc.write_version_config(p, v, raw, initialize_project_fields=True)
                                 config_imported = True
                             except _vc.VersionConfigError:
                                 pass  # 无效 config，跳过，不中断导入

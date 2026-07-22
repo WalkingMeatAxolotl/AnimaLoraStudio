@@ -163,6 +163,21 @@ class TrainingConfig(BaseModel):
         description="VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
         json_schema_extra=_meta("system", show_when="cache_latents==true", advanced=True),
     )
+    # 归 system 组而非 training：它只改权重放哪、不改任何训练数值，
+    # 换出多少层对产出的 LoRA 逐位无影响（纯资源旋钮，同 vae_tiling / cache_latents）
+    blocks_to_swap: int = Field(
+        0, ge=0,
+        description="Block 交换：换出到内存的 DiT 层数（0=关闭）。被换出的层权重常驻"
+                    "内存，算到该层才搬进显存，用时间换显存，不影响训练结果。"
+                    "每层约省 0.4GB（fp8 底模）/ 0.8GB（bf16 底模）显存；"
+                    "1024 分辨率下换出全部 28 层，fp8 实测约慢 4%。"
+                    "需要等量的可用内存，且这部分内存会被锁定、其他程序无法使用",
+        json_schema_extra=_meta(
+            "system",
+            show_when=cap_gate("block_swap"),
+            advanced=True,
+        ),
+    )
 
     # --------------------------------------------------- NaViT / Patch-n-Pack
     # 块对角打包训练（Phase 2 数据层）。以下字段全部默认关闭 / 行为中立：
@@ -1230,14 +1245,6 @@ class TrainingConfig(BaseModel):
         description="多 prompt 轮换（优先于 sample_prompt）",
         json_schema_extra=_meta("sample", "string-list"),
     )
-    trigger_word: str = Field(
-        "",
-        description="触发词（version 级，由 Step 4 Tagging 页面写入；空串=不启用）。"
-                    "训练时 bootstrap_phase 会自动 prepend 到 sample_prompt / "
-                    "sample_prompts，确保采样图能反映 LoRA 是否激活。",
-        json_schema_extra=_meta("sample", hidden=True),
-    )
-
     # ----------------------------------------------------------- 训练后指标评估
     eval_validation_enabled: bool = Field(
         False,
