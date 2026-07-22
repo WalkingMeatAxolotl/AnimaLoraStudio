@@ -576,11 +576,8 @@ fp8 那条只要**顺序对**就正确：loader 落 CPU pinned → `apply_loras`
 注册 forward pre/post hook**（`PinnedBlockSwap.attach()`），更好：
 
 - **完全不改 `modeling/krea2/`** —— 那里对 ComfyUI 有逐字 parity 要求（§7.1）。
-- **反向自动成立**：开 gradient checkpointing 后，反向阶段会重算前向，即再次调用
-  block 的 forward → pre-hook 随之触发，按逆序换回权重。§2.4 说的「重算与反向在同
-  一驻留窗口内完成」在这里是自然结果，**不需要为反向单独编排时序**。
-  该结论由 `tests/test_block_swap.py::test_attach_with_gradient_checkpointing_backward`
-  实测钉死（与全常驻的梯度逐位一致），不是推断。
+- ~~**反向自动成立**：checkpoint 重算会触发 forward hook，逆序换入自动成立~~
+  —— **这条是错的，已于 §9.10 更正**。反向必须自己挂钩子取回权重。
 - Anima 接线因此也只是「构造 + attach」，连它的手工展开循环都不必改。
 
 ### 9.4 实施中实测抓出的三个坑（都已有回归测试）
@@ -659,3 +656,50 @@ block 的不止 `ctx.model` —— LyCORIS injector 持 `org_module`、optimizer
 hook 闭包也可能持有。真机实测只丢 swap 对象归还 **0 字节**，丢 model 之后才归还。
 与其到处找持有者，不如让组件自己把参数指走。`close()` 之后仍需
 `release_pinned_host_cache()` 才真正还给操作系统（§9.7 的另一层）。
+
+### 9.10 反向必须单独挂钩子（推翻 §9.3 的错误论断）
+
+**症状**：用户开 block swap + PPSF 训练，Prodigy 的 `d` 估计大幅跳升、学习率失控、
+训练失败。
+
+**根因**：`attach()` 起初只挂前向 pre/post 钩子，基于一个错误论断——「开 gradient
+checkpointing 后反向会重算前向，forward hook 随之触发，逆序换入自动成立」。实测两处
+都不成立：
+
+1. **重算不触发 forward_hook**：实测 checkpoint 下 pre-hook 触发 2N 次，而 post-hook
+   只有 N 次（重算只走 pre）。
+2. **更关键**：重算之后本 block 的**反向**仍要读权重，而前向 post 已经放开了槽位 ——
+   下一次换入直接覆盖正在被反向读的权重。
+
+后果是**静默的**：不报错、不 NaN，梯度只是数值不对。定量（RTX 5090，真实 6144-dim
+block）：
+
+| | 噪声底 | swap 偏差 | 倍数 |
+|---|---|---|---|
+| 修复前 · checkpoint | 4.4e-3 | **1.31** | **298×** |
+| 修复前 · 无 checkpoint | 2.2e-3 | 1.48 | 675× |
+| 修复后 · checkpoint | 4.4e-3 | 4.7e-3 | 1× |
+| 修复后 · 无 checkpoint | 3.5e-3 | 4.7e-3 | 1.4× |
+
+**PPSF 是报警器不是肇事者**：固定 lr 的 AdamW 会带着被污染的梯度闷头训完、产出一个
+质量下降但看不出异常的 LoRA；Prodigy 系靠梯度一致性估计 `d`，梯度一乱 `d` 立刻炸。
+**用 AdamW + block swap 训过的 LoRA 都应视为受影响。**
+
+**修法**：四个钩子缺一不可 —— 前向 pre 取回 / post 放开、**反向 pre 再取回 / post
+放开**。开 checkpoint 时反向 pre 通常命中紧邻重算刚放好的权重，零额外传输；不开
+checkpoint 时它是唯一的换回时机。
+
+### 9.11 这个 bug 为什么能溜过全部既有测试
+
+`test_block_swap.py` 里那条 checkpoint 反向测试**在 bug 存在时照样全绿**。原因：
+
+- 小张量（16–32 dim）、`_Tiny` block **没有 attention**，计算快到竞态窗口不显形；
+- 它用 `assert_close` 逐位比 —— 而真实尺寸下 SDPA 反向在 CUDA/bf16 上**本就非确定**
+  （同权重跑两遍梯度差约 5e-3），逐位比在真实尺寸上根本没法用。
+
+教训两条，已固化进 `tests/test_block_swap_grad_fidelity.py`：
+
+1. **验证并发/竞态必须用真实尺寸**。小 case 的绿灯是假信心。
+2. **非确定性环境里要先测噪声底再做判据**。第一次排查时我直接拿「梯度不逐位相等」
+   当证据，其实无 swap 跑两遍也不相等 —— 缺对照组的测量会同时制造假阳性（当时）
+   和假阴性（原单测）。判据应是「与对照组自身重复性同量级」。
