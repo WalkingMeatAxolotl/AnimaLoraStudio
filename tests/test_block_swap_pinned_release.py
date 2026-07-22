@@ -53,6 +53,34 @@ def test_unload_releases_pinned_host_cache_when_swap_was_active(monkeypatch):
     assert calls, "block swap 用过就必须归还 pinned host cache"
 
 
+def test_unload_releases_pinned_even_without_cuda_available(monkeypatch):
+    """**回归**：pinned 归还不能嵌在 `if torch.cuda.is_available()` 里。
+
+    用过 block swap 就必然有 pinned 内存待还，这件事不该取决于「卸载这一刻
+    CUDA 还可不可用」。首版嵌在 CUDA 分支内 —— 本地（有 GPU）绿、CI（Linux
+    无 GPU）红，正是 CONTRIBUTING 测试卫生 #2 说的平台分支陷阱。
+    """
+    import torch
+
+    d = _daemon()
+    calls = []
+    monkeypatch.setattr(d, "_release_pinned_host_cache", lambda: calls.append(1))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    cache = d.ModelCache()
+    cache.model = object()
+    cache.blocks_to_swap = 28
+
+    class _FakeSwap:
+        def close(self):
+            pass
+
+    cache.block_swap = _FakeSwap()
+    cache.unload()
+
+    assert calls, "无 CUDA 环境下也必须归还 pinned（函数本身是安全 no-op）"
+
+
 def test_unload_skips_host_cache_release_without_swap(monkeypatch):
     """没用过 block swap 就不动 host cache —— 只清理自己分配的，别影响别人。"""
     d = _daemon()

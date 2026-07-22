@@ -460,10 +460,12 @@ def test_apply_loras_routes_bf16_merge_precision(tmp_path, monkeypatch):
 
     def recording_merge(
         model, sources, *, compute_dtype=torch.float32, chunk_rows=None,
+        keep_backup=True,
     ):
         observed.append((compute_dtype, chunk_rows))
         return real_merge(
             model, sources, compute_dtype=compute_dtype, chunk_rows=chunk_rows,
+            keep_backup=keep_backup,
         )
 
     monkeypatch.setattr(merge_mod, "merge_loras_into_fp8_model", recording_merge)

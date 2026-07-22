@@ -835,9 +835,12 @@ class ModelCache:
                     pass
                 torch.cuda.empty_cache()
                 _ram_marks.append(("empty_cache", available_ram_bytes()))
-                if had_block_swap:
-                    _release_pinned_host_cache()
-                    _ram_marks.append(("pinned 归还", available_ram_bytes()))
+            # 刻意放在 CUDA 分支**外**：用过 block swap 就必然有 pinned 内存待还，
+            # 这件事不该取决于「卸载这一刻 CUDA 还可不可用」。函数本身对 API 缺失
+            # 静默，无 CUDA 环境下是安全 no-op。
+            if had_block_swap:
+                _release_pinned_host_cache()
+                _ram_marks.append(("pinned 归还", available_ram_bytes()))
             # 大权重的 mmap 文件缓存页（DiT 13-26GB + TE）在 working set 里赖着
             # 不走 —— 加载后 trim 过一次，卸载后同样要 trim（此前漏了）
             trim_working_set()
