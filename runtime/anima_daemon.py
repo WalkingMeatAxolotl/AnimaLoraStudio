@@ -700,8 +700,11 @@ class ModelCache:
                 self.t5_tokenizer_backend, self.vae_tiling,
             )
             # family_id 在 unload() 里被清空，必须先存——漏传曾是隐性
-            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）
+            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）。
+            # blocks_to_swap 同理：unload() 会清零，漏传则重载后 block swap
+            # 静默消失、模型全量上卡（小显存直接 OOM）。
             saved_family = self.family_id or "anima"
+            saved_blocks_to_swap = self.blocks_to_swap
             self.unload()
             self._load(
                 family_id=saved_family,
@@ -715,6 +718,7 @@ class ModelCache:
                 text_encoder_backend=saved_paths[7] or "hf",
                 t5_tokenizer_backend=saved_paths[8] or "slow",
                 vae_tiling=saved_paths[9] or "auto",
+                blocks_to_swap=saved_blocks_to_swap,
             )
             _emit_evt("loaded")
         self.last_lora_specs = []
@@ -725,6 +729,9 @@ class ModelCache:
             self.model, specs, self.device, self.lora_dtype,
             family_id=self.family_id or "anima",
             lora_merge_precision=self.lora_merge_precision,
+            # 开了 block swap = 用户内存本就紧张：不留那份与整个模型等大的 CPU
+            # 备份（krea2 fp8 实测 12.23GB），换 LoRA 改走「重载模型」兜底
+            keep_merge_backup=self.block_swap is None,
         )
         self.last_lora_specs = specs
         self.last_lora_metas = current_metas
@@ -784,6 +791,10 @@ class ModelCache:
                     pass
             return
         logger.info("unloading model")
+        # 埋点必须在**丢引用之前**取基线，否则丢引用那一步的回收量测不到
+        from training.sysmem import available_ram_bytes, trim_working_set
+
+        _ram_marks: list[tuple[str, int | None]] = [("起点", available_ram_bytes())]
         had_block_swap = self.block_swap is not None
         if had_block_swap:
             # 摘钩子并丢弃管理对象。注意**丢引用不等于还内存**：pinned 走
@@ -806,16 +817,12 @@ class ModelCache:
         self.last_lora_specs = []
         self.last_lora_metas = []
         self.last_lora_merge_precision = None
-        # 分步埋点：卸载后仍有大块内存不还系统时，这几行直接指出是哪一步的问题
-        # （真机报告：峰值 50GB → 手动释放 39GB → 退出才回 22GB，中间 17GB 待定位）
-        from training.sysmem import available_ram_bytes, trim_working_set
-
-        _ram_marks: list[tuple[str, int | None]] = [("卸载前", available_ram_bytes())]
+        _ram_marks.append(("丢引用", available_ram_bytes()))
 
         try:
             import gc
             gc.collect()
-            _ram_marks.append(("丢引用+gc", available_ram_bytes()))
+            _ram_marks.append(("gc", available_ram_bytes()))
             if torch.cuda.is_available():
                 try:
                     # cuBLAS workspace 是 C++ 级常驻分配（Python gc 不可见，

@@ -292,11 +292,18 @@ class Fp8LoraMergeAdapter:
     supports_hot_reload = False
 
     def __init__(self, model: torch.nn.Module,
-                 backup: dict[str, tuple[Tensor, Tensor | None]]) -> None:
+                 backup: dict[str, tuple[Tensor, Tensor | None]],
+                 *, can_restore: bool = True) -> None:
         self._model = model
         self._backup = backup
+        #: 是否留了备份。False = 换 LoRA 时无法就地还原，detach() 返回 False
+        #: 让 daemon 走「重载模型」兜底（省下与整个模型等大的一份 CPU 备份）。
+        self._can_restore = can_restore
 
     def detach(self) -> bool:
+        if not self._can_restore:
+            # 没留备份：告诉调用方「还不了」，由它重载模型保证干净状态
+            return False
         if not self._backup:
             return True
         modules = dict(self._model.named_modules())
@@ -315,6 +322,7 @@ def merge_loras_into_fp8_model(
     *,
     compute_dtype: torch.dtype = torch.float32,
     chunk_rows: int | None = None,
+    keep_backup: bool = True,
 ) -> Fp8LoraMergeAdapter:
     """把多份 LoRA 按 comfy merge 语义烘进（部分）fp8 模型的 Linear 权重。
 
@@ -374,10 +382,14 @@ def merge_loras_into_fp8_model(
         scale = getattr(module, "weight_scale", None)
         is_fp8 = weight.dtype in _FP8_TORCH_DTYPES
 
-        backup[name] = (
-            weight.detach().to("cpu", copy=True),
-            None if scale is None else scale.detach().to("cpu", copy=True),
-        )
+        if keep_backup:
+            # 注意这份备份与**整个模型等大**：krea2 fp8 实测 261 个 Linear 合计
+            # 12.23GB（全模型 12.24GB），且整个会话常驻。开 block swap 时由
+            # 调用方关掉（那批用户内存本就紧张），换 LoRA 改走重载兜底。
+            backup[name] = (
+                weight.detach().to("cpu", copy=True),
+                None if scale is None else scale.detach().to("cpu", copy=True),
+            )
 
         # dequant 到 fp16（comfy lora_compute_dtype 域，QuantizedTensor 无
         # bf16 中转）；非量化 Linear 同样 cast fp16 参与 merge
@@ -428,4 +440,4 @@ def merge_loras_into_fp8_model(
         len(sources), len(per_layer), str(compute_dtype).removeprefix("torch."),
         normalized_chunk_rows or "off",
     )
-    return Fp8LoraMergeAdapter(model, backup)
+    return Fp8LoraMergeAdapter(model, backup, can_restore=keep_backup)

@@ -312,6 +312,7 @@ def apply_loras(
     family_id: str = "anima",
     lora_merge_precision: str = "fp32",
     lora_merge_chunk_rows: int = 1024,
+    keep_merge_backup: bool = True,
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
@@ -458,6 +459,7 @@ def apply_loras(
             merge_sources,
             compute_dtype=merge_dtype,
             chunk_rows=lora_merge_chunk_rows,
+            keep_backup=keep_merge_backup,
         )
 
         # The merge dequantizes fp8 weights to temporary fp16 tensors one layer

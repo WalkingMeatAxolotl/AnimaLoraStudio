@@ -385,6 +385,7 @@ def test_model_cache_moves_offloaded_model_before_injecting_lora(tmp_path: Path,
 
     def fake_apply_loras(
         model, specs, device, dtype, family_id="anima", lora_merge_precision="fp32",
+        keep_merge_backup=True,
     ):
         events.append("apply_loras")
         assert "model.to:cuda" in events
@@ -453,6 +454,7 @@ def test_model_cache_remerges_fp8_lora_when_merge_precision_changes(
 
     def fake_apply_loras(
         model, specs, device, dtype, family_id="anima", lora_merge_precision="fp32",
+        keep_merge_backup=True,
     ):
         calls.append(lora_merge_precision)
         handle = MagicMock()

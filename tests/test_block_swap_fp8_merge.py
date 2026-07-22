@@ -106,6 +106,46 @@ def test_fp8_merge_with_swap_matches_no_swap_reference():
     torch.testing.assert_close(_forward(blocks, x), expected)
 
 
+def test_keep_backup_false_skips_the_second_full_copy():
+    """开 block swap 时不留备份 —— 那份备份与整个模型等大（krea2 fp8 实测
+    12.23GB，全模型 12.24GB），等于内存里躺着第二份完整 DiT。
+
+    代价是 detach() 还不了原权重，返回 False 让 daemon 走「重载模型」兜底。
+    """
+    from training.families.krea2.lora_fp8_merge import merge_loras_into_fp8_model
+
+    device = torch.device("cuda")
+    lora = _lora_state_dict()
+
+    kept = _build_fp8_blocks(device)
+    a_kept = merge_loras_into_fp8_model(kept, [(lora, 1.0, "t")], keep_backup=True)
+    assert a_kept._backup, "默认应留备份"
+    assert a_kept.detach() is True, "有备份 → 能就地还原"
+
+    lean = _build_fp8_blocks(device)
+    a_lean = merge_loras_into_fp8_model(lean, [(lora, 1.0, "t")], keep_backup=False)
+    assert not a_lean._backup, "关掉后不应有任何备份张量"
+    assert a_lean.detach() is False, "无备份 → 必须返回 False 触发重载兜底"
+
+
+def test_keep_backup_false_still_merges_identically():
+    """省掉备份不能改变 merge 的数值结果。"""
+    from training.families.krea2.lora_fp8_merge import merge_loras_into_fp8_model
+
+    device = torch.device("cuda")
+    x = torch.randn(2, _DIM, device=device, dtype=torch.bfloat16)
+    lora = _lora_state_dict()
+
+    ref = _build_fp8_blocks(device)
+    merge_loras_into_fp8_model(ref, [(lora, 1.0, "t")], keep_backup=True)
+    expected = _forward(ref, x)
+
+    lean = _build_fp8_blocks(device)
+    merge_loras_into_fp8_model(lean, [(lora, 1.0, "t")], keep_backup=False)
+
+    torch.testing.assert_close(_forward(lean, x), expected)
+
+
 def test_fp8_merge_writes_reach_the_pinned_masters():
     """merge 的改动必须真的写进 CPU pinned 主副本（而不是某个 GPU 槽）。"""
     from training.block_swap import PinnedBlockSwap
