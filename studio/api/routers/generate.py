@@ -222,6 +222,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             )
             vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
             ram_guard = bool(getattr(gen_cfg, "ram_guard", True))
+            blocks_to_swap = int(getattr(gen_cfg, "blocks_to_swap", 0) or 0)
         except Exception:
             attn_default = "auto"
             preview_n = 0
@@ -229,6 +230,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             lora_merge_precision = "fp32"
             vram_policy = "auto"
             ram_guard = True
+            blocks_to_swap = 0
         attn = body.attention_backend or attn_default
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
@@ -256,6 +258,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             attention_backend=attn,
             vram_policy=vram_policy,
             ram_guard=ram_guard,
+            blocks_to_swap=blocks_to_swap,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
 

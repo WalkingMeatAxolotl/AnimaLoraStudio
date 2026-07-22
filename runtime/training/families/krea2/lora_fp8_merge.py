@@ -292,11 +292,18 @@ class Fp8LoraMergeAdapter:
     supports_hot_reload = False
 
     def __init__(self, model: torch.nn.Module,
-                 backup: dict[str, tuple[Tensor, Tensor | None]]) -> None:
+                 backup: dict[str, tuple[Tensor, Tensor | None]],
+                 *, can_restore: bool = True) -> None:
         self._model = model
         self._backup = backup
+        #: 是否留了备份。False = 换 LoRA 时无法就地还原，detach() 返回 False
+        #: 让 daemon 走「重载模型」兜底（省下与整个模型等大的一份 CPU 备份）。
+        self._can_restore = can_restore
 
     def detach(self) -> bool:
+        if not self._can_restore:
+            # 没留备份：告诉调用方「还不了」，由它重载模型保证干净状态
+            return False
         if not self._backup:
             return True
         modules = dict(self._model.named_modules())
@@ -315,6 +322,7 @@ def merge_loras_into_fp8_model(
     *,
     compute_dtype: torch.dtype = torch.float32,
     chunk_rows: int | None = None,
+    keep_backup: bool = True,
 ) -> Fp8LoraMergeAdapter:
     """把多份 LoRA 按 comfy merge 语义烘进（部分）fp8 模型的 Linear 权重。
 
@@ -356,6 +364,16 @@ def merge_loras_into_fp8_model(
             len(missing), missing[:5], " ..." if len(missing) > 5 else "",
         )
 
+    # 运算设备：block swap 下换出层的权重是 **CPU pinned 主副本**，而
+    # weight_scale 恒在计算设备（swap 的前向需要，见 quant_fp8.patch_fp8_linears）。
+    # 若就地按权重所在设备算，`w16 * scale` 会跨设备崩；退一步全在 CPU 上算又
+    # 慢得离谱（264 层 6144² 的 fp32 delta）。故统一到 GPU 算，写回时靠
+    # `weight.data.copy_()` 跨设备落回主副本 —— 主副本才是持久的那份，之后每次
+    # 换入带的都是 merged 权重（docs/design/block-swap.md §9.6）。
+    merge_device = next(
+        (p.device for p in model.parameters() if p.device.type == "cuda"), None,
+    )
+
     backup: dict[str, tuple[Tensor, Tensor | None]] = {}
     layer_count = len(per_layer)
     for layer_index, (layer_key, layer_sources) in enumerate(per_layer.items(), 1):
@@ -364,16 +382,22 @@ def merge_loras_into_fp8_model(
         scale = getattr(module, "weight_scale", None)
         is_fp8 = weight.dtype in _FP8_TORCH_DTYPES
 
-        backup[name] = (
-            weight.detach().to("cpu", copy=True),
-            None if scale is None else scale.detach().to("cpu", copy=True),
-        )
+        if keep_backup:
+            # 注意这份备份与**整个模型等大**：krea2 fp8 实测 261 个 Linear 合计
+            # 12.23GB（全模型 12.24GB），且整个会话常驻。开 block swap 时由
+            # 调用方关掉（那批用户内存本就紧张），换 LoRA 改走重载兜底。
+            backup[name] = (
+                weight.detach().to("cpu", copy=True),
+                None if scale is None else scale.detach().to("cpu", copy=True),
+            )
 
         # dequant 到 fp16（comfy lora_compute_dtype 域，QuantizedTensor 无
         # bf16 中转）；非量化 Linear 同样 cast fp16 参与 merge
         w16 = weight.detach().to(torch.float16)
+        if merge_device is not None and w16.device != merge_device:
+            w16 = w16.to(merge_device)
         if scale is not None:
-            w16 = w16 * scale.to(torch.float16)
+            w16 = w16 * scale.to(device=w16.device, dtype=torch.float16)
 
         for tensors, strength, source in layer_sources:
             w16 = _apply_lora_delta(
@@ -416,4 +440,4 @@ def merge_loras_into_fp8_model(
         len(sources), len(per_layer), str(compute_dtype).removeprefix("torch."),
         normalized_chunk_rows or "off",
     )
-    return Fp8LoraMergeAdapter(model, backup)
+    return Fp8LoraMergeAdapter(model, backup, can_restore=keep_backup)

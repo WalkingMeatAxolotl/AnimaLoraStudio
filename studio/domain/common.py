@@ -23,7 +23,7 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
         "navit", "sra", "leap", "compile_blocks",
         "caption_tag_ops", "online_text", "masked_loss",
     }),
-    "krea2": frozenset({"masked_loss", "text_cache"}),
+    "krea2": frozenset({"masked_loss", "text_cache", "block_swap"}),
 }
 
 # 族默认 overlay 的单一权威源（ModelSpec.config_defaults 直接引用本表，R3）。

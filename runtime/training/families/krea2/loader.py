@@ -264,6 +264,125 @@ def checkpoint_contains_fp8(path: str | Path) -> bool:
         return False
 
 
+def _swapped_block_prefixes(config: Krea2Config, blocks_to_swap: int) -> tuple[str, ...]:
+    """被换出的层的 state_dict 键前缀（末尾 N 层，与 PinnedBlockSwap 同口径）。"""
+    if blocks_to_swap <= 0:
+        return ()
+    first = max(config.layers - blocks_to_swap, 0)
+    return tuple(f"blocks.{i}." for i in range(first, config.layers))
+
+
+def _swapped_param_counts(
+    blocks_to_swap: int, config: Krea2Config,
+) -> tuple[int, int]:
+    """(换出层参数量, 全模型参数量)。meta 模型数参数，不读盘、不占显存。"""
+    prefixes = _swapped_block_prefixes(config, blocks_to_swap)
+    with torch.device("meta"):
+        probe = SingleStreamDiT(config)
+    swapped = total = 0
+    for name, param in probe.named_parameters():
+        total += param.numel()
+        if prefixes and name.startswith(prefixes):
+            swapped += param.numel()
+    return swapped, total
+
+
+def swapped_param_ratio(
+    blocks_to_swap: int, *, config: Krea2Config = KREA2_CONFIG,
+) -> float:
+    """换出层占全模型参数的比例 —— **显存预算折扣用这个，不要用字节数**。
+
+    折扣必须 dtype 无关：`check_load_budget` 的 need 来自权重文件实际大小，
+    fp8 checkpoint 只有 bf16 的一半。若折扣按 bf16 字节算，会把 fp8 场景的
+    需求折扣过头（need 13GB 减掉 11.3GB → 以为只要 1.7GB，实际常驻 7.2GB），
+    护栏就形同虚设。按比例乘文件实际大小则两种精度都正确。
+    """
+    if blocks_to_swap <= 0:
+        return 0.0
+    swapped, total = _swapped_param_counts(blocks_to_swap, config)
+    return (swapped / total) if total else 0.0
+
+
+def estimate_swapped_bytes(
+    blocks_to_swap: int,
+    dtype: torch.dtype,
+    *,
+    config: Krea2Config = KREA2_CONFIG,
+) -> int:
+    """换出层的权重字节数（**pinned 内存预算专用**）。
+
+    这里按计算 dtype 估，对 fp8 底模是高估 —— 对 pinned 预算而言高估是安全方向
+    （提前拒绝，不会让用户在锁定内存上翻车）。显存折扣不能用它，见
+    ``swapped_param_ratio`` 的说明。
+    """
+    if blocks_to_swap <= 0:
+        return 0
+    swapped, _total = _swapped_param_counts(blocks_to_swap, config)
+    return swapped * torch.empty(0, dtype=dtype).element_size()
+
+
+def _swapped_bytes_from_checkpoint(
+    checkpoint: Path,
+    prefixes: tuple[str, ...],
+    normalized_to_source: dict,
+) -> int:
+    """换出层在 checkpoint 里的**实际**字节数（只读 header，不加载数据）。
+
+    必须用实际 dtype 而非计算 dtype：fp8 checkpoint 只有 bf16 的一半，按 bf16
+    估会把 28 层算成 22.6GB（实际 11.3GB），在 37.5GB 内存的机器上撞 60% 安全
+    线被**误拒** —— 恰好挡死 B12 的目标配置。高估在这里不是保守，是假阴性。
+
+    header 读不出来时返回 0，由调用方回退到按计算 dtype 的估算。
+    """
+    total = 0
+    try:
+        with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+            for normalized, source_key in normalized_to_source.items():
+                if not normalized.startswith(prefixes):
+                    continue
+                slice_ = handle.get_slice(source_key)
+                numel = 1
+                for dim in slice_.get_shape():
+                    numel *= dim
+                total += numel * _dtype_size(slice_.get_dtype())
+    except Exception:  # noqa: BLE001
+        return 0
+    return total
+
+
+#: safetensors dtype 字符串 → 字节宽度（header 里是字符串不是 torch.dtype）
+_DTYPE_BYTES = {
+    "F64": 8, "I64": 8,
+    "F32": 4, "I32": 4,
+    "F16": 2, "BF16": 2, "I16": 2,
+    "F8_E4M3": 1, "F8_E5M2": 1, "I8": 1, "U8": 1, "BOOL": 1,
+}
+
+
+def _dtype_size(name: str) -> int:
+    return _DTYPE_BYTES.get(str(name).upper(), 2)
+
+
+def _check_swap_budget(
+    config: Krea2Config,
+    blocks_to_swap: int,
+    dtype: torch.dtype,
+    normalized_to_source: dict,
+    checkpoint: Path,
+) -> None:
+    """换出层落 pinned 之前先过内存预算护栏（B6：失败即报错，不静默降级）。
+
+    在**任何权重读取之前**调用 —— 失败要 fail-fast，不能等搬了一半才炸。
+    """
+    from training.sysmem import check_pinned_budget
+
+    prefixes = _swapped_block_prefixes(config, blocks_to_swap)
+    need = _swapped_bytes_from_checkpoint(checkpoint, prefixes, normalized_to_source)
+    if need <= 0:  # header 读不出：回退到按计算 dtype 估
+        need = estimate_swapped_bytes(blocks_to_swap, dtype, config=config)
+    check_pinned_budget(need, blocks=blocks_to_swap)
+
+
 def load_krea2_model(
     path: str | Path,
     device: str | torch.device,
@@ -271,6 +390,7 @@ def load_krea2_model(
     *,
     config: Krea2Config = KREA2_CONFIG,
     purpose: str = "train",
+    blocks_to_swap: int = 0,
 ) -> SingleStreamDiT:
     """Strict-load a single-file Krea2 checkpoint into a frozen meta-created model.
 
@@ -279,6 +399,11 @@ def load_krea2_model(
     见 quant_fp8）。训练即 kohya/musubi 生态的 fp8_base 语义——底模 frozen
     无梯度，LoRA 参数全精度；显存收益依赖 grad checkpointing（dequant 临时
     权重随重算段释放），该约束由 trainer 启动期校验强制（phases/models）。
+    ``blocks_to_swap`` > 0 时（block swap，见 docs/design/block-swap.md）：末尾
+    N 层的权重**直接载到 CPU pinned**，不经过显存 —— 这是「12/16GB 消费级卡
+    跑 K2」的前提，若先全量上卡再搬下来，峰值仍等于完整模型。落地后由
+    ``training.block_swap.PinnedBlockSwap`` 就地接管这批 CPU 张量。
+
     ``purpose`` 当前不影响加载行为，保留作调用面语义标注。
     """
     if dtype not in {torch.float16, torch.bfloat16, torch.float32, torch.float64}:
@@ -299,6 +424,13 @@ def load_krea2_model(
     state_dict = {}
     fp8_scales: dict[str, torch.Tensor | None] = {}
     checkpoint = _checkpoint_path(path)
+
+    swapped_prefixes = _swapped_block_prefixes(config, blocks_to_swap)
+    if swapped_prefixes:
+        _check_swap_budget(
+            config, blocks_to_swap, dtype, normalized_to_source, checkpoint,
+        )
+
     with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
         for normalized, source_key in normalized_to_source.items():
             tensor = handle.get_tensor(source_key)
@@ -306,14 +438,21 @@ def load_krea2_model(
                 raise ValueError(
                     f"Krea2 checkpoint 含非浮点参数 {source_key}: {tensor.dtype}"
                 )
+            # 被换出的层不上卡：直接落 CPU pinned（见 docstring）
+            swapped = normalized.startswith(swapped_prefixes) if swapped_prefixes else False
             if allow_fp8 and tensor.dtype in (
                 torch.float8_e4m3fn, torch.float8_e5m2,
             ):
                 # fp8 原样常驻（显存收益所在），不 cast dtype
-                state_dict[normalized] = tensor.to(device=target_device)
+                state_dict[normalized] = (
+                    tensor.pin_memory() if swapped
+                    else tensor.to(device=target_device)
+                )
                 if normalized.endswith(".weight"):
                     layer = normalized[: -len(".weight")]
                     fp8_scales.setdefault(layer, None)
+            elif swapped:
+                state_dict[normalized] = tensor.to(dtype=dtype).pin_memory()
             else:
                 state_dict[normalized] = tensor.to(
                     device=target_device,
@@ -328,5 +467,7 @@ def load_krea2_model(
     del state_dict
     model.requires_grad_(False)
     if fp8_scales:
-        patch_fp8_linears(model, fp8_scales)
+        # scale 恒放计算设备：换出层的权重此刻在 CPU，跟随它会导致前向 device
+        # 不匹配（见 patch_fp8_linears docstring）
+        patch_fp8_linears(model, fp8_scales, device=target_device)
     return model

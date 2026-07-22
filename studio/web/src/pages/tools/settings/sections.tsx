@@ -1366,6 +1366,29 @@ export function VramPolicySection({
           onChange={(v) => update('generate', 'ram_guard', v)}
         />
       </SettingsField>
+      <SettingsField
+        label={t('settings.vramPolicy.blocksToSwapLabel')}
+        desc={t('settings.vramPolicy.blocksToSwapDesc')}
+        helpTooltip={<p>{t('settings.vramPolicy.blocksToSwapHelp')}</p>}
+      >
+        <div className="flex items-center gap-2">
+          <SettingsInput
+            type="number"
+            min={0}
+            max={28}
+            value={draft.generate.blocks_to_swap ?? 0}
+            onChange={(v) =>
+              update('generate', 'blocks_to_swap', Math.max(0, Number(v) || 0))
+            }
+            className={`${textInputClass} max-w-32`}
+          />
+          <span className="text-xs text-fg-tertiary">
+            {(draft.generate.blocks_to_swap ?? 0) === 0
+              ? t('settings.vramPolicy.blocksToSwapOffHint')
+              : t('settings.vramPolicy.blocksToSwapSuffix')}
+          </span>
+        </div>
+      </SettingsField>
     </SettingsSection>
   )
 }

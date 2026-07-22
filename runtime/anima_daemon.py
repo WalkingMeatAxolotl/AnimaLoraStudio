@@ -143,6 +143,23 @@ def _move_module_to_device(module: Any, device: str) -> None:
     module.to(device)
 
 
+def _swap_discount_ratio(family_id: str, blocks_to_swap: int) -> float:
+    """block swap 下不会进显存的权重比例（显存预算折扣）。
+
+    比例而非字节：fp8 与 bf16 的文件大小差一倍，按字节折扣会在 fp8 场景把护栏
+    折扣穿（训练侧同款，见 training/sysmem.check_load_budget）。
+    族不支持 / 查询失败返回 0，护栏退化成保守。
+    """
+    if blocks_to_swap <= 0:
+        return 0.0
+    try:
+        family = _T.get_family(family_id)
+        ratio_fn = getattr(family, "swapped_param_ratio", None)
+        return float(ratio_fn(blocks_to_swap)) if ratio_fn else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def _move_adapter_to_device(adapter: Any, device: str, dtype: Any) -> None:
     network = getattr(adapter, "network", None)
     if network is None or not hasattr(network, "to"):
@@ -346,6 +363,10 @@ class ModelCache:
         self.dtype: Any = None
         self.lora_dtype: Any = torch.float32
         self.model: Any = None
+        #: block swap（training.block_swap.PinnedBlockSwap）。属于底模 identity：
+        #: blocks_to_swap 改变要重载 DiT（换出层是在 loader 里就不上卡的）。
+        self.blocks_to_swap: int = 0
+        self.block_swap: Any = None
         self.vae: Any = None
         # 族 opaque 文本栈（anima=(qwen_model, qwen_tok, t5_tok) 三元组，
         # krea2=Krea2TextStack）——只经 family.sample_image 消费，daemon 不拆包
@@ -409,6 +430,7 @@ class ModelCache:
         precision = cfg.get("mixed_precision", "bf16")
         vae_precision = cfg.get("vae_precision", precision)
         vae_tiling = str(cfg.get("vae_tiling") or "auto")
+        blocks_to_swap = int(cfg.get("blocks_to_swap") or 0)
         self.lora_merge_precision = str(
             cfg.get("lora_merge_precision") or "fp32"
         ).lower()
@@ -442,6 +464,8 @@ class ModelCache:
             or self.mixed_precision != precision
             or self.vae_precision != vae_precision
             or self.vae_tiling != vae_tiling
+            # 换出哪些层是在 loader 里决定的（换出层根本不上卡），改了必须重载
+            or self.blocks_to_swap != blocks_to_swap
             or self.text_encoder_backend != text_encoder_backend
             or self.t5_tokenizer_backend != t5_tokenizer_backend
         )
@@ -453,6 +477,9 @@ class ModelCache:
                 self.ram_guard,
                 weight_paths=[transformer_path, vae_path],
                 stage="模型加载",
+                vram_discount_ratio=_swap_discount_ratio(
+                    family_id, blocks_to_swap,
+                ),
             )
             # keep_text：TE 先行栈刚编码完（LRU 已填充），重载不清它
             self.unload(keep_text=True)
@@ -468,6 +495,7 @@ class ModelCache:
                 text_encoder_backend=text_encoder_backend,
                 t5_tokenizer_backend=t5_tokenizer_backend,
                 vae_tiling=vae_tiling,
+                blocks_to_swap=blocks_to_swap,
             )
             _emit_evt("loaded")
 
@@ -485,6 +513,7 @@ class ModelCache:
         text_encoder_backend: str,
         t5_tokenizer_backend: str,
         vae_tiling: str = "auto",
+        blocks_to_swap: int = 0,
     ) -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _torch_dtype_from_precision(precision)
@@ -495,10 +524,21 @@ class ModelCache:
 
         family = _T.get_family(family_id)
         logger.info("loading transformer [%s] %s", family_id, transformer_path)
+        swap_extra: dict[str, Any] = {}
+        if blocks_to_swap > 0:
+            if "block_swap" not in family.spec.capabilities:
+                raise RuntimeError(
+                    f"model_family='{family_id}' 不支持 block swap，但 "
+                    f"blocks_to_swap={blocks_to_swap}。请置 0。"
+                )
+            # 换出层由 loader 直接落 CPU pinned，不经显存
+            swap_extra["blocks_to_swap"] = blocks_to_swap
+            logger.info("block swap: last %d blocks stay in RAM", blocks_to_swap)
         model = family.load_dit(
             transformer_path, device, dtype,
             attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
             purpose="generate",
+            **swap_extra,
         )
         if use_xformers and not _T.enable_xformers(model):
             raise RuntimeError(
@@ -536,6 +576,17 @@ class ModelCache:
                 cache_enabled=False,
             )
 
+        # block swap：换出层此刻已在 CPU pinned（loader 直接落的），这里建管理
+        # 对象并挂前向钩子。LoRA 在 apply_loras 里按任务注入/merge，那边会先
+        # restore_masters() 保证 merge 落在主副本上（doc §9.6）。
+        self.block_swap = None
+        self.blocks_to_swap = blocks_to_swap
+        if blocks_to_swap > 0:
+            from training.block_swap import PinnedBlockSwap
+
+            self.block_swap = PinnedBlockSwap(model.blocks, blocks_to_swap, device)
+            self.block_swap.attach()
+
         self.family_id = family_id
         self.family = family
         self.model = model
@@ -567,6 +618,13 @@ class ModelCache:
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
         """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
         self._move_runtime_to_device()
+        if self.block_swap is not None:
+            # 关键顺序（doc §9.6）：fp8 底模的 LoRA 走**权重 merge**，而跑过前向后
+            # 换出层的 .data 指向的是会被下一层换入覆盖的 GPU 槽位——直接 merge
+            # 会静默丢失。先把参数指回 CPU pinned 主副本，delta 落在主副本上，
+            # 之后每次换入带的都是 merged 权重。
+            # bf16 底模走 lycoris hook 不改权重，restore 对它是无害的 no-op 语义。
+            self.block_swap.restore_masters()
 
         specs = [
             LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
@@ -642,8 +700,11 @@ class ModelCache:
                 self.t5_tokenizer_backend, self.vae_tiling,
             )
             # family_id 在 unload() 里被清空，必须先存——漏传曾是隐性
-            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）
+            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）。
+            # blocks_to_swap 同理：unload() 会清零，漏传则重载后 block swap
+            # 静默消失、模型全量上卡（小显存直接 OOM）。
             saved_family = self.family_id or "anima"
+            saved_blocks_to_swap = self.blocks_to_swap
             self.unload()
             self._load(
                 family_id=saved_family,
@@ -657,6 +718,7 @@ class ModelCache:
                 text_encoder_backend=saved_paths[7] or "hf",
                 t5_tokenizer_backend=saved_paths[8] or "slow",
                 vae_tiling=saved_paths[9] or "auto",
+                blocks_to_swap=saved_blocks_to_swap,
             )
             _emit_evt("loaded")
         self.last_lora_specs = []
@@ -667,6 +729,9 @@ class ModelCache:
             self.model, specs, self.device, self.lora_dtype,
             family_id=self.family_id or "anima",
             lora_merge_precision=self.lora_merge_precision,
+            # 开了 block swap = 用户内存本就紧张：不留那份与整个模型等大的 CPU
+            # 备份（krea2 fp8 实测 12.23GB），换 LoRA 改走「重载模型」兜底
+            keep_merge_backup=self.block_swap is None,
         )
         self.last_lora_specs = specs
         self.last_lora_metas = current_metas
@@ -677,7 +742,14 @@ class ModelCache:
     def _move_runtime_to_device(self) -> None:
         if not self.device:
             return
-        _move_module_to_device(self.model, self.device)
+        if self.block_swap is not None:
+            # 一刀切 .to(device) 会把换出层的 CPU pinned 主副本一起搬上卡，
+            # swap 白做且瞬时占用等于完整模型（小卡直接 OOM）——跳过被管理的张量
+            from training.block_swap import move_module_excluding
+
+            move_module_excluding(self.model, self.device, self.block_swap)
+        else:
+            _move_module_to_device(self.model, self.device)
         # anima 文本栈是 (qwen_model, qwen_tok, t5_tok) 三元组——采样内部的
         # decode offload 会把 TE 挪去 CPU，这里搬回。自管 device 的栈
         # （krea2 的 Krea2TextStack）没有裸模块成员，循环自然 no-op。
@@ -719,6 +791,24 @@ class ModelCache:
                     pass
             return
         logger.info("unloading model")
+        # 埋点必须在**丢引用之前**取基线，否则丢引用那一步的回收量测不到
+        from training.sysmem import available_ram_bytes, trim_working_set
+
+        _ram_marks: list[tuple[str, int | None]] = [("起点", available_ram_bytes())]
+        had_block_swap = self.block_swap is not None
+        if had_block_swap:
+            # 摘钩子并丢弃管理对象。注意**丢引用不等于还内存**：pinned 走
+            # PyTorch 的 host caching allocator，del + gc 之后实测归还 0 字节，
+            # 必须显式清 host cache（见下方 _release_pinned_host_cache）。
+            try:
+                # close() 而非 detach()：主副本被 param.data 引用，而持有 block
+                # 的不止 self.model（adapters 里的 LyCORIS 也持 org_module），
+                # 让组件自己把参数指走才可靠
+                self.block_swap.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.block_swap = None
+            self.blocks_to_swap = 0
         self.model = None
         self.vae = None
         self.family_id = None
@@ -727,9 +817,12 @@ class ModelCache:
         self.last_lora_specs = []
         self.last_lora_metas = []
         self.last_lora_merge_precision = None
+        _ram_marks.append(("丢引用", available_ram_bytes()))
+
         try:
             import gc
             gc.collect()
+            _ram_marks.append(("gc", available_ram_bytes()))
             if torch.cuda.is_available():
                 try:
                     # cuBLAS workspace 是 C++ 级常驻分配（Python gc 不可见，
@@ -741,8 +834,43 @@ class ModelCache:
                 except Exception:
                     pass
                 torch.cuda.empty_cache()
+                _ram_marks.append(("empty_cache", available_ram_bytes()))
+            # 刻意放在 CUDA 分支**外**：用过 block swap 就必然有 pinned 内存待还，
+            # 这件事不该取决于「卸载这一刻 CUDA 还可不可用」。函数本身对 API 缺失
+            # 静默，无 CUDA 环境下是安全 no-op。
+            if had_block_swap:
+                _release_pinned_host_cache()
+                _ram_marks.append(("pinned 归还", available_ram_bytes()))
+            # 大权重的 mmap 文件缓存页（DiT 13-26GB + TE）在 working set 里赖着
+            # 不走 —— 加载后 trim 过一次，卸载后同样要 trim（此前漏了）
+            trim_working_set()
+            _ram_marks.append(("trim working set", available_ram_bytes()))
         except Exception:
             pass
+
+        try:
+            parts = []
+            prev = _ram_marks[0][1]
+            for label, value in _ram_marks[1:]:
+                if value is None or prev is None:
+                    continue
+                parts.append(f"{label} +{(value - prev) / 1024**3:.2f}GB")
+                prev = value
+            tail = _ram_marks[-1][1]
+            if tail is not None:
+                logger.info(
+                    "[卸载] 可用内存 %.1fGB（%s）",
+                    tail / 1024**3, "，".join(parts) or "无变化",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _release_pinned_host_cache() -> None:
+    """把 pinned 内存还给操作系统（实现见 training.block_swap，训练侧共用）。"""
+    from training.block_swap import release_pinned_host_cache
+
+    release_pinned_host_cache()
 
 
 CACHE = ModelCache()

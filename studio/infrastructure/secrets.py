@@ -600,6 +600,10 @@ class GenerateConfig(BaseModel):
     save_test_images: bool = False
     vram_policy: str = "auto"
     ram_guard: bool = True
+    #: 换出到内存的 DiT 层数（0=关闭，krea2 生效）。与 vram_policy 分工不同：
+    #: 前者管模型之间谁让位，本项管单个 DiT 内部——单个模型自己就装不下显存时
+    #: 唯一的办法。见 docs/design/block-swap.md。
+    blocks_to_swap: int = 0
     task_timeout_minutes: int = 0
 
 

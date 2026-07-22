@@ -91,12 +91,19 @@ def _fp8_linear_forward(self, input: torch.Tensor) -> torch.Tensor:
 def patch_fp8_linears(
     model: torch.nn.Module,
     scales: dict[str, torch.Tensor | None],
+    *,
+    device: torch.device | None = None,
 ) -> int:
     """给持 fp8 权重的 Linear 挂 dequant 前向；返回 patch 数。
 
     ``scales``：layer 名（如 ``blocks.0.attn.gate``）→ F32 标量 scale；
     纯 cast 形态传 None。scale 以非持久 buffer 存进模块（不进 state_dict，
     不破坏既有序列化面）。
+
+    ``device``：scale 放哪。默认跟随该层权重所在设备。**block swap 场景必须
+    显式传计算设备**：被换出层的权重此刻在 CPU，跟随它会把 scale 也放 CPU，
+    而前向时权重已被搬到 GPU，`weight * scale` 会 device 不匹配（scale.to()
+    只改 dtype 不改 device）。scale 是 per-layer 标量，常驻 GPU 开销可忽略。
     """
     patched = 0
     modules = dict(model.named_modules())
@@ -111,7 +118,10 @@ def patch_fp8_linears(
         if scale is not None:
             module.register_buffer(
                 "weight_scale",
-                scale.to(device=module.weight.device, dtype=torch.float32),
+                scale.to(
+                    device=device if device is not None else module.weight.device,
+                    dtype=torch.float32,
+                ),
                 persistent=False,
             )
         module.forward = MethodType(_fp8_linear_forward, module)
