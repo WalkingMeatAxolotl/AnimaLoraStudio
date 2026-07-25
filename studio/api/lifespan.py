@@ -160,6 +160,20 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
             )
     threading.Thread(target=_bg_download_tag_dict, name="tag-dict-bg-download", daemon=True).start()
 
+    # 旧模型 eval 作业存量清理（#465）：0.21 及以前一次评估散成几百条作业行 + 几百个
+    # 只含 run.log 的目录。跑一次、写标记、之后跳过。放后台线程是因为几千条存量要逐个
+    # rmtree，不该拖慢启动。存量清完的版本之后连同 services/eval_cleanup.py 一起退役。
+    def _bg_cleanup_legacy_eval() -> None:
+        from ..services import eval_cleanup
+        try:
+            with db.connection_for() as conn:
+                eval_cleanup.cleanup_legacy_eval_on_startup(conn)
+        except Exception:
+            logger.exception("legacy eval cleanup failed (harmless; will retry next start)")
+    threading.Thread(
+        target=_bg_cleanup_legacy_eval, name="legacy-eval-cleanup", daemon=True
+    ).start()
+
     bus.attach_loop(asyncio.get_running_loop())
 
     # commit 11：SSE 客户端断连 + 30s 缓冲后清 generate cache。
