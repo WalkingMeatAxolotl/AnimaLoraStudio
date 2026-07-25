@@ -9,7 +9,6 @@ import { useEventStream } from './useEventStream'
 // 刷新时也能从仍在跑的 metric 状态接上。纯前端，不依赖新后端事件。
 
 const ACTIVE_STATUS = new Set(['pending', 'running'])
-const METRIC_KEYS = ['clip_t', 'clip_i', 'dino_i'] as const
 const POLL_MS = 4000
 
 export interface EvalProgress {
@@ -22,17 +21,19 @@ export interface EvalProgress {
 }
 
 /** 从 listEvalMetrics 的 results 聚合出「评估中 done/total」。
- *  一个 checkpoint「在评估」= run 级 status 或任一指标 status 为 pending/running
- *  （run pending/running 覆盖出图阶段，指标 status 覆盖算指标阶段）。 */
+ *
+ *  一个候选「在评估」= 它自己的 status 或**任一** metric_states 项为 pending/running。
+ *  指标 key 不再硬编码 —— 那样开了 CCIP / Tag-Recall 时会漏算，显示「评估完成」但实际
+ *  还在跑（旧实现只看 clip_t/clip_i/dino_i）。Session 模型下 metric_states 的键就是本次
+ *  plan 启用的指标集，直接遍历它。 */
 export function evalProgressFromResults(results: EvalMetricResult[]): EvalProgress {
   let active = false
   let done = 0
   for (const r of results) {
     const runActive = ACTIVE_STATUS.has(r.status)
-    const metricActive = METRIC_KEYS.some((k) => {
-      const s = r.metric_states?.[k]?.status
-      return s != null && ACTIVE_STATUS.has(s)
-    })
+    const metricActive = Object.values(r.metric_states ?? {}).some(
+      (s) => s?.status != null && ACTIVE_STATUS.has(s.status),
+    )
     if (runActive || metricActive) active = true
     else done += 1
   }

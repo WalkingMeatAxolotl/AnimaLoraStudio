@@ -5,7 +5,7 @@
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api, type EvalJobInfo, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
+import { api, type EvalMetricResult, type EvalMetricState, type EvalScale, type EvalSessionSummary, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { InfoButton } from './InfoButton'
@@ -389,14 +389,15 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 训练后/手动评估 job（统一日志区取原始日志用）。
-  const [evalJobs, setEvalJobs] = useState<EvalJobInfo[]>([])
+  // 历史评估（#465 起一次评估一个 Session，全部留档）。null = 看最新那次。
+  const [sessions, setSessions] = useState<EvalSessionSummary[]>([])
+  const [pickedSession, setPickedSession] = useState<number | null>(null)
 
   const load = useCallback(async (quiet = false) => {
     if (!pid || !vid) return
     if (!quiet) setLoading(true)
     try {
-      const next = await api.listEvalMetrics(pid, vid, taskId)
+      const next = await api.listEvalMetrics(pid, vid, taskId, pickedSession ?? undefined)
       setPayload(next)
       setError(null)
     } catch (err) {
@@ -404,15 +405,13 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     } finally {
       if (!quiet) setLoading(false)
     }
-    if (taskId) {
-      try {
-        const ej = await api.listTaskEvalJobs(pid, vid, taskId)
-        setEvalJobs(ej.jobs)
-      } catch {
-        // 日志关联是辅助信息，拉失败不打扰
-      }
+    try {
+      const { sessions: list } = await api.listEvalSessions(pid, vid, taskId)
+      setSessions(list)
+    } catch {
+      // 历史切换是辅助信息，拉失败不打扰
     }
-  }, [pid, vid, taskId])
+  }, [pid, vid, taskId, pickedSession])
 
   useEffect(() => {
     setPayload(null)
@@ -420,6 +419,9 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     if (!pid || !vid) return
     void load()
   }, [pid, vid, load])
+
+  // 切 task 时清掉选中的 Session（那是上一个 task 的历史）
+  useEffect(() => { setPickedSession(null) }, [taskId])
 
   const results = useMemo(() => {
     return [...(payload?.results ?? [])]
@@ -443,11 +445,11 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     )
   }, [results])
 
-  // 还有评估 job 在跑（含「出图」阶段——此时 metric 状态还是 not_run，hasActiveMetric
-  // 抓不到）。重跑评估在已 done 的 task 上时，靠这个让轮询继续，新 run 进度/日志才刷新。
+  // Session 还在跑（含「出图」阶段——此时各 metric 状态还是 pending，hasActiveMetric
+  // 抓不到）。重跑评估在已 done 的 task 上时，靠这个让轮询继续。
   const hasActiveJob = useMemo(
-    () => evalJobs.some((j) => j.status === 'pending' || j.status === 'running'),
-    [evalJobs],
+    () => sessions.some((s) => s.status === 'pending' || s.status === 'running'),
+    [sessions],
   )
 
   // 核心指标常显；动漫域新指标默认关，只有算过（状态非 not_run）才显示，避免空卡。
@@ -479,6 +481,9 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [running, setRunning] = useState(false)
   const [runMsg, setRunMsg] = useState<string | null>(null)
+  // 规模因子（验证图数 / 指标 runner / baseline 开关）与选了几个 checkpoint 无关，
+  // 拉一次就够，选择变化时前端就地推算出图数与后台任务数（issue #465 成本可见性）。
+  const [scale, setScale] = useState<EvalScale | null>(null)
 
   const loadCkpts = useCallback(async () => {
     if (!pid || !vid) return
@@ -497,9 +502,26 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     setPickerOpen((open) => {
       const next = !open
       if (next && ckpts.length === 0) void loadCkpts()
+      if (next && !scale && pid && vid) {
+        void api.getEvalScale(pid, vid).then(setScale).catch(() => {})
+      }
       return next
     })
-  }, [ckpts.length, loadCkpts])
+  }, [ckpts.length, loadCkpts, scale, pid, vid])
+
+  // 本次评估的规模：候选 = 选中数 + baseline 一份，每个候选出一整套验证图。作业数恒为
+  // 1（一次评估一个 EvalSession，#465），成本落在出图数和阶段数上 —— 阶段 = 1 个出图
+  // + 每个启用的指标 runner 一个，全在同一个作业里顺序跑。
+  const pickedScale = useMemo(() => {
+    if (!scale || selected.size === 0) return null
+    const candidates = selected.size + (scale.baseline_enabled ? 1 : 0)
+    return {
+      candidates,
+      images: candidates * scale.validation_images,
+      stages: 1 + scale.metric_runners.length,
+      validationImages: scale.validation_images,
+    }
+  }, [scale, selected.size])
 
   const toggleCkpt = useCallback((path: string) => {
     setSelected((prev) => {
@@ -519,7 +541,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
         task_id: taskId,
         checkpoints: [...selected],
       })
-      setRunMsg(`已排队 ${r.queued} 个 checkpoint 的评估`)
+      setRunMsg(`已排队评估 #${r.session.id}（${selected.size} 个 checkpoint）`)
       setSelected(new Set())
       setPickerOpen(false)
       void load(true)
@@ -594,10 +616,37 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
           </div>
         </div>
         <span className="flex-1" />
+        {/* 历史评估切换：一次评估一个 Session，全部留档（#465）。只有 2 次以上才显示。 */}
+        {sessions.length > 1 && (
+          <select
+            className="font-mono cursor-pointer max-w-[260px] truncate"
+            style={{
+              fontSize: 11,
+              padding: '4px 8px',
+              borderRadius: 'var(--r-md)',
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-sunken)',
+              color: 'var(--fg-secondary)',
+            }}
+            value={pickedSession ?? sessions[0].id}
+            onChange={(e) => setPickedSession(Number(e.target.value))}
+            title="查看历史评估"
+            aria-label="选择要查看的评估"
+          >
+            {sessions.map((s, i) => (
+              <option key={s.id} value={s.id}>
+                {i === 0 ? '最新 · ' : ''}
+                {new Date((s.created_at ?? 0) * 1000).toLocaleString()}
+                {` · ${s.candidate_count} 个候选`}
+                {s.status !== 'done' ? ` · ${s.status}` : ''}
+              </option>
+            ))}
+          </select>
+        )}
         {evalAgg.active && (
           <span
             className="badge badge-accent text-xs"
-            title="训练结束后正在用验证集对各 checkpoint 算指标（出图 + CLIP / DINO），完成后消失"
+            title="正在用验证集对各 checkpoint 出图并算指标，完成后消失"
           >
             <span className="dot dot-running" />
             评估中 {evalAgg.done}/{evalAgg.total}
@@ -688,6 +737,22 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                   </button>
                 )
               })}
+            </div>
+          )}
+          {pickedScale && (
+            <div className="text-[11px] text-fg-tertiary">
+              {pickedScale.validationImages === 0 ? (
+                <span className="text-warn">
+                  验证集为空 —— 先划分或手动放入验证图，否则评估算不出指标。
+                </span>
+              ) : (
+                <>
+                  将生成 <span className="font-mono text-fg-secondary">{pickedScale.images}</span> 张图
+                  （{pickedScale.candidates} 个被测对象 × {pickedScale.validationImages} 张
+                  {scale?.baseline_enabled ? '，含一组纯底模 baseline 对照' : ''}）、
+                  1 个评估任务（<span className="font-mono text-fg-secondary">{pickedScale.stages}</span> 个阶段）
+                </>
+              )}
             </div>
           )}
           <div className="flex items-center gap-2">

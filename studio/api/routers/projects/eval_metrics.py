@@ -1,21 +1,48 @@
-"""Version eval metric result endpoints."""
+"""评估结果读侧端点。
+
+一次评估 = 一个 EvalSession = 一个作业（#465），所以**没有**「合并多个子作业日志」的
+端点了 —— 日志直接走统一的 `/api/logs/{task_id}`。历史 Session 全部保留，`/eval/sessions`
+列出来供切换，`/eval/metrics` 默认给最新一次。
+"""
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ...schemas.projects import EvalClipStart, EvalDinoStart
-from ._shared import _publish_job_state, _version_dir_or_404
-from .... import db, secrets
+from ._shared import _version_dir_or_404
+from ...deps import _supervisor
+from .... import db
 from ....infrastructure.paths import task_eval_dir
-from ....services import eval_clip, eval_dino, eval_metrics, eval_samples
-from ....services.projects import jobs as project_jobs
+from ....services import eval_metrics, eval_samples, eval_session
 
 router = APIRouter()
 
-# 训练后 / 手动评估的 job kind（inline 训练时评估无 job，进训练日志）。
-_EVAL_JOB_KINDS = ("eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip")
+
+@router.get("/api/projects/{pid}/versions/{vid}/eval/sessions")
+def list_eval_sessions_endpoint(
+    pid: int, vid: int, task_id: int | None = None, limit: int = 50,
+) -> dict[str, Any]:
+    """列该 version（可选：某训练 task）的评估 Session，最新在前。
+
+    历史全部保留（一次评估一条），前端用它做「看哪一次评估」的切换。
+    """
+    _version_dir_or_404(pid, vid)
+    with db.connection_for() as conn:
+        sessions = eval_session.list_sessions(
+            conn, project_id=pid, version_id=vid,
+            parent_task_id=task_id, limit=max(1, min(limit, 200)),
+        )
+    # plan 整体可能很大（200 个候选 + 验证集清单），列表里只给摘要
+    for s in sessions:
+        plan = s.pop("plan", None) or {}
+        s.pop("plan_json", None)
+        s["candidate_count"] = len(plan.get("candidates") or []) + (
+            1 if (plan.get("baseline") or {}).get("enabled") else 0
+        )
+        s["metric_keys"] = (plan.get("metrics") or {}).get("keys") or []
+        s["validation_images"] = (plan.get("reference_manifest") or {}).get("count", 0)
+    return {"sessions": sessions}
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/metrics")
@@ -23,8 +50,44 @@ def list_eval_metric_results_endpoint(
     pid: int,
     vid: int,
     task_id: int | None = None,
+    session_id: int | None = None,
 ) -> dict[str, Any]:
+    """评估结果。
+
+    优先读 EvalSession（#465 起的数据模型）：`session_id` 指定哪一次，省略则取该
+    task / version 最新一次。没有任何 Session 时回落到**存量**文件结果（0.21 及以前
+    的 run.json / metrics.json 仍可读），这样老项目的历史指标不会因为换模型而消失。
+    """
     _, _, vdir = _version_dir_or_404(pid, vid)
+    with db.connection_for() as conn:
+        session = None
+        if session_id:
+            session = eval_session.get_session(conn, session_id)
+            if session is None:
+                raise HTTPException(404, f"eval session 不存在: {session_id}")
+            if int(session.get("version_id") or 0) != vid:
+                raise HTTPException(400, "eval session 不属于该 version")
+        else:
+            latest = eval_session.list_sessions(
+                conn, project_id=pid, version_id=vid,
+                parent_task_id=task_id, limit=1,
+            )
+            session = latest[0] if latest else None
+        if session is not None:
+            sid = int(session["id"])
+            results = eval_session.session_results(conn, sid) or []
+            return {
+                "metric_specs": eval_metrics.metric_specs(),
+                "cache": eval_metrics.cache_layout(
+                    vdir, eval_session.samples_root(sid)
+                ),
+                "results": results,
+                "session": {
+                    k: v for k, v in session.items() if k not in ("plan", "plan_json")
+                },
+            }
+
+    # 存量回落：没有 Session（老项目 / 从没跑过新版评估）
     eval_root = task_eval_dir(task_id) if task_id else None
     try:
         results = eval_metrics.list_results(vdir, eval_root)
@@ -34,44 +97,41 @@ def list_eval_metric_results_endpoint(
         "metric_specs": eval_metrics.metric_specs(),
         "cache": eval_metrics.cache_layout(vdir, eval_root),
         "results": results,
+        "session": None,
+        "legacy": True,
     }
 
 
-@router.get("/api/projects/{pid}/versions/{vid}/eval/jobs")
-def list_task_eval_jobs_endpoint(
-    pid: int, vid: int, task_id: int,
-) -> dict[str, Any]:
-    """列某 task 的训练后/手动评估 job（eval_samples/clip/dino），给前端按
-    run_id 关联 checkpoint 行 + 取原始日志（job_log_appended / GET /api/jobs/{id}/log）。
-
-    job_log_appended 事件不带 task_id，刷新会丢 live 关联，所以靠这个端点重新发现。
-    inline 训练时评估无 job（进训练日志），不在此列。
-
-    只返回 **run 仍存在** 的 job：每次「运行评估」会删上一轮 run 文件，旧 job 的 run
-    不在了就过滤掉，合并评估日志永远只剩这次的数据。不改任何 job 状态、不污染历史。
-    """
-    _, _, vdir = _version_dir_or_404(pid, vid)
-    eval_root = task_eval_dir(task_id)
+@router.post("/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/cancel")
+def cancel_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]:
+    """中断一次评估：取消 Session 的 task（已算出的结果保留）。"""
+    _version_dir_or_404(pid, vid)
     with db.connection_for() as conn:
-        rows = project_jobs.list_jobs(conn, project_id=pid, version_id=vid)
-    out: list[dict[str, Any]] = []
-    for j in rows:
-        if j.get("kind") not in _EVAL_JOB_KINDS:
-            continue
-        params = j.get("params_decoded") or {}
-        if int(params.get("task_id") or 0) != task_id:
-            continue
-        run_id = params.get("run_id")
-        if not run_id or not eval_samples.run_path(vdir, str(run_id), eval_root).exists():
-            continue  # run 已被清空 → 不再显示这个历史 job
-        out.append({
-            "id": j.get("id"),
-            "kind": j.get("kind"),
-            "status": j.get("status"),
-            "run_id": run_id,
-            "checkpoint_path": params.get("checkpoint_path"),
-        })
-    return {"jobs": out}
+        session = eval_session.get_session(conn, sid)
+        if session is None or int(session.get("version_id") or 0) != vid:
+            raise HTTPException(404, f"eval session 不存在: {sid}")
+        task_id = int(session.get("task_id") or 0)
+    # Session 的 task 走统一队列取消（异步 SIGTERM）；worker 收到信号后把当前阶段标
+    # canceled，已算完的候选结果留在库里。
+    if task_id:
+        _supervisor().cancel(task_id)
+    return {"canceled": sid, "task_id": task_id or None}
+
+
+@router.delete("/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}")
+def delete_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]:
+    """删一次评估的记录和产物。checkpoint 是引用，不受影响。"""
+    _version_dir_or_404(pid, vid)
+    with db.connection_for() as conn:
+        session = eval_session.get_session(conn, sid)
+        if session is None or int(session.get("version_id") or 0) != vid:
+            raise HTTPException(404, f"eval session 不存在: {sid}")
+        if session.get("status") in (
+            eval_session.STATUS_PENDING, eval_session.STATUS_RUNNING
+        ):
+            raise HTTPException(400, "评估还在进行中，先中断再删除")
+        eval_session.delete_session(conn, sid)
+    return {"deleted": sid}
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics")
@@ -90,55 +150,3 @@ def get_eval_metric_result_endpoint(
     if result is None:
         raise HTTPException(404, f"eval sample run 不存在: {run_id}")
     return {"metric_specs": eval_metrics.metric_specs(), "result": result}
-
-
-@router.post("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/clip")
-def start_eval_clip_metrics_endpoint(
-    pid: int, vid: int, run_id: str, body: EvalClipStart
-) -> dict[str, Any]:
-    p, v, vdir = _version_dir_or_404(pid, vid)
-    cfg = secrets.load().eval_metrics
-    try:
-        with db.connection_for() as conn:
-            job, result = eval_clip.start_job(
-                conn,
-                p,
-                v,
-                vdir,
-                run_id,
-                model_name=body.model_name or cfg.clip_model_name,
-            )
-    except (
-        eval_clip.EvalClipError,
-        eval_metrics.EvalMetricsError,
-        eval_samples.EvalSamplesError,
-    ) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    _publish_job_state(job)
-    return {"job": job, "result": result}
-
-
-@router.post("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/dino")
-def start_eval_dino_metrics_endpoint(
-    pid: int, vid: int, run_id: str, body: EvalDinoStart
-) -> dict[str, Any]:
-    p, v, vdir = _version_dir_or_404(pid, vid)
-    cfg = secrets.load().eval_metrics
-    try:
-        with db.connection_for() as conn:
-            job, result = eval_dino.start_job(
-                conn,
-                p,
-                v,
-                vdir,
-                run_id,
-                model_name=body.model_name or cfg.dino_model_name,
-            )
-    except (
-        eval_dino.EvalDinoError,
-        eval_metrics.EvalMetricsError,
-        eval_samples.EvalSamplesError,
-    ) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    _publish_job_state(job)
-    return {"job": job, "result": result}

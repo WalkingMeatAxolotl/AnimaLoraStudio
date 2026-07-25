@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
-  type EvalJobInfo,
+  type EvalSessionSummary,
   type Task,
   type TaskOutputs,
   type TaskStatus,
@@ -643,8 +643,9 @@ function MonitorTab({ taskId }: { taskId: number }) {
 
 // ── EvalTab ─────────────────────────────────────────────────────────────────
 
-// 评估日志：把该 task 所有评估 job（出图 + 各指标）的原始日志按时间（job id）拼成
-// 一条流，喂给统一的 TaskLogDrawer（全 app 一致的底部抽屉）。不按 checkpoint 分。
+// 评估日志：一次评估 = 一个 EvalSession = 一个作业（#465），所以直接读那个作业的
+// run.log，喂给统一的 TaskLogDrawer。以前一次评估散成几百个子作业，这里要先拉作业列表
+// 再逐个取日志拼起来；现在一个 getLog 就够。
 function useEvalLogSource(
   pid: number | undefined,
   vid: number | undefined,
@@ -652,110 +653,85 @@ function useEvalLogSource(
 ): LogSource | null {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const [jobs, setJobs] = useState<EvalJobInfo[]>([])
-  const [buffers, setBuffers] = useState<Record<number, string>>({})
-  const buffersRef = useRef<Record<number, string>>({})
+  const [session, setSession] = useState<EvalSessionSummary | null>(null)
+  const [baseLines, setBaseLines] = useState<string[]>([])
+  const [liveLines, setLiveLines] = useState<string[]>([])
   const [retrying, setRetrying] = useState(false)
 
-  const loadJobs = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!pid || !vid || !taskId) return
     try {
-      // 后端只返回 run 仍存在的 job（重跑会清掉上一轮 run），所以这里拿到的天然只有
-      // 这次的 job —— 不需要前端再按状态过滤。
-      const r = await api.listTaskEvalJobs(pid, vid, taskId)
-      setJobs(r.jobs)
+      // 最新一次评估（历史全部保留，日志只看当前这次）
+      const { sessions } = await api.listEvalSessions(pid, vid, taskId)
+      const latest = sessions[0] ?? null
+      setSession(latest)
+      if (!latest?.task_id) { setBaseLines([]); return }
+      const log = await api.getLog(latest.task_id)
+      setBaseLines((log.content || '').split('\n'))
+      setLiveLines([])  // 已并进 base，避免与 SSE 追加的重复
     } catch {
       // 辅助信息，拉失败不打扰
     }
   }, [pid, vid, taskId])
 
-  // 评估 tab 挂载期间稳定轮询：清空 + 重跑后新 job 是从无到有，靠它发现（之前只在
-  // 已有 job 活跃时轮询，清空后 job 全 canceled → 不轮询 → 重跑的新 job 看不到）。
+  // 评估 tab 挂载期间稳定轮询：重跑会建一个**新** Session，靠它发现。
   useEffect(() => {
-    void loadJobs()
-    const id = window.setInterval(() => void loadJobs(), 5000)
+    void load()
+    const id = window.setInterval(() => void load(), 5000)
     return () => window.clearInterval(id)
-  }, [loadJobs])
+  }, [load])
 
-  // 每个 job 的日志 hydrate 一次
-  const jobIds = jobs.map((j) => j.id).join(',')
-  useEffect(() => {
-    let alive = true
-    for (const j of jobs) {
-      if (buffersRef.current[j.id] === undefined) {
-        buffersRef.current[j.id] = ''
-        // R-5：eval 作业与任务同台账，日志走统一 /api/logs/{id}
-        void api.getLog(j.id).then((r) => {
-          if (!alive) return
-          buffersRef.current[j.id] = r.content || ''
-          setBuffers({ ...buffersRef.current })
-        }).catch(() => {})
-      }
-    }
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobIds])
-
-  // 实时续流
+  // 实时续流：本 Session 作业的增量往尾部追（下一次 load 会并进 base）
+  const evalTaskId = session?.task_id ?? null
   useEventStream((evt) => {
-    if (
-      evt.type === 'job_log_appended'
-      && typeof evt.job_id === 'number'
-      && jobs.some((j) => j.id === evt.job_id)
-    ) {
-      const id = evt.job_id
-      const text = typeof evt.text === 'string' ? evt.text : ''
-      const prev = buffersRef.current[id] ?? ''
-      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
-      buffersRef.current[id] = prev + sep + text + '\n'
-      setBuffers({ ...buffersRef.current })
-    }
+    const isMine =
+      (evt.type === 'job_log_appended' && evt.job_id === evalTaskId)
+      || (evt.type === 'task_log_appended' && evt.task_id === evalTaskId)
+    if (!isMine || evalTaskId == null) return
+    const text = typeof evt.text === 'string' ? evt.text : ''
+    if (text) setLiveLines((prev) => [...prev, ...text.split('\n')])
   })
 
   return useMemo(() => {
-    if (jobs.length === 0) return null
-    const ordered = [...jobs].sort((a, b) => a.id - b.id)
-    const lines: string[] = []
-    for (const j of ordered) {
-      const buf = buffers[j.id]
-      if (!buf) continue
-      const ls = buf.split('\n')
-      if (ls.length && ls[ls.length - 1] === '') ls.pop()
-      lines.push(...ls)
-    }
+    if (!session) return null
+    const lines = [...baseLines, ...liveLines]
     const status: LogSourceStatus =
-      jobs.some((j) => j.status === 'running') ? 'running'
-        : jobs.some((j) => j.status === 'pending') ? 'pending'
-          : jobs.some((j) => j.status === 'failed') ? 'failed'
+      session.status === 'running' ? 'running'
+        : session.status === 'pending' ? 'pending'
+          : session.status === 'failed' ? 'failed'
             : 'done'
-    // 中断：取消该 task 全部未完成的评估 job（异步 SIGTERM）。区别于「清空」——
-    // 不删已算出的结果，只停后续 job。drawer 在 live 时把它显示成 header 右侧取消按钮。
-    const active = jobs.filter(
-      (j) => j.status !== 'done' && j.status !== 'failed' && j.status !== 'canceled',
-    )
-    const onCancel = active.length
+    // 中断：取消 Session 的作业（异步 SIGTERM）。已算出的候选结果留在库里，不回滚。
+    const active = session.status === 'pending' || session.status === 'running'
+    const onCancel = active && pid && vid
       ? () => {
-          active.forEach((j) => void api.cancelJob(j.id).catch(() => {}))
-          void loadJobs()
+          void api.cancelEvalSession(pid, vid, session.id).catch(() => {})
+          void load()
         }
       : undefined
-    // 重试：整体 failed 时对本轮同一批 checkpoint 完全重跑（后端 /eval/run 会
-    // 先清空上一轮 run 再排队 + 自动补 baseline），不做失败项增量。checkpoint
-    // 从本轮 job params 收集（baseline job 复用首个 checkpoint 路径，去重即可）。
-    const ckpts = [...new Set(
-      jobs.map((j) => j.checkpoint_path).filter((p): p is string => !!p),
-    )]
-    const onRetry = status === 'failed' && !retrying && pid && vid && ckpts.length
+    // 重试：整体 failed 时按同一批 checkpoint 再建一个 Session（不覆盖失败那次 ——
+    // 历史保留，两次都能查）。候选路径从 plan 拿不到（列表接口只回摘要），所以走
+    // /eval/metrics 的结果行收集。
+    const onRetry = status === 'failed' && !retrying && pid && vid
       ? () => {
           setRetrying(true)
-          api.runTaskEval(pid, vid, { task_id: taskId, checkpoints: ckpts })
-            .then(() => { toast(t('queueDetail.evalRetryQueued'), 'success'); return loadJobs() })
+          void api.listEvalMetrics(pid, vid, taskId, session.id)
+            .then((r) => {
+              const ckpts = [...new Set(
+                (r.results ?? [])
+                  .filter((row) => !row.baseline)
+                  .map((row) => row.checkpoint?.path)
+                  .filter((p): p is string => !!p),
+              )]
+              if (!ckpts.length) throw new Error('no checkpoint to retry')
+              return api.runTaskEval(pid, vid, { task_id: taskId, checkpoints: ckpts })
+            })
+            .then(() => { toast(t('queueDetail.evalRetryQueued'), 'success'); return load() })
             .catch((e) => toast(String(e), 'error'))
             .finally(() => setRetrying(false))
         }
       : undefined
     return { key: `eval-${taskId}`, label: '评估', status, lines, onCancel, onRetry }
-  }, [jobs, buffers, taskId, loadJobs, retrying, pid, vid, t, toast])
+  }, [session, baseLines, liveLines, taskId, load, retrying, pid, vid, t, toast])
 }
 
 function EvalTab({ taskId }: { taskId: number }) {
