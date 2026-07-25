@@ -51,6 +51,16 @@ GPU_TASK_TYPES = ("train", "reg_ai", "generate")
 # 数据作业当训练任务）。
 JOB_TASK_TYPES = (
     "download", "preprocess", "tag", "reg_build",
+    # eval_session：一次评估 = 一个作业（EvalSession，#465）。内部按 stage 顺序跑出图
+    # 和各指标，不再 fan-out 成下面那批 per-checkpoint / per-metric 作业。
+    "eval_session",
+    # 旧模型的 eval 子作业 kind。Session 上线后不再产生，保留是为了让存量行仍能被
+    # 查询 / 清理（见 services/eval_cleanup.py 的代际判据）。
+    "eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip",
+)
+# 旧模型（0.21 及以前）的 eval 子作业 —— 一次评估散成几百条的那批。清理和「是不是
+# 上一代数据」的判断都以此为准；新模型只产生 "eval_session"。
+LEGACY_EVAL_TASK_TYPES = (
     "eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip",
 )
 VALID_TASK_TYPES = GPU_TASK_TYPES + JOB_TASK_TYPES

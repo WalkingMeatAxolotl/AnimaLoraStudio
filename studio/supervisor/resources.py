@@ -32,6 +32,10 @@ JOB_KIND_RESOURCE_CLASS: dict[str, str] = {
     "preprocess": RESOURCE_LIGHT,   # spandrel 超分，小模型（D-R1）
     "tag": RESOURCE_LIGHT,          # WD14 / CLTagger ONNX
     "reg_build": RESOURCE_LIGHT,
+    # 一次评估 = 一个作业（EvalSession，#465）。内部先出图（底模栈，与 generate 同款）
+    # 再算指标，整段占 GPU → exclusive。旧模型把出图和指标拆成两个档位是因为它们是
+    # 两个独立作业；合成一个 Session 后按最重的阶段定档。
+    "eval_session": RESOURCE_EXCLUSIVE,
     "eval_samples": RESOURCE_EXCLUSIVE,  # 与 generate 同款底模栈（D-R2）
     "eval_clip": RESOURCE_LIGHT,
     "eval_dino": RESOURCE_LIGHT,

@@ -146,6 +146,38 @@ def task_log_path(task_id: int) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# EvalSession 档案（#465 —— 评估从「寄生在训练 task 目录下的一堆 run」提升为一等对象）
+# ---------------------------------------------------------------------------
+#
+# 布局（docs 设计稿 §0.5）：
+#   eval/sessions/<id>/plan.json                不可变 EvalPlan
+#   eval/sessions/<id>/reference_manifest.json  validation 文件 + prompt + digest
+#   eval/sessions/<id>/samples/<run_id>/        出图与指标产物
+#   eval/sessions/<id>/report.json              完成态导出（可从 DB 重新生成）
+#
+# 输入 checkpoint 不复制进来，plan 里只存路径 + digest —— 删 Session 不动 checkpoint。
+# 跟训练 task 目录解耦：删训练 task 不会带走评估历史，反之亦然。
+EVAL_SESSIONS_DIR = STUDIO_DATA / "eval" / "sessions"
+
+
+def eval_session_dir(session_id: int) -> Path:
+    return EVAL_SESSIONS_DIR / str(int(session_id))
+
+
+def eval_session_plan_path(session_id: int) -> Path:
+    return eval_session_dir(session_id) / "plan.json"
+
+
+def eval_session_report_path(session_id: int) -> Path:
+    return eval_session_dir(session_id) / "report.json"
+
+
+def eval_session_samples_dir(session_id: int) -> Path:
+    """出图根。首版下面按复用的 eval_samples run_id 分目录（见 _v19 的 run_id 注释）。"""
+    return eval_session_dir(session_id) / "samples"
+
+
+# ---------------------------------------------------------------------------
 # Path traversal 防护
 # ---------------------------------------------------------------------------
 #
