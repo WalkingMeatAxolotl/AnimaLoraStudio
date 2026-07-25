@@ -10,22 +10,25 @@
  * 同源 API 路径，drawImage 不需要 crossOrigin/CORS。
  */
 import { api } from '../../../api/client'
-import type { XYAxisType } from '../../../api/client'
 import i18n from '../../../i18n'
-import { formatAxisValue } from './xy'
 
 interface ExportSample {
   path: string
   xy: { xi: number; yi: number }
+  /** 非 Generate cache 来源时由调用方给完整 URL（如 eval 的出图） */
+  imageUrl?: string
 }
 
 export interface ExportInput {
   samples: ExportSample[]
   taskId: number
-  xAxis: XYAxisType
-  yAxis: XYAxisType | null
-  xValues: string[]
-  yValues: Array<string | null>
+  /** 轴标签：**已格式化**的显示文本，直接画到 canvas 上。
+   *
+   *  以前这里收 XYAxisType 再自己 formatAxisValue —— 那把导出绑死在 Generate 的
+   *  轴类型枚举上。改收成品文本后 eval 的 checkpoint × prompt 矩阵也能用同一个导出。 */
+  xLabels: string[]
+  /** null = 单轴（不画 Y 标签列） */
+  yLabels: Array<string | null> | null
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -39,9 +42,10 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 /** 把 XY 矩阵合成成一张 PNG Blob —— exportXYMatrix 下载 + saveTestImages 自动落盘共用。 */
 export async function composeXYMatrix(input: ExportInput): Promise<Blob> {
-  const { samples, taskId, xAxis, yAxis, xValues, yValues } = input
-  const xLen = xValues.length
-  const yLen = Math.max(yValues.length, 1)
+  const { samples, taskId, xLabels, yLabels } = input
+  const yRows: Array<string | null> = yLabels ?? [null]
+  const xLen = xLabels.length
+  const yLen = Math.max(yRows.length, 1)
   if (xLen === 0 || samples.length === 0) {
     throw new Error(i18n.t('generate.noExportableXyData'))
   }
@@ -68,7 +72,7 @@ export async function composeXYMatrix(input: ExportInput): Promise<Blob> {
   // 文字 / padding 尺寸（按 cellW 自适应：大图大字）
   const fontSize = Math.max(18, Math.round(cellW / 28))
   const labelH = Math.round(fontSize * 2.6)
-  const labelW = yAxis ? Math.round(fontSize * 7) : 0
+  const labelW = yLabels ? Math.round(fontSize * 7) : 0
   const padding = Math.round(fontSize * 1.2)
   const totalW = padding * 2 + labelW + xLen * cellW
   const totalH = padding * 2 + labelH + yLen * cellH
@@ -91,19 +95,19 @@ export async function composeXYMatrix(input: ExportInput): Promise<Blob> {
   for (let xi = 0; xi < xLen; xi++) {
     const x = padding + labelW + xi * cellW + cellW / 2
     const y = padding + labelH / 2
-    const txt = formatAxisValue(xAxis, xValues[xi])
+    const txt = xLabels[xi] ?? ''
     ctx.fillText(txt, x, y, cellW - 8)
   }
 
   // Y 轴标签（左侧）
-  if (yAxis) {
+  if (yLabels) {
     ctx.textAlign = 'right'
     for (let yi = 0; yi < yLen; yi++) {
-      const yv = yValues[yi]
+      const yv = yRows[yi]
       if (yv == null) continue
       const x = padding + labelW - 8
       const y = padding + labelH + yi * cellH + cellH / 2
-      ctx.fillText(formatAxisValue(yAxis, yv), x, y, labelW - 16)
+      ctx.fillText(yv ?? '', x, y, labelW - 16)
     }
   }
 

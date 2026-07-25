@@ -2,12 +2,14 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import PreviewXYGrid, { type XYSample } from './PreviewXYGrid'
-import type { XYAxisDraft } from './xy'
+import { axisView, type XYAxisDraft } from './xy'
 
 type Sample = XYSample
 
-const xDraft: XYAxisDraft = { axis: 'steps', raw: '20, 25, 30', loraIndex: null }
-const yDraft: XYAxisDraft = { axis: 'cfg_scale', raw: '3.0, 5.0', loraIndex: null }
+// 轴以 XYAxisView 传入（组件不再认 XYAxisDraft）；这里仍从 draft 派生，保持断言里的
+// 「步数 / CFG Scale」文案与 Generate 页一致。
+const xAxis = axisView({ axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft)
+const yAxis = axisView({ axis: 'cfg_scale', raw: '3.0, 5.0', loraIndex: null } as XYAxisDraft)
 
 function makeSample(xi: number, yi: number, xv: number, yv: number | null): Sample {
   return {
@@ -23,8 +25,8 @@ describe('PreviewXYGrid', () => {
       <PreviewXYGrid
         samples={[]}
         taskId={99}
-        xDraft={xDraft}
-        yDraft={yDraft}
+        xAxis={xAxis}
+        yAxis={yAxis}
       />
     )
     // 3 × 2 = 6 张
@@ -34,7 +36,7 @@ describe('PreviewXYGrid', () => {
   it('shows partial count when generation in progress', () => {
     const samples = [makeSample(0, 0, 20, 3.0), makeSample(1, 0, 25, 3.0)]
     render(
-      <PreviewXYGrid samples={samples} taskId={99} xDraft={xDraft} yDraft={yDraft} />
+      <PreviewXYGrid samples={samples} taskId={99} xAxis={xAxis} yAxis={yAxis} />
     )
     expect(screen.getByText(/3 × 2 = 6 张/)).toBeInTheDocument()
     expect(screen.getByText(/已出 2/)).toBeInTheDocument()
@@ -42,7 +44,7 @@ describe('PreviewXYGrid', () => {
 
   it('renders 1D layout (y=null) with single header row', () => {
     render(
-      <PreviewXYGrid samples={[]} taskId={99} xDraft={xDraft} yDraft={null} />
+      <PreviewXYGrid samples={[]} taskId={99} xAxis={xAxis} yAxis={null} />
     )
     expect(screen.getByText(/3 张/)).toBeInTheDocument()
   })
@@ -53,7 +55,7 @@ describe('PreviewXYGrid', () => {
       makeSample(2, 1, 30, 5.0),
     ]
     render(
-      <PreviewXYGrid samples={samples} taskId={99} xDraft={xDraft} yDraft={yDraft} />
+      <PreviewXYGrid samples={samples} taskId={99} xAxis={xAxis} yAxis={yAxis} />
     )
     // 已出 cell 显示 img；未出 cell 显示 …
     const imgs = screen.getAllByRole('img')
@@ -71,8 +73,8 @@ describe('PreviewXYGrid', () => {
       <PreviewXYGrid
         samples={samples}
         taskId={99}
-        xDraft={xDraft}
-        yDraft={null}
+        xAxis={xAxis}
+        yAxis={null}
         onCellClick={onCellClick}
       />
     )
@@ -90,7 +92,7 @@ describe('PreviewXYGrid', () => {
   it('shows zoom percentage button (replaces old density toggle)', () => {
     const samples = [makeSample(0, 0, 20, null)]
     render(
-      <PreviewXYGrid samples={samples} taskId={99} xDraft={xDraft} yDraft={null} />
+      <PreviewXYGrid samples={samples} taskId={99} xAxis={xAxis} yAxis={null} />
     )
     // 默认 100%
     const zoomBtn = screen.getByRole('button', { name: '100%' })
@@ -103,8 +105,8 @@ describe('PreviewXYGrid', () => {
       <PreviewXYGrid
         samples={samples}
         taskId={99}
-        xDraft={xDraft}
-        yDraft={null}
+        xAxis={xAxis}
+        yAxis={null}
         selectedIndices={[0]}
       />
     )
@@ -122,7 +124,7 @@ describe('PreviewXYGrid', () => {
       makeSample(1, 1, 25, 5.0),
     ]
     render(
-      <PreviewXYGrid samples={samples} taskId={99} xDraft={xDraft} yDraft={yDraft} />
+      <PreviewXYGrid samples={samples} taskId={99} xAxis={xAxis} yAxis={yAxis} />
     )
 
     await user.dblClick(screen.getAllByRole('img')[0])
@@ -141,7 +143,7 @@ describe('PreviewXYGrid', () => {
       imageUrl: '/api/generate/disk/image/2026-06-08/xy/xy%20plot%201/cell%20x0%20y0.png',
     }
     render(
-      <PreviewXYGrid samples={[sample]} taskId={-1} xDraft={xDraft} yDraft={null} />
+      <PreviewXYGrid samples={[sample]} taskId={-1} xAxis={xAxis} yAxis={null} />
     )
     const img = screen.getAllByRole('img')[0] as HTMLImageElement
     expect(img.src).toContain('/api/generate/disk/image/2026-06-08/xy/')
@@ -157,7 +159,7 @@ describe('PreviewXYGrid', () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     render(
       <PreviewXYGrid
-        samples={samples} taskId={-1} xDraft={xDraft} yDraft={null}
+        samples={samples} taskId={-1} xAxis={xAxis} yAxis={null}
         compositeUrl="/api/generate/disk/image/2026-06-08/xy/xy%20plot%201/xy%20plot.png"
       />
     )

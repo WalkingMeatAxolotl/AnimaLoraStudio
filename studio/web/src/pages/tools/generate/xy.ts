@@ -128,3 +128,32 @@ export function formatAxisValue(axis: XYAxisType, value: string): string {
   if (axis === 'lora_ckpt') return ckptStemFromPath(value)
   return value
 }
+
+/** 轴的**展示视图** —— 给 PreviewXYGrid / composeXYMatrix 用。
+ *
+ *  这两处以前直接收 `XYAxisDraft` / `XYAxisType`，把网格渲染和导出绑死在 Generate
+ *  的四种轴类型上。抽成 { label, values } 之后，eval 的「checkpoint × prompt」矩阵
+ *  也能复用同一套 zoom / pan / 全屏 / 导出，不用给 XYAxisType 塞一个只有 eval 用的值。 */
+export interface XYAxisView {
+  /** 轴名（已 i18n），用于 cell tooltip 和全屏 caption */
+  label: string
+  /** 各列 / 行的原始值 */
+  values: string[]
+  /** 显示用格式化；省略则原样显示 */
+  format?: (value: string) => string
+}
+
+/** XYAxisDraft → XYAxisView（Generate 页的适配）。 */
+export function axisView(draft: XYAxisDraft): XYAxisView {
+  return {
+    label: axisLabel(draft.axis),
+    values: draft.raw.split(',').map((s) => s.trim()).filter(Boolean),
+    format: (v) => formatAxisValue(draft.axis, v),
+  }
+}
+
+/** 取轴值的显示文本（没给 format 就原样）。 */
+export function axisText(axis: XYAxisView, value: string | null): string {
+  if (value == null) return ''
+  return axis.format ? axis.format(value) : value
+}
