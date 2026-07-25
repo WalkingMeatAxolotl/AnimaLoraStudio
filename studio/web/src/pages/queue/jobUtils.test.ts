@@ -12,18 +12,19 @@ function task(over: Partial<Task>): Task {
 }
 
 describe('jobJumpPath', () => {
-  it('评估跳版本级评估页 —— 不是训练页', () => {
+  it('评估跳概览的评估 tab —— 不是训练页', () => {
     const path = jobJumpPath(task({ task_type: 'eval_session' }))
-    expect(path).toBe('/projects/7/v/9/eval')
+    expect(path).toBe('/projects/7?version=9&tab=eval')
   })
 
   it('给了 session id 就深链到那一次（否则会落到该 version 最新一次）', () => {
     expect(jobJumpPath(task({ task_type: 'eval_session' }), 42))
-      .toBe('/projects/7/v/9/eval?session=42')
+      .toBe('/projects/7?version=9&tab=eval&session=42')
   })
 
-  it('上一代 eval 子作业的存量行同样归到评估页', () => {
-    expect(jobJumpPath(task({ task_type: 'eval_samples' }))).toBe('/projects/7/v/9/eval')
+  it('上一代 eval 子作业的存量行同样归到评估 tab', () => {
+    expect(jobJumpPath(task({ task_type: 'eval_samples' })))
+      .toBe('/projects/7?version=9&tab=eval')
   })
 
   it('其余数据作业跳各自的原生步骤页', () => {

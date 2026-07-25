@@ -13,7 +13,6 @@
     "reg": "Reg set (optional)",
     "train": "Train",
     "preprocess": "Preprocess (optional)",
-    "eval": "Evaluation",
     "overview": "Overview"
   },
   "common": {
@@ -1672,6 +1671,7 @@
     "tabDetails": "Details",
     "tabTasks": "Tasks",
     "tabOutput": "LoRA files",
+    "tabEval": "Evaluation",
     "tasksPlaceholder": "Training tasks for this project (to be implemented)",
     "outputPlaceholder": "LoRA artifacts produced by this project (to be implemented)",
     "tasksEmpty": "No training tasks for this project yet",

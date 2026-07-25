@@ -109,8 +109,7 @@ function evalRowStatus(result: EvalMetricResult): { text: string; tone: 'ok' | '
 }
 
 export function EvalMetricsPanel({
-  state, connected, taskId, projectId, versionId, subtitle,
-  initialSessionId, onSessionChange,
+  state, connected, taskId, projectId, versionId, subtitle, initialSessionId,
 }: {
   /** 训练页传 monitor 快照（顺带拿 project/version 和标题）；版本页不传。 */
   state?: MonitorState | null
@@ -122,10 +121,8 @@ export function EvalMetricsPanel({
   projectId?: number
   versionId?: number
   subtitle?: string
-  /** 深链进来时要打开的那次评估（`?session=` / 队列作业详情跳转）。 */
+  /** 深链进来时要打开的那次评估（队列作业详情的「查看结果 →」带过来）。 */
   initialSessionId?: number | null
-  /** 切换 Session 时回传，供调用方同步 URL。 */
-  onSessionChange?: (sid: number | null) => void
 }) {
   const pid = projectId ?? state?.project_id
   const vid = versionId ?? state?.version_id
@@ -171,11 +168,6 @@ export function EvalMetricsPanel({
   useEffect(() => {
     if (initialSessionId != null) setPickedSession(initialSessionId)
   }, [initialSessionId])
-
-  const pickSession = useCallback((sid: number | null) => {
-    setPickedSession(sid)
-    onSessionChange?.(sid)
-  }, [onSessionChange])
 
   // 当前在看哪个 Session：下拉选中优先，否则后端给的那个（最新）。存量回落时为 null。
   const activeSessionId = pickedSession ?? payload?.session?.id ?? null
@@ -417,7 +409,7 @@ export function EvalMetricsPanel({
               color: 'var(--fg-secondary)',
             }}
             value={pickedSession ?? sessions[0].id}
-            onChange={(e) => pickSession(Number(e.target.value))}
+            onChange={(e) => setPickedSession(Number(e.target.value))}
             title="查看历史评估"
             aria-label="选择要查看的评估"
           >

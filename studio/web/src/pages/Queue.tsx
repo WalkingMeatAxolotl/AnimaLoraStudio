@@ -196,10 +196,13 @@ function QueueTaskRow({
       ? { path: `/tools/generate?task=${task.id}`, label: t('queue.jumpGenerate') }
       : kind === 'reg_ai' && hasProject
         ? { path: `/projects/${task.project_id}/v/${task.version_id}/reg`, label: t('queue.jumpReg') }
-        // 评估落版本级评估页 —— 评估的对象是 version 下的 checkpoint，不一定有对应
-        // 的训练 task（eval_samples 是上一代子作业，存量行同样归到那里）
+        // 评估落概览的「评估」tab —— 评估的对象是 output/ 下的 LoRA 文件，不一定
+        // 有对应的训练 task（eval_samples 是上一代子作业，存量行同样归到那里）
         : (kind === 'eval_session' || kind === 'eval_samples') && hasProject
-          ? { path: `/projects/${task.project_id}/v/${task.version_id}/eval`, label: t('queue.jumpEval') }
+          ? {
+              path: `/projects/${task.project_id}?version=${task.version_id}&tab=eval`,
+              label: t('queue.jumpEval'),
+            }
           : kind === 'train' && hasProject
             ? { path: `/projects/${task.project_id}/v/${task.version_id}/train`, label: t('queue.jumpTrain') }
             : null

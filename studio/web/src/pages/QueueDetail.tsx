@@ -510,7 +510,7 @@ export default function QueueDetailPage() {
 /** 评估作业的概览补充：当前阶段 + 候选进度 + 直达结果。
  *
  *  作业详情回答「这个作业在干嘛、跑到哪了」，结果本身不在这里渲染 —— 评估结果的
- *  规范位置是版本级评估页，两处各渲染一份会分叉（勾选状态、后续的导出/对比功能）。
+ *  规范位置是项目概览的「评估」tab，两处各渲一份会分叉（勾选状态、后续的导出/对比）。
  *  这块只把「跑到哪了」说清楚，再给一个一键直达。 */
 function EvalSessionOverview({ task }: { task: Task }) {
   const navigate = useNavigate()
@@ -553,7 +553,7 @@ function EvalSessionOverview({ task }: { task: Task }) {
         <button
           type="button"
           className="btn btn-secondary btn-sm"
-          onClick={() => navigate(`/projects/${pid}/v/${vid}/eval?session=${session.id}`)}
+          onClick={() => navigate(`/projects/${pid}?version=${vid}&tab=eval&session=${session.id}`)}
         >
           查看结果 →
         </button>

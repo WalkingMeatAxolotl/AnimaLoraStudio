@@ -31,7 +31,6 @@ import RegularizationPage from './pages/project/steps/Regularization'
 import TagEditPage from './pages/project/steps/TagEdit'
 import TaggingPage from './pages/project/steps/Tagging'
 import TrainPage from './pages/project/steps/Train'
-import EvaluationPage from './pages/project/steps/Evaluation'
 import GeneratePage from './pages/tools/Generate'
 import MonitorPage from './pages/tools/Monitor'
 import PresetsPage from './pages/tools/Presets'
@@ -119,7 +118,6 @@ const router = createBrowserRouter(
                 { path: 'edit', element: <TagEditPage /> },
                 { path: 'reg', element: <RegularizationPage /> },
                 { path: 'train', element: <TrainPage /> },
-                { path: 'eval', element: <EvaluationPage /> },
               ],
             },
           ],

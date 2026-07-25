@@ -13,7 +13,6 @@
     "reg": "正则集（可选）",
     "train": "训练",
     "preprocess": "预处理（可选）",
-    "eval": "评估",
     "overview": "概览"
   },
   "common": {
@@ -1672,6 +1671,7 @@
     "tabDetails": "详情",
     "tabTasks": "任务",
     "tabOutput": "LoRA 文件",
+    "tabEval": "评估",
     "tasksPlaceholder": "本项目的训练任务列表（待实现）",
     "outputPlaceholder": "本项目下产出的 LoRA 模型列表（待实现）",
     "tasksEmpty": "本项目还没有训练任务",
