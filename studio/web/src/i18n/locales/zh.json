@@ -662,6 +662,7 @@
         "preprocess": "预处理",
         "tag": "打标",
         "reg_build": "正则集构建",
+        "eval_session": "评估",
         "eval_samples": "评估出图",
         "eval_clip": "CLIP 评估",
         "eval_dino": "DINO 评估",

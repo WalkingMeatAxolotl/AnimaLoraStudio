@@ -1631,10 +1631,12 @@ export interface XformersInstallResult {
 export type TaskStatus =
   'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused' | 'scheduled'
 
-/** tasks.task_type 的合法值。R-3 台账合并起含九类数据作业 kind。
- *  档位：exclusive = train/reg_ai/generate/eval_samples；light = 其余；io = download。 */
+/** tasks.task_type 的合法值。R-3 台账合并起含数据作业 kind。
+ *  档位：exclusive = train/reg_ai/generate/eval_session；light = 其余；io = download。
+ *  eval_samples/eval_clip/... 是上一代 eval 的 per-checkpoint 子作业 kind，只出现在
+ *  存量历史行上（新模型只产生 eval_session，见 #465）。 */
 export type TaskType =
-  | 'train' | 'reg_ai' | 'generate'
+  | 'train' | 'reg_ai' | 'generate' | 'eval_session'
   | 'download' | 'preprocess' | 'tag' | 'reg_build'
   | 'eval_samples' | 'eval_clip' | 'eval_dino' | 'eval_tag' | 'eval_ccip'
 

@@ -662,6 +662,7 @@
         "preprocess": "Preprocess",
         "tag": "Tagging",
         "reg_build": "Reg build",
+        "eval_session": "Evaluation",
         "eval_samples": "Eval samples",
         "eval_clip": "CLIP eval",
         "eval_dino": "DINO eval",

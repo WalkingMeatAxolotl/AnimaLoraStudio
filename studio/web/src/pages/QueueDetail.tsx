@@ -34,6 +34,7 @@ const VISIBLE_TABS_BY_TYPE: Record<TaskType, readonly Tab[]> = {
   preprocess: ['overview', 'log'],
   tag: ['overview', 'log'],
   reg_build: ['overview', 'log'],
+  eval_session: ['overview', 'log'],
   eval_samples: ['overview', 'log'],
   eval_clip: ['overview', 'log'],
   eval_dino: ['overview', 'log'],

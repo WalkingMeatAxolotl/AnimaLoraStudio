@@ -3,7 +3,7 @@ import { api, type EvalMetricResult, type Task } from '../api/client'
 import { useEventStream } from './useEventStream'
 
 // 训练结束后评估（after-training eval）的可见性：训练进程一退出 task 就标 done，
-// 评估作为独立 jobs（每个 checkpoint：eval_samples→eval_clip→eval_dino）在后面跑，
+// 评估作为独立作业（EvalSession，一次评估一个 task，内部按 stage 出图→算指标）在后面跑，
 // 不在 queue 列表里，用户没感知。这里靠现有 listEvalMetrics 的逐 checkpoint 状态
 // 拼出「评估中 done/total」，配合 eval_auto_after_training_queued 事件即时开始观察、
 // 刷新时也能从仍在跑的 metric 状态接上。纯前端，不依赖新后端事件。

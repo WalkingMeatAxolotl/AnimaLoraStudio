@@ -2,15 +2,15 @@
  *  R-5 台账合并后作业就是 task（task_type = kind），工具全部按 Task 形状取字段。 */
 import type { Task, TaskType } from '../../api/client'
 
-/** 数据视图（light + io 档）的 kind 全集。eval_samples 是 exclusive 档，
- *  归 GPU 视图（锚点 §4-2），不在此列。 */
+/** 数据视图（light + io 档）的 kind 全集。评估是 exclusive 档，归 GPU 视图
+ *  （锚点 §4-2），不在此列。 */
 export const DATA_VIEW_KINDS: TaskType[] = [
   'download', 'preprocess', 'tag', 'reg_build',
   'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
 ]
 
-/** 全部作业 kind（i18n 标签遍历用，含 eval_samples）。 */
-export const JOB_KINDS: TaskType[] = ['eval_samples', ...DATA_VIEW_KINDS]
+/** 全部作业 kind（i18n 标签 / 深链遍历用，含 GPU 视图那侧的评估）。 */
+export const JOB_KINDS: TaskType[] = ['eval_session', 'eval_samples', ...DATA_VIEW_KINDS]
 
 export const JOB_STATUS_TONE: Record<string, string> = {
   pending: 'neutral', running: 'accent', done: 'ok', failed: 'err', canceled: 'neutral',

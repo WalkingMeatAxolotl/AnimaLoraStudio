@@ -18,9 +18,10 @@ import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import DataJobsPanel from './queue/DataJobsPanel'
 
-// GPU 视图（exclusive 档）的行类型。R-5：eval_samples（评估出图，底模级）
-// 随台账合并归位本视图（用户感知锚点 §4-2）。
-type TaskKind = 'train' | 'reg_ai' | 'generate' | 'eval_samples'
+// GPU 视图（exclusive 档）的行类型。R-5：评估（底模级出图 + 指标）随台账合并归位
+// 本视图（用户感知锚点 §4-2）。eval_session = 一次评估一个作业（#465）；eval_samples
+// 是上一代的 per-checkpoint 子作业 kind，只为存量历史行还能正确显示类型而保留。
+type TaskKind = 'train' | 'reg_ai' | 'generate' | 'eval_session' | 'eval_samples'
 
 const STATUS_TONE: Record<TaskStatus, string> = {
   pending:   'neutral',
@@ -175,7 +176,9 @@ function QueueTaskRow({
   }
   const KIND_LABEL: Record<TaskKind, string> = {
     train: t('queue.typeTrain'), reg_ai: t('queue.typeReg'),
-    generate: t('queue.typeGenerate'), eval_samples: t('queue.jobs.kind.eval_samples'),
+    generate: t('queue.typeGenerate'),
+    eval_session: t('queue.jobs.kind.eval_session'),
+    eval_samples: t('queue.jobs.kind.eval_samples'),
   }
   const isRunning = task.status === 'running'
   const isPaused = task.status === 'paused'
@@ -193,8 +196,8 @@ function QueueTaskRow({
       ? { path: `/tools/generate?task=${task.id}`, label: t('queue.jumpGenerate') }
       : kind === 'reg_ai' && hasProject
         ? { path: `/projects/${task.project_id}/v/${task.version_id}/reg`, label: t('queue.jumpReg') }
-        : (kind === 'train' || kind === 'eval_samples') && hasProject
-          // eval_samples 的结果面板挂在版本训练页（EvalMetricsPanel），同 train 深链
+        : (kind === 'train' || kind === 'eval_session' || kind === 'eval_samples') && hasProject
+          // 评估的结果面板挂在版本训练页（EvalMetricsPanel），同 train 深链
           ? { path: `/projects/${task.project_id}/v/${task.version_id}/train`, label: t('queue.jumpTrain') }
           : null
 
@@ -963,7 +966,7 @@ export default function QueuePage() {
             <option value="train">{t('queue.typeTrain')}</option>
             <option value="reg_ai">{t('queue.typeReg')}</option>
             <option value="generate">{t('queue.typeGenerate')}</option>
-            <option value="eval_samples">{t('queue.jobs.kind.eval_samples')}</option>
+            <option value="eval_session">{t('queue.jobs.kind.eval_session')}</option>
           </select>
           <select
             className="input"
