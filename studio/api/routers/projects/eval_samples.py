@@ -79,23 +79,36 @@ def eval_scale_endpoint(
 def run_task_eval_endpoint(
     pid: int, vid: int, body: EvalRunRequest
 ) -> dict[str, Any]:
-    """手动评估一个已完成 task 的指定 checkpoint 集 —— 建**一个** EvalSession。
+    """手动评估指定的 checkpoint 集 —— 建**一个** EvalSession。
+
+    `task_id` 可省：评估的对象是 version 下的一组 checkpoint，不必存在对应的训练
+    task（比如评一个手动丢进 output/ 的 LoRA）。带上时只作溯源，训练页据此过滤出
+    「这次训练触发的评估」。
 
     不看自动评估开关（用户明确点了按钮）。上一轮的 Session 不动：历史全部留档，
     评估页默认显示最新那次。
     """
-    _version_dir_or_404(pid, vid)
+    project, version, vdir = _version_dir_or_404(pid, vid)
     if not body.checkpoints:
         raise HTTPException(400, "checkpoints 不能为空")
     with db.connection_for() as conn:
-        task = db.get_task(conn, int(body.task_id))
-        if not task:
-            raise HTTPException(404, f"task {body.task_id} 不存在")
-        if int(task.get("project_id") or 0) != pid or int(task.get("version_id") or 0) != vid:
-            raise HTTPException(400, "task 不属于该 project/version")
+        task = None
+        if body.task_id is not None:
+            task = db.get_task(conn, int(body.task_id))
+            if not task:
+                raise HTTPException(404, f"task {body.task_id} 不存在")
+            if (
+                int(task.get("project_id") or 0) != pid
+                or int(task.get("version_id") or 0) != vid
+            ):
+                raise HTTPException(400, "task 不属于该 project/version")
         try:
-            session = eval_auto.queue_manual_task_eval(
-                conn, task, list(body.checkpoints)
+            session = (
+                eval_auto.queue_manual_task_eval(conn, task, list(body.checkpoints))
+                if task is not None
+                else eval_auto.queue_manual_eval(
+                    conn, project, version, vdir, list(body.checkpoints)
+                )
             )
         except (eval_samples.EvalSamplesError, eval_session.EvalSessionError) as exc:
             raise HTTPException(400, str(exc)) from exc

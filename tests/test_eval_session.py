@@ -472,3 +472,38 @@ def test_retry_keeps_finished_candidates_for_resume(isolated) -> None:
 
     assert after[0]["status"] == eval_session.STATUS_DONE
     assert after[0]["run_id"] == "run-x"
+
+
+# ---------------------------------------------------------------------------
+# 版本级手动评估（评估的对象是 checkpoint，不必存在对应的训练 task）
+# ---------------------------------------------------------------------------
+
+def test_version_scoped_manual_eval_has_no_parent_task(isolated) -> None:
+    from studio.services import eval_auto
+
+    project, version, vdir = _setup(isolated)
+    paths = [c["path"] for c in _all_ckpts(vdir)]
+    with db.connection_for(isolated["db"]) as conn:
+        session = eval_auto.queue_manual_eval(conn, project, version, vdir, paths)
+
+    assert session is not None
+    assert session["parent_task_id"] is None
+    assert session["trigger"] == "manual"
+    assert int(session["version_id"]) == int(version["id"])
+
+
+def test_version_scoped_session_is_listed_by_version(isolated) -> None:
+    """没有 parent task 的评估必须能从 version 查到 —— 否则它就永远找不回来了。"""
+    from studio.services import eval_auto
+
+    project, version, vdir = _setup(isolated)
+    paths = [c["path"] for c in _all_ckpts(vdir)]
+    with db.connection_for(isolated["db"]) as conn:
+        created = eval_auto.queue_manual_eval(conn, project, version, vdir, paths)
+        by_version = eval_session.list_sessions(
+            conn, project_id=int(project["id"]), version_id=int(version["id"])
+        )
+        by_task = eval_session.list_sessions(conn, parent_task_id=1)
+
+    assert [int(s["id"]) for s in by_version] == [int(created["id"])]
+    assert by_task == []

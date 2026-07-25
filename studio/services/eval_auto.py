@@ -152,24 +152,24 @@ def queue_training_finished_eval(
         return None
 
 
-def queue_manual_task_eval(
+def queue_manual_eval(
     conn,
-    task: dict[str, Any],
+    project: dict[str, Any],
+    version: dict[str, Any],
+    vdir: Path,
     checkpoints: list[str],
+    *,
+    parent_task_id: int | None = None,
 ) -> Optional[dict[str, Any]]:
     """手动「运行评估」→ 建一个 EvalSession（显式 checkpoint 集）。
 
     与训练后入口的区别：**不看** per-version 开关（用户明确点了按钮），且 checkpoint
     是用户选的，不走策略。上一轮的 Session 不动 —— 历史保留（A 方案）。
-    """
-    ctx = _resolve_context(conn, task)
-    if ctx is None:
-        return None
-    project, version, vdir = ctx
-    task_id = int(task.get("id") or 0)
-    if not task_id:
-        return None
 
+    评估的对象是 version 下的一组 checkpoint，所以 `parent_task_id` 是可选的**溯源**
+    信息，不是归属：从训练页发起时填上（面板据此只显示这次训练的评估），从版本的
+    评估页发起时留空（比如评一个手动丢进 output/ 的 LoRA）。
+    """
     selected = resolve_checkpoint_selection(project, version, vdir, checkpoints)
     if not selected:
         return None
@@ -178,7 +178,25 @@ def queue_manual_task_eval(
         conn, project, version, vdir,
         checkpoints=selected,
         trigger="manual",
-        parent_task_id=task_id,
+        parent_task_id=parent_task_id,
+    )
+
+
+def queue_manual_task_eval(
+    conn,
+    task: dict[str, Any],
+    checkpoints: list[str],
+) -> Optional[dict[str, Any]]:
+    """训练页发起的手动评估 —— 同上，只是自动带上 parent_task_id 溯源。"""
+    ctx = _resolve_context(conn, task)
+    if ctx is None:
+        return None
+    project, version, vdir = ctx
+    task_id = int(task.get("id") or 0)
+    if not task_id:
+        return None
+    return queue_manual_eval(
+        conn, project, version, vdir, checkpoints, parent_task_id=task_id
     )
 
 
