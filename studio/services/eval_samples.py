@@ -605,6 +605,57 @@ def _default_generator(
     _ = adapters  # keep adapter references alive for forward hooks
     model.eval()
 
+    try:
+        _generate_items(
+            run, version_dir, progress, family=family, model=model, vae=vae,
+            text_stack=text_stack, height=height, width=width, steps=steps,
+            cfg_scale=cfg_scale, negative_prompt=negative_prompt,
+            sampler_name=sampler_name, scheduler=scheduler, device=device, dtype=dtype,
+            torch=torch, random=random,
+        )
+    finally:
+        # 显式释放：EvalSession 起，**同一个 worker 进程**会连续为多个候选调用本函数
+        # （旧模型是每候选一个子进程，退出即由 OS 回收，没有这个问题）。不释放的话
+        # 显存单调上涨 —— adapter 的 forward hook 与 model 互相持有引用，靠引用计数
+        # 回收不掉；CUDA caching allocator 也不会把 reserved 段还给驱动。真机症状：
+        # 第 3 个候选起 VAE decode 就得 offload 腾地方，第 4 个候选加载 transformer
+        # 时撞 WDDM 崖（显存被换到系统内存），表现为无报错卡死。
+        _release_generation_models(adapters, model, vae, text_stack, torch, progress)
+
+
+def _release_generation_models(
+    adapters: Any, model: Any, vae: Any, text_stack: Any, torch: Any,
+    progress: Callable[[str], None],
+) -> None:
+    for adapter in adapters or []:
+        detach = getattr(adapter, "detach", None)
+        if callable(detach):
+            try:
+                detach()
+            except Exception:
+                logger.warning("eval sample: LoRA detach 失败", exc_info=True)
+    del adapters, model, vae, text_stack
+    import gc
+    gc.collect()
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        logger.warning("eval sample: empty_cache 失败", exc_info=True)
+    progress("[eval-samples] released base model")
+
+
+def _generate_items(
+    run: dict[str, Any],
+    version_dir: Path,
+    progress: Callable[[str], None],
+    *,
+    family: Any, model: Any, vae: Any, text_stack: Any,
+    height: int, width: int, steps: int, cfg_scale: float,
+    negative_prompt: str, sampler_name: str, scheduler: str,
+    device: Any, dtype: Any, torch: Any, random: Any,
+) -> None:
     items = run.get("items") if isinstance(run.get("items"), list) else []
     scoped_root = (
         Path(str(run.get("eval_root")))

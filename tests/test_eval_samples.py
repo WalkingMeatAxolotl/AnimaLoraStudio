@@ -360,3 +360,92 @@ def test_run_task_eval_endpoint_validates_task_ownership(client, isolated) -> No
         json={"task_id": tid_ok, "checkpoints": []},
     )
     assert empty.status_code == 400, empty.text
+
+
+# ---------------------------------------------------------------------------
+# 模型释放（EvalSession 同进程连续跑多个候选，不释放会显存单调上涨）
+# ---------------------------------------------------------------------------
+
+class _FakeAdapter:
+    def __init__(self, *, boom: bool = False) -> None:
+        self.detached = False
+        self._boom = boom
+
+    def detach(self) -> bool:
+        if self._boom:
+            raise RuntimeError("detach exploded")
+        self.detached = True
+        return True
+
+
+class _FakeCuda:
+    def __init__(self, available: bool = True) -> None:
+        self._available = available
+        self.emptied = 0
+        self.ipc = 0
+
+    def is_available(self) -> bool:
+        return self._available
+
+    def empty_cache(self) -> None:
+        self.emptied += 1
+
+    def ipc_collect(self) -> None:
+        self.ipc += 1
+
+
+class _FakeTorch:
+    def __init__(self, available: bool = True) -> None:
+        self.cuda = _FakeCuda(available)
+
+
+def test_release_detaches_loras_and_empties_cuda_cache() -> None:
+    adapters = [_FakeAdapter(), _FakeAdapter()]
+    torch_ = _FakeTorch()
+    lines: list[str] = []
+
+    eval_samples._release_generation_models(
+        adapters, object(), object(), object(), torch_, lines.append,
+    )
+
+    assert all(a.detached for a in adapters)
+    assert torch_.cuda.emptied == 1
+    assert torch_.cuda.ipc == 1
+    assert any("released base model" in ln for ln in lines)
+
+
+def test_release_survives_detach_failure() -> None:
+    """某个 adapter detach 炸了也要继续释放剩下的 + 清缓存 —— 否则一个失败就漏掉全部。"""
+    boom, ok = _FakeAdapter(boom=True), _FakeAdapter()
+    torch_ = _FakeTorch()
+
+    eval_samples._release_generation_models(
+        [boom, ok], object(), object(), object(), torch_, lambda _l: None,
+    )
+
+    assert ok.detached
+    assert torch_.cuda.emptied == 1
+
+
+def test_release_skips_cuda_when_unavailable() -> None:
+    torch_ = _FakeTorch(available=False)
+    eval_samples._release_generation_models(
+        [], object(), object(), object(), torch_, lambda _l: None,
+    )
+    assert torch_.cuda.emptied == 0
+
+
+def test_release_tolerates_empty_cache_failure() -> None:
+    """empty_cache 抛错（驱动层偶发）不该让整个候选算失败。"""
+    class _Boom(_FakeTorch):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cuda.empty_cache = self._boom  # type: ignore[method-assign]
+
+        @staticmethod
+        def _boom() -> None:
+            raise RuntimeError("driver hiccup")
+
+    eval_samples._release_generation_models(
+        [], object(), object(), object(), _Boom(), lambda _l: None,
+    )  # 不抛就算过
