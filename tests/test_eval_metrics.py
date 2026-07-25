@@ -440,3 +440,127 @@ def test_delete_session_endpoint_refuses_while_running(client, isolated) -> None
         assert eval_session.get_session(conn, sid) is None
     # checkpoint 是引用，删 Session 不动它
     assert (vdir / "output" / "model_step100.safetensors").exists()
+
+
+def test_grid_endpoint_builds_checkpoint_by_prompt_matrix(client, isolated) -> None:
+    """出图矩阵：X = 候选（baseline 在最前），Y = 验证图；cell 给 run_id + filename。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    # 第二张验证图 → 矩阵两行
+    val = vdir / "validation" / "1_data"
+    (val / "b.png").write_bytes(b"png-b")
+    (val / "b.txt").write_text("1girl, blue hair", encoding="utf-8")
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)
+    sid = int(session["id"])
+
+    # 给两个候选各建一个 run（模拟出图阶段跑过）
+    root = eval_session.samples_root(sid)
+    with db.connection_for(isolated["db"]) as conn:
+        cands = eval_session.list_candidates(conn, sid)
+        for cand in cands:
+            run = eval_samples.create_run(
+                project, version, vdir,
+                checkpoint_path=str(
+                    eval_session.resolve_candidate_path(
+                        vdir, str(cand["checkpoint_path"])
+                    )
+                ),
+                eval_root=root,
+                baseline=cand["role"] == "baseline",
+            )
+            eval_session.update_candidate(
+                conn, int(cand["id"]), run_id=str(run["run_id"])
+            )
+
+    grid = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/grid"
+    ).json()
+
+    # baseline 排第一列 —— 纯底模对照，测试页的 XY 没有这一列
+    assert grid["columns"][0]["role"] == "baseline"
+    assert grid["columns"][0]["label"] == "baseline"
+    assert [c["role"] for c in grid["columns"]] == ["baseline", "checkpoint"]
+    # 行来自 plan 冻结的验证集清单，带各自 prompt
+    assert len(grid["rows"]) == 2
+    assert {r["prompt"] for r in grid["rows"]} == {"solo, red hair", "1girl, blue hair"}
+    # 每个候选 × 每行都有 cell
+    for col in grid["columns"]:
+        for row in grid["rows"]:
+            cell = grid["cells"][f"{col['candidate_id']}:{row['index']}"]
+            assert cell["filename"].endswith(".png")
+            assert cell["run_id"] == col["run_id"]
+
+
+def test_grid_endpoint_tolerates_candidates_without_run(client, isolated) -> None:
+    """候选还没开跑（run_id 为空）→ 列在、cell 缺，不报错。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)
+
+    grid = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{session['id']}/grid"
+    ).json()
+
+    assert len(grid["columns"]) == 2
+    assert grid["cells"] == {}
+    assert len(grid["rows"]) == 1
+    assert grid["rows"][0]["prompt"] == ""  # 没有 run 就没有 prompt
+
+
+def test_grid_endpoint_rejects_session_of_another_version(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    session = _seed_session(isolated, project, version, vdir)
+    with db.connection_for(isolated["db"]) as conn:
+        other = versions.create_version(conn, project_id=project["id"], label="v2")
+
+    r = client.get(
+        f"/api/projects/{project['id']}/versions/{other['id']}"
+        f"/eval/sessions/{session['id']}/grid"
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_grid_aligns_rows_by_reference_image_not_position(client, isolated) -> None:
+    """按参考图路径对齐，不按数组下标 —— 否则验证集变化后会把 A 图结果贴到 B 行。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    val = vdir / "validation" / "1_data"
+    (val / "b.png").write_bytes(b"png-b")
+    (val / "b.txt").write_text("second", encoding="utf-8")
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)   # plan 冻结 a.png + b.png
+    sid = int(session["id"])
+
+    # 候选的 run 建立**之前**删掉第一张验证图 → run 只有 b.png 一项，
+    # 按下标会落到第 0 行（a.png），按路径才落到第 1 行。
+    (val / "a.png").unlink()
+    (val / "a.txt").unlink()
+    root = eval_session.samples_root(sid)
+    with db.connection_for(isolated["db"]) as conn:
+        cand = eval_session.list_candidates(conn, sid)[0]
+        run = eval_samples.create_run(
+            project, version, vdir,
+            checkpoint_path=str(
+                eval_session.resolve_candidate_path(vdir, str(cand["checkpoint_path"]))
+            ),
+            eval_root=root,
+        )
+        eval_session.update_candidate(conn, int(cand["id"]), run_id=str(run["run_id"]))
+
+    grid = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/grid"
+    ).json()
+
+    # plan 的两行都还在（冻结口径不受后来删图影响）
+    assert [r["image"] for r in grid["rows"]] == [
+        "validation/1_data/a.png", "validation/1_data/b.png",
+    ]
+    cid = int(cand["id"])
+    # 结果落在 b.png 那一行（index 1），a.png 那一行是空的
+    assert f"{cid}:0" not in grid["cells"]
+    assert grid["cells"][f"{cid}:1"]["filename"].endswith(".png")
+    assert grid["rows"][1]["prompt"] == "second"
+    assert grid["rows"][0]["prompt"] == ""

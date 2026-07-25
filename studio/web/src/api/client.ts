@@ -286,6 +286,29 @@ export interface EvalSessionInfo {
   plan?: Record<string, unknown>
 }
 
+/** 出图矩阵：X = 候选（baseline 在最前），Y = 验证图 / prompt。
+ *  cells 的 key 是 `<candidate_id>:<row index>`。 */
+export interface EvalSampleGrid {
+  session_id: number
+  columns: Array<{
+    candidate_id: number
+    role: 'checkpoint' | 'baseline' | string
+    label: string
+    checkpoint_path: string | null
+    epoch: number | null
+    step: number | null
+    status: string
+    run_id: string | null
+  }>
+  rows: Array<{
+    index: number
+    image: string | null
+    folder: string | null
+    prompt: string
+  }>
+  cells: Record<string, { run_id: string; filename: string; status: string }>
+}
+
 /** 一次评估的规模预估。Session 模型下永远只有 1 个 task，成本用出图数 + 阶段数表达。 */
 export interface EvalScale {
   checkpoints_total: number
@@ -3154,6 +3177,15 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/eval/sessions` +
       (taskId ? `?task_id=${taskId}` : ''),
     ),
+  /** 出图的 checkpoint × prompt 矩阵（复用测试页 XY 网格做肉眼对比）。 */
+  getEvalSessionGrid: (pid: number, vid: number, sid: number) =>
+    req<EvalSampleGrid>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}/grid?_=${Date.now()}`,
+    ),
+  /** eval 出图的单张 URL（session 作用域）。 */
+  evalSampleImageUrl: (pid: number, vid: number, sid: number, runId: string, filename: string) =>
+    `/api/projects/${pid}/versions/${vid}/eval/samples/${encodeURIComponent(runId)}`
+    + `/images/${encodeURIComponent(filename)}?session_id=${sid}`,
   /** 中断一次评估（已算出的结果保留）。 */
   cancelEvalSession: (pid: number, vid: number, sid: number) =>
     req<{ canceled: number; task_id: number | null }>(

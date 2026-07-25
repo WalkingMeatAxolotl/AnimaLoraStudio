@@ -5,6 +5,7 @@
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import EvalSampleGrid from './EvalSampleGrid'
 import { api, type EvalMetricResult, type EvalMetricState, type EvalScale, type EvalSessionSummary, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
@@ -422,6 +423,9 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
 
   // 切 task 时清掉选中的 Session（那是上一个 task 的历史）
   useEffect(() => { setPickedSession(null) }, [taskId])
+
+  // 当前在看哪个 Session：下拉选中优先，否则后端给的那个（最新）。存量回落时为 null。
+  const activeSessionId = pickedSession ?? payload?.session?.id ?? null
 
   const results = useMemo(() => {
     return [...(payload?.results ?? [])]
@@ -880,6 +884,13 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
             </table>
           </div>
         </>
+      )}
+
+      {/* 出图矩阵：评估已经为每个候选 × 每张验证图出了图，顺手让用户肉眼比一遍
+          （选 checkpoint 的主路径本来就是视觉对比）。只有新模型的 Session 有 —— 存量
+          旧结果的图散在各 run 目录里、没有 candidate 概念，拼不出矩阵。 */}
+      {activeSessionId != null && (
+        <EvalSampleGrid pid={pid} vid={vid} sessionId={activeSessionId} />
       )}
     </div>
   )

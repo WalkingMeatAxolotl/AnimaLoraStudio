@@ -699,6 +699,100 @@ def session_results(
     return out
 
 
+def sample_grid(
+    conn: sqlite3.Connection, session_id: int, version_dir: Path
+) -> Optional[dict[str, Any]]:
+    """出图的 **checkpoint × prompt 矩阵**。
+
+    评估第一步本来就为每个候选 × 每张验证图出了一张图，之前只喂给指标计算、用户看不到。
+    这里把它们按「X 轴 = 候选（baseline 在最前）、Y 轴 = 验证图/prompt」排成矩阵，
+    前端直接复用测试页的 XY 网格组件 —— 用户能顺手肉眼比一遍，省掉去测试页重跑一次
+    XY 的功夫（选 checkpoint 的主路径本来就是视觉对比）。
+
+    baseline 放第一列是 eval 独有的对照：测试页的 XY 没有「纯底模」这一列。
+
+    行的口径取自 plan 冻结的 reference_manifest，所以跟指标算的是同一批图；cell 的
+    文件名取自各候选自己的 run（同一个 plan 下 items 顺序一致，按 index 对齐）。
+    """
+    session = get_session(conn, session_id)
+    if session is None:
+        return None
+    plan = session.get("plan") or {}
+    candidates = list_candidates(conn, session_id)
+    plan_by_ordinal = {
+        int(c.get("ordinal", i)): c for i, c in enumerate(plan.get("candidates") or [])
+    }
+
+    # 列：baseline 在最前，其余按 ordinal
+    ordered = sorted(
+        candidates,
+        key=lambda c: (0 if c.get("role") == "baseline" else 1, int(c.get("ordinal") or 0)),
+    )
+    columns: list[dict[str, Any]] = []
+    for cand in ordered:
+        meta = plan_by_ordinal.get(int(cand.get("ordinal") or 0)) or {}
+        is_baseline = cand.get("role") == "baseline"
+        columns.append({
+            "candidate_id": int(cand["id"]),
+            "role": cand.get("role"),
+            "label": "baseline" if is_baseline else (meta.get("label") or ""),
+            "checkpoint_path": cand.get("checkpoint_path"),
+            "epoch": cand.get("epoch"),
+            "step": cand.get("step"),
+            "status": cand.get("status"),
+            "run_id": cand.get("run_id"),
+        })
+
+    entries = plan.get("reference_manifest", {}).get("entries") or []
+    rows: list[dict[str, Any]] = [
+        {"index": i, "image": entry.get("image"), "folder": entry.get("folder"), "prompt": ""}
+        for i, entry in enumerate(entries)
+    ]
+    # 行号索引：run item 的 `reference_image` 与 manifest 的 `image` 同源（都是相对
+    # version 目录的路径）。按路径对齐而不是按数组下标 —— 万一某个候选的 run 是在
+    # 验证集变化后建的，路径匹配会落空，下标匹配会**错位对齐**（把 A 图的结果贴到 B 行）。
+    row_by_image = {
+        str(e.get("image") or ""): i for i, e in enumerate(entries) if e.get("image")
+    }
+
+    cells: dict[str, Any] = {}
+    prompts: dict[int, str] = {}
+    root = samples_root(session_id)
+    for cand in ordered:
+        run_id = str(cand.get("run_id") or "")
+        if not run_id:
+            continue  # 该候选还没开跑 —— 列在、cell 缺
+        try:
+            run = eval_samples.load_run(version_dir, run_id, root)
+        except Exception:
+            run = None
+        if not run:
+            continue
+        items = run.get("items") or []
+        # 验证集为空时 eval 退化成按 config 的 sample prompts 出图（没有参考图），
+        # manifest 也就是空的 —— 这时用第一个候选的 items 建行，矩阵仍然成立。
+        if not rows and items:
+            rows = [
+                {"index": i, "image": None, "folder": None, "prompt": ""}
+                for i in range(len(items))
+            ]
+        for pos, item in enumerate(items):
+            ref = str(item.get("reference_image") or "")
+            idx = row_by_image.get(ref) if ref else pos
+            if idx is None or idx >= len(rows):
+                continue
+            prompts.setdefault(int(idx), str(item.get("prompt") or ""))
+            cells[f"{cand['id']}:{idx}"] = {
+                "run_id": run_id,
+                "filename": item.get("filename"),
+                "status": item.get("status"),
+            }
+    for row in rows:
+        row["prompt"] = prompts.get(int(row["index"]), "")
+
+    return {"session_id": int(session_id), "columns": columns, "rows": rows, "cells": cells}
+
+
 def write_report(conn: sqlite3.Connection, session_id: int) -> Optional[dict[str, Any]]:
     report = build_report(conn, session_id)
     if report is None:

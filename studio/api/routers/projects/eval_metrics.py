@@ -102,6 +102,24 @@ def list_eval_metric_results_endpoint(
     }
 
 
+@router.get("/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/grid")
+def eval_session_grid_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]:
+    """出图的 checkpoint × prompt 矩阵（给前端复用测试页的 XY 网格）。
+
+    评估本来就为每个候选 × 每张验证图出了图，这里把它们排成矩阵让用户能顺手肉眼比 ——
+    省掉去测试页重跑一次 XY。baseline 在第一列（纯底模对照，测试页做不到）。
+    """
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    with db.connection_for() as conn:
+        session = eval_session.get_session(conn, sid)
+        if session is None or int(session.get("version_id") or 0) != vid:
+            raise HTTPException(404, f"eval session 不存在: {sid}")
+        grid = eval_session.sample_grid(conn, sid, vdir)
+    if grid is None:
+        raise HTTPException(404, f"eval session 不存在: {sid}")
+    return grid
+
+
 @router.post("/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/cancel")
 def cancel_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]:
     """中断一次评估：取消 Session 的 task（已算出的结果保留）。"""
