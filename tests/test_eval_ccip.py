@@ -64,19 +64,6 @@ def _sample_run(project, version, vdir) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_start_eval_ccip_job_marks_ccip_pending(isolated) -> None:
-    project, version, vdir = _new_project(isolated)
-    run = _sample_run(project, version, vdir)
-    with db.connection_for(isolated["db"]) as conn:
-        job, result = eval_ccip.start_job(
-            conn, project, version, vdir, run["run_id"], model_name="ccip-x",
-        )
-    assert job["kind"] == "eval_ccip"
-    assert job["params_decoded"]["model_name"] == "ccip-x"
-    assert result["metric_states"]["ccip_i"]["status"] == "pending"
-    assert result["metric_states"]["dino_i"]["status"] == "not_run"
-
-
 def test_run_ccip_job_with_injected_scorer(isolated) -> None:
     project, version, vdir = _new_project(isolated)
     run = _sample_run(project, version, vdir)

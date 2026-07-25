@@ -1263,6 +1263,13 @@ class TrainingConfig(BaseModel):
         description="验证集随机划分的种子，固定后划分结果可复现。",
         json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
     )
+    eval_checkpoint_skip_count: int = Field(
+        0, ge=0,
+        description="评估一个 checkpoint 后跳过几个再评下一个。0 = 每个保存的 checkpoint 都评；"
+                    "填 2 = 评一个跳两个（每 3 个里评 1 个）。最终权重始终评估。"
+                    "每个被评的 checkpoint 都要出一整套验证图再算指标，200 个 checkpoint 填 0 就是 200 套。",
+        json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
+    )
 
     # WandB：0.18 起 per-config 覆盖块整体移除 —— wandb 属于账号/工作流级配置,
     # 不随项目变化;api_key/entity/base_url 写进 yaml 会随预设分享/bundle 导出/

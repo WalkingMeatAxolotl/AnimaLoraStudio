@@ -1,178 +1,154 @@
-"""POC glue for automatically evaluating saved training checkpoints."""
+"""评估入队 —— 训练后自动与手动两个入口，统一创建一个 EvalSession。
+
+0.21 及以前这里是「隐式任务链」的源头：逐 checkpoint 排出图作业，出图 worker 完成后
+再回头排指标作业，一次评估 fan-out 成几百个 tasks 行 + 几百个日志目录（issue #465）。
+现在两个入口都收口到 `eval_session.create_session`，一次评估 = 一个 `eval_session`
+作业，阶段编排在 `workers/eval_session_worker` 里。
+
+本模块只剩两件事：
+1. **算出该评估哪些 checkpoint**（`checkpoint_skip_count` + `select_checkpoints`）；
+2. 把入口参数归一后交给 `eval_session.create_session`。
+
+历史保留：每次评估创建一个新 Session，旧的留档（A 方案，推翻 ADR 0011 Addendum §5
+的「先清空上一轮、永远只显示当次」）—— 一次评估一个 task 之后历史本身就是干净可读的，
+而「改了配置重训后指标怎么变」是评估的核心用途之一。
+"""
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
-from studio import db
-from studio import secrets
-from studio.infrastructure.paths import task_eval_dir
-from studio.services import (
-    eval_ccip,
-    eval_clip,
-    eval_dino,
-    eval_registry,
-    eval_samples,
-    eval_tag,
-)
-from studio.services.projects import jobs as project_jobs, projects, versions
+from studio.services import eval_session
+from studio.services.projects import projects, versions
 
 logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[[str], None]
 
-# 训练后 / 手动评估的 job kind（与 router 的 _EVAL_JOB_KINDS 一致）。
-EVAL_JOB_KINDS = ("eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip")
 
+def _version_eval_config(
+    project: dict[str, Any], version: dict[str, Any]
+) -> dict[str, Any]:
+    """读 version 训练配置。评估开关与 checkpoint 策略同源，一次读出。
 
-def _clear_previous_task_eval(
-    conn, project_id: int, version_id: int, task_id: int, vdir: Path, eval_root: Path
-) -> None:
-    """重跑评估前清空该 task 上一轮：取消未完成的旧 eval job + 删旧 run 文件。
-
-    只显示「这次」的数据。已完成的旧 job **不改状态**（保留 done/failed 原样），靠
-    list_task_eval_jobs 的「run 是否存在」过滤，不污染历史、不需跨轮 merge。
+    读的是**当前** version config（跟 `eval_validation_enabled` 一直以来的口径一致）。
+    改读 task frozen snapshot 是后续的事 —— 那需要 EvalPlan 从快照取全部生成参数，
+    不能只换这一处来源，否则两套口径混用更难解释。
     """
-    for j in project_jobs.list_jobs(conn, project_id=project_id, version_id=version_id):
-        if j.get("kind") not in EVAL_JOB_KINDS:
-            continue
-        params = j.get("params_decoded") or {}
-        if int(params.get("task_id") or 0) != task_id:
-            continue
-        if j.get("status") in ("pending", "running"):
-            project_jobs.mark_canceled(conn, int(j["id"]))
-    eval_samples.delete_all_runs(vdir, eval_root)
+    from studio.services import version_config
+    try:
+        return version_config.read_version_config(project, version)
+    except Exception:
+        return {}
 
 
 def _version_eval_enabled(project: dict[str, Any], version: dict[str, Any]) -> bool:
     """Per-version opt-in for post-training validation metrics (training config)."""
-    from studio.services import version_config
+    return bool(_version_eval_config(project, version).get("eval_validation_enabled"))
+
+
+# checkpoint 采样：见 TrainingConfig.eval_checkpoint_skip_count。只有一个旋钮 ——
+# 「评一个跳几个」，0 = 全评。issue #465 的作业膨胀已经在 Session 层根治（一次评估
+# 一个作业），所以这里不需要再靠限制 checkpoint 数来止血，默认就是全评。
+DEFAULT_CHECKPOINT_SKIP_COUNT = 0
+
+
+def checkpoint_skip_count(cfg: dict[str, Any]) -> int:
+    """从训练配置解析 skip_count；缺失 / 非法值归一到 0（全评）。"""
     try:
-        cfg = version_config.read_version_config(project, version)
-    except Exception:
-        return False
-    return bool(cfg.get("eval_validation_enabled"))
+        skip = int(cfg.get("eval_checkpoint_skip_count", DEFAULT_CHECKPOINT_SKIP_COUNT))
+    except (TypeError, ValueError):
+        skip = DEFAULT_CHECKPOINT_SKIP_COUNT
+    return max(0, skip)
+
+
+def select_checkpoints(
+    ckpts: list[dict[str, Any]], *, skip_count: int
+) -> list[dict[str, Any]]:
+    """挑出要评估的 checkpoint 子集。
+
+    - ``skip_count <= 0``：全部评估。
+    - 否则：训练顺序取一个、跳 ``skip_count`` 个再取下一个；**最终权重始终在内**。
+
+    `list_lora_ckpts` 给的是**展示序**（final 在前、step/epoch 降序）。采样按**训练
+    顺序**（升序）走 —— 「评一个跳 N 个」才对得上 user 心智，且同一批 ckpt 的采样结果
+    稳定，不随展示序变化。返回值仍按入参原序。
+    """
+    if not ckpts or skip_count <= 0:
+        return list(ckpts)
+    finals = [c for c in ckpts if c.get("kind") == "final"]
+    rest = list(reversed([c for c in ckpts if c.get("kind") != "final"]))
+    stride = int(skip_count) + 1
+    chosen = [*finals, *rest[::stride]]
+    keep = {str(c.get("path") or "") for c in chosen}
+    return [c for c in ckpts if str(c.get("path") or "") in keep]
+
+
+def _resolve_context(
+    conn, task: dict[str, Any]
+) -> Optional[tuple[dict[str, Any], dict[str, Any], Path]]:
+    """task → (project, version, version_dir)；绑定缺失 / 不一致时 None。"""
+    project_id = int(task.get("project_id") or 0)
+    version_id = int(task.get("version_id") or 0)
+    if not project_id or not version_id:
+        return None
+    project = projects.get_project(conn, project_id)
+    version = versions.get_version(conn, version_id)
+    if not project or not version or int(version["project_id"]) != project_id:
+        return None
+    vdir = versions.version_dir(
+        project_id, str(project["slug"]), str(version["label"])
+    )
+    return project, version, vdir
 
 
 def queue_training_finished_eval(
     conn,
     task: dict[str, Any],
     payload: dict[str, Any] | None = None,
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Queue eval sample jobs for all saved LoRA checkpoints after training.
+) -> Optional[dict[str, Any]]:
+    """训练完成 → 建一个 EvalSession。返回 session，未开启 / 无候选时 None。
 
-    Gated on the version's per-version opt-in (training config
-    ``eval_validation_enabled``); the held-out validation set is the reference.
-    评估统一在训练后跑（inline / checkpoint-trigger 已移除）。
+    受 per-version 开关 `eval_validation_enabled` 门控；评估哪些 checkpoint 由
+    `eval_checkpoint_skip_count` 决定（默认 0 = 全评，见 `select_checkpoints`）。
     """
-    project_id = int(task.get("project_id") or 0)
-    version_id = int(task.get("version_id") or 0)
-    if not project_id or not version_id:
-        return []
+    ctx = _resolve_context(conn, task)
+    if ctx is None:
+        return None
+    project, version, vdir = ctx
 
-    project = projects.get_project(conn, project_id)
-    version = versions.get_version(conn, version_id)
-    if not project or not version or int(version["project_id"]) != project_id:
-        return []
+    cfg = _version_eval_config(project, version)
+    if not cfg.get("eval_validation_enabled"):
+        return None
+    skip_count = checkpoint_skip_count(cfg)
 
-    if not _version_eval_enabled(project, version):
-        return []
-
-    vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
-    task_id = int(task.get("id") or 0)
-    eval_root = task_eval_dir(task_id) if task_id else None
-    queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    last_rel = ""
-    for checkpoint in versions.list_lora_ckpts(vdir):
-        rel = _checkpoint_relative_to_output(
-            project_id,
-            str(project.get("slug") or ""),
-            version,
-            str(checkpoint.get("path") or ""),
+    all_ckpts = versions.list_lora_ckpts(vdir)
+    selected = select_checkpoints(all_ckpts, skip_count=skip_count)
+    if not selected:
+        logger.info(
+            "after-training eval skipped for task=%s: no checkpoint in output/",
+            task.get("id"),
         )
-        if not rel:
-            continue
-        try:
-            job, run = eval_samples.start_job(
-                conn,
-                project,
-                version,
-                vdir,
-                checkpoint_path=rel,
-                auto_metrics=True,
-                auto_source={
-                    "task_id": int(task.get("id") or 0),
-                    "epoch": (payload or {}).get("epoch"),
-                    "step": (payload or {}).get("step"),
-                    "trigger": "after_training",
-                },
-                eval_root=eval_root,
-            )
-        except Exception:
-            logger.exception(
-                "auto eval after-training enqueue failed for task=%s checkpoint=%s",
-                task.get("id"),
-                checkpoint.get("path"),
-            )
-            continue
-        queued.append((job, run))
-        last_rel = rel
-
-    base = _ensure_baseline_queued(
-        conn, project, version, vdir,
-        task_id=task_id, eval_root=eval_root, ckpt_rel=last_rel, trigger="after_training",
-    )
-    if base is not None:
-        queued.append(base)
-
-    logger.info(
-        "queued after-training eval sample jobs for task=%s count=%s",
-        task.get("id"),
-        len(queued),
-    )
-    return queued
-
-
-def _has_baseline_run(vdir: Path, eval_root: Path | None) -> bool:
-    """该 eval scope 下是否已有 baseline run（每 task 只生成一次）。"""
-    for run in eval_samples.list_runs(vdir, eval_root):
-        if run.get("baseline"):
-            return True
-    return False
-
-
-def _ensure_baseline_queued(
-    conn,
-    project: dict[str, Any],
-    version: dict[str, Any],
-    vdir: Path,
-    *,
-    task_id: int,
-    eval_root: Path | None,
-    ckpt_rel: str,
-    trigger: str,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """每 task 排一个 baseline run（纯底模 lora_scale=0、同 prompt/seed），给各
-    checkpoint 算 Δ。已有 baseline / 关闭 / 无可用 checkpoint 则跳过。after-training
-    与 manual 共用 —— 两个入口都要有 baseline，否则手动重跑看不到 Δ。
-    """
-    cfg = secrets.load().eval_metrics
-    if not cfg.eval_baseline_enabled or not ckpt_rel:
         return None
-    if _has_baseline_run(vdir, eval_root):
-        return None
+    if len(selected) != len(all_ckpts):
+        logger.info(
+            "eval checkpoint sampling skip=%s: %s/%s checkpoints selected",
+            skip_count, len(selected), len(all_ckpts),
+        )
+
     try:
-        return eval_samples.start_job(
+        return eval_session.create_session(
             conn, project, version, vdir,
-            checkpoint_path=ckpt_rel,
-            auto_metrics=True,
-            auto_source={"task_id": task_id, "trigger": trigger, "baseline": True},
-            eval_root=eval_root,
-            baseline=True,
+            checkpoints=selected,
+            trigger="after_training",
+            parent_task_id=int(task.get("id") or 0) or None,
+            skip_count=skip_count,
         )
     except Exception:
-        logger.exception("baseline eval enqueue failed for task=%s", task_id)
+        logger.exception(
+            "after-training eval session creation failed for task=%s", task.get("id")
+        )
         return None
 
 
@@ -180,188 +156,92 @@ def queue_manual_task_eval(
     conn,
     task: dict[str, Any],
     checkpoints: list[str],
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Queue task-scoped eval sample+metric jobs for an explicit checkpoint set.
+) -> Optional[dict[str, Any]]:
+    """手动「运行评估」→ 建一个 EvalSession（显式 checkpoint 集）。
 
-    Unlike :func:`queue_training_finished_eval`, this is the *manual* entry point
-    (a user clicking "运行评估" on a finished task), so it does NOT gate on the
-    per-version opt-in.
-    It evaluates the full validation set and reuses the Settings metric models,
-    writing under ``tasks/<id>/eval/`` so results show up in that task's eval page.
-
-    每次「运行评估」**先自动清空上一轮**（删旧 run 文件 + 取消未完成的旧 eval job），
-    所以评估页永远只显示这次的数据 —— 不做跨轮 merge/dedup，旧值也无参考性。已完成的
-    旧 job 不改状态（靠「run 是否存在」从日志过滤，见 list_task_eval_jobs），不污染历史。
+    与训练后入口的区别：**不看** per-version 开关（用户明确点了按钮），且 checkpoint
+    是用户选的，不走策略。上一轮的 Session 不动 —— 历史保留（A 方案）。
     """
-    project_id = int(task.get("project_id") or 0)
-    version_id = int(task.get("version_id") or 0)
+    ctx = _resolve_context(conn, task)
+    if ctx is None:
+        return None
+    project, version, vdir = ctx
     task_id = int(task.get("id") or 0)
-    if not project_id or not version_id or not task_id:
-        return []
+    if not task_id:
+        return None
 
-    project = projects.get_project(conn, project_id)
-    version = versions.get_version(conn, version_id)
-    if not project or not version or int(version["project_id"]) != project_id:
-        return []
+    selected = resolve_checkpoint_selection(project, version, vdir, checkpoints)
+    if not selected:
+        return None
 
-    vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
-    eval_root = task_eval_dir(task_id)
-    _clear_previous_task_eval(conn, project_id, version_id, task_id, vdir, eval_root)
-    queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    seen: set[str] = set()
-    baseline_rel = ""
-    for raw in checkpoints:
-        rel = _checkpoint_relative_to_output(
-            project_id, str(project.get("slug") or ""), version, str(raw or "")
-        )
-        if not rel or rel in seen:
-            continue
-        seen.add(rel)
-        if not baseline_rel:
-            baseline_rel = rel
-        try:
-            job, run = eval_samples.start_job(
-                conn,
-                project,
-                version,
-                vdir,
-                checkpoint_path=rel,
-                auto_metrics=True,
-                auto_source={"task_id": task_id, "trigger": "manual"},
-                eval_root=eval_root,
-            )
-        except Exception:
-            logger.exception(
-                "manual eval enqueue failed for task=%s checkpoint=%s", task_id, raw
-            )
-            continue
-        queued.append((job, run))
-
-    base = _ensure_baseline_queued(
+    return eval_session.create_session(
         conn, project, version, vdir,
-        task_id=task_id, eval_root=eval_root, ckpt_rel=baseline_rel, trigger="manual",
+        checkpoints=selected,
+        trigger="manual",
+        parent_task_id=task_id,
     )
-    if base is not None:
-        queued.append(base)
-
-    logger.info(
-        "queued manual eval sample jobs for task=%s count=%s", task_id, len(queued)
-    )
-    return queued
 
 
-def queue_metric_jobs_for_sample(
-    conn,
+def resolve_checkpoint_selection(
     project: dict[str, Any],
     version: dict[str, Any],
-    version_dir: Path,
-    run_id: str,
-    *,
-    eval_root: Path | None = None,
-    task_id: int | None = None,
+    vdir: Path,
+    raw_paths: list[str],
 ) -> list[dict[str, Any]]:
-    """Queue metric jobs（按 Settings 勾选的指标对应 runner）after a sample run。
+    """用户传的 checkpoint 路径 → `list_lora_ckpts` 条目。
 
-    只排「启用集合」对应的 runner；已有活跃 job 的复用、不重排。clip/dino 先接进
-    这张表，全启用时与原行为一致；ccip/tag runner 后续加入 `queue_runners`。
+    去重、丢弃 output/ 之外的路径（防穿越），并保持 `list_lora_ckpts` 的展示序 ——
+    候选顺序不该取决于用户点选的先后。
     """
-    cfg = secrets.load().eval_metrics
-    # runner key → (JOB_KIND, start_job, model_name)
-    queue_runners = {
-        "clip": (eval_clip.JOB_KIND, eval_clip.start_job, cfg.clip_model_name),
-        "dino": (eval_dino.JOB_KIND, eval_dino.start_job, cfg.dino_model_name),
-        "tag": (eval_tag.JOB_KIND, eval_tag.start_job, eval_tag.DEFAULT_MODEL_NAME),
-        "ccip": (eval_ccip.JOB_KIND, eval_ccip.start_job, cfg.ccip_model_name),
-    }
-    jobs: list[dict[str, Any]] = []
-    for runner_key in eval_registry.enabled_runners(cfg.enabled_metrics):
-        spec = queue_runners.get(runner_key)
-        if spec is None:
-            continue
-        kind, start_job, model_name = spec
-        job = _active_metric_job(
-            conn,
-            project=project,
-            version=version,
-            kind=kind,
-            run_id=run_id,
-            task_id=task_id,
+    project_id = int(project["id"])
+    slug = str(project.get("slug") or "")
+    wanted: set[str] = set()
+    for raw in raw_paths:
+        rel = _checkpoint_relative_to_output(project_id, slug, version, str(raw or ""))
+        if rel:
+            wanted.add(rel)
+    if not wanted:
+        return []
+
+    picked: list[dict[str, Any]] = []
+    for ckpt in versions.list_lora_ckpts(vdir):
+        rel = _checkpoint_relative_to_output(
+            project_id, slug, version, str(ckpt.get("path") or "")
         )
-        if job is None:
-            job, _ = start_job(
-                conn,
-                project,
-                version,
-                version_dir,
-                run_id,
-                model_name=model_name,
-                eval_root=eval_root,
-                task_id=task_id,
-            )
-        jobs.append(job)
-    logger.info(
-        "queued auto eval metric jobs for run=%s: %s",
-        run_id,
-        [j.get("id") for j in jobs],
-    )
-    return jobs
+        if rel and rel in wanted:
+            picked.append(ckpt)
+    return picked
 
 
-def _resolve_task_checkpoint(
-    conn,
-    task: dict[str, Any],
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], Path, str] | None:
-    project_id = int(task.get("project_id") or 0)
-    version_id = int(task.get("version_id") or 0)
-    if not project_id or not version_id:
-        return None
-
-    project = projects.get_project(conn, project_id)
-    version = versions.get_version(conn, version_id)
-    if not project or not version or int(version["project_id"]) != project_id:
-        return None
-
-    checkpoint = _checkpoint_relative_to_output(
-        project_id,
-        str(project.get("slug") or ""),
-        version,
-        str(payload.get("checkpoint_path") or ""),
-    )
-    if not checkpoint:
-        return None
-
-    vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
-    return project, version, vdir, checkpoint
-
-
-def _active_metric_job(
-    conn,
-    *,
+def eval_scale(
     project: dict[str, Any],
     version: dict[str, Any],
-    kind: str,
-    run_id: str,
-    task_id: int | None = None,
-) -> dict[str, Any] | None:
-    for status in ("pending", "running"):
-        for job in project_jobs.list_jobs(
-            conn,
-            project_id=int(project["id"]),
-            version_id=int(version["id"]),
-            kind=kind,
-            status=status,
-        ):
-            params = job.get("params_decoded")
-            if not isinstance(params, dict):
-                continue
-            if str(params.get("run_id") or "") == str(run_id):
-                if task_id is not None and int(params.get("task_id") or 0) != int(task_id):
-                    continue
-                if task_id is None and int(params.get("task_id") or 0):
-                    continue
-                return job
-    return None
+    vdir: Path,
+    *,
+    selected_count: int | None = None,
+) -> dict[str, Any]:
+    """评估规模预估（创建前的成本可见性，issue #465）。
+
+    `selected_count` 给定时按手动选中的 checkpoint 数算；为 None 时按 version 的
+    checkpoint 策略算（训练后自动评估会评几个）。
+    """
+    if selected_count is None:
+        cfg = _version_eval_config(project, version)
+        skip_count = checkpoint_skip_count(cfg)
+        all_ckpts = versions.list_lora_ckpts(vdir)
+        count = len(select_checkpoints(all_ckpts, skip_count=skip_count))
+        total = len(all_ckpts)
+    else:
+        skip_count = None
+        count = max(0, int(selected_count))
+        total = len(versions.list_lora_ckpts(vdir))
+
+    summary = eval_session.resource_summary(
+        project, version, vdir, selected_count=count
+    )
+    summary["checkpoints_total"] = total
+    summary["skip_count"] = skip_count
+    return summary
 
 
 def _checkpoint_relative_to_output(
@@ -370,6 +250,7 @@ def _checkpoint_relative_to_output(
     version: dict[str, Any],
     raw_path: str,
 ) -> str | None:
+    """checkpoint 路径 → 相对 output/ 的 posix 路径；越界返回 None。"""
     if not raw_path or not project_slug:
         return None
     vdir = versions.version_dir(project_id, project_slug, str(version["label"]))
@@ -380,6 +261,6 @@ def _checkpoint_relative_to_output(
     try:
         rel = path.resolve().relative_to(output_dir)
     except ValueError:
-        logger.warning("auto eval checkpoint outside output dir: %s", raw_path)
+        logger.warning("eval checkpoint outside output dir: %s", raw_path)
         return None
-    return rel.as_posix()
+    return f"output/{rel.as_posix()}"

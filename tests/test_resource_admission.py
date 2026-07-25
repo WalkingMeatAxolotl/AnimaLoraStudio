@@ -2,8 +2,8 @@
 
 覆盖三个准入漏洞的修复 + exclusive 档平级 FIFO + secrets 开关迁移：
 - L1：训练运行时 generate 不再被提交给 daemon（后端守卫，原先只有前端挡）
-- L2：exclusive 档数据作业（eval_samples）运行时训练不 spawn（原先仲裁单向）
-- L3：eval_samples 无视 light 开关（原先与 tag 混在同一粗粒度开关下）
+- L2：exclusive 档数据作业（eval_session）运行时训练不 spawn（原先仲裁单向）
+- L3：eval_session 无视 light 开关（原先与 tag 混在同一粗粒度开关下）
 """
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ def test_resource_class_mapping() -> None:
     assert task_resource_class("reg_ai") == RESOURCE_EXCLUSIVE
     assert task_resource_class("generate") == RESOURCE_EXCLUSIVE
     assert task_resource_class(None) == RESOURCE_EXCLUSIVE  # 老行兜底 train
-    assert job_resource_class("eval_samples") == RESOURCE_EXCLUSIVE  # D-R2
+    assert job_resource_class("eval_session") == RESOURCE_EXCLUSIVE  # 一次评估一个作业
     assert job_resource_class("preprocess") == RESOURCE_LIGHT  # D-R1
     for k in ("tag", "reg_build", "eval_clip", "eval_dino", "eval_tag", "eval_ccip"):
         assert job_resource_class(k) == RESOURCE_LIGHT
@@ -159,15 +159,15 @@ def test_train_not_spawned_while_daemon_generate_active(env, fake_daemon, fake_s
 # ---------------------------------------------------------------------------
 
 
-def test_train_waits_for_running_eval_samples(env, fake_daemon, fake_secrets):
+def test_train_waits_for_running_eval_session(env, fake_daemon, fake_secrets):
     sup = _make_sup(env)
     spawned: list[Any] = []
     sup._spawn_task = lambda slot, task: spawned.append(task)  # type: ignore
-    _occupy(_slot(sup, "data"), kind="job", job_kind="eval_samples")
+    _occupy(_slot(sup, "data"), kind="job", job_kind="eval_session")
     _make_task(env, task_type="train", created_at=100)
 
     sup._tick()
-    assert spawned == [], "eval_samples（底模级）运行中训练不得 spawn（L2）"
+    assert spawned == [], "eval_session（底模级）运行中训练不得 spawn（L2）"
 
     _slot(sup, "data").reset()
     sup._tick()
@@ -187,24 +187,24 @@ def test_train_does_not_wait_for_running_light_job(env, fake_daemon, fake_secret
 
 
 # ---------------------------------------------------------------------------
-# L3：eval_samples 无视 light 开关；light 按开关；io 恒放行
+# L3：eval_session 无视 light 开关；light 按开关；io 恒放行
 # ---------------------------------------------------------------------------
 
 
-def test_eval_samples_deferred_during_training_despite_switch(
+def test_eval_session_deferred_during_training_despite_switch(
     env, fake_daemon, fake_secrets,
 ):
-    """训练运行 + light 开关开：tag 放行、eval_samples 推迟（L3 修复核心）。"""
+    """训练运行 + light 开关开：tag 放行、eval_session 推迟（L3 修复核心）。"""
     sup = _make_sup(env)
     spawned_jobs: list[Any] = []
     sup._spawn_job = lambda slot, job: spawned_jobs.append(job)  # type: ignore
     _occupy(_slot(sup, "train"), kind="task")
-    _make_job(env, kind="eval_samples")
+    _make_job(env, kind="eval_session")
     tag_id = _make_job(env, kind="tag")
 
     sup._dispatch_data(_slot(sup, "data"))
     assert [j["id"] for j in spawned_jobs] == [tag_id], \
-        "开关只放行 light 档；eval_samples（exclusive）必须推迟"
+        "开关只放行 light 档；eval_session（exclusive）必须推迟"
 
 
 def test_light_deferred_when_switch_off_but_io_still_runs(
@@ -223,18 +223,18 @@ def test_light_deferred_when_switch_off_but_io_still_runs(
         "开关关闭时 light 推迟，io（download）仍恒放行"
 
 
-def test_eval_samples_requires_daemon_lease_release(env, fake_daemon, fake_secrets):
-    """eval_samples 与 train 同规格：daemon idle 常驻模型 → 先吊销租约再派。
+def test_eval_session_requires_daemon_lease_release(env, fake_daemon, fake_secrets):
+    """eval_session 与 train 同规格：daemon idle 常驻模型 → 先吊销租约再派。
 
-    R-3 起 eval_samples 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks），
-    执行位仍是 DATA 槽。
+    eval_session 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks），执行位是
+    DATA 槽 —— 它先出图再算指标，整段占底模栈。
     """
     fake_daemon.is_model_loaded = True
     fake_daemon.is_busy = False
     sup = _make_sup(env)
     spawned_jobs: list[Any] = []
     sup._spawn_job = lambda slot, job: spawned_jobs.append(job)  # type: ignore
-    _make_job(env, kind="eval_samples")
+    _make_job(env, kind="eval_session")
 
     sup._dispatch_exclusive_tasks(_slot(sup, "train"))
     assert spawned_jobs == []
@@ -243,17 +243,17 @@ def test_eval_samples_requires_daemon_lease_release(env, fake_daemon, fake_secre
     fake_daemon.is_model_loaded = False
     sup._dispatch_exclusive_tasks(_slot(sup, "train"))
     assert len(spawned_jobs) == 1
-    assert spawned_jobs[0]["kind"] == "eval_samples"
+    assert spawned_jobs[0]["kind"] == "eval_session"
 
 
-def test_exclusive_fifo_eval_samples_before_train(env, fake_daemon, fake_secrets):
-    """D-R3 跨类型平级：先入队的 eval_samples 先跑，后入队的 train 排队等。"""
+def test_exclusive_fifo_eval_session_before_train(env, fake_daemon, fake_secrets):
+    """D-R3 跨类型平级：先入队的 eval_session 先跑，后入队的 train 排队等。"""
     sup = _make_sup(env)
     spawned_jobs: list[Any] = []
     spawned_tasks: list[Any] = []
     sup._spawn_job = lambda slot, job: spawned_jobs.append(job)  # type: ignore
     sup._spawn_task = lambda slot, task: spawned_tasks.append(task)  # type: ignore
-    ev = _make_job(env, kind="eval_samples")
+    ev = _make_job(env, kind="eval_session")
     with db.connection_for(env["db"]) as conn:
         db.update_task(conn, ev, created_at=100.0)
     _make_task(env, task_type="train", created_at=200.0)
@@ -261,7 +261,7 @@ def test_exclusive_fifo_eval_samples_before_train(env, fake_daemon, fake_secrets
     sup._dispatch_exclusive_tasks(_slot(sup, "train"))
     assert [j["id"] for j in spawned_jobs] == [ev] and spawned_tasks == []
 
-    # eval_samples 结束 → train 轮到
+    # eval_session 结束 → train 轮到
     with db.connection_for(env["db"]) as conn:
         db.update_task(conn, ev, status="done")
     sup._dispatch_exclusive_tasks(_slot(sup, "train"))

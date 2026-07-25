@@ -43,9 +43,3 @@ class EvalRunRequest(BaseModel):
     checkpoints: list[str]
 
 
-class EvalClipStart(BaseModel):
-    model_name: Optional[str] = None
-
-
-class EvalDinoStart(BaseModel):
-    model_name: Optional[str] = None

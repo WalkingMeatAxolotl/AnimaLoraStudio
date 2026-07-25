@@ -397,51 +397,6 @@ def create_run(
     return run
 
 
-def start_job(
-    conn,
-    project: dict[str, Any],
-    version: dict[str, Any],
-    version_dir: Path,
-    *,
-    checkpoint_path: str | None = None,
-    auto_metrics: bool = False,
-    auto_source: dict[str, Any] | None = None,
-    eval_root: Path | None = None,
-    baseline: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    run = create_run(
-        project,
-        version,
-        version_dir,
-        checkpoint_path=checkpoint_path,
-        auto_metrics=auto_metrics,
-        auto_source=auto_source,
-        eval_root=eval_root,
-        baseline=baseline,
-    )
-    params: dict[str, Any] = {
-        "version_id": int(version["id"]),
-        "run_id": run["run_id"],
-        "checkpoint_path": run["checkpoint"]["path"],
-    }
-    if auto_metrics:
-        params["auto_metrics"] = True
-    if auto_source:
-        params["auto_source"] = dict(auto_source)
-    if eval_root is not None:
-        task_id = int((auto_source or {}).get("task_id") or 0)
-        if task_id:
-            params["task_id"] = task_id
-    job = project_jobs.create_job(
-        conn,
-        project_id=int(project["id"]),
-        version_id=int(version["id"]),
-        kind=JOB_KIND,
-        params=params,
-    )
-    return job, run
-
-
 def run_sample_job(
     project: dict[str, Any],
     version: dict[str, Any],
