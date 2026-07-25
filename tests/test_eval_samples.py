@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from studio import db, server
 from studio.infrastructure import paths as infra_paths
-from studio.services import eval_samples
+from studio.services import eval_samples, eval_session
 from studio.services.projects import projects, versions
 
 
@@ -19,6 +19,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db.init_db(dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(infra_paths, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(infra_paths, "EVAL_SESSIONS_DIR", tmp_path / "eval" / "sessions")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     return {"db": dbfile}
@@ -142,25 +143,23 @@ def test_default_generator_path_has_no_dead_schema_import(isolated) -> None:
     assert "migrate_legacy_attention" not in str(reloaded.get("error") or "")
 
 
-def test_start_job_creates_project_job_and_run(isolated) -> None:
+def test_create_run_plans_items_from_validation_set(isolated) -> None:
+    """出图计划来自 held-out 验证集，每项带自己的参考图（给 CLIP-I / DINO-I 用）。
+
+    排队入口在 EvalSession（#465 起一次评估一个作业）；这里只测 run 本身的构造。
+    """
     project, version, vdir = _new_project(isolated)
     _seed_validation_and_ckpt(vdir)
 
-    with db.connection_for(isolated["db"]) as conn:
-        job, run = eval_samples.start_job(
-            conn,
-            project,
-            version,
-            vdir,
-            checkpoint_path="model_step100.safetensors",
-        )
+    run = eval_samples.create_run(
+        project, version, vdir, checkpoint_path="model_step100.safetensors",
+    )
 
-    assert job["kind"] == "eval_samples"
-    assert job["version_id"] == version["id"]
-    assert job["params_decoded"]["run_id"] == run["run_id"]
+    assert run["status"] == "pending"
+    assert run["version_id"] == version["id"]
     assert len(run["items"]) == 2
-    # items come from the validation set, each carrying its reference image
     assert run["items"][0]["reference_image"] == "validation/1_data/a.png"
+    assert run["checkpoint"]["path"] == "output/model_step100.safetensors"
     assert (vdir / "eval" / "samples" / run["run_id"] / "run.json").exists()
 
 
@@ -216,16 +215,14 @@ def test_eval_samples_http_run_list_get_and_image(client: TestClient, isolated) 
         version = versions.get_version(conn, vid)
     tid = _bound_task({"db": db.STUDIO_DB}, project, version)
 
-    created = client.post(
-        f"/api/projects/{pid}/versions/{vid}/eval/run",
-        json={"task_id": tid, "checkpoints": [str(ckpt)]},
+    # 出图产物的读接口仍按 task-scoped eval_root 组织；Session 把 eval_root 指向
+    # eval/sessions/<id>/samples/，这里直接用 task_eval_dir 造一个 run 来测读路径。
+    eval_root = infra_paths.task_eval_dir(tid)
+    run = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path=str(ckpt), eval_root=eval_root,
     )
-    assert created.status_code == 200, created.text
-    body = created.json()
-    run_id = body["runs"][0]["run_id"]
-    # 1 个 checkpoint + 1 个 baseline 对照
-    assert body["queued"] == 2
-    assert body["jobs"][0]["kind"] == "eval_samples"
+    run_id = run["run_id"]
 
     q = f"?task_id={tid}"
     listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples{q}")
@@ -238,7 +235,6 @@ def test_eval_samples_http_run_list_get_and_image(client: TestClient, isolated) 
     item = got.json()["run"]["items"][0]
     assert item["filename"].endswith(".png")
 
-    eval_root = infra_paths.task_eval_dir(tid)
     image_path = eval_samples.sample_image_path(vdir, run_id, item["filename"], eval_root)
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(b"PNG")
@@ -270,7 +266,8 @@ def _bound_task(isolated, project: dict[str, Any], version: dict[str, Any]) -> i
     return tid
 
 
-def test_run_task_eval_endpoint_queues_task_scoped(client, isolated) -> None:
+def test_run_task_eval_endpoint_creates_one_session(client, isolated) -> None:
+    """#465：手动评估建一个 EvalSession，而不是逐 checkpoint 排一串子作业。"""
     project, version, vdir = _new_project(isolated)
     ckpt = _seed_validation_and_ckpt(vdir)
     pid, vid = project["id"], version["id"]
@@ -281,53 +278,58 @@ def test_run_task_eval_endpoint_queues_task_scoped(client, isolated) -> None:
         json={"task_id": tid, "checkpoints": [str(ckpt)]},
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    session = resp.json()["session"]
+    assert session["trigger"] == "manual"
+    assert int(session["parent_task_id"]) == tid
+    assert session["status"] == "pending"
+
+    with db.connection_for(isolated["db"]) as conn:
+        eval_tasks = conn.execute(
+            "SELECT * FROM tasks WHERE task_type = 'eval_session'"
+        ).fetchall()
+        cands = eval_session.list_candidates(conn, int(session["id"]))
+    assert len(eval_tasks) == 1
+    assert int(eval_tasks[0]["id"]) == int(session["task_id"])
     # 1 个 checkpoint + 1 个 baseline 对照
-    assert body["queued"] == 2
-    assert sum(1 for r in body["runs"] if r.get("baseline")) == 1
-    assert body["runs"][0]["storage_scope"] == "task"
-    assert body["jobs"][0]["params_decoded"]["task_id"] == tid
+    assert [c["role"] for c in cands] == ["checkpoint", "baseline"]
 
 
-def test_rerun_auto_clears_previous_task_eval(client, isolated) -> None:
+def test_rerun_keeps_previous_sessions(client, isolated) -> None:
+    """A 方案：重跑不清上一轮，历史 Session 全部留档（推翻 ADR 0011 Addendum §5）。"""
     project, version, vdir = _new_project(isolated)
     ckpt = _seed_validation_and_ckpt(vdir)
     pid, vid = project["id"], version["id"]
     tid = _bound_task(isolated, project, version)
 
-    def run() -> list[dict]:
-        client.post(
+    def run() -> int:
+        resp = client.post(
             f"/api/projects/{pid}/versions/{vid}/eval/run",
             json={"task_id": tid, "checkpoints": [str(ckpt)]},
         )
-        return client.get(
-            f"/api/projects/{pid}/versions/{vid}/eval/samples?task_id={tid}"
-        ).json()["runs"]
+        assert resp.status_code == 200, resp.text
+        return int(resp.json()["session"]["id"])
 
-    first = run()
-    assert len(first) == 2  # 1 checkpoint + 1 baseline
-    second = run()
-    # 第二轮自动清空了第一轮 → 仍是 2，而不是累积成 4
-    assert len(second) == 2
+    first, second = run(), run()
+
+    assert first != second
+    with db.connection_for(isolated["db"]) as conn:
+        listed = eval_session.list_sessions(conn, parent_task_id=tid)
+    assert [int(s["id"]) for s in listed] == [second, first]
 
 
-def test_eval_jobs_endpoint_filters_jobs_of_deleted_runs(client, isolated) -> None:
+def test_run_task_eval_rejects_checkpoints_outside_output(client, isolated) -> None:
     project, version, vdir = _new_project(isolated)
-    ckpt = _seed_validation_and_ckpt(vdir)
+    _seed_validation_and_ckpt(vdir)
     pid, vid = project["id"], version["id"]
     tid = _bound_task(isolated, project, version)
 
-    client.post(
+    resp = client.post(
         f"/api/projects/{pid}/versions/{vid}/eval/run",
-        json={"task_id": tid, "checkpoints": [str(ckpt)]},
+        json={"task_id": tid, "checkpoints": ["../../../etc/passwd"]},
     )
-    jobs = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id={tid}").json()["jobs"]
-    assert len(jobs) >= 1
-
-    # 删掉 run 文件 → /eval/jobs 不再返回这些 job（只显示 run 仍存在的）
-    eval_samples.delete_all_runs(vdir, infra_paths.task_eval_dir(tid))
-    jobs2 = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id={tid}").json()["jobs"]
-    assert jobs2 == []
+    assert resp.status_code == 400, resp.text
+    with db.connection_for(isolated["db"]) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM eval_sessions").fetchone()[0] == 0
 
 
 def test_run_task_eval_endpoint_validates_task_ownership(client, isolated) -> None:
