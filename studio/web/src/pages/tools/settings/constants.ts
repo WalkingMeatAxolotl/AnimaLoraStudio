@@ -48,8 +48,8 @@ export type Section =
 
 export type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
-// 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
-// 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
+// 外部页面 / 公告深链（app://settings/<id>）跳转到特定 section 时，用这个反向映射
+// 决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 export const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
   'krea2-models': 'training',
