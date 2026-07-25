@@ -808,6 +808,114 @@ def write_report(conn: sqlite3.Connection, session_id: int) -> Optional[dict[str
     return report
 
 
+def _terminal_status_for_task(task_status: str) -> str:
+    if task_status == "canceled":
+        return STATUS_CANCELED
+    return STATUS_FAILED
+
+
+def reconcile_with_task(
+    conn: sqlite3.Connection, session: dict[str, Any]
+) -> dict[str, Any]:
+    """Session 状态跟 task 的终态对齐；返回（可能已修正的）session。
+
+    Session 的运行状态是 worker 自己写的 —— 进程被 kill（cancel 的 SIGTERM、显存
+    撞崖后用户强杀、机器断电）时最后那次写根本不会发生，Session 就永远停在
+    running：队列里 task 已经是 failed，评估面板却还在转圈，也点不了任何按钮。
+
+    tasks 的终态有 supervisor 兜底维护，所以拿 task 反推是唯一可靠的真相来源。
+    读侧每次都过一遍（终态 Session 直接短路，代价只有一条主键查询）。
+    """
+    if session.get("status") not in (STATUS_PENDING, STATUS_RUNNING):
+        return session
+    task_id = int(session.get("task_id") or 0)
+    session_id = int(session.get("id") or 0)
+    if not task_id or not session_id:
+        return session
+    row = conn.execute(
+        "SELECT status, error_msg FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if row is None:
+        # task 行被删了（用户清队列历史）——没人会再推进这个 Session
+        status, message = STATUS_FAILED, "作业记录已删除，评估无法继续"
+    elif str(row["status"]) in db.TERMINAL_STATUSES:
+        task_status = str(row["status"])
+        if task_status == "done":
+            # 作业正常退出却没写完聚合（极少见）——按已落库的候选/指标重算
+            status = rollup_status(
+                list_candidates(conn, session_id), list_metric_results(conn, session_id)
+            )
+            message = None
+        else:
+            status = _terminal_status_for_task(task_status)
+            message = str(row["error_msg"] or "") or "评估作业已终止"
+    else:
+        return session
+
+    _terminate_open_rows(conn, session_id, status, message)
+    update_session(
+        conn, session_id,
+        status=status, stage=None, finished_at=time.time(),
+        error=(message or None) if status != STATUS_DONE else None,
+    )
+    logger.info("reconciled eval session=%s → %s (task=%s)", session_id, status, task_id)
+    return get_session(conn, session_id) or session
+
+
+def _terminate_open_rows(
+    conn: sqlite3.Connection, session_id: int, status: str, message: str | None
+) -> None:
+    """把还挂在 pending/running 的候选与指标一并收口。
+
+    不收口的话前端的「评估中 n/m」永远不消失（它按候选 + metric_states 判活）。
+    候选标成非 done 不影响重试 —— worker 的断点续跑只认 done。
+    """
+    cand_status = STATUS_CANCELED if status == STATUS_CANCELED else STATUS_FAILED
+    for cand in list_candidates(conn, session_id):
+        if cand.get("status") in (STATUS_PENDING, STATUS_RUNNING):
+            update_candidate(
+                conn, int(cand["id"]), status=cand_status, error=message,
+            )
+    conn.execute(
+        "UPDATE eval_metric_results SET status = 'skipped', reason = ? "
+        "WHERE status IN (?, ?) AND candidate_id IN "
+        "(SELECT id FROM eval_candidates WHERE session_id = ?)",
+        (message or "评估中断", STATUS_PENDING, STATUS_RUNNING, int(session_id)),
+    )
+    conn.commit()
+
+
+def retry_session(conn: sqlite3.Connection, session_id: int) -> dict[str, Any]:
+    """重新入队一个已终止的 Session —— 复用 worker 的断点续跑。
+
+    已经 done 的候选跳过出图、已经 done 的指标跳过重算，所以「重试」只补没跑完的
+    那部分，不会把整轮 200 个 checkpoint 重来一遍。每次重试建一条新的 task 行
+    （队列历史保留每次尝试），session.task_id 指向最新那次。
+    """
+    session = get_session(conn, session_id)
+    if session is None:
+        raise EvalSessionError(f"eval session 不存在: {session_id}")
+    if session.get("status") in (STATUS_PENDING, STATUS_RUNNING):
+        raise EvalSessionError("评估还在进行中，先中断再重试")
+
+    task_id = db.create_task(
+        conn,
+        name=TASK_TYPE,
+        config_name=TASK_TYPE,
+        task_type=TASK_TYPE,
+        params={"session_id": int(session_id)},
+        project_id=int(session["project_id"]),
+        version_id=int(session["version_id"]),
+    )
+    update_session(
+        conn, session_id,
+        task_id=int(task_id), status=STATUS_PENDING, stage=None,
+        started_at=None, finished_at=None, error=None,
+    )
+    logger.info("retry eval session=%s → task=%s", session_id, task_id)
+    return get_session(conn, session_id) or {}
+
+
 def cancel_active_sessions_for_task(conn: sqlite3.Connection, task_id: int) -> int:
     """取消某训练 task 名下未完成的 Session（对应的 task 行由调用方 cancel）。"""
     rows = conn.execute(

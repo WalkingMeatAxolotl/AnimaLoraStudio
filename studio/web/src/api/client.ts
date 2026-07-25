@@ -3194,6 +3194,12 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}/cancel`,
       { method: 'POST' },
     ),
+  /** 重跑一次失败 / 被中断的评估：断点续跑，只补没跑完的候选和指标。 */
+  retryEvalSession: (pid: number, vid: number, sid: number) =>
+    req<{ session: EvalSessionInfo }>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}/retry`,
+      { method: 'POST' },
+    ),
   /** 删一次评估的记录和产物（checkpoint 是引用，不受影响）。 */
   deleteEvalSession: (pid: number, vid: number, sid: number) =>
     req<{ deleted: number }>(

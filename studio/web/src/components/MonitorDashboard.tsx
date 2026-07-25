@@ -426,6 +426,11 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
 
   // 当前在看哪个 Session：下拉选中优先，否则后端给的那个（最新）。存量回落时为 null。
   const activeSessionId = pickedSession ?? payload?.session?.id ?? null
+  // 列表里那条更新（轮询每 5s 重拉），拿不到再退回 /eval/metrics 带的快照
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.id === activeSessionId) ?? payload?.session ?? null,
+    [sessions, activeSessionId, payload?.session],
+  )
 
   const results = useMemo(() => {
     return [...(payload?.results ?? [])]
@@ -556,6 +561,29 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     }
   }, [pid, vid, taskId, selected, load])
 
+  // 中断 / 重试当前 Session。重试走断点续跑（只补没跑完的候选和指标），所以对
+  // 「跑了 180 个 checkpoint 才崩」的场景不会全部重来。
+  const [sessionBusy, setSessionBusy] = useState(false)
+  const sessionAction = useCallback(async (kind: 'cancel' | 'retry') => {
+    if (!pid || !vid || !activeSessionId) return
+    setSessionBusy(true)
+    setRunMsg(null)
+    try {
+      if (kind === 'cancel') {
+        await api.cancelEvalSession(pid, vid, activeSessionId)
+        setRunMsg(`已请求中断评估 #${activeSessionId}，已算出的结果保留`)
+      } else {
+        await api.retryEvalSession(pid, vid, activeSessionId)
+        setRunMsg(`已重新排队评估 #${activeSessionId}（跳过已完成的部分）`)
+      }
+      void load(true)
+    } catch (err) {
+      setRunMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSessionBusy(false)
+    }
+  }, [pid, vid, activeSessionId, load])
+
   const latestByKey = useMemo(() => {
     const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
     for (const key of EVAL_METRIC_KEYS) {
@@ -657,6 +685,31 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
           </span>
         )}
         {loading && <span className="text-xs text-fg-tertiary">读取中…</span>}
+        {/* 一次评估就是一个作业，中断 / 重试直接挂在结果面板上——用户看结果的地方
+            就是他想操作的地方，不必先去队列里翻出那条 task。 */}
+        {activeSession && (activeSession.status === 'pending' || activeSession.status === 'running') && (
+          <button
+            type="button"
+            onClick={() => void sessionAction('cancel')}
+            disabled={sessionBusy}
+            className="btn btn-ghost btn-sm"
+            title="中断这次评估，已算出的结果保留"
+          >
+            中断
+          </button>
+        )}
+        {activeSession
+          && ['failed', 'canceled', 'partial'].includes(activeSession.status) && (
+          <button
+            type="button"
+            onClick={() => void sessionAction('retry')}
+            disabled={sessionBusy}
+            className="btn btn-secondary btn-sm"
+            title="重跑没跑完的候选和指标（已完成的跳过）"
+          >
+            重试
+          </button>
+        )}
         {taskId != null && (
           <button
             type="button"
@@ -674,6 +727,18 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
           刷新
         </button>
       </div>
+
+      {/* Session 终止原因 —— 之前只写在 DB 和作业日志里，面板上看不到，用户只知道
+          「一直在转」。runMsg 在选择器折叠时也得有个落点，一并放这。 */}
+      {activeSession?.error
+        && ['failed', 'canceled'].includes(activeSession.status) && (
+        <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-xs text-err">
+          评估{activeSession.status === 'canceled' ? '已中断' : '失败'}：{activeSession.error}
+        </div>
+      )}
+      {!pickerOpen && runMsg && (
+        <div className="text-[11px] text-fg-tertiary">{runMsg}</div>
+      )}
 
       {taskId != null && pickerOpen && (
         <div className="rounded-md border border-subtle bg-overlay px-3 py-2.5 flex flex-col gap-2">

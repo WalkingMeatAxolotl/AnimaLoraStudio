@@ -324,3 +324,151 @@ def test_resource_summary_zero_selection(isolated) -> None:
     assert summary["candidates"] == 0
     assert summary["images"] == 0
     assert summary["tasks"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 与 task 终态对齐 + 重试（worker 被 kill 时 Session 会停在 running）
+# ---------------------------------------------------------------------------
+
+def _make_session(isolated):
+    project, version, vdir = _setup(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        session = eval_session.create_session(
+            conn, project, version, vdir,
+            checkpoints=_all_ckpts(vdir), trigger="manual",
+        )
+    return session
+
+
+def _mark_running(isolated, session_id: int) -> None:
+    with db.connection_for(isolated["db"]) as conn:
+        eval_session.update_session(
+            conn, session_id, status=eval_session.STATUS_RUNNING,
+            stage=eval_session.STAGE_GENERATE,
+        )
+        for cand in eval_session.list_candidates(conn, session_id):
+            eval_session.update_candidate(
+                conn, int(cand["id"]), status=eval_session.STATUS_RUNNING
+            )
+
+
+def test_reconcile_pulls_session_out_of_running_when_task_failed(isolated) -> None:
+    """worker 被 kill → 最后一次写没发生，Session 停在 running；靠 task 终态兜底。"""
+    session = _make_session(isolated)
+    sid, task_id = int(session["id"]), int(session["task_id"])
+    _mark_running(isolated, sid)
+
+    with db.connection_for(isolated["db"]) as conn:
+        db.update_task(conn, task_id, status="failed", error_msg="worker killed")
+        fixed = eval_session.reconcile_with_task(
+            conn, eval_session.get_session(conn, sid) or {}
+        )
+        candidates = eval_session.list_candidates(conn, sid)
+        results = eval_session.list_metric_results(conn, sid)
+
+    assert fixed["status"] == eval_session.STATUS_FAILED
+    assert fixed["stage"] is None
+    assert fixed["finished_at"] is not None
+    assert "worker killed" in str(fixed["error"])
+    # 候选和指标一并收口，否则前端「评估中 n/m」永不消失
+    assert {c["status"] for c in candidates} == {eval_session.STATUS_FAILED}
+    assert all(
+        r["status"] == "skipped" for rows in results.values() for r in rows
+    )
+
+
+def test_reconcile_maps_canceled_task_to_canceled_session(isolated) -> None:
+    session = _make_session(isolated)
+    sid, task_id = int(session["id"]), int(session["task_id"])
+    _mark_running(isolated, sid)
+
+    with db.connection_for(isolated["db"]) as conn:
+        db.update_task(conn, task_id, status="canceled")
+        fixed = eval_session.reconcile_with_task(
+            conn, eval_session.get_session(conn, sid) or {}
+        )
+        candidates = eval_session.list_candidates(conn, sid)
+
+    assert fixed["status"] == eval_session.STATUS_CANCELED
+    assert {c["status"] for c in candidates} == {eval_session.STATUS_CANCELED}
+
+
+def test_reconcile_leaves_live_session_alone(isolated) -> None:
+    """task 还没到终态 → 一个字都不能改（否则会把正在跑的评估judged成失败）。"""
+    session = _make_session(isolated)
+    sid = int(session["id"])
+    _mark_running(isolated, sid)
+
+    with db.connection_for(isolated["db"]) as conn:
+        before = eval_session.get_session(conn, sid) or {}
+        after = eval_session.reconcile_with_task(conn, before)
+
+    assert after["status"] == eval_session.STATUS_RUNNING
+    assert after["stage"] == eval_session.STAGE_GENERATE
+    assert after["finished_at"] is None
+
+
+def test_reconcile_fails_session_when_task_row_is_gone(isolated) -> None:
+    """队列历史被清掉 → 没人会再推进这个 Session，不能让它挂着 running。"""
+    session = _make_session(isolated)
+    sid, task_id = int(session["id"]), int(session["task_id"])
+    _mark_running(isolated, sid)
+
+    with db.connection_for(isolated["db"]) as conn:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        conn.commit()
+        fixed = eval_session.reconcile_with_task(
+            conn, eval_session.get_session(conn, sid) or {}
+        )
+
+    assert fixed["status"] == eval_session.STATUS_FAILED
+    assert "已删除" in str(fixed["error"])
+
+
+def test_retry_queues_a_new_task_and_reopens_the_session(isolated) -> None:
+    """重试 = 新建一条 task 行（每次尝试留档），Session 回到 pending 等断点续跑。"""
+    session = _make_session(isolated)
+    sid, first_task = int(session["id"]), int(session["task_id"])
+
+    with db.connection_for(isolated["db"]) as conn:
+        eval_session.update_session(
+            conn, sid, status=eval_session.STATUS_FAILED, error="boom"
+        )
+        retried = eval_session.retry_session(conn, sid)
+        tasks = conn.execute(
+            "SELECT id FROM tasks WHERE task_type = ? ORDER BY id",
+            (eval_session.TASK_TYPE,),
+        ).fetchall()
+
+    assert retried["status"] == eval_session.STATUS_PENDING
+    assert retried["error"] is None
+    assert retried["finished_at"] is None
+    assert int(retried["task_id"]) != first_task
+    assert [int(r["id"]) for r in tasks] == [first_task, int(retried["task_id"])]
+
+
+def test_retry_refuses_while_still_running(isolated) -> None:
+    session = _make_session(isolated)
+    sid = int(session["id"])
+    _mark_running(isolated, sid)
+
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.raises(eval_session.EvalSessionError):
+            eval_session.retry_session(conn, sid)
+
+
+def test_retry_keeps_finished_candidates_for_resume(isolated) -> None:
+    """断点续跑的前提：已 done 的候选不能被重试重置（否则 200 个全部重来）。"""
+    session = _make_session(isolated)
+    sid = int(session["id"])
+    with db.connection_for(isolated["db"]) as conn:
+        first = eval_session.list_candidates(conn, sid)[0]
+        eval_session.update_candidate(
+            conn, int(first["id"]), status=eval_session.STATUS_DONE, run_id="run-x"
+        )
+        eval_session.update_session(conn, sid, status=eval_session.STATUS_FAILED)
+        eval_session.retry_session(conn, sid)
+        after = eval_session.list_candidates(conn, sid)
+
+    assert after[0]["status"] == eval_session.STATUS_DONE
+    assert after[0]["run_id"] == "run-x"

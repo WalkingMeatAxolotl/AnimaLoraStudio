@@ -29,10 +29,13 @@ def list_eval_sessions_endpoint(
     """
     _version_dir_or_404(pid, vid)
     with db.connection_for() as conn:
-        sessions = eval_session.list_sessions(
-            conn, project_id=pid, version_id=vid,
-            parent_task_id=task_id, limit=max(1, min(limit, 200)),
-        )
+        sessions = [
+            eval_session.reconcile_with_task(conn, s)
+            for s in eval_session.list_sessions(
+                conn, project_id=pid, version_id=vid,
+                parent_task_id=task_id, limit=max(1, min(limit, 200)),
+            )
+        ]
     # plan 整体可能很大（200 个候选 + 验证集清单），列表里只给摘要
     for s in sessions:
         plan = s.pop("plan", None) or {}
@@ -74,6 +77,9 @@ def list_eval_metric_results_endpoint(
             )
             session = latest[0] if latest else None
         if session is not None:
+            # worker 被 kill 时 Session 会停在 running（最后一次写没发生）；拿 task
+            # 的终态兜底，否则面板永远转圈、按钮也点不动
+            session = eval_session.reconcile_with_task(conn, session)
             sid = int(session["id"])
             results = eval_session.session_results(conn, sid) or []
             return {
@@ -136,6 +142,26 @@ def cancel_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]
     return {"canceled": sid, "task_id": task_id or None}
 
 
+@router.post("/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/retry")
+def retry_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]:
+    """重跑一次失败 / 被中断的评估。
+
+    复用 worker 的断点续跑：已出完图的候选跳过出图、已算完的指标跳过重算，所以补的
+    只是没跑完的那部分。每次重试是队列里一条新的作业行（每次尝试都留档）。
+    """
+    _version_dir_or_404(pid, vid)
+    with db.connection_for() as conn:
+        session = eval_session.get_session(conn, sid)
+        if session is None or int(session.get("version_id") or 0) != vid:
+            raise HTTPException(404, f"eval session 不存在: {sid}")
+        session = eval_session.reconcile_with_task(conn, session)
+        try:
+            session = eval_session.retry_session(conn, sid)
+        except eval_session.EvalSessionError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return {"session": {k: v for k, v in session.items() if k not in ("plan", "plan_json")}}
+
+
 @router.delete("/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}")
 def delete_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]:
     """删一次评估的记录和产物。checkpoint 是引用，不受影响。"""
@@ -144,6 +170,8 @@ def delete_eval_session_endpoint(pid: int, vid: int, sid: int) -> dict[str, Any]
         session = eval_session.get_session(conn, sid)
         if session is None or int(session.get("version_id") or 0) != vid:
             raise HTTPException(404, f"eval session 不存在: {sid}")
+        # 先兜底对齐 —— 否则 worker 被 kill 留下的僵尸 running 连删都删不掉
+        session = eval_session.reconcile_with_task(conn, session)
         if session.get("status") in (
             eval_session.STATUS_PENDING, eval_session.STATUS_RUNNING
         ):
