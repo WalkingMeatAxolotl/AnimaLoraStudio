@@ -13,6 +13,7 @@
     "reg": "正则集（可选）",
     "train": "训练",
     "preprocess": "预处理（可选）",
+    "eval": "评估",
     "overview": "概览"
   },
   "common": {
@@ -727,6 +728,7 @@
     "typeTrain": "训练",
     "typeReg": "正则集构建",
     "typeGenerate": "测试出图",
+    "jumpEval": "评估页",
     "jumpTrain": "配置页",
     "jumpReg": "正则集",
     "jumpGenerate": "出图结果",

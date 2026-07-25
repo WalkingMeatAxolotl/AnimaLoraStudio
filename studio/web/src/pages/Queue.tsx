@@ -196,10 +196,13 @@ function QueueTaskRow({
       ? { path: `/tools/generate?task=${task.id}`, label: t('queue.jumpGenerate') }
       : kind === 'reg_ai' && hasProject
         ? { path: `/projects/${task.project_id}/v/${task.version_id}/reg`, label: t('queue.jumpReg') }
-        : (kind === 'train' || kind === 'eval_session' || kind === 'eval_samples') && hasProject
-          // 评估的结果面板挂在版本训练页（EvalMetricsPanel），同 train 深链
-          ? { path: `/projects/${task.project_id}/v/${task.version_id}/train`, label: t('queue.jumpTrain') }
-          : null
+        // 评估落版本级评估页 —— 评估的对象是 version 下的 checkpoint，不一定有对应
+        // 的训练 task（eval_samples 是上一代子作业，存量行同样归到那里）
+        : (kind === 'eval_session' || kind === 'eval_samples') && hasProject
+          ? { path: `/projects/${task.project_id}/v/${task.version_id}/eval`, label: t('queue.jumpEval') }
+          : kind === 'train' && hasProject
+            ? { path: `/projects/${task.project_id}/v/${task.version_id}/train`, label: t('queue.jumpTrain') }
+            : null
 
   return (
     <button

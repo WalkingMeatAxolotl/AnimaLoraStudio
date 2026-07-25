@@ -23,6 +23,13 @@ import { fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'eval' | 'outputs' | 'snapshot'
 
+/** eval_session 作业的 params 里带着它跑的那个 Session id（create_session 写入），
+ *  用来把「查看结果」深链钉到具体那一次，而不是落到该 version 最新一次。 */
+function evalSessionIdOf(task: Task): number | null {
+  const raw = task.params_decoded?.session_id
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+}
+
 // 0.17 P-H：QueueDetail 按 task_type 差异化。train 保留全部 tab；reg_ai/generate 是
 // 推理/出图循环，无训练 monitor/eval/snapshot，只留 overview + log，结果靠 header 的
 // 「查看结果」深链跳原生页。
@@ -352,9 +359,9 @@ export default function QueueDetailPage() {
             >{t('queueDetail.viewInReg')}</button>
           )}
           {/* R-5：数据作业类 task 跳原生步骤页（download→项目下载页、tag→打标页…） */}
-          {task && jobJumpPath(task) && (
+          {task && jobJumpPath(task, evalSessionIdOf(task)) && (
             <button
-              onClick={() => navigate(jobJumpPath(task)!)}
+              onClick={() => navigate(jobJumpPath(task, evalSessionIdOf(task))!)}
               className="btn btn-secondary btn-sm"
               data-testid="detail-view-job-source"
             >{t('queue.jobs.jump')} →</button>
@@ -500,6 +507,79 @@ export default function QueueDetailPage() {
 
 // ── OverviewTab ─────────────────────────────────────────────────────────────
 
+/** 评估作业的概览补充：当前阶段 + 候选进度 + 直达结果。
+ *
+ *  作业详情回答「这个作业在干嘛、跑到哪了」，结果本身不在这里渲染 —— 评估结果的
+ *  规范位置是版本级评估页，两处各渲染一份会分叉（勾选状态、后续的导出/对比功能）。
+ *  这块只把「跑到哪了」说清楚，再给一个一键直达。 */
+function EvalSessionOverview({ task }: { task: Task }) {
+  const navigate = useNavigate()
+  const pid = task.project_id
+  const vid = task.version_id
+  const [session, setSession] = useState<EvalSessionSummary | null>(null)
+
+  useEffect(() => {
+    if (!pid || !vid) return
+    let alive = true
+    const load = async () => {
+      try {
+        // 按 version 列（不能按 parent_task_id —— 那是溯源字段，指的是触发它的
+        // 训练 task，不是评估作业自己），再按作业 id 认领本条
+        const { sessions } = await api.listEvalSessions(pid, vid)
+        if (alive) setSession(sessions.find((s) => s.task_id === task.id) ?? null)
+      } catch { /* 辅助信息，拉失败不打扰 */ }
+    }
+    void load()
+    const id = window.setInterval(() => void load(), 5000)
+    return () => { alive = false; window.clearInterval(id) }
+  }, [pid, vid, task.id])
+
+  if (!session) return null
+
+  const stageLabel = session.stage === 'generate' ? '出图'
+    : session.stage === 'aggregate' ? '汇总'
+      : session.stage?.startsWith('metric:') ? `指标 ${session.stage.slice(7)}`
+        : session.status === 'pending' ? '排队中' : '—'
+
+  return (
+    <div className="card p-4 flex flex-col gap-2.5" style={{ maxWidth: 720 }}>
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-semibold">评估进度</span>
+        <span className="text-xs text-fg-tertiary font-mono">
+          session #{session.id} · {session.candidate_count} 个候选
+          · {session.validation_images} 张验证图
+        </span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => navigate(`/projects/${pid}/v/${vid}/eval?session=${session.id}`)}
+        >
+          查看结果 →
+        </button>
+      </div>
+      <div className="flex items-center gap-4 text-xs text-fg-secondary font-mono">
+        <span>当前阶段：{stageLabel}</span>
+        <span>指标：{session.metric_keys.join(', ') || '—'}</span>
+        {session.parent_task_id != null && (
+          <Link
+            to={`/queue/${session.parent_task_id}`}
+            className="text-accent"
+            title="这次评估是那次训练结束后自动触发的"
+          >
+            来自训练 #{session.parent_task_id}
+          </Link>
+        )}
+      </div>
+      {session.error && (
+        <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-xs text-err">
+          {session.error}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function OverviewTab({ task }: { task: Task }) {
   const { t } = useTranslation()
   const statusLabel: Record<string, string> = {
@@ -556,7 +636,8 @@ function OverviewTab({ task }: { task: Task }) {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-5">
+    <div className="flex-1 min-h-0 overflow-y-auto p-5 flex flex-col gap-4">
+      {task.task_type === 'eval_session' && <EvalSessionOverview task={task} />}
       <div className="card overflow-hidden p-0" style={{ maxWidth: 720 }}>
         {items.map((row, i) => (
           <div
@@ -710,23 +791,14 @@ function useEvalLogSource(
           void load()
         }
       : undefined
-    // 重试：整体 failed 时按同一批 checkpoint 再建一个 Session（不覆盖失败那次 ——
-    // 历史保留，两次都能查）。候选路径从 plan 拿不到（列表接口只回摘要），所以走
-    // /eval/metrics 的结果行收集。
-    const onRetry = status === 'failed' && !retrying && pid && vid
+    // 重试：重新入队**同一个** Session，走 worker 的断点续跑 —— 已出完图的候选跳过
+    // 出图、已算完的指标跳过重算，所以「跑到第 180 个 checkpoint 才崩」补的只是剩下
+    // 那些。以前这里是按同一批 checkpoint 另建一个 Session，等于整轮重来。
+    const retriable = ['failed', 'canceled', 'partial'].includes(session.status)
+    const onRetry = retriable && !retrying && pid && vid
       ? () => {
           setRetrying(true)
-          void api.listEvalMetrics(pid, vid, taskId, session.id)
-            .then((r) => {
-              const ckpts = [...new Set(
-                (r.results ?? [])
-                  .filter((row) => !row.baseline)
-                  .map((row) => row.checkpoint?.path)
-                  .filter((p): p is string => !!p),
-              )]
-              if (!ckpts.length) throw new Error('no checkpoint to retry')
-              return api.runTaskEval(pid, vid, { task_id: taskId, checkpoints: ckpts })
-            })
+          void api.retryEvalSession(pid, vid, session.id)
             .then(() => { toast(t('queueDetail.evalRetryQueued'), 'success'); return load() })
             .catch((e) => toast(String(e), 'error'))
             .finally(() => setRetrying(false))

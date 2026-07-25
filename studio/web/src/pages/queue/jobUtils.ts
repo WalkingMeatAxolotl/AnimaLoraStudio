@@ -39,9 +39,12 @@ export function fmtJobTime(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
-/** 作业 kind → 原生步骤页深链（download 是 project 级，其余 version 级；
- *  eval_* 落训练页）。非作业类型返回 null（train/generate 的跳转另有专链）。 */
-export function jobJumpPath(task: Task): string | null {
+/** 作业 kind → 原生步骤页深链（download 是 project 级，其余 version 级）。
+ *  非作业类型返回 null（train/generate 的跳转另有专链）。
+ *
+ *  评估落版本级评估页而不是训练页：评估的对象是 version 下的 checkpoint，可能
+ *  根本没有对应的训练 task。`sessionId` 给上就深链到具体那一次。 */
+export function jobJumpPath(task: Task, sessionId?: number | null): string | null {
   const kind = task.task_type ?? 'train'
   const pid = task.project_id
   const vid = task.version_id
@@ -52,6 +55,16 @@ export function jobJumpPath(task: Task): string | null {
     case 'preprocess': return `/projects/${pid}/v/${vid}/preprocess`
     case 'tag': return `/projects/${pid}/v/${vid}/tag`
     case 'reg_build': return `/projects/${pid}/v/${vid}/reg`
+    // eval_session 是当前模型；eval_samples/eval_clip/... 是上一代的 per-checkpoint
+    // 子作业 kind，存量历史行同样归评估页
+    case 'eval_session':
+    case 'eval_samples':
+    case 'eval_clip':
+    case 'eval_dino':
+    case 'eval_tag':
+    case 'eval_ccip':
+      return `/projects/${pid}/v/${vid}/eval`
+        + (sessionId ? `?session=${sessionId}` : '')
     default: return `/projects/${pid}/v/${vid}/train`
   }
 }

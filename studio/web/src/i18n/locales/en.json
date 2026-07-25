@@ -13,6 +13,7 @@
     "reg": "Reg set (optional)",
     "train": "Train",
     "preprocess": "Preprocess (optional)",
+    "eval": "Evaluation",
     "overview": "Overview"
   },
   "common": {
@@ -727,6 +728,7 @@
     "typeTrain": "Train",
     "typeReg": "Reg build",
     "typeGenerate": "Test image",
+    "jumpEval": "Evaluation",
     "jumpTrain": "Config",
     "jumpReg": "Reg set",
     "jumpGenerate": "Render",

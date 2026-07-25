@@ -3216,7 +3216,8 @@ export const api = {
   runTaskEval: (
     pid: number,
     vid: number,
-    body: { task_id: number; checkpoints: string[] },
+    // task_id 只作溯源（训练页发起时带上）；省略 = 版本级评估，Session 无 parent task
+    body: { task_id?: number; checkpoints: string[] },
   ) =>
     req<{ session: EvalSessionInfo }>(
       `/api/projects/${pid}/versions/${vid}/eval/run`,

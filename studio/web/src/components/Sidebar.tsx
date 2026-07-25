@@ -69,6 +69,7 @@ const I = {
   edit:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h4l11-11-4-4L3 17z"/><path d="m14 5 4 4"/></svg>,
   reg:     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>,
   train:   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 18 9 12l4 4 8-9"/><path d="M15 7h6v6"/></svg>,
+  eval:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>,
   plus:    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>,
   sun:     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>,
   moon:    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
@@ -371,6 +372,11 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed, in
     { key: 'edit',       labelKey: 'nav.tagEdit',    idx: '4', icon: I.edit,     scope: 'version' as const },
     { key: 'reg',        labelKey: 'nav.reg',        idx: '5', icon: I.reg,      scope: 'version' as const },
     { key: 'train',      labelKey: 'nav.train',      idx: '6', icon: I.train,    scope: 'version' as const },
+    // 评估**不是**流水线 phase：它的对象是 output/ 里的一组 checkpoint，训练完随时
+    // 可以跑、可以跑很多次，没有「做完了往下走」的语义。所以不进 PHASE_ORDER
+    // （STEP_KEY_TO_PHASE 里没有它 → 永不 disabled、永不显示完成态），只是挂在
+    // 训练后面的一个常驻入口，idx 留空用 icon 代替序号。
+    { key: 'eval',       labelKey: 'nav.eval',       idx: '',  icon: I.eval,     scope: 'version' as const },
   ]
 
   const overviewActive = inRoute && currentStep === null
@@ -466,7 +472,8 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed, in
 
         // 项目级 ①② badge 内放 icon（跟"概览" ≡ 同款），不要数字 / 不要绿色态。
         // version 级 badge 始终放数字；完成时数字变绿；cursor+1 时背景 accent + 呼吸。
-        const badgeContent = isProject ? s.icon : s.idx
+        // idx 为空的 version 级项（评估）不属于编号流水线，同样用 icon
+        const badgeContent = (isProject || !s.idx) ? s.icon : s.idx
 
         const inner = (
           <>

@@ -108,19 +108,35 @@ function evalRowStatus(result: EvalMetricResult): { text: string; tone: 'ok' | '
   return { text: result.status, tone: 'muted' }
 }
 
-export function EvalMetricsPanel({ state, connected, taskId }: {
-  state: MonitorState | null
+export function EvalMetricsPanel({
+  state, connected, taskId, projectId, versionId, subtitle,
+  initialSessionId, onSessionChange,
+}: {
+  /** 训练页传 monitor 快照（顺带拿 project/version 和标题）；版本页不传。 */
+  state?: MonitorState | null
+  /** SSE 是否连着 —— 训练页据此决定要不要持续轮询；版本页传 false 即可。 */
   connected: boolean
+  /** 带上 = 只看这次训练触发的评估，且发起评估时填溯源；不带 = 整个 version。 */
   taskId?: number
+  /** 版本页直接给 project/version（没有 monitor 快照可拿）。 */
+  projectId?: number
+  versionId?: number
+  subtitle?: string
+  /** 深链进来时要打开的那次评估（`?session=` / 队列作业详情跳转）。 */
+  initialSessionId?: number | null
+  /** 切换 Session 时回传，供调用方同步 URL。 */
+  onSessionChange?: (sid: number | null) => void
 }) {
-  const pid = state?.project_id
-  const vid = state?.version_id
+  const pid = projectId ?? state?.project_id
+  const vid = versionId ?? state?.version_id
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 历史评估（#465 起一次评估一个 Session，全部留档）。null = 看最新那次。
   const [sessions, setSessions] = useState<EvalSessionSummary[]>([])
-  const [pickedSession, setPickedSession] = useState<number | null>(null)
+  const [pickedSession, setPickedSession] = useState<number | null>(
+    initialSessionId ?? null,
+  )
 
   const load = useCallback(async (quiet = false) => {
     if (!pid || !vid) return
@@ -151,6 +167,15 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
 
   // 切 task 时清掉选中的 Session（那是上一个 task 的历史）
   useEffect(() => { setPickedSession(null) }, [taskId])
+  // 深链换目标（同一页里点了另一次评估）时跟过去
+  useEffect(() => {
+    if (initialSessionId != null) setPickedSession(initialSessionId)
+  }, [initialSessionId])
+
+  const pickSession = useCallback((sid: number | null) => {
+    setPickedSession(sid)
+    onSessionChange?.(sid)
+  }, [onSessionChange])
 
   // 当前在看哪个 Session：下拉选中优先，否则后端给的那个（最新）。存量回落时为 null。
   const activeSessionId = pickedSession ?? payload?.session?.id ?? null
@@ -270,10 +295,12 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   }, [])
 
   const runEval = useCallback(async () => {
-    if (!pid || !vid || !taskId || selected.size === 0) return
+    if (!pid || !vid || selected.size === 0) return
     setRunning(true)
     setRunMsg(null)
     try {
+      // task_id 只作溯源：训练页发起时带上，版本页发起时留空（评一个手动丢进
+      // output/ 的 LoRA 时根本没有对应的训练 task）
       const r = await api.runTaskEval(pid, vid, {
         task_id: taskId,
         checkpoints: [...selected],
@@ -372,7 +399,8 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
         <div className="min-w-0">
           <div className="text-sm font-semibold">指标</div>
           <div className="text-xs text-fg-tertiary font-mono truncate">
-            {state?.project_slug ?? `project ${pid}`} · {state?.version_label ?? `version ${vid}`}
+            {subtitle
+              ?? `${state?.project_slug ?? `project ${pid}`} · ${state?.version_label ?? `version ${vid}`}`}
           </div>
         </div>
         <span className="flex-1" />
@@ -389,7 +417,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
               color: 'var(--fg-secondary)',
             }}
             value={pickedSession ?? sessions[0].id}
-            onChange={(e) => setPickedSession(Number(e.target.value))}
+            onChange={(e) => pickSession(Number(e.target.value))}
             title="查看历史评估"
             aria-label="选择要查看的评估"
           >
@@ -438,15 +466,13 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
             重试
           </button>
         )}
-        {taskId != null && (
-          <button
-            type="button"
-            onClick={togglePicker}
-            className={`btn btn-sm ${pickerOpen ? 'btn-primary' : 'btn-secondary'}`}
-          >
-            运行评估
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={togglePicker}
+          className={`btn btn-sm ${pickerOpen ? 'btn-primary' : 'btn-secondary'}`}
+        >
+          运行评估
+        </button>
         <button
           type="button"
           onClick={() => void load()}
@@ -468,7 +494,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
         <div className="text-[11px] text-fg-tertiary">{runMsg}</div>
       )}
 
-      {taskId != null && pickerOpen && (
+      {pickerOpen && (
         <div className="rounded-md border border-subtle bg-overlay px-3 py-2.5 flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold">选择 checkpoint 评估</span>
