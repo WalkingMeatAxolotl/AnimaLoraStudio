@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import contextlib
+
 import pytest
 
 from studio import db, secrets
@@ -99,6 +101,16 @@ class _NoopGenerator:
         raise AssertionError("测试不该走到真的 daemon 出图")
 
 
+@contextlib.contextmanager
+def _noop_shared_scorer(_progress=None):
+    """替掉真的 shared_scorer：假 runner 不需要模型，也绝不能去加载。
+
+    真实现会在这里 load CLIP / DINO / WD14；测试里必须是 no-op，否则每个用例都要
+    下模型、进 CUDA（CI 无 GPU）。yield None = 让 run_fn 走它自己的 scorer 参数。
+    """
+    yield None
+
+
 @pytest.fixture
 def fake_generate(monkeypatch: pytest.MonkeyPatch):
     """让 run_sample_job 走假 generator（真签名、真 run.json 写入）。"""
@@ -141,10 +153,12 @@ def fake_metrics(monkeypatch: pytest.MonkeyPatch):
         return _metric_states(dino_i=0.6)
 
     monkeypatch.setitem(
-        worker._RUNNERS, "clip", (fake_clip, lambda _cfg: "fake-clip")
+        worker._RUNNERS, "clip",
+        (fake_clip, lambda _cfg: "fake-clip", _noop_shared_scorer)
     )
     monkeypatch.setitem(
-        worker._RUNNERS, "dino", (fake_dino, lambda _cfg: "fake-dino")
+        worker._RUNNERS, "dino",
+        (fake_dino, lambda _cfg: "fake-dino", _noop_shared_scorer)
     )
     return calls
 
@@ -333,8 +347,8 @@ def test_metric_failure_is_isolated_to_that_runner(
     def bad_dino(project_, version_, vdir_, run_id, **kw):
         raise RuntimeError("dino model missing")
 
-    monkeypatch.setitem(worker._RUNNERS, "clip", (ok_clip, lambda _c: "fake-clip"))
-    monkeypatch.setitem(worker._RUNNERS, "dino", (bad_dino, lambda _c: "fake-dino"))
+    monkeypatch.setitem(worker._RUNNERS, "clip", (ok_clip, lambda _c: "fake-clip", _noop_shared_scorer))
+    monkeypatch.setitem(worker._RUNNERS, "dino", (bad_dino, lambda _c: "fake-dino", _noop_shared_scorer))
 
     assert worker.run(int(session["task_id"])) == 0
 
@@ -366,7 +380,7 @@ def test_runner_not_run_status_is_recorded_verbatim(
             }
         }
 
-    monkeypatch.setitem(worker._RUNNERS, "clip", (skipping_clip, lambda _c: "m"))
+    monkeypatch.setitem(worker._RUNNERS, "clip", (skipping_clip, lambda _c: "m", _noop_shared_scorer))
 
     worker.run(int(session["task_id"]))
 
@@ -396,7 +410,7 @@ def test_runner_gets_model_name_from_settings(
         return _metric_states(clip_t=0.05, clip_i=0.7)
 
     real_getter = worker._RUNNERS["clip"][1]
-    monkeypatch.setitem(worker._RUNNERS, "clip", (spy_clip, real_getter))
+    monkeypatch.setitem(worker._RUNNERS, "clip", (spy_clip, real_getter, _noop_shared_scorer))
 
     assert worker.run(int(session["task_id"])) == 0
 

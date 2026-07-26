@@ -7,10 +7,12 @@ caption 有意义。复用项目已下载的 WD14（零新模型），无参考�
 """
 from __future__ import annotations
 
+import contextlib
+import functools
 from pathlib import Path
 from typing import Any, Callable
 
-from . import eval_metrics, eval_samples
+from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
 
 JOB_KIND = "eval_tag"
@@ -239,23 +241,30 @@ def _mean(values: list[float]) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def _default_scorer(
-    run: dict[str, Any],
-    version_dir: Path,
-    model_name: str,
-    progress: Callable[[str], None],
-) -> dict[str, Any]:
+def _load_tagger(progress: Callable[[str], None]):
     from studio.services.tagging.wd14 import WD14Tagger
-
-    eval_root = _run_eval_root(run)
-    items = _done_image_items(run, version_dir, eval_root)
 
     tagger = WD14Tagger()
     ok, msg = tagger.is_available()
     if not ok:
         raise EvalTagError(f"WD14 模型不可用：{msg}")
+    progress("[eval-tag] loading WD14")
     tagger.prepare()
-    known = {_norm_tag(t) for t in tagger.known_tags()}
+    return tagger, {_norm_tag(t) for t in tagger.known_tags()}
+
+
+def _default_scorer(
+    run: dict[str, Any],
+    version_dir: Path,
+    model_name: str,
+    progress: Callable[[str], None],
+    pool: eval_model_pool.ModelPool | None = None,
+) -> dict[str, Any]:
+    eval_root = _run_eval_root(run)
+    items = _done_image_items(run, version_dir, eval_root)
+
+    pool = pool if pool is not None else eval_model_pool.ModelPool("tag")
+    tagger, known = pool.get(model_name, lambda: _load_tagger(progress))
 
     # 只保留有「WD14 词表内 prompt tag」的样本（触发词等不在词表→不计分母）
     scored_items: list[tuple[dict[str, Any], set[str]]] = []
@@ -292,3 +301,22 @@ def _default_scorer(
             if recalls else "no taggable generated images"
         ),
     }
+
+
+@contextlib.contextmanager
+def shared_scorer(progress: Callable[[str], None] | None = None):
+    """阶段级共享的 scorer：WD14 tagger 只加载一次，跑完全部候选后释放。
+
+    `_stage_metric` 本来就是「一个指标跑完所有候选再换下一个」，但
+    `_default_scorer` 是旧模型（每候选一个子进程）留下的形状 —— 模型写在函数体里
+    加载，于是 200 个 checkpoint 就重建 200 次 onnx session。池子交给调用方持有而
+    不是放模块级全局：全局状态会跨测试泄漏（成组跑时上一个用例的 tagger 被下一个
+    复用）。
+
+    `run_tag_job(scorer=None)` 独立调用时仍是「加载 → 用一次 → 返回即释放」，行为不变。
+    """
+    pool = eval_model_pool.ModelPool("tag")
+    try:
+        yield functools.partial(_default_scorer, pool=pool)
+    finally:
+        pool.release(progress)
