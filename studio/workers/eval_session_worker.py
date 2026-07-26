@@ -42,12 +42,32 @@ from studio.services.projects import projects, versions
 
 logger = logging.getLogger(__name__)
 
-# runner key → (跑它的函数, 从 secrets 取默认模型名的取值器)
-_RUNNERS: dict[str, tuple[Callable[..., dict[str, Any]], Callable[[Any], str]]] = {
-    "clip": (eval_clip.run_clip_job, lambda cfg: cfg.clip_model_name),
-    "dino": (eval_dino.run_dino_job, lambda cfg: cfg.dino_model_name),
-    "tag": (eval_tag.run_tag_job, lambda _cfg: eval_tag.DEFAULT_MODEL_NAME),
-    "ccip": (eval_ccip.run_ccip_job, lambda cfg: cfg.ccip_model_name),
+# runner key → (跑它的函数, 从 secrets 取默认模型名的取值器, 阶段级共享 scorer)
+#
+# 第三项是「模型只加载一次」的关键：`_stage_metric` 本来就是「一个指标跑完所有候选
+# 再换下一个」，但 run_*_job 每次调用都自己加载一遍模型（旧模型每候选一个子进程时
+# 的正确形状）。`shared_scorer` 把模型的生命周期提到阶段上，跑完即释放 —— 跟出图那
+# 刀（#470）同构，只是小一号。
+_RUNNERS: dict[
+    str,
+    tuple[Callable[..., dict[str, Any]], Callable[[Any], str], Callable[..., Any]],
+] = {
+    "clip": (
+        eval_clip.run_clip_job, lambda cfg: cfg.clip_model_name,
+        eval_clip.shared_scorer,
+    ),
+    "dino": (
+        eval_dino.run_dino_job, lambda cfg: cfg.dino_model_name,
+        eval_dino.shared_scorer,
+    ),
+    "tag": (
+        eval_tag.run_tag_job, lambda _cfg: eval_tag.DEFAULT_MODEL_NAME,
+        eval_tag.shared_scorer,
+    ),
+    "ccip": (
+        eval_ccip.run_ccip_job, lambda cfg: cfg.ccip_model_name,
+        eval_ccip.shared_scorer,
+    ),
 }
 
 
@@ -266,7 +286,7 @@ def _stage_metric(
     if spec is None:
         progress(f"[metric:{runner}] 未知 runner，跳过")
         return
-    run_fn, model_getter = spec
+    run_fn, model_getter, shared_scorer = spec
     model_name = model_getter(secrets.load().eval_metrics)
     metric_keys = eval_registry.runner_metrics(runner)
     eval_root = eval_session.samples_root(session_id)
@@ -277,6 +297,31 @@ def _stage_metric(
         candidates = eval_session.list_candidates(conn, session_id)
         existing = eval_session.list_metric_results(conn, session_id)
 
+    # 模型在这里加载一次、跑完全部候选后释放（惰性：真正要打分时才 load，所以
+    # 「候选全跳过」的情形一次都不加载）
+    with shared_scorer(progress) as scorer:
+        _score_candidates(
+            session_id, runner, candidates, existing, scorer, run_fn,
+            project, version, vdir, eval_root, model_name, metric_keys, stage, progress,
+        )
+
+
+def _score_candidates(
+    session_id: int,
+    runner: str,
+    candidates: list[dict[str, Any]],
+    existing: dict[int, list[dict[str, Any]]],
+    scorer: Any,
+    run_fn: Callable[..., dict[str, Any]],
+    project: dict[str, Any],
+    version: dict[str, Any],
+    vdir: Path,
+    eval_root: Path,
+    model_name: str,
+    metric_keys: list[str],
+    stage: str,
+    progress: Callable[[str], None],
+) -> None:
     for cand in candidates:
         cid = int(cand["id"])
         label = f"{cand['role']}#{cand['ordinal']}"
@@ -300,6 +345,7 @@ def _stage_metric(
             progress(f"[{stage}] {label} run={run_id}")
             saved = run_fn(
                 project, version, vdir, run_id,
+                scorer=scorer,
                 model_name=model_name, on_progress=progress, eval_root=eval_root,
             )
             _record_metrics(cid, metric_keys, saved, model_name)

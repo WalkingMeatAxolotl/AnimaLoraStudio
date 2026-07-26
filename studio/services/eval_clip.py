@@ -6,12 +6,14 @@ job/result contract without importing torch or transformers.
 """
 from __future__ import annotations
 
+import functools
+import contextlib
 import json
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
-from . import eval_metrics, eval_samples
+from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
 
 JOB_KIND = "eval_clip"
@@ -276,27 +278,39 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _default_scorer(
-    run: dict[str, Any],
-    version_dir: Path,
-    model_name: str,
-    progress: Callable[[str], None],
-) -> dict[str, Any]:
-    import numpy as np
+def _load_clip(model_name: str, progress: Callable[[str], None]):
     import torch
     from transformers import CLIPModel, CLIPProcessor
 
-    eval_root = _run_eval_root(run)
-    items = _done_image_items(run, version_dir, eval_root)
-    references = _reference_paths(run, version_dir)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # 统一下载中心：缺则下到项目 models/eval/clip/（不再隐式落 ~/.cache/huggingface）。
     from studio.services.models.downloader import ensure_eval_model
+
     local_dir = ensure_eval_model("clip", model_name, on_log=progress)
     progress(f"[eval-clip] loading CLIP on {device}")
     processor = CLIPProcessor.from_pretrained(str(local_dir))
     model = CLIPModel.from_pretrained(str(local_dir)).to(device)
     model.eval()
+    return model, processor, device
+
+
+def _default_scorer(
+    run: dict[str, Any],
+    version_dir: Path,
+    model_name: str,
+    progress: Callable[[str], None],
+    pool: eval_model_pool.ModelPool | None = None,
+) -> dict[str, Any]:
+    import numpy as np
+    import torch
+
+    eval_root = _run_eval_root(run)
+    items = _done_image_items(run, version_dir, eval_root)
+    references = _reference_paths(run, version_dir)
+    pool = pool if pool is not None else eval_model_pool.ModelPool("clip")
+    model, processor, device = pool.get(
+        model_name, lambda: _load_clip(model_name, progress),
+    )
 
     image_paths = [item["_image_path"] for item in items]
     prompts = [str(item.get("prompt") or "").strip() for item in items]
@@ -551,3 +565,21 @@ def _rel_to_version(version_dir: Path, path: Path) -> str:
         return path.resolve().relative_to(version_dir.resolve()).as_posix()
     except ValueError:
         return str(path)
+
+
+@contextlib.contextmanager
+def shared_scorer(progress: Callable[[str], None] | None = None):
+    """阶段级共享的 scorer：CLIP 只加载一次，跑完全部候选后释放。
+
+    `_stage_metric` 本来就是「一个指标跑完所有候选再换下一个」，但
+    `_default_scorer` 是旧模型（每候选一个子进程）留下的形状 —— 模型写在函数体里
+    加载，于是 200 个 checkpoint 就加载 200 次。池子交给调用方持有而不是放模块级
+    全局：全局状态会跨测试泄漏（成组跑时上一个用例的 tagger 被下一个复用）。
+
+    `run_*_job(scorer=None)` 独立调用时仍是「加载 → 用一次 → 返回即释放」，行为不变。
+    """
+    pool = eval_model_pool.ModelPool("clip")
+    try:
+        yield functools.partial(_default_scorer, pool=pool)
+    finally:
+        pool.release(progress)
