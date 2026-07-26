@@ -310,6 +310,27 @@ def _set_generate_settings(monkeypatch: pytest.MonkeyPatch, **values: Any) -> No
     monkeypatch.setattr(secrets, "load", lambda: _Secrets())
 
 
+def test_block_swap_notice_is_logged_once_not_per_candidate(
+    isolated, monkeypatch: pytest.MonkeyPatch, caplog,
+) -> None:
+    """本函数每个候选走一遍；逐次打日志就是 200 个 checkpoint 打 200 行同样的话。"""
+    import logging
+
+    eval_generation._BLOCK_SWAP_NOTICED.discard("anima")
+    _, _, vdir, run = _run_for(isolated)
+    _set_generate_settings(monkeypatch, blocks_to_swap=14)
+
+    with caplog.at_level(logging.INFO, logger="studio.services.eval_generation"):
+        for _ in range(5):
+            cfg = eval_generation.build_daemon_config(
+                run, vdir, output_dir=vdir / "out",
+            )
+            assert cfg["blocks_to_swap"] == 0
+
+    hits = [r for r in caplog.records if "block swap" in r.getMessage()]
+    assert len(hits) == 1
+
+
 def test_block_swap_is_dropped_for_families_without_the_capability(
     isolated, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

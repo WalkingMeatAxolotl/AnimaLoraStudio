@@ -46,6 +46,9 @@ class EvalGenerationError(RuntimeError):
     pass
 
 
+# 「该族不支持 block swap」只提示一次（见 _generate_settings）
+_BLOCK_SWAP_NOTICED: set[str] = set()
+
 _FALLBACK_SETTINGS: dict[str, Any] = {
     "vae_precision": "bf16", "lora_merge_precision": "fp32",
     "vram_policy": "auto", "ram_guard": True, "blocks_to_swap": 0,
@@ -81,10 +84,14 @@ def _generate_settings(family_id: str) -> dict[str, Any]:
     if settings["blocks_to_swap"] and "block_swap" not in FAMILY_CAPABILITIES.get(
         family_id, frozenset()
     ):
-        logger.info(
-            "model_family=%s 不支持 block swap，评估出图忽略全局设置的 blocks_to_swap=%s",
-            family_id, settings["blocks_to_swap"],
-        )
+        # 每个候选都会走一遍本函数，逐次打就是 200 个 checkpoint 打 200 行同样的话
+        # ——正是 #465 抱怨的那种噪音。按族记一次就够。
+        if family_id not in _BLOCK_SWAP_NOTICED:
+            _BLOCK_SWAP_NOTICED.add(family_id)
+            logger.info(
+                "model_family=%s 不支持 block swap，评估出图忽略全局设置的 "
+                "blocks_to_swap=%s", family_id, settings["blocks_to_swap"],
+            )
         settings["blocks_to_swap"] = 0
     return settings
 
