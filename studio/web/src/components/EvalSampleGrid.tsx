@@ -18,6 +18,15 @@ import type { XYAxisView } from '../pages/tools/generate/xy'
 const DEFAULT_PROMPT_COUNT = 3
 const DEFAULT_CKPT_COUNT = 20
 
+/** 验证图的 id —— 文件名去掉扩展名。行标签和下拉选项都显示它：prompt 常是一长串
+ *  booru tag，铺在 60px 宽的标签列里既看不清也认不出是哪张图；id 能直接对上盘上的
+ *  文件，完整 prompt 交给 hover。 */
+function imageId(row: { image?: string | null; index: number }): string {
+  const name = (row.image ?? '').split(/[\\/]/).pop() ?? ''
+  const stem = name.replace(/\.[^.]+$/, '')
+  return stem || `#${row.index}`
+}
+
 export default function EvalSampleGrid({
   pid, vid, sessionId,
 }: {
@@ -79,16 +88,15 @@ export default function EvalSampleGrid({
     () => ({ label: 'lora', values: columns.map((c) => c.label || `#${c.candidate_id}`) }),
     [columns],
   )
-  const yAxis: XYAxisView = useMemo(
-    () => ({
+  const yAxis: XYAxisView = useMemo(() => {
+    const promptById = new Map(rows.map((r) => [imageId(r), r.prompt || '']))
+    return {
       label: 'prompt',
-      values: rows.map((r) => r.prompt || r.image || `#${r.index}`),
-      // 网格的行标签只有 60px 宽，prompt 常是一长串 booru tag —— 截短，完整内容
-      // 靠 cell tooltip / 全屏 caption 看
-      format: (v) => (v.length > 28 ? `${v.slice(0, 27)}…` : v),
-    }),
-    [rows],
-  )
+      values: rows.map(imageId),
+      // 显示 id，hover 才给完整 prompt（axisTitle）
+      title: (v) => promptById.get(v) || v,
+    }
+  }, [rows])
 
   /** grid.cells → PreviewXYGrid 的 samples。图走 session 作用域的 URL（不在
    *  generate cache 里，所以填 imageUrl 让组件优先用它）。 */
@@ -112,7 +120,7 @@ export default function EvalSampleGrid({
   const promptOptions = useMemo(
     () => (grid?.rows ?? []).map((r) => ({
       value: String(r.index),
-      label: r.prompt || r.image || `#${r.index}`,
+      label: imageId(r),
       title: r.prompt || r.image || '',
     })),
     [grid],
@@ -142,7 +150,7 @@ export default function EvalSampleGrid({
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-3 flex-1 min-h-0">
+    <div className="card p-4 flex flex-col gap-3 flex-1 min-h-0 min-w-0 overflow-hidden">
       <div className="flex items-center gap-3 flex-wrap">
         <div className="text-sm font-semibold">样图</div>
         <span className="text-xs text-fg-tertiary">
@@ -174,7 +182,9 @@ export default function EvalSampleGrid({
               : '这次评估还没有出图（出图阶段可能仍在跑，或已失败）。'}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 flex" style={{ minHeight: 420 }}>
+        /* min-w-0 是关键：flex 子项默认 min-width:auto，几十列的网格会把父容器整个
+           撑宽（页面横向溢出、网格自己反而不滚），zoom 之后就左右移不动了 */
+        <div className="flex-1 min-h-0 min-w-0 flex" style={{ minHeight: 420 }}>
           <PreviewXYGrid
             samples={samples}
             taskId={-1 /* 图走 imageUrl，不会回退到 generate cache */}

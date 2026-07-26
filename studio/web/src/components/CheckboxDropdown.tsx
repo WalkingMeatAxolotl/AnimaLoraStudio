@@ -70,8 +70,10 @@ export default function CheckboxDropdown({
 
       {open && (
         <div
-          className="absolute z-30 mt-1 rounded-md border border-subtle bg-elevated shadow-xl flex flex-col"
-          style={{ minWidth: 260, maxWidth: 420 }}
+          // 右对齐：这两个下拉挂在 header 的最右端，左对齐会整块伸出屏幕外。
+          // maxWidth 用 vw 兜底，防止超长 prompt 把 popover 撑出视口。
+          className="absolute right-0 z-30 mt-1 rounded-md border border-subtle bg-elevated shadow-xl flex flex-col"
+          style={{ minWidth: 240, maxWidth: 'min(420px, 80vw)' }}
         >
           <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-subtle">
             <span className="text-[11px] text-fg-tertiary flex-1">

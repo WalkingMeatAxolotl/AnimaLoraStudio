@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../../../api/client'
 import { exportXYMatrix } from './exportXY'
 import FullscreenViewer from './FullscreenViewer'
-import { axisText, type XYAxisView } from './xy'
+import { axisText, axisTitle, type XYAxisView } from './xy'
 
 /** PreviewXYGrid 本地 sample 类型。
  *
@@ -223,7 +223,9 @@ export default function PreviewXYGrid({
     : `repeat(${xLen}, ${cellW}px)`
 
   return (
-    <div className="flex flex-col gap-2 flex-1 min-h-0">
+    // min-w-0：作为 flex 子项时默认 min-width:auto，网格宽度会顶穿父容器 ——
+    // 下面那层 overflow-auto 就永远不滚，zoom 之后左右 pan 不动
+    <div className="flex flex-col gap-2 flex-1 min-h-0 min-w-0">
       <div className="flex items-center justify-between shrink-0">
         <span className="caption">
           {t('generate.xyGridCount', { x: xLen, y: yLen, n: xLen * yLen, axis: yAxis ? ` × ${yLen}` : '' })}
@@ -275,7 +277,7 @@ export default function PreviewXYGrid({
               key={`h-${xi}`}
               className="text-2xs text-fg-tertiary font-mono text-center truncate"
               style={{ padding: '4px 2px' }}
-              title={xv}
+              title={axisTitle(xAxis, xv)}
             >
               {axisText(xAxis, xv)}
             </div>
@@ -366,7 +368,7 @@ function Row({
         <div
           className="text-2xs text-fg-tertiary font-mono text-right truncate self-center"
           style={{ paddingRight: 4 }}
-          title={yv ?? ''}
+          title={yAxis ? axisTitle(yAxis, yv) : (yv ?? '')}
         >
           {axisText(yAxis, yv)}
         </div>

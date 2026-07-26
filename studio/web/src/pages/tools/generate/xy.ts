@@ -141,6 +141,9 @@ export interface XYAxisView {
   values: string[]
   /** 显示用格式化；省略则原样显示 */
   format?: (value: string) => string
+  /** hover 提示；省略则用原始值。评估的 prompt 轴靠它把「标签显示验证图 id、
+   *  hover 才看完整 prompt」这件事做出来 —— 显示值和提示内容不是同一个东西。 */
+  title?: (value: string) => string
 }
 
 /** XYAxisDraft → XYAxisView（Generate 页的适配）。 */
@@ -156,4 +159,10 @@ export function axisView(draft: XYAxisDraft): XYAxisView {
 export function axisText(axis: XYAxisView, value: string | null): string {
   if (value == null) return ''
   return axis.format ? axis.format(value) : value
+}
+
+/** 轴值的 hover 提示（无 `title` 时退回原始值）。 */
+export function axisTitle(axis: XYAxisView, value: string | null): string {
+  if (value == null) return ''
+  return axis.title ? axis.title(value) : value
 }

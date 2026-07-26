@@ -18,8 +18,8 @@ function makeGrid(ckpts: number, rows: number): GridData {
     })
   }
   const gridRows: GridData['rows'] = Array.from({ length: rows }, (_, i) => ({
-    index: i, image: `validation/1_data/v${i}.png`, folder: '1_data',
-    prompt: `prompt ${i}`,
+    index: i, image: `validation/1_data/img_00${i}.png`, folder: '1_data',
+    prompt: `1girl, solo, a very long booru caption number ${i}`,
   }))
   const cells: GridData['cells'] = {}
   for (const c of columns) {
@@ -43,6 +43,23 @@ describe('EvalSampleGrid', () => {
     vi.spyOn(api, 'getEvalSessionGrid').mockResolvedValue(makeGrid(30, 5))
   })
   afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+  it('prompt 显示验证图 id，完整 prompt 交给 hover', async () => {
+    render(<EvalSampleGrid pid={1} vid={2} sessionId={7} />)
+    await waitFor(() => expect(screen.getAllByRole('img').length).toBeGreaterThan(0))
+
+    // 行标签是 id（文件名去扩展名），不是那一长串 caption
+    expect(screen.getByText('img_000')).toBeInTheDocument()
+    expect(screen.queryByText(/very long booru caption number 0/)).not.toBeInTheDocument()
+    // hover 才给完整 prompt
+    expect(screen.getByTitle('1girl, solo, a very long booru caption number 0'))
+      .toBeInTheDocument()
+
+    // 下拉选项同款：显示 id，title 是 prompt
+    const boxes = await openDropdown('prompt')
+    expect(boxes.length).toBe(5)
+    expect(screen.getAllByText('img_001').length).toBeGreaterThan(0)
+  })
 
   it('默认勾前 3 个 prompt + baseline 和最近 20 个 lora', async () => {
     render(<EvalSampleGrid pid={1} vid={2} sessionId={7} />)

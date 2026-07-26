@@ -488,7 +488,7 @@ export default function QueueDetailPage() {
       </nav>
 
       {/* Tab body */}
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
         {tab === 'overview' && task && <OverviewTab task={task} />}
         {tab === 'overview' && !task && (
           <div className="p-6 text-center text-fg-tertiary text-sm">
@@ -865,7 +865,7 @@ function EvalSamplesTab({ task, sessionId }: { task: Task; sessionId: number | n
     )
   }
   return (
-    <div className="flex flex-col flex-1 min-h-0 p-4">
+    <div className="flex flex-col flex-1 min-h-0 min-w-0 p-4">
       <EvalSampleGrid pid={ctx.pid} vid={ctx.vid} sessionId={sid} />
     </div>
   )
