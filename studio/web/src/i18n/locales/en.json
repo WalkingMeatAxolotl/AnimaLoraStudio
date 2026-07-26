@@ -781,6 +781,7 @@
     "tabLogs": "Logs",
     "tabMonitor": "Monitor",
     "tabEval": "Metrics",
+    "tabSamples": "Samples",
     "tabOutputs": "Outputs",
     "tabSnapshot": "Snapshot config",
     "viewInGenerate": "View render →",

@@ -123,25 +123,20 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
 describe('ProjectOverview 评估 tab', () => {
   beforeEach(() => {
     vi.spyOn(api, 'listQueue').mockResolvedValue([])
-    vi.spyOn(api, 'listEvalMetrics').mockResolvedValue({
-      metric_specs: {}, cache: {}, results: [], session: null,
-    } as never)
     vi.spyOn(api, 'listEvalSessions').mockResolvedValue({ sessions: [] } as never)
   })
 
-  it('点「评估」tab → 按 version 拉评估，不带 task_id', async () => {
+  it('点「评估」tab → 列该 version 的评估作业（不带 task_id）', async () => {
     renderOverview(makeProject())
     fireEvent.click(await screen.findByRole('button', { name: '评估' }))
 
-    await waitFor(() => expect(api.listEvalMetrics).toHaveBeenCalled())
-    // 概览页是版本级视角：taskId 省略，看的是该 version 的全部评估
-    expect(api.listEvalMetrics).toHaveBeenCalledWith(3, 7, undefined, undefined)
-    expect(api.listEvalSessions).toHaveBeenCalledWith(3, 7, undefined)
+    await waitFor(() => expect(api.listEvalSessions).toHaveBeenCalledWith(3, 7))
+    expect(await screen.findByText('创建新评估')).toBeInTheDocument()
   })
 
-  it('折叠在别的 tab 时不拉评估（进项目页不该白跑一次请求）', async () => {
+  it('停在别的 tab 时不拉评估（进项目页不该白跑一次请求）', async () => {
     renderOverview(makeProject())
     await waitFor(() => expect(api.listQueue).toHaveBeenCalled())
-    expect(api.listEvalMetrics).not.toHaveBeenCalled()
+    expect(api.listEvalSessions).not.toHaveBeenCalled()
   })
 })

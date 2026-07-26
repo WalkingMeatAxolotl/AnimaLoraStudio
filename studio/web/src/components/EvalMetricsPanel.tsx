@@ -1,11 +1,12 @@
-// 评估结果面板 —— 指标卡 + 逐 checkpoint 表格 + 样图矩阵 + 运行/中断/重试。
+// 评估的**指标**面板：指标卡 + 逐 checkpoint 表格 + 中断 / 重试。
 //
-// 从 MonitorDashboard 抽出来（本次是纯搬家）：评估的对象是 version 下的一组
-// checkpoint，不是某一次训练进程，所以它得能脱离训练任务页单独存在。训练页仍然
-// 挂着它（训练完就地看结果是高频路径），只是多传一个 taskId 做过滤。
+// 只管指标。样图矩阵是同级的另一个 tab（EvalSampleGrid），发起评估是列表上方的
+// 「创建新评估」—— 都不在这里，一个 tab 一件事。
+//
+// `sessionId` 钉死看哪一次时（评估作业详情页）不显示历史切换；不钉时（训练详情页）
+// 在 taskId 名下的历史里选，默认最新那次。
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import EvalSampleGrid from './EvalSampleGrid'
-import { api, type EvalMetricResult, type EvalMetricState, type EvalScale, type EvalSessionSummary, type LoraCkpt, type MonitorState } from '../api/client'
+import { api, type EvalMetricResult, type EvalMetricState, type EvalSessionSummary } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { InfoButton } from './InfoButton'
 import { SeriesChart } from './SeriesChart'
@@ -109,37 +110,31 @@ function evalRowStatus(result: EvalMetricResult): { text: string; tone: 'ok' | '
 }
 
 export function EvalMetricsPanel({
-  state, connected, taskId, projectId, versionId, subtitle, initialSessionId,
+  pid, vid, taskId, sessionId, connected,
 }: {
-  /** 训练页传 monitor 快照（顺带拿 project/version 和标题）；版本页不传。 */
-  state?: MonitorState | null
-  /** SSE 是否连着 —— 训练页据此决定要不要持续轮询；版本页传 false 即可。 */
-  connected: boolean
-  /** 带上 = 只看这次训练触发的评估，且发起评估时填溯源；不带 = 整个 version。 */
+  pid: number | undefined
+  vid: number | undefined
+  /** 带上 = 只在这次训练触发的评估里选；不带 = 整个 version。 */
   taskId?: number
-  /** 版本页直接给 project/version（没有 monitor 快照可拿）。 */
-  projectId?: number
-  versionId?: number
-  subtitle?: string
-  /** 深链进来时要打开的那次评估（队列作业详情的「查看结果 →」带过来）。 */
-  initialSessionId?: number | null
+  /** 钉死看哪一次（评估作业详情页）。给了就不显示历史切换。 */
+  sessionId?: number | null
+  /** SSE 是否连着 —— 训练页据此决定要不要持续轮询；独立页传 false 即可。 */
+  connected: boolean
 }) {
-  const pid = projectId ?? state?.project_id
-  const vid = versionId ?? state?.version_id
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 历史评估（#465 起一次评估一个 Session，全部留档）。null = 看最新那次。
   const [sessions, setSessions] = useState<EvalSessionSummary[]>([])
-  const [pickedSession, setPickedSession] = useState<number | null>(
-    initialSessionId ?? null,
-  )
+  const [pickedSession, setPickedSession] = useState<number | null>(sessionId ?? null)
 
   const load = useCallback(async (quiet = false) => {
     if (!pid || !vid) return
     if (!quiet) setLoading(true)
     try {
-      const next = await api.listEvalMetrics(pid, vid, taskId, pickedSession ?? undefined)
+      const next = await api.listEvalMetrics(
+        pid, vid, taskId, (sessionId ?? pickedSession) ?? undefined,
+      )
       setPayload(next)
       setError(null)
     } catch (err) {
@@ -153,7 +148,7 @@ export function EvalMetricsPanel({
     } catch {
       // 历史切换是辅助信息，拉失败不打扰
     }
-  }, [pid, vid, taskId, pickedSession])
+  }, [pid, vid, taskId, sessionId, pickedSession])
 
   useEffect(() => {
     setPayload(null)
@@ -164,13 +159,10 @@ export function EvalMetricsPanel({
 
   // 切 task 时清掉选中的 Session（那是上一个 task 的历史）
   useEffect(() => { setPickedSession(null) }, [taskId])
-  // 深链换目标（同一页里点了另一次评估）时跟过去
-  useEffect(() => {
-    if (initialSessionId != null) setPickedSession(initialSessionId)
-  }, [initialSessionId])
 
-  // 当前在看哪个 Session：下拉选中优先，否则后端给的那个（最新）。存量回落时为 null。
-  const activeSessionId = pickedSession ?? payload?.session?.id ?? null
+  // 当前在看哪个 Session：钉死的优先，其次下拉选中，最后后端给的那个（最新）。
+  // 存量回落（老项目没有 Session）时为 null。
+  const activeSessionId = sessionId ?? pickedSession ?? payload?.session?.id ?? null
   // 列表里那条更新（轮询每 5s 重拉），拿不到再退回 /eval/metrics 带的快照
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) ?? payload?.session ?? null,
@@ -228,89 +220,10 @@ export function EvalMetricsPanel({
     return () => window.clearInterval(id)
   }, [connected, hasActiveMetric, hasActiveJob, load, pid, vid])
 
-  // ── 手动评估：选 checkpoint → POST /eval/run（task-scoped） ──────────────
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
-  const [ckptsLoading, setCkptsLoading] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [running, setRunning] = useState(false)
-  const [runMsg, setRunMsg] = useState<string | null>(null)
-  // 规模因子（验证图数 / 指标 runner / baseline 开关）与选了几个 checkpoint 无关，
-  // 拉一次就够，选择变化时前端就地推算出图数与后台任务数（issue #465 成本可见性）。
-  const [scale, setScale] = useState<EvalScale | null>(null)
-
-  const loadCkpts = useCallback(async () => {
-    if (!pid || !vid) return
-    setCkptsLoading(true)
-    try {
-      const items = await api.listVersionLoraCkpts(pid, vid)
-      setCkpts(items)
-    } catch (err) {
-      setRunMsg(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCkptsLoading(false)
-    }
-  }, [pid, vid])
-
-  const togglePicker = useCallback(() => {
-    setPickerOpen((open) => {
-      const next = !open
-      if (next && ckpts.length === 0) void loadCkpts()
-      if (next && !scale && pid && vid) {
-        void api.getEvalScale(pid, vid).then(setScale).catch(() => {})
-      }
-      return next
-    })
-  }, [ckpts.length, loadCkpts, scale, pid, vid])
-
-  // 本次评估的规模：候选 = 选中数 + baseline 一份，每个候选出一整套验证图。作业数恒为
-  // 1（一次评估一个 EvalSession，#465），成本落在出图数和阶段数上 —— 阶段 = 1 个出图
-  // + 每个启用的指标 runner 一个，全在同一个作业里顺序跑。
-  const pickedScale = useMemo(() => {
-    if (!scale || selected.size === 0) return null
-    const candidates = selected.size + (scale.baseline_enabled ? 1 : 0)
-    return {
-      candidates,
-      images: candidates * scale.validation_images,
-      stages: 1 + scale.metric_runners.length,
-      validationImages: scale.validation_images,
-    }
-  }, [scale, selected.size])
-
-  const toggleCkpt = useCallback((path: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }, [])
-
-  const runEval = useCallback(async () => {
-    if (!pid || !vid || selected.size === 0) return
-    setRunning(true)
-    setRunMsg(null)
-    try {
-      // task_id 只作溯源：训练页发起时带上，版本页发起时留空（评一个手动丢进
-      // output/ 的 LoRA 时根本没有对应的训练 task）
-      const r = await api.runTaskEval(pid, vid, {
-        task_id: taskId,
-        checkpoints: [...selected],
-      })
-      setRunMsg(`已排队评估 #${r.session.id}（${selected.size} 个 checkpoint）`)
-      setSelected(new Set())
-      setPickerOpen(false)
-      void load(true)
-    } catch (err) {
-      setRunMsg(err instanceof Error ? err.message : String(err))
-    } finally {
-      setRunning(false)
-    }
-  }, [pid, vid, taskId, selected, load])
-
   // 中断 / 重试当前 Session。重试走断点续跑（只补没跑完的候选和指标），所以对
   // 「跑了 180 个 checkpoint 才崩」的场景不会全部重来。
   const [sessionBusy, setSessionBusy] = useState(false)
+  const [runMsg, setRunMsg] = useState<string | null>(null)
   const sessionAction = useCallback(async (kind: 'cancel' | 'retry') => {
     if (!pid || !vid || !activeSessionId) return
     setSessionBusy(true)
@@ -388,16 +301,11 @@ export function EvalMetricsPanel({
   return (
     <div className="card p-4 flex flex-col gap-3">
       <div className="flex items-center gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold">指标</div>
-          <div className="text-xs text-fg-tertiary font-mono truncate">
-            {subtitle
-              ?? `${state?.project_slug ?? `project ${pid}`} · ${state?.version_label ?? `version ${vid}`}`}
-          </div>
-        </div>
+        <div className="text-sm font-semibold">指标</div>
         <span className="flex-1" />
-        {/* 历史评估切换：一次评估一个 Session，全部留档（#465）。只有 2 次以上才显示。 */}
-        {sessions.length > 1 && (
+        {/* 历史评估切换：一次评估一个 Session，全部留档（#465）。钉死看某一次时
+            （评估作业详情页）没有「切一次」的语义，不显示。 */}
+        {sessionId == null && sessions.length > 1 && (
           <select
             className="font-mono cursor-pointer max-w-[260px] truncate"
             style={{
@@ -460,13 +368,6 @@ export function EvalMetricsPanel({
         )}
         <button
           type="button"
-          onClick={togglePicker}
-          className={`btn btn-sm ${pickerOpen ? 'btn-primary' : 'btn-secondary'}`}
-        >
-          运行评估
-        </button>
-        <button
-          type="button"
           onClick={() => void load()}
           className="btn btn-secondary btn-sm"
         >
@@ -475,114 +376,14 @@ export function EvalMetricsPanel({
       </div>
 
       {/* Session 终止原因 —— 之前只写在 DB 和作业日志里，面板上看不到，用户只知道
-          「一直在转」。runMsg 在选择器折叠时也得有个落点，一并放这。 */}
+          「一直在转」。 */}
       {activeSession?.error
         && ['failed', 'canceled'].includes(activeSession.status) && (
         <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-xs text-err">
           评估{activeSession.status === 'canceled' ? '已中断' : '失败'}：{activeSession.error}
         </div>
       )}
-      {!pickerOpen && runMsg && (
-        <div className="text-[11px] text-fg-tertiary">{runMsg}</div>
-      )}
-
-      {pickerOpen && (
-        <div className="rounded-md border border-subtle bg-overlay px-3 py-2.5 flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold">选择 checkpoint 评估</span>
-            <span className="text-[11px] text-fg-tertiary">
-              选多个可横向对比；样本数 / 模型用 Settings 默认
-            </span>
-            <span className="flex-1" />
-            {ckpts.length > 0 && (
-              <button
-                type="button"
-                className="text-[11px] text-fg-tertiary hover:text-fg underline"
-                onClick={() =>
-                  setSelected((prev) =>
-                    prev.size === ckpts.length ? new Set() : new Set(ckpts.map((c) => c.path)),
-                  )
-                }
-              >
-                {selected.size === ckpts.length ? '清空' : '全选'}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setPickerOpen(false)}
-              className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
-              title="关闭"
-              aria-label="关闭 checkpoint 选择"
-            >
-              ×
-            </button>
-          </div>
-          {ckptsLoading ? (
-            <div className="text-xs text-fg-tertiary py-1">读取 checkpoint…</div>
-          ) : ckpts.length === 0 ? (
-            <div className="text-xs text-fg-tertiary py-1">output/ 下没有 LoRA checkpoint。</div>
-          ) : (
-            // chip 网格（与测试页 LoRA 选择器同款）：auto-fill 等宽列、+/✓ 标记、
-            // 选中态 accent-soft 高亮。
-            <div
-              className="grid gap-1.5 overflow-y-auto"
-              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', maxHeight: 200, padding: 2 }}
-            >
-              {ckpts.map((c) => {
-                const isPicked = selected.has(c.path)
-                return (
-                  <button
-                    key={c.path}
-                    type="button"
-                    onClick={() => toggleCkpt(c.path)}
-                    className="font-mono flex items-center gap-1 min-w-0"
-                    style={{
-                      fontSize: 11,
-                      padding: '4px 8px',
-                      borderRadius: 'var(--r-md)',
-                      border: isPicked ? '1px solid transparent' : '1px solid var(--border-subtle)',
-                      background: isPicked ? 'var(--accent-soft)' : 'var(--bg-sunken)',
-                      color: isPicked ? 'var(--accent)' : 'var(--fg-secondary)',
-                      cursor: 'pointer',
-                    }}
-                    title={c.path}
-                  >
-                    <span className="shrink-0">{isPicked ? '✓' : '+'}</span>
-                    <span className="truncate flex-1 text-left">{c.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {pickedScale && (
-            <div className="text-[11px] text-fg-tertiary">
-              {pickedScale.validationImages === 0 ? (
-                <span className="text-warn">
-                  验证集为空 —— 先划分或手动放入验证图，否则评估算不出指标。
-                </span>
-              ) : (
-                <>
-                  将生成 <span className="font-mono text-fg-secondary">{pickedScale.images}</span> 张图
-                  （{pickedScale.candidates} 个被测对象 × {pickedScale.validationImages} 张
-                  {scale?.baseline_enabled ? '，含一组纯底模 baseline 对照' : ''}）、
-                  1 个评估任务（<span className="font-mono text-fg-secondary">{pickedScale.stages}</span> 个阶段）
-                </>
-              )}
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={running || selected.size === 0}
-              onClick={() => void runEval()}
-              className="btn btn-primary btn-sm"
-            >
-              {running ? '排队中…' : `运行评估${selected.size ? ` (${selected.size})` : ''}`}
-            </button>
-            {runMsg && <span className="text-[11px] text-fg-tertiary">{runMsg}</span>}
-          </div>
-        </div>
-      )}
+      {runMsg && <div className="text-[11px] text-fg-tertiary">{runMsg}</div>}
 
       {error ? (
         <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-sm text-err">
@@ -590,7 +391,7 @@ export function EvalMetricsPanel({
         </div>
       ) : results.length === 0 ? (
         <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
-          暂无 eval 结果。点「运行评估」选 checkpoint 手动评估，或在训练配置开启「训练后指标评估」，训练结束后自动用验证集算 CLIP-T、CLIP-I、DINO-I。
+          暂无评估结果。在概览的「评估」里点「创建新评估」选 LoRA 文件，或在训练配置开启「训练后指标评估」，训练结束后自动用验证集算 CLIP-T、CLIP-I、DINO-I。
         </div>
       ) : (
         <>
@@ -697,12 +498,6 @@ export function EvalMetricsPanel({
         </>
       )}
 
-      {/* 出图矩阵：评估已经为每个候选 × 每张验证图出了图，顺手让用户肉眼比一遍
-          （选 checkpoint 的主路径本来就是视觉对比）。只有新模型的 Session 有 —— 存量
-          旧结果的图散在各 run 目录里、没有 candidate 概念，拼不出矩阵。 */}
-      {activeSessionId != null && (
-        <EvalSampleGrid pid={pid} vid={vid} sessionId={activeSessionId} />
-      )}
     </div>
   )
 }

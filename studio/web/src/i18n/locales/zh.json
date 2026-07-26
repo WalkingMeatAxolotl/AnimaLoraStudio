@@ -781,6 +781,7 @@
     "tabLogs": "日志",
     "tabMonitor": "监控",
     "tabEval": "指标",
+    "tabSamples": "样图",
     "tabOutputs": "输出",
     "tabSnapshot": "关联配置",
     "viewInGenerate": "查看出图结果 →",
