@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from studio import secrets
-from studio.domain.common import FAMILY_CAPABILITIES
+from studio.domain.common import supports_capability
 from studio.services import version_config
 from studio.services.inference.daemon import InferenceDaemon
 
@@ -81,9 +81,7 @@ def _generate_settings(family_id: str) -> dict[str, Any]:
         logger.warning("读取出图设置失败，评估出图用保守默认", exc_info=True)
         return dict(_FALLBACK_SETTINGS)
 
-    if settings["blocks_to_swap"] and "block_swap" not in FAMILY_CAPABILITIES.get(
-        family_id, frozenset()
-    ):
+    if settings["blocks_to_swap"] and not supports_capability(family_id, "block_swap"):
         # 每个候选都会走一遍本函数，逐次打就是 200 个 checkpoint 打 200 行同样的话
         # ——正是 #465 抱怨的那种噪音。按族记一次就够。
         if family_id not in _BLOCK_SWAP_NOTICED:

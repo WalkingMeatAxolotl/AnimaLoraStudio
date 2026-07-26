@@ -47,6 +47,7 @@ from ...domain.errors import (
     ValidationError,
 )
 from ...domain.comfy_parity import force_comfy_parity_runtime_config
+from ...domain.common import supports_capability
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
 from ...services.generation_metadata import (
@@ -235,6 +236,17 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
             attn = detect_attention_backend()
+
+        # 族条件门控：blocks_to_swap 来自**全局**出图设置，是用户为某个模型调的，
+        # 但这次请求可以是另一个族的底模。原样透传时 daemon 在加载 DiT 时 fail-fast
+        # （"model_family=X 不支持 block swap"），整个出图直接崩。用户并没有为这个
+        # 模型要求 block swap，所以忽略而不是报错。
+        if blocks_to_swap and not supports_capability(body.model_family, "block_swap"):
+            logger.info(
+                "model_family=%s 不支持 block swap，本次出图忽略全局设置的 "
+                "blocks_to_swap=%s", body.model_family, blocks_to_swap,
+            )
+            blocks_to_swap = 0
 
         cfg = GenerateConfig(
             **model_paths,
