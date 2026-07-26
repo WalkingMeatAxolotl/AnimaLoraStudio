@@ -27,6 +27,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     from studio import db
     from studio.api.routers import root as _root_router
     from studio.api.routers import samples as _samples_router
+    from studio.services.inference import disk_cache
     from studio.services.projects import projects
     output = tmp_path / "output"
     samples_dir = output / "samples"
@@ -42,6 +43,19 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     monkeypatch.setattr(_samples_router, "OUTPUT_DIR", output)
     monkeypatch.setattr(_root_router, "WEB_DIST", web_dist)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
+
+    # 加密磁盘 cache：生产里由 lifespan 初始化，但这里的 TestClient 不进 context
+    # manager，lifespan **不会跑**。以前 test_generate_sample_response_* 能过，
+    # 只是因为全量跑时 tests/test_disk_cache.py 字母序在前，把那个**进程级
+    # singleton** 漏了出来 —— 单跑本文件或按 CONTRIBUTING §3 只跑关联测试就假红。
+    #
+    # 不能靠 `with TestClient(...)` 补 lifespan：本 fixture 没隔离 STUDIO_DATA，
+    # 而 disk_cache.init() 会 startup_clean(root) rmtree 掉 root 下所有 session-*
+    # —— 那会删掉本机正在跑的 server 的出图 cache（历史踩过）。
+    # 先把 singleton 置 None 再 init：否则 init 会 clear_all 别的测试留下的那个。
+    monkeypatch.setattr(disk_cache, "_session", None)
+    disk_cache.init(tmp_path / "generate_cache")
+
     return {
         "tmp": tmp_path,
         "db": dbfile,

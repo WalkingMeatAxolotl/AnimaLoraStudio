@@ -29,7 +29,7 @@ import random
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import torch
 
@@ -74,7 +74,13 @@ logging.basicConfig(
 logger = logging.getLogger("anima_daemon")
 
 
-def _keep_third_party_logs_off_stdout() -> None:
+# 会往 stdout 写日志的第三方 logger。stdout 是本进程的协议流，它们必须掰到 stderr。
+_STDOUT_NOISY_LOGGERS: tuple[str, ...] = ("LyCORIS",)
+
+
+def _keep_third_party_logs_off_stdout(
+    names: Iterable[str] = _STDOUT_NOISY_LOGGERS,
+) -> None:
     """把往 stdout 写的第三方 logger 掰到 stderr。
 
     lycoris 在 import 时给 `LyCORIS` logger 挂了 `StreamHandler(sys.stdout)` 且
@@ -86,7 +92,7 @@ def _keep_third_party_logs_off_stdout() -> None:
     就能让它整段跳过（本函数在 lycoris import 之前跑）。同时也清掉已存在的 stdout
     handler —— 万一将来 import 顺序变了，行为依然正确。
     """
-    for name in ("LyCORIS",):
+    for name in names:
         third = logging.getLogger(name)
         for handler in list(third.handlers):
             if getattr(handler, "stream", None) is sys.stdout:
