@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, server
+from studio import db, secrets, server
 from studio.infrastructure import paths as infra_paths
-from studio.services import eval_metrics, eval_samples
+from studio.services import eval_metrics, eval_samples, eval_session
 from studio.services.projects import jobs as project_jobs, projects, versions
 
 
@@ -19,8 +19,10 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db.init_db(dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(infra_paths, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(infra_paths, "EVAL_SESSIONS_DIR", tmp_path / "eval" / "sessions")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
+    monkeypatch.setattr(secrets, "SECRETS_FILE", tmp_path / "secrets.json")
     return {"db": dbfile}
 
 
@@ -80,34 +82,6 @@ def _vdir_for(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]
     assert project and version
     vdir = versions.version_dir(project["id"], project["slug"], version["label"])
     return project, version, vdir
-
-
-def test_list_task_eval_jobs_filters_by_task_and_kind(client: TestClient) -> None:
-    pid, vid = _make(client)
-    # /eval/jobs 只返回 run 仍存在的 job —— 给 task 42 的三个 job 各建一个 run.json
-    eval_root = infra_paths.task_eval_dir(42)
-    with db.connection_for() as conn:
-        # task 42 的三种 eval job
-        for kind in ("eval_samples", "eval_clip", "eval_dino"):
-            run_dir = eval_root / "samples" / f"run-{kind}"
-            run_dir.mkdir(parents=True, exist_ok=True)
-            (run_dir / "run.json").write_text("{}", encoding="utf-8")
-            project_jobs.create_job(
-                conn, project_id=pid, version_id=vid, kind=kind,
-                params={"task_id": 42, "run_id": f"run-{kind}"},
-            )
-        # 别的 task 的 eval job + 非 eval job：都不该出现
-        project_jobs.create_job(
-            conn, project_id=pid, version_id=vid, kind="eval_samples",
-            params={"task_id": 99, "run_id": "run-other"},
-        )
-        project_jobs.create_job(
-            conn, project_id=pid, version_id=vid, kind="tag", params={"task_id": 42},
-        )
-    r = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id=42").json()
-    kinds = sorted(j["kind"] for j in r["jobs"])
-    assert kinds == ["eval_clip", "eval_dino", "eval_samples"]
-    assert all(j["run_id"].startswith("run-") and j["run_id"] != "run-other" for j in r["jobs"])
 
 
 def test_baseline_run_sets_lora_scale_zero(isolated) -> None:
@@ -345,3 +319,248 @@ def test_eval_metrics_http_can_list_task_scoped_results(client: TestClient) -> N
     body = listed.json()
     assert [item["run_id"] for item in body["results"]] == [task_run["run_id"]]
     assert body["results"][0]["metric_states"]["clip_t"]["value"] == 0.75
+
+
+# ---------------------------------------------------------------------------
+# EvalSession 读侧（#465）—— 历史全部保留，默认给最新一次
+# ---------------------------------------------------------------------------
+
+def _seed_session(
+    isolated, project, version, vdir, *, ckpts=("model_step100.safetensors",),
+) -> dict[str, Any]:
+    with db.connection_for(isolated["db"]) as conn:
+        return eval_session.create_session(
+            conn, project, version, vdir,
+            checkpoints=versions.list_lora_ckpts(vdir),
+            trigger="manual", metric_keys=["clip_t", "clip_i"],
+        )
+
+
+def test_sessions_endpoint_lists_newest_first_with_summary(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    first = _seed_session(isolated, project, version, vdir)
+    second = _seed_session(isolated, project, version, vdir)
+
+    r = client.get(f"/api/projects/{pid}/versions/{vid}/eval/sessions")
+    assert r.status_code == 200, r.text
+    sessions = r.json()["sessions"]
+
+    assert [s["id"] for s in sessions] == [second["id"], first["id"]]
+    # 列表只回摘要 —— 200 个候选的完整 plan 太大
+    assert "plan" not in sessions[0] and "plan_json" not in sessions[0]
+    assert sessions[0]["candidate_count"] == 2  # 1 checkpoint + baseline
+    assert sessions[0]["metric_keys"] == ["clip_i", "clip_t"]
+    assert sessions[0]["validation_images"] == 1  # _seed_validation_and_ckpt 建一张
+
+
+def test_metrics_endpoint_defaults_to_latest_session(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    _seed_session(isolated, project, version, vdir)
+    latest = _seed_session(isolated, project, version, vdir)
+
+    r = client.get(f"/api/projects/{pid}/versions/{vid}/eval/metrics").json()
+
+    assert r["session"]["id"] == latest["id"]
+    assert r.get("legacy") is not True
+    # 结果按前端既有的 EvalMetricResult 形状返回（每个候选一条）
+    assert len(r["results"]) == 2
+    row = next(x for x in r["results"] if not x["baseline"])
+    assert set(row["metric_states"]) == {"clip_t", "clip_i"}
+    assert row["metric_states"]["clip_t"]["status"] == "pending"
+    assert row["checkpoint"]["path"] == "output/model_step100.safetensors"
+
+
+def test_metrics_endpoint_can_pick_a_historical_session(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    first = _seed_session(isolated, project, version, vdir)
+    _seed_session(isolated, project, version, vdir)
+
+    r = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/metrics?session_id={first['id']}"
+    ).json()
+
+    assert r["session"]["id"] == first["id"]
+
+
+def test_metrics_endpoint_rejects_session_of_another_version(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    session = _seed_session(isolated, project, version, vdir)
+    with db.connection_for(isolated["db"]) as conn:
+        other = versions.create_version(conn, project_id=project["id"], label="v2")
+
+    r = client.get(
+        f"/api/projects/{project['id']}/versions/{other['id']}"
+        f"/eval/metrics?session_id={session['id']}"
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_metrics_endpoint_falls_back_to_legacy_files(client, isolated) -> None:
+    """老项目没有任何 Session —— 存量 run.json / metrics.json 仍要读得到。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    run = eval_samples.create_run(
+        project, version, vdir, checkpoint_path="model_step100.safetensors",
+    )
+    eval_metrics.save_result(vdir, run["run_id"], {"metrics": {"clip_i": 0.5}})
+
+    r = client.get(f"/api/projects/{pid}/versions/{vid}/eval/metrics").json()
+
+    assert r["session"] is None
+    assert r["legacy"] is True
+    assert any(x["run_id"] == run["run_id"] for x in r["results"])
+
+
+def test_delete_session_endpoint_refuses_while_running(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)
+    sid = int(session["id"])
+
+    # pending → 拒删（要求先中断）
+    assert client.delete(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}"
+    ).status_code == 400
+
+    with db.connection_for(isolated["db"]) as conn:
+        eval_session.update_session(conn, sid, status="done")
+    ok = client.delete(f"/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}")
+    assert ok.status_code == 200, ok.text
+
+    with db.connection_for(isolated["db"]) as conn:
+        assert eval_session.get_session(conn, sid) is None
+    # checkpoint 是引用，删 Session 不动它
+    assert (vdir / "output" / "model_step100.safetensors").exists()
+
+
+def test_grid_endpoint_builds_checkpoint_by_prompt_matrix(client, isolated) -> None:
+    """出图矩阵：X = 候选（baseline 在最前），Y = 验证图；cell 给 run_id + filename。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    # 第二张验证图 → 矩阵两行
+    val = vdir / "validation" / "1_data"
+    (val / "b.png").write_bytes(b"png-b")
+    (val / "b.txt").write_text("1girl, blue hair", encoding="utf-8")
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)
+    sid = int(session["id"])
+
+    # 给两个候选各建一个 run（模拟出图阶段跑过）
+    root = eval_session.samples_root(sid)
+    with db.connection_for(isolated["db"]) as conn:
+        cands = eval_session.list_candidates(conn, sid)
+        for cand in cands:
+            run = eval_samples.create_run(
+                project, version, vdir,
+                checkpoint_path=str(
+                    eval_session.resolve_candidate_path(
+                        vdir, str(cand["checkpoint_path"])
+                    )
+                ),
+                eval_root=root,
+                baseline=cand["role"] == "baseline",
+            )
+            eval_session.update_candidate(
+                conn, int(cand["id"]), run_id=str(run["run_id"])
+            )
+
+    grid = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/grid"
+    ).json()
+
+    # baseline 排第一列 —— 纯底模对照，测试页的 XY 没有这一列
+    assert grid["columns"][0]["role"] == "baseline"
+    assert grid["columns"][0]["label"] == "baseline"
+    assert [c["role"] for c in grid["columns"]] == ["baseline", "checkpoint"]
+    # 行来自 plan 冻结的验证集清单，带各自 prompt
+    assert len(grid["rows"]) == 2
+    assert {r["prompt"] for r in grid["rows"]} == {"solo, red hair", "1girl, blue hair"}
+    # 每个候选 × 每行都有 cell
+    for col in grid["columns"]:
+        for row in grid["rows"]:
+            cell = grid["cells"][f"{col['candidate_id']}:{row['index']}"]
+            assert cell["filename"].endswith(".png")
+            assert cell["run_id"] == col["run_id"]
+
+
+def test_grid_endpoint_tolerates_candidates_without_run(client, isolated) -> None:
+    """候选还没开跑（run_id 为空）→ 列在、cell 缺，不报错。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)
+
+    grid = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{session['id']}/grid"
+    ).json()
+
+    assert len(grid["columns"]) == 2
+    assert grid["cells"] == {}
+    assert len(grid["rows"]) == 1
+    assert grid["rows"][0]["prompt"] == ""  # 没有 run 就没有 prompt
+
+
+def test_grid_endpoint_rejects_session_of_another_version(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    session = _seed_session(isolated, project, version, vdir)
+    with db.connection_for(isolated["db"]) as conn:
+        other = versions.create_version(conn, project_id=project["id"], label="v2")
+
+    r = client.get(
+        f"/api/projects/{project['id']}/versions/{other['id']}"
+        f"/eval/sessions/{session['id']}/grid"
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_grid_aligns_rows_by_reference_image_not_position(client, isolated) -> None:
+    """按参考图路径对齐，不按数组下标 —— 否则验证集变化后会把 A 图结果贴到 B 行。"""
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    val = vdir / "validation" / "1_data"
+    (val / "b.png").write_bytes(b"png-b")
+    (val / "b.txt").write_text("second", encoding="utf-8")
+    pid, vid = project["id"], version["id"]
+    session = _seed_session(isolated, project, version, vdir)   # plan 冻结 a.png + b.png
+    sid = int(session["id"])
+
+    # 候选的 run 建立**之前**删掉第一张验证图 → run 只有 b.png 一项，
+    # 按下标会落到第 0 行（a.png），按路径才落到第 1 行。
+    (val / "a.png").unlink()
+    (val / "a.txt").unlink()
+    root = eval_session.samples_root(sid)
+    with db.connection_for(isolated["db"]) as conn:
+        cand = eval_session.list_candidates(conn, sid)[0]
+        run = eval_samples.create_run(
+            project, version, vdir,
+            checkpoint_path=str(
+                eval_session.resolve_candidate_path(vdir, str(cand["checkpoint_path"]))
+            ),
+            eval_root=root,
+        )
+        eval_session.update_candidate(conn, int(cand["id"]), run_id=str(run["run_id"]))
+
+    grid = client.get(
+        f"/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/grid"
+    ).json()
+
+    # plan 的两行都还在（冻结口径不受后来删图影响）
+    assert [r["image"] for r in grid["rows"]] == [
+        "validation/1_data/a.png", "validation/1_data/b.png",
+    ]
+    cid = int(cand["id"])
+    # 结果落在 b.png 那一行（index 1），a.png 那一行是空的
+    assert f"{cid}:0" not in grid["cells"]
+    assert grid["cells"][f"{cid}:1"]["filename"].endswith(".png")
+    assert grid["rows"][1]["prompt"] == "second"
+    assert grid["rows"][0]["prompt"] == ""

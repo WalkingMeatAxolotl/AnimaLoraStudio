@@ -2,15 +2,15 @@
  *  R-5 台账合并后作业就是 task（task_type = kind），工具全部按 Task 形状取字段。 */
 import type { Task, TaskType } from '../../api/client'
 
-/** 数据视图（light + io 档）的 kind 全集。eval_samples 是 exclusive 档，
- *  归 GPU 视图（锚点 §4-2），不在此列。 */
+/** 数据视图（light + io 档）的 kind 全集。评估是 exclusive 档，归 GPU 视图
+ *  （锚点 §4-2），不在此列。 */
 export const DATA_VIEW_KINDS: TaskType[] = [
   'download', 'preprocess', 'tag', 'reg_build',
   'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
 ]
 
-/** 全部作业 kind（i18n 标签遍历用，含 eval_samples）。 */
-export const JOB_KINDS: TaskType[] = ['eval_samples', ...DATA_VIEW_KINDS]
+/** 全部作业 kind（i18n 标签 / 深链遍历用，含 GPU 视图那侧的评估）。 */
+export const JOB_KINDS: TaskType[] = ['eval_session', 'eval_samples', ...DATA_VIEW_KINDS]
 
 export const JOB_STATUS_TONE: Record<string, string> = {
   pending: 'neutral', running: 'accent', done: 'ok', failed: 'err', canceled: 'neutral',
@@ -39,9 +39,12 @@ export function fmtJobTime(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
-/** 作业 kind → 原生步骤页深链（download 是 project 级，其余 version 级；
- *  eval_* 落训练页）。非作业类型返回 null（train/generate 的跳转另有专链）。 */
-export function jobJumpPath(task: Task): string | null {
+/** 作业 kind → 原生步骤页深链（download 是 project 级，其余 version 级）。
+ *  非作业类型返回 null（train/generate 的跳转另有专链）。
+ *
+ *  评估落项目概览的「评估」tab 而不是训练页：评估的对象是 output/ 下的那些 LoRA
+ *  文件，可能根本没有对应的训练 task。`sessionId` 给上就深链到具体那一次。 */
+export function jobJumpPath(task: Task, sessionId?: number | null): string | null {
   const kind = task.task_type ?? 'train'
   const pid = task.project_id
   const vid = task.version_id
@@ -52,6 +55,16 @@ export function jobJumpPath(task: Task): string | null {
     case 'preprocess': return `/projects/${pid}/v/${vid}/preprocess`
     case 'tag': return `/projects/${pid}/v/${vid}/tag`
     case 'reg_build': return `/projects/${pid}/v/${vid}/reg`
+    // eval_session 是当前模型；eval_samples/eval_clip/... 是上一代的 per-checkpoint
+    // 子作业 kind，存量历史行同样归评估页
+    case 'eval_session':
+    case 'eval_samples':
+    case 'eval_clip':
+    case 'eval_dino':
+    case 'eval_tag':
+    case 'eval_ccip':
+      return `/projects/${pid}?version=${vid}&tab=eval`
+        + (sessionId ? `&session=${sessionId}` : '')
     default: return `/projects/${pid}/v/${vid}/train`
   }
 }

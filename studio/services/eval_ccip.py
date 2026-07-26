@@ -41,49 +41,6 @@ class EvalCcipError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def start_job(
-    conn,
-    project: dict[str, Any],
-    version: dict[str, Any],
-    version_dir: Path,
-    run_id: str,
-    *,
-    model_name: str | None = None,
-    eval_root: Path | None = None,
-    task_id: int | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Queue a CCIP-I metric job and mark ccip_i pending."""
-    model = _normalize_model_name(model_name)
-    run = _load_scored_run(project, version, version_dir, run_id, eval_root)
-    scoped_root = _run_eval_root(run, eval_root)
-    inferred_task_id = _run_task_id(run, task_id)
-    params: dict[str, Any] = {
-        "version_id": int(version["id"]),
-        "run_id": str(run["run_id"]),
-        "model_name": model,
-    }
-    if inferred_task_id:
-        params["task_id"] = int(inferred_task_id)
-    job = project_jobs.create_job(
-        conn,
-        project_id=int(project["id"]),
-        version_id=int(version["id"]),
-        kind=JOB_KIND,
-        params=params,
-    )
-    result = _save_state(
-        version_dir,
-        str(run["run_id"]),
-        _metric_state(
-            "pending", reason="eval_ccip job queued",
-            model_name=model, job_id=int(job["id"]),
-        ),
-        clear_value=True,
-        eval_root=scoped_root,
-    )
-    return job, result
-
-
 def run_ccip_job(
     project: dict[str, Any],
     version: dict[str, Any],

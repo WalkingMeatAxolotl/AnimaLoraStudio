@@ -248,3 +248,83 @@ describe('QueueDetailPage 类型差异化 tab（P-H）', () => {
     expect(screen.getByText('详情')).toBeInTheDocument()
   })
 })
+
+// ── 评估 tab（#465）──────────────────────────────────────────────────────────
+describe('QueueDetailPage 评估 tab', () => {
+  function mockTask(task: Task, sessions: unknown[]) {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(task))
+      if (url.includes('/eval/sessions')) {
+        const body = { sessions }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body, text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+  }
+
+  it('评估作业：指标 / 样图分成两个 tab，且「关联训练」显示溯源', async () => {
+    mockTask(
+      makeTask({
+        id: 119, task_type: 'eval_session', status: 'done',
+        project_id: 3, version_id: 7, params_decoded: { session_id: 42 },
+      }),
+      [{ id: 42, task_id: 119, parent_task_id: 88, status: 'done', trigger: 'after_training' }],
+    )
+    renderDetailPage()
+
+    await waitFor(() => expect(screen.getByText('样图')).toBeInTheDocument())
+    expect(screen.getByText('指标')).toBeInTheDocument()
+    // 训练专用 tab 不该出现在评估作业上
+    expect(screen.queryByText('监控')).not.toBeInTheDocument()
+    // 溯源进了概览的键值表，不是单独一块进度卡。parent 是异步认领的（params 里
+    // 只有 session_id），所以等它出现而不是等「关联训练」那一格。
+    await waitFor(() => expect(screen.getByText('#88')).toBeInTheDocument())
+    expect(screen.getByText('关联训练')).toBeInTheDocument()
+  })
+
+  it('手动发起的评估没有关联训练 → n/a，不藏起来', async () => {
+    mockTask(
+      makeTask({
+        id: 119, task_type: 'eval_session', status: 'done',
+        project_id: 3, version_id: 7, params_decoded: { session_id: 42 },
+      }),
+      [{ id: 42, task_id: 119, parent_task_id: null, status: 'done', trigger: 'manual' }],
+    )
+    renderDetailPage()
+
+    await waitFor(() => expect(screen.getByText('关联训练')).toBeInTheDocument())
+    expect(screen.getByText('n/a')).toBeInTheDocument()
+  })
+
+  it('训练没评估过 → 指标 / 样图两个 tab 都不显示', async () => {
+    mockTask(
+      makeTask({ id: 119, task_type: 'train', status: 'done', project_id: 3, version_id: 7 }),
+      [],
+    )
+    renderDetailPage()
+
+    // 等 tab 收敛（listEvalSessions 回来之前不收，避免抖动）
+    await waitFor(() => expect(screen.queryByText('指标')).not.toBeInTheDocument())
+    expect(screen.queryByText('样图')).not.toBeInTheDocument()
+    // 其余训练 tab 不受影响
+    expect(screen.getByText('监控')).toBeInTheDocument()
+  })
+
+  it('训练评估过 → 两个 tab 都在', async () => {
+    mockTask(
+      makeTask({ id: 119, task_type: 'train', status: 'done', project_id: 3, version_id: 7 }),
+      [{ id: 42, task_id: 500, parent_task_id: 119, status: 'done', trigger: 'after_training' }],
+    )
+    renderDetailPage()
+
+    await waitFor(() => expect(screen.getByText('指标')).toBeInTheDocument())
+    expect(screen.getByText('样图')).toBeInTheDocument()
+  })
+})

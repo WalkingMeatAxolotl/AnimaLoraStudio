@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../../../api/client'
 import { exportXYMatrix } from './exportXY'
 import FullscreenViewer from './FullscreenViewer'
-import { axisLabel, formatAxisValue, type XYAxisDraft } from './xy'
+import { axisText, axisTitle, type XYAxisView } from './xy'
 
 /** PreviewXYGrid 本地 sample 类型。
  *
@@ -47,13 +47,14 @@ function clamp(v: number, lo: number, hi: number): number {
  *   且至少 MIN 宽，多余空间均分；超出容器宽时整个 grid 横滚
  */
 export default function PreviewXYGrid({
-  samples, taskId, xDraft, yDraft, onCellClick, selectedIndices,
+  samples, taskId, xAxis, yAxis, onCellClick, selectedIndices,
   compositeUrl,
 }: {
   samples: XYSample[]
   taskId: number
-  xDraft: XYAxisDraft
-  yDraft: XYAxisDraft | null
+  xAxis: XYAxisView
+  /** null = 单轴（不画 Y 标签列） */
+  yAxis: XYAxisView | null
   onCellClick?: (sampleIdx: number) => void
   selectedIndices?: number[]
   /** disk 历史回看专用：传 composite 大图 URL → 导出 PNG 按钮直接 anchor download，
@@ -87,14 +88,14 @@ export default function PreviewXYGrid({
       } else {
         const exportSamples = samples
           .filter((s): s is XYSample & { xy: NonNullable<XYSample['xy']> } => s.xy != null)
-          .map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } }))
+          .map((s) => ({
+            path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi }, imageUrl: s.imageUrl,
+          }))
         await exportXYMatrix({
           samples: exportSamples,
           taskId,
-          xAxis: xDraft.axis,
-          yAxis: yDraft?.axis ?? null,
-          xValues,
-          yValues,
+          xLabels: xValues.map((v) => axisText(xAxis, v)),
+          yLabels: yAxis ? yValues.map((v) => axisText(yAxis, v)) : null,
         })
       }
       setExportMsg(t('generate.exportDownloaded'))
@@ -181,13 +182,10 @@ export default function PreviewXYGrid({
     }
   }
 
-  const xValues = useMemo(
-    () => xDraft.raw.split(',').map((s) => s.trim()).filter(Boolean),
-    [xDraft.raw],
-  )
-  const yValues = useMemo(
-    () => yDraft ? yDraft.raw.split(',').map((s) => s.trim()).filter(Boolean) : [null],
-    [yDraft],
+  const xValues = xAxis.values
+  const yValues: Array<string | null> = useMemo(
+    () => (yAxis ? yAxis.values : [null]),
+    [yAxis],
   )
   const xLen = xValues.length
   const yLen = yValues.length
@@ -219,16 +217,18 @@ export default function PreviewXYGrid({
   // grid 列：固定 cellW（zoom 调它），yDraft 时左侧多一列 axis label。
   // 用 ${cellW}px 而非 minmax(MIN, 1fr) —— 后者在容器宽时按 1fr 均分，
   // zoom 就看不出来；固定列宽让滚轮 zoom 视觉立即生效。
-  const labelColW = yDraft ? 60 : 0
-  const gridCols = yDraft
+  const labelColW = yAxis ? 60 : 0
+  const gridCols = yAxis
     ? `${labelColW}px repeat(${xLen}, ${cellW}px)`
     : `repeat(${xLen}, ${cellW}px)`
 
   return (
-    <div className="flex flex-col gap-2 flex-1 min-h-0">
+    // min-w-0：作为 flex 子项时默认 min-width:auto，网格宽度会顶穿父容器 ——
+    // 下面那层 overflow-auto 就永远不滚，zoom 之后左右 pan 不动
+    <div className="flex flex-col gap-2 flex-1 min-h-0 min-w-0">
       <div className="flex items-center justify-between shrink-0">
         <span className="caption">
-          {t('generate.xyGridCount', { x: xLen, y: yLen, n: xLen * yLen, axis: yDraft ? ` × ${yLen}` : '' })}
+          {t('generate.xyGridCount', { x: xLen, y: yLen, n: xLen * yLen, axis: yAxis ? ` × ${yLen}` : '' })}
           {samples.length < xLen * yLen && samples.length > 0 && (
             <span className="text-fg-tertiary"> · {t('generate.generatedCount', { n: samples.length })}</span>
           )}
@@ -271,15 +271,15 @@ export default function PreviewXYGrid({
       >
         <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 2 }}>
           {/* 表头：左上角空白（仅当有 yDraft）+ X 标签 */}
-          {yDraft && <div />}
+          {yAxis && <div />}
           {xValues.map((xv, xi) => (
             <div
               key={`h-${xi}`}
               className="text-2xs text-fg-tertiary font-mono text-center truncate"
               style={{ padding: '4px 2px' }}
-              title={xv}
+              title={axisTitle(xAxis, xv)}
             >
-              {formatAxisValue(xDraft.axis, xv)}
+              {axisText(xAxis, xv)}
             </div>
           ))}
 
@@ -289,8 +289,8 @@ export default function PreviewXYGrid({
               key={`y-${yi}`}
               yi={yi} yv={yv}
               xValues={xValues}
-              xDraft={xDraft}
-              yDraft={yDraft}
+              xAxis={xAxis}
+              yAxis={yAxis}
               cellIndex={cellIndex}
               samples={samples}
               taskId={taskId}
@@ -307,9 +307,9 @@ export default function PreviewXYGrid({
         const fn = s.path.split(/[\\/]/).pop() ?? ''
         const captionParts: string[] = []
         if (s.xy) {
-          captionParts.push(`${axisLabel(xDraft.axis)}=${formatAxisValue(xDraft.axis, String(s.xy.xv ?? ''))}`)
-          if (yDraft && s.xy.yv != null) {
-            captionParts.push(`${axisLabel(yDraft.axis)}=${formatAxisValue(yDraft.axis, String(s.xy.yv))}`)
+          captionParts.push(`${xAxis.label}=${axisText(xAxis, String(s.xy.xv ?? ''))}`)
+          if (yAxis && s.xy.yv != null) {
+            captionParts.push(`${yAxis.label}=${axisText(yAxis, String(s.xy.yv))}`)
           }
         }
         return (
@@ -346,14 +346,14 @@ export default function PreviewXYGrid({
 }
 
 function Row({
-  yi, yv, xValues, xDraft, yDraft, cellIndex, samples, taskId, selSet,
+  yi, yv, xValues, xAxis, yAxis, cellIndex, samples, taskId, selSet,
   onCellClick, onCellDoubleClick,
 }: {
   yi: number
   yv: string | null
   xValues: string[]
-  xDraft: XYAxisDraft
-  yDraft: XYAxisDraft | null
+  xAxis: XYAxisView
+  yAxis: XYAxisView | null
   cellIndex: Map<string, number>
   samples: XYSample[]
   taskId: number
@@ -364,13 +364,13 @@ function Row({
   const { t } = useTranslation()
   return (
     <>
-      {yDraft && (
+      {yAxis && (
         <div
           className="text-2xs text-fg-tertiary font-mono text-right truncate self-center"
           style={{ paddingRight: 4 }}
-          title={yv ?? ''}
+          title={yAxis ? axisTitle(yAxis, yv) : (yv ?? '')}
         >
-          {yv != null ? formatAxisValue(yDraft.axis, yv) : ''}
+          {axisText(yAxis, yv)}
         </div>
       )}
       {xValues.map((xv, xi) => {
@@ -379,9 +379,9 @@ function Row({
         const filename = sample ? sample.path.split(/[\\/]/).pop() ?? null : null
         const isSel = idx != null && selSet.has(idx)
         const tooltip = t('generate.xyCellTooltip', {
-          label: !yDraft
-            ? `${axisLabel(xDraft.axis)}=${formatAxisValue(xDraft.axis, xv)}`
-            : `${axisLabel(xDraft.axis)}=${formatAxisValue(xDraft.axis, xv)} · ${axisLabel(yDraft.axis)}=${formatAxisValue(yDraft.axis, yv ?? '')}`,
+          label: !yAxis
+            ? `${xAxis.label}=${axisText(xAxis, xv)}`
+            : `${xAxis.label}=${axisText(xAxis, xv)} · ${yAxis.label}=${axisText(yAxis, yv)}`,
         })
         return (
           <GridCell

@@ -8,7 +8,7 @@
  *
  *  jsdom 默认没有 EventSource（useEventStream 内部 typeof 守卫会短路），这里塞
  *  个 fake 让 hook 真订阅，再手动驱动事件验证组件会重拉 listQueue 并显示按钮。 */
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Outlet, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../../components/Toast'
@@ -117,5 +117,26 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
     // 重拉后暂停按钮出现（不依赖切版本 / 刷新页面）。
     await waitFor(() => expect(screen.getByText('暂停')).toBeInTheDocument())
     expect(listSpy.mock.calls.length).toBeGreaterThan(callsBefore)
+  })
+})
+
+describe('ProjectOverview 评估 tab', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([])
+    vi.spyOn(api, 'listEvalSessions').mockResolvedValue({ sessions: [] } as never)
+  })
+
+  it('点「评估」tab → 列该 version 的评估作业（不带 task_id）', async () => {
+    renderOverview(makeProject())
+    fireEvent.click(await screen.findByRole('button', { name: '评估' }))
+
+    await waitFor(() => expect(api.listEvalSessions).toHaveBeenCalledWith(3, 7))
+    expect(await screen.findByText('创建新评估')).toBeInTheDocument()
+  })
+
+  it('停在别的 tab 时不拉评估（进项目页不该白跑一次请求）', async () => {
+    renderOverview(makeProject())
+    await waitFor(() => expect(api.listQueue).toHaveBeenCalled())
+    expect(api.listEvalSessions).not.toHaveBeenCalled()
   })
 })

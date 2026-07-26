@@ -38,14 +38,12 @@ class EvalManifestPut(BaseModel):
 
 
 class EvalRunRequest(BaseModel):
-    """Manual eval trigger for a finished task over an explicit checkpoint set."""
-    task_id: int
+    """Manual eval trigger over an explicit checkpoint set.
+
+    `task_id` 只是溯源：从训练页发起时带上（那批评估会挂在那次训练名下），从版本的
+    评估页发起时省略 —— 评估的对象是 version 下的 checkpoint，不必存在对应的训练 task。
+    """
+    task_id: Optional[int] = None
     checkpoints: list[str]
 
 
-class EvalClipStart(BaseModel):
-    model_name: Optional[str] = None
-
-
-class EvalDinoStart(BaseModel):
-    model_name: Optional[str] = None

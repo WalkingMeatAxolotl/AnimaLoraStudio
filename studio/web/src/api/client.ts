@@ -260,18 +260,82 @@ export interface EvalMetricResult {
   }
 }
 
-/** 训练后 / 手动评估的一条 job（inline 训练时评估无 job）。按 run_id 关联到某个
- *  checkpoint 行，用来取原始日志（含报错）。 */
-export interface EvalJobInfo {
+/** Session 列表项（列表接口不回传完整 plan —— 200 个候选的 plan 很大，只给摘要）。 */
+export interface EvalSessionSummary extends EvalSessionInfo {
+  candidate_count: number
+  metric_keys: string[]
+  validation_images: number
+}
+
+/** 一个 EvalSession（一次完整评估）。一次评估 = 一个 Session = 一个后台作业（#465）。
+ *  历史 Session 全部保留，评估页默认显示最新那次。 */
+export interface EvalSessionInfo {
   id: number
-  kind: 'eval_samples' | 'eval_clip' | 'eval_dino' | string
-  status: string
-  run_id?: string | null
-  checkpoint_path?: string | null
+  task_id: number | null
+  parent_task_id: number | null
+  project_id: number | null
+  version_id: number | null
+  trigger: string
+  status: 'pending' | 'running' | 'done' | 'partial' | 'failed' | 'canceled' | string
+  /** 当前阶段：generate / metric:<runner> / aggregate；跑完为 null */
+  stage: string | null
+  created_at: number
+  started_at: number | null
+  finished_at: number | null
+  error: string | null
+  plan?: Record<string, unknown>
+}
+
+/** 出图矩阵：X = 候选（baseline 在最前），Y = 验证图 / prompt。
+ *  cells 的 key 是 `<candidate_id>:<row index>`。 */
+export interface EvalSampleGrid {
+  session_id: number
+  columns: Array<{
+    candidate_id: number
+    role: 'checkpoint' | 'baseline' | string
+    label: string
+    checkpoint_path: string | null
+    epoch: number | null
+    step: number | null
+    status: string
+    run_id: string | null
+  }>
+  rows: Array<{
+    index: number
+    image: string | null
+    folder: string | null
+    prompt: string
+  }>
+  cells: Record<string, { run_id: string; filename: string; status: string }>
+}
+
+/** 一次评估的规模预估。Session 模型下永远只有 1 个 task，成本用出图数 + 阶段数表达。 */
+export interface EvalScale {
+  checkpoints_total: number
+  checkpoints_selected: number
+  /** 「评一个跳几个」；null = 手动显式选择，不走采样 */
+  skip_count: number | null
+  /** 被测对象数 = 选中 checkpoint 数 + baseline 一份 */
+  candidates: number
+  validation_images: number
+  metric_runners: string[]
+  metric_keys: string[]
+  /** baseline 对照的配置开关（与本次选了几个 checkpoint 无关） */
+  baseline_enabled: boolean
+  baseline: boolean
+  images: number
+  /** 1 个出图阶段 + 每个指标 runner 一个阶段，全在同一个 task 里顺序跑 */
+  stages: number
+  /** 恒为 1 —— 一次评估一个作业（#465） */
+  tasks: number
 }
 
 export interface EvalMetricsListResponse {
   metric_specs: EvalMetricSpec[]
+  /** 本次结果属于哪个 Session；null = 读的是 0.21 及以前的存量文件结果 */
+  session?: EvalSessionInfo | null
+  /** true = 存量回落（该 version 还没有任何 Session） */
+  legacy?: boolean
   cache: {
     embeddings_dir: string
     entries: Array<{ key: string; path: string; file_count: number; size_bytes: number }>
@@ -1567,10 +1631,12 @@ export interface XformersInstallResult {
 export type TaskStatus =
   'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused' | 'scheduled'
 
-/** tasks.task_type 的合法值。R-3 台账合并起含九类数据作业 kind。
- *  档位：exclusive = train/reg_ai/generate/eval_samples；light = 其余；io = download。 */
+/** tasks.task_type 的合法值。R-3 台账合并起含数据作业 kind。
+ *  档位：exclusive = train/reg_ai/generate/eval_session；light = 其余；io = download。
+ *  eval_samples/eval_clip/... 是上一代 eval 的 per-checkpoint 子作业 kind，只出现在
+ *  存量历史行上（新模型只产生 eval_session，见 #465）。 */
 export type TaskType =
-  | 'train' | 'reg_ai' | 'generate'
+  | 'train' | 'reg_ai' | 'generate' | 'eval_session'
   | 'download' | 'preprocess' | 'tag' | 'reg_build'
   | 'eval_samples' | 'eval_clip' | 'eval_dino' | 'eval_tag' | 'eval_ccip'
 
@@ -3100,24 +3166,60 @@ export const api = {
     ),
   sampleImageUrl: (filename: string, taskId: number, w?: number) =>
     `/samples/${filename}?task_id=${taskId}${w ? `&w=${w}` : ''}`,
-  listEvalMetrics: (pid: number, vid: number, taskId?: number) =>
+  listEvalMetrics: (pid: number, vid: number, taskId?: number, sessionId?: number) =>
     req<EvalMetricsListResponse>(
       `/api/projects/${pid}/versions/${vid}/eval/metrics?` +
       (taskId ? `task_id=${taskId}&` : '') +
+      (sessionId ? `session_id=${sessionId}&` : '') +
       `_=${Date.now()}`,
     ),
-  /** 列某 task 的训练后/手动评估 job（按 run_id 关联 checkpoint 行 + 取原始日志）。 */
-  listTaskEvalJobs: (pid: number, vid: number, taskId: number) =>
-    req<{ jobs: EvalJobInfo[] }>(
-      `/api/projects/${pid}/versions/${vid}/eval/jobs?task_id=${taskId}`,
+  /** 列某 task / version 的评估 Session（最新在前）—— 历史切换用。 */
+  listEvalSessions: (pid: number, vid: number, taskId?: number) =>
+    req<{ sessions: EvalSessionSummary[] }>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions` +
+      (taskId ? `?task_id=${taskId}` : ''),
     ),
-  /** 手动评估完成任务的选定 checkpoint（task-scoped，绕过自动评估开关）。 */
+  /** 出图的 checkpoint × prompt 矩阵（复用测试页 XY 网格做肉眼对比）。 */
+  getEvalSessionGrid: (pid: number, vid: number, sid: number) =>
+    req<EvalSampleGrid>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}/grid?_=${Date.now()}`,
+    ),
+  /** eval 出图的单张 URL（session 作用域）。 */
+  evalSampleImageUrl: (pid: number, vid: number, sid: number, runId: string, filename: string) =>
+    `/api/projects/${pid}/versions/${vid}/eval/samples/${encodeURIComponent(runId)}`
+    + `/images/${encodeURIComponent(filename)}?session_id=${sid}`,
+  /** 中断一次评估（已算出的结果保留）。 */
+  cancelEvalSession: (pid: number, vid: number, sid: number) =>
+    req<{ canceled: number; task_id: number | null }>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}/cancel`,
+      { method: 'POST' },
+    ),
+  /** 重跑一次失败 / 被中断的评估：断点续跑，只补没跑完的候选和指标。 */
+  retryEvalSession: (pid: number, vid: number, sid: number) =>
+    req<{ session: EvalSessionInfo }>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}/retry`,
+      { method: 'POST' },
+    ),
+  /** 删一次评估的记录和产物（checkpoint 是引用，不受影响）。 */
+  deleteEvalSession: (pid: number, vid: number, sid: number) =>
+    req<{ deleted: number }>(
+      `/api/projects/${pid}/versions/${vid}/eval/sessions/${sid}`,
+      { method: 'DELETE' },
+    ),
+  /** 评估规模预估：出图数 / 阶段数。`selected` 省略则按 version 的 checkpoint 策略算。 */
+  getEvalScale: (pid: number, vid: number, selected?: number) =>
+    req<EvalScale>(
+      `/api/projects/${pid}/versions/${vid}/eval/scale` +
+      (selected != null ? `?selected=${selected}` : ''),
+    ),
+  /** 手动评估选定 checkpoint —— 建**一个** EvalSession（#465），上一轮历史保留。 */
   runTaskEval: (
     pid: number,
     vid: number,
-    body: { task_id: number; checkpoints: string[] },
+    // task_id 只作溯源（训练页发起时带上）；省略 = 版本级评估，Session 无 parent task
+    body: { task_id?: number; checkpoints: string[] },
   ) =>
-    req<{ queued: number }>(
+    req<{ session: EvalSessionInfo }>(
       `/api/projects/${pid}/versions/${vid}/eval/run`,
       { method: 'POST', body: JSON.stringify(body) },
     ),

@@ -29,6 +29,7 @@ import { TranslatedTag } from '../../components/tagDisplay/TranslatedTag'
 import ImageGrid, { type ImageGridItem } from '../../components/ImageGrid'
 import ImagePreviewModal from '../../components/ImagePreviewModal'
 import { OutputsTab } from '../QueueDetail'
+import EvalJobsPanel from './EvalJobsPanel'
 import { arBucket } from '../../lib/aspectRatio'
 import { compareImageName } from '../../lib/imageSort'
 import { computePixelHist } from '../../lib/pixelBins'
@@ -36,7 +37,7 @@ import { useProjectCtx } from '../../context/ProjectContext'
 import { useEventStream } from '../../lib/useEventStream'
 import { useToast } from '../../components/Toast'
 
-type OverviewTab = 'details' | 'tasks' | 'output'
+type OverviewTab = 'details' | 'tasks' | 'output' | 'eval'
 
 interface Ctx {
   project: ProjectDetail
@@ -1251,13 +1252,26 @@ export default function ProjectOverview() {
     } catch { /* ignore */ }
     return project.active_version_id ?? activeVersion?.id ?? null
   })
+  // 深链参数：`?tab=eval` 直接落到评估列表。与 `?version=` 同款一次性语义 ——
+  // 读完就从地址栏抹掉，避免刷新时覆盖用户后续在页面上切的 tab。
+  const [deepLink] = useState<{ tab: OverviewTab | null }>(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const tab = sp.get('tab')
+      return {
+        tab: (['details', 'tasks', 'output', 'eval'] as const).includes(tab as OverviewTab)
+          ? (tab as OverviewTab) : null,
+      }
+    } catch { return { tab: null } }
+  })
   useEffect(() => {
     try {
       const url = new URL(window.location.href)
-      if (url.searchParams.has('version')) {
-        url.searchParams.delete('version')
-        window.history.replaceState({}, '', url.toString())
+      let dirty = false
+      for (const key of ['version', 'tab']) {
+        if (url.searchParams.has(key)) { url.searchParams.delete(key); dirty = true }
       }
+      if (dirty) window.history.replaceState({}, '', url.toString())
     } catch { /* ignore */ }
   }, [])
   useEffect(() => {
@@ -1314,7 +1328,7 @@ export default function ProjectOverview() {
     if (latestReloadTimer.current) window.clearTimeout(latestReloadTimer.current)
   }, [])
 
-  const [activeTab, setActiveTab] = useState<OverviewTab>('details')
+  const [activeTab, setActiveTab] = useState<OverviewTab>(deepLink.tab ?? 'details')
 
   const tabBtnCls = (tab: OverviewTab) => [
     'px-4 py-2 text-sm border-none bg-transparent cursor-pointer border-b-2 transition-colors',
@@ -1368,6 +1382,12 @@ export default function ProjectOverview() {
           <button className={tabBtnCls('output')} onClick={() => setActiveTab('output')}>
             {t('overview.tabOutput')}
           </button>
+          {/* 评估的对象是 output/ 里的那些 LoRA 文件，所以紧挨着「LoRA 文件」。
+              它不是流水线 phase —— 训练完随时能跑、能跑很多次，没有「做完往下走」
+              的语义，所以不进 sidebar 的编号步骤。 */}
+          <button className={tabBtnCls('eval')} onClick={() => setActiveTab('eval')}>
+            {t('overview.tabEval')}
+          </button>
         </div>
       </div>
 
@@ -1386,6 +1406,9 @@ export default function ProjectOverview() {
         <div className="flex-1 min-h-0 overflow-y-auto">
           <VersionOutputPanel version={selectedVersion} latestTask={latestTask} />
         </div>
+      )}
+      {activeTab === 'eval' && (
+        <EvalJobsPanel pid={project.id} vid={selectedVid} />
       )}
     </div>
   )

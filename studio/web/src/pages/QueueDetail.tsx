@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
-  type EvalJobInfo,
+  type EvalSessionSummary,
   type Task,
   type TaskOutputs,
   type TaskStatus,
@@ -14,19 +14,28 @@ import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useTaskEvalProgress } from '../lib/useEvalProgress'
-import MonitorDashboard, { EvalMetricsPanel } from '../components/MonitorDashboard'
+import MonitorDashboard from '../components/MonitorDashboard'
+import { EvalMetricsPanel } from '../components/EvalMetricsPanel'
+import EvalSampleGrid from '../components/EvalSampleGrid'
 import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../components/TaskLogDrawer'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { taskKind } from './Queue'
 import { fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
 
-type Tab = 'overview' | 'log' | 'monitor' | 'eval' | 'outputs' | 'snapshot'
+type Tab = 'overview' | 'log' | 'monitor' | 'metrics' | 'samples' | 'outputs' | 'snapshot'
+
+/** eval_session 作业的 params 里带着它跑的那个 Session id（create_session 写入），
+ *  用来把「查看结果」深链钉到具体那一次，而不是落到该 version 最新一次。 */
+function evalSessionIdOf(task: Task): number | null {
+  const raw = task.params_decoded?.session_id
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+}
 
 // 0.17 P-H：QueueDetail 按 task_type 差异化。train 保留全部 tab；reg_ai/generate 是
 // 推理/出图循环，无训练 monitor/eval/snapshot，只留 overview + log，结果靠 header 的
 // 「查看结果」深链跳原生页。
 const VISIBLE_TABS_BY_TYPE: Record<TaskType, readonly Tab[]> = {
-  train: ['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'],
+  train: ['overview', 'log', 'monitor', 'metrics', 'samples', 'outputs', 'snapshot'],
   reg_ai: ['overview', 'log'],
   generate: ['overview', 'log'],
   // R-5 台账合并：数据作业类 task 走 D5 轻方案（概览 + 日志，结果靠跳转深链）
@@ -34,11 +43,21 @@ const VISIBLE_TABS_BY_TYPE: Record<TaskType, readonly Tab[]> = {
   preprocess: ['overview', 'log'],
   tag: ['overview', 'log'],
   reg_build: ['overview', 'log'],
+  // 评估作业的结果就在它自己的详情页：指标 + 样图两个 tab（#465）
+  eval_session: ['overview', 'metrics', 'samples', 'log'],
   eval_samples: ['overview', 'log'],
   eval_clip: ['overview', 'log'],
   eval_dino: ['overview', 'log'],
   eval_tag: ['overview', 'log'],
   eval_ccip: ['overview', 'log'],
+}
+
+/** 可见 tab = 按 task_type 的基线，再按「有没有评估过」收掉指标 / 样图。
+ *  `hasEval === null`（还没查出来 / 评估作业自己）时不收，避免刷新期抖动。 */
+function visibleTabsFor(task: Task | null, hasEval: boolean | null): readonly Tab[] {
+  const base = VISIBLE_TABS_BY_TYPE[task ? taskKind(task) : 'train']
+  if (hasEval !== false) return base
+  return base.filter((tb) => tb !== 'metrics' && tb !== 'samples')
 }
 
 const STATUS_BADGE: Record<TaskStatus, string> = {
@@ -120,7 +139,7 @@ export default function QueueDetailPage() {
   const [tab, setTab] = useState<Tab>(() => {
     if (typeof window === 'undefined') return 'overview'
     const v = window.location.hash.replace(/^#/, '')
-    return (['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
+    return (['overview', 'log', 'monitor', 'metrics', 'samples', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pauseModalOpen, setPauseModalOpen] = useState(false)
@@ -139,17 +158,34 @@ export default function QueueDetailPage() {
   // 写回不会更新 router state，所以两条 effect 不会 ping-pong。
   useEffect(() => {
     const v = location.hash.replace(/^#/, '')
-    if ((['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'] as const).includes(v as Tab)) {
+    if ((['overview', 'log', 'monitor', 'metrics', 'samples', 'outputs', 'snapshot'] as const).includes(v as Tab)) {
       setTab((prev) => (prev === v ? prev : (v as Tab)))
     }
   }, [location.hash])
 
+  // 这次训练有没有评估 —— 没开「训练后指标评估」也没手动发起过时，指标 / 样图两个
+  // tab 全程是空的，直接不显示。判据用「本 task 名下有没有 EvalSession」而不是读
+  // 配置开关：配置是**当前**的，可能训练跑完之后又被改过；有没有真的评估过才是事实。
+  // null = 还没查出来，此时不收敛 tab（否则会把正停在指标 tab 的用户踢回概览）。
+  const [taskHasEval, setTaskHasEval] = useState<boolean | null>(null)
+  useEffect(() => {
+    const pid = task?.project_id
+    const vid = task?.version_id
+    if (!task || task.task_type === 'eval_session') { setTaskHasEval(null); return }
+    if (!pid || !vid) { setTaskHasEval(false); return }
+    let alive = true
+    void api.listEvalSessions(pid, vid, task.id)
+      .then(({ sessions }) => { if (alive) setTaskHasEval(sessions.length > 0) })
+      .catch(() => { if (alive) setTaskHasEval(false) })
+    return () => { alive = false }
+  }, [task])
+
   // P-H：task 加载后若当前 tab 因类型收敛而不可见（如带 #monitor 进 generate 详情），
   // 回落 overview。放在早退之前，和其它 hash effect 一起（rules-of-hooks）。
   useEffect(() => {
-    const vt = VISIBLE_TABS_BY_TYPE[task ? taskKind(task) : 'train']
+    const vt = visibleTabsFor(task, taskHasEval)
     if (!vt.includes(tab)) setTab('overview')
-  }, [task, tab])
+  }, [task, tab, taskHasEval])
 
   // reload 串行号：SSE 事件密集时多个 getTask 并发在飞，HTTP 响应可能乱序回来。
   // 只让「最后发起」的那次写 state，避免旧快照覆盖新状态（典型故障：恢复后
@@ -291,14 +327,18 @@ export default function QueueDetailPage() {
     scheduled: t('status.scheduled'),
   }
 
+  // 评估作业钉死看自己那一次；训练作业不钉（面板在它名下的历史里选）。
+  const evalSessionId = task ? evalSessionIdOf(task) : null
+
   // 按 task_type 过滤可见 tab（task 未加载时先按 train 给全量，加载后收敛）。
   const kind = task ? taskKind(task) : 'train'
-  const visibleTabs = VISIBLE_TABS_BY_TYPE[kind]
+  const visibleTabs = visibleTabsFor(task, taskHasEval)
   const allTabs: Array<{ key: Tab; label: string }> = [
     { key: 'overview', label: t('queueDetail.tabOverview') },
     { key: 'log',      label: t('queueDetail.tabLogs') },
     { key: 'monitor',  label: t('queueDetail.tabMonitor') },
-    { key: 'eval',     label: t('queueDetail.tabEval') },
+    { key: 'metrics',  label: t('queueDetail.tabEval') },
+    { key: 'samples',  label: t('queueDetail.tabSamples') },
     { key: 'outputs',  label: t('queueDetail.tabOutputs') },
     { key: 'snapshot', label: t('queueDetail.tabSnapshot') },
   ]
@@ -350,9 +390,9 @@ export default function QueueDetailPage() {
             >{t('queueDetail.viewInReg')}</button>
           )}
           {/* R-5：数据作业类 task 跳原生步骤页（download→项目下载页、tag→打标页…） */}
-          {task && jobJumpPath(task) && (
+          {task && jobJumpPath(task, evalSessionIdOf(task)) && (
             <button
-              onClick={() => navigate(jobJumpPath(task)!)}
+              onClick={() => navigate(jobJumpPath(task, evalSessionIdOf(task))!)}
               className="btn btn-secondary btn-sm"
               data-testid="detail-view-job-source"
             >{t('queue.jobs.jump')} →</button>
@@ -448,7 +488,7 @@ export default function QueueDetailPage() {
       </nav>
 
       {/* Tab body */}
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
         {tab === 'overview' && task && <OverviewTab task={task} />}
         {tab === 'overview' && !task && (
           <div className="p-6 text-center text-fg-tertiary text-sm">
@@ -457,7 +497,12 @@ export default function QueueDetailPage() {
         )}
         {tab === 'log' && <LogTab taskId={taskId} />}
         {tab === 'monitor' && <MonitorTab taskId={taskId} />}
-        {tab === 'eval' && <EvalTab taskId={taskId} />}
+        {tab === 'metrics' && task && (
+          <EvalMetricsTab task={task} sessionId={evalSessionId} />
+        )}
+        {tab === 'samples' && task && (
+          <EvalSamplesTab task={task} sessionId={evalSessionId} />
+        )}
         {tab === 'outputs' && <OutputsTab taskId={taskId} />}
         {tab === 'snapshot' && <SnapshotConfigTab task={task} />}
       </div>
@@ -498,8 +543,29 @@ export default function QueueDetailPage() {
 
 // ── OverviewTab ─────────────────────────────────────────────────────────────
 
+/** 评估作业对应 Session 的 parent_task_id（触发它的那次训练）。
+ *  task.params 里只有 session_id，所以按 version 列一遍再认领本条。 */
+function useEvalParentTaskId(task: Task): number | null {
+  const sid = evalSessionIdOf(task)
+  const pid = task.project_id
+  const vid = task.version_id
+  const [parent, setParent] = useState<number | null>(null)
+  useEffect(() => {
+    if (task.task_type !== 'eval_session' || !sid || !pid || !vid) { setParent(null); return }
+    let alive = true
+    void api.listEvalSessions(pid, vid)
+      .then(({ sessions }) => {
+        if (alive) setParent(sessions.find((x) => x.id === sid)?.parent_task_id ?? null)
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [task.task_type, sid, pid, vid])
+  return parent
+}
+
 function OverviewTab({ task }: { task: Task }) {
   const { t } = useTranslation()
+  const evalParentTaskId = useEvalParentTaskId(task)
   const statusLabel: Record<string, string> = {
     pending: t('status.pending'), running: t('status.running'), done: t('status.done'),
     failed: t('status.failed'), canceled: t('status.canceled'), paused: t('status.paused'),
@@ -531,6 +597,18 @@ function OverviewTab({ task }: { task: Task }) {
           className="text-accent font-mono text-sm"
         >{t('queueDetail.sourceLink', { projectId: task.project_id, versionId: task.version_id })}</Link>
       ) : '—',
+    })
+  }
+  // 评估作业：parent_task_id 是**溯源**（哪次训练结束后自动触发的），不是归属 ——
+  // 手动发起的评估没有它，显示 n/a 而不是藏起来，免得用户以为漏了信息。
+  if (task.task_type === 'eval_session') {
+    items.push({
+      label: '关联训练',
+      value: evalParentTaskId != null ? (
+        <Link to={`/queue/${evalParentTaskId}`} className="text-accent font-mono text-sm">
+          #{evalParentTaskId}
+        </Link>
+      ) : <span className="text-fg-tertiary font-mono">n/a</span>,
     })
   }
   if (task.config_path) {
@@ -643,8 +721,9 @@ function MonitorTab({ taskId }: { taskId: number }) {
 
 // ── EvalTab ─────────────────────────────────────────────────────────────────
 
-// 评估日志：把该 task 所有评估 job（出图 + 各指标）的原始日志按时间（job id）拼成
-// 一条流，喂给统一的 TaskLogDrawer（全 app 一致的底部抽屉）。不按 checkpoint 分。
+// 评估日志：一次评估 = 一个 EvalSession = 一个作业（#465），所以直接读那个作业的
+// run.log，喂给统一的 TaskLogDrawer。以前一次评估散成几百个子作业，这里要先拉作业列表
+// 再逐个取日志拼起来；现在一个 getLog 就够。
 function useEvalLogSource(
   pid: number | undefined,
   vid: number | undefined,
@@ -652,121 +731,142 @@ function useEvalLogSource(
 ): LogSource | null {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const [jobs, setJobs] = useState<EvalJobInfo[]>([])
-  const [buffers, setBuffers] = useState<Record<number, string>>({})
-  const buffersRef = useRef<Record<number, string>>({})
+  const [session, setSession] = useState<EvalSessionSummary | null>(null)
+  const [baseLines, setBaseLines] = useState<string[]>([])
+  const [liveLines, setLiveLines] = useState<string[]>([])
   const [retrying, setRetrying] = useState(false)
 
-  const loadJobs = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!pid || !vid || !taskId) return
     try {
-      // 后端只返回 run 仍存在的 job（重跑会清掉上一轮 run），所以这里拿到的天然只有
-      // 这次的 job —— 不需要前端再按状态过滤。
-      const r = await api.listTaskEvalJobs(pid, vid, taskId)
-      setJobs(r.jobs)
+      // 最新一次评估（历史全部保留，日志只看当前这次）
+      const { sessions } = await api.listEvalSessions(pid, vid, taskId)
+      const latest = sessions[0] ?? null
+      setSession(latest)
+      if (!latest?.task_id) { setBaseLines([]); return }
+      const log = await api.getLog(latest.task_id)
+      setBaseLines((log.content || '').split('\n'))
+      setLiveLines([])  // 已并进 base，避免与 SSE 追加的重复
     } catch {
       // 辅助信息，拉失败不打扰
     }
   }, [pid, vid, taskId])
 
-  // 评估 tab 挂载期间稳定轮询：清空 + 重跑后新 job 是从无到有，靠它发现（之前只在
-  // 已有 job 活跃时轮询，清空后 job 全 canceled → 不轮询 → 重跑的新 job 看不到）。
+  // 评估 tab 挂载期间稳定轮询：重跑会建一个**新** Session，靠它发现。
   useEffect(() => {
-    void loadJobs()
-    const id = window.setInterval(() => void loadJobs(), 5000)
+    void load()
+    const id = window.setInterval(() => void load(), 5000)
     return () => window.clearInterval(id)
-  }, [loadJobs])
+  }, [load])
 
-  // 每个 job 的日志 hydrate 一次
-  const jobIds = jobs.map((j) => j.id).join(',')
-  useEffect(() => {
-    let alive = true
-    for (const j of jobs) {
-      if (buffersRef.current[j.id] === undefined) {
-        buffersRef.current[j.id] = ''
-        // R-5：eval 作业与任务同台账，日志走统一 /api/logs/{id}
-        void api.getLog(j.id).then((r) => {
-          if (!alive) return
-          buffersRef.current[j.id] = r.content || ''
-          setBuffers({ ...buffersRef.current })
-        }).catch(() => {})
-      }
-    }
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobIds])
-
-  // 实时续流
+  // 实时续流：本 Session 作业的增量往尾部追（下一次 load 会并进 base）
+  const evalTaskId = session?.task_id ?? null
   useEventStream((evt) => {
-    if (
-      evt.type === 'job_log_appended'
-      && typeof evt.job_id === 'number'
-      && jobs.some((j) => j.id === evt.job_id)
-    ) {
-      const id = evt.job_id
-      const text = typeof evt.text === 'string' ? evt.text : ''
-      const prev = buffersRef.current[id] ?? ''
-      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
-      buffersRef.current[id] = prev + sep + text + '\n'
-      setBuffers({ ...buffersRef.current })
-    }
+    const isMine =
+      (evt.type === 'job_log_appended' && evt.job_id === evalTaskId)
+      || (evt.type === 'task_log_appended' && evt.task_id === evalTaskId)
+    if (!isMine || evalTaskId == null) return
+    const text = typeof evt.text === 'string' ? evt.text : ''
+    if (text) setLiveLines((prev) => [...prev, ...text.split('\n')])
   })
 
   return useMemo(() => {
-    if (jobs.length === 0) return null
-    const ordered = [...jobs].sort((a, b) => a.id - b.id)
-    const lines: string[] = []
-    for (const j of ordered) {
-      const buf = buffers[j.id]
-      if (!buf) continue
-      const ls = buf.split('\n')
-      if (ls.length && ls[ls.length - 1] === '') ls.pop()
-      lines.push(...ls)
-    }
+    if (!session) return null
+    const lines = [...baseLines, ...liveLines]
     const status: LogSourceStatus =
-      jobs.some((j) => j.status === 'running') ? 'running'
-        : jobs.some((j) => j.status === 'pending') ? 'pending'
-          : jobs.some((j) => j.status === 'failed') ? 'failed'
+      session.status === 'running' ? 'running'
+        : session.status === 'pending' ? 'pending'
+          : session.status === 'failed' ? 'failed'
             : 'done'
-    // 中断：取消该 task 全部未完成的评估 job（异步 SIGTERM）。区别于「清空」——
-    // 不删已算出的结果，只停后续 job。drawer 在 live 时把它显示成 header 右侧取消按钮。
-    const active = jobs.filter(
-      (j) => j.status !== 'done' && j.status !== 'failed' && j.status !== 'canceled',
-    )
-    const onCancel = active.length
+    // 中断：取消 Session 的作业（异步 SIGTERM）。已算出的候选结果留在库里，不回滚。
+    const active = session.status === 'pending' || session.status === 'running'
+    const onCancel = active && pid && vid
       ? () => {
-          active.forEach((j) => void api.cancelJob(j.id).catch(() => {}))
-          void loadJobs()
+          void api.cancelEvalSession(pid, vid, session.id).catch(() => {})
+          void load()
         }
       : undefined
-    // 重试：整体 failed 时对本轮同一批 checkpoint 完全重跑（后端 /eval/run 会
-    // 先清空上一轮 run 再排队 + 自动补 baseline），不做失败项增量。checkpoint
-    // 从本轮 job params 收集（baseline job 复用首个 checkpoint 路径，去重即可）。
-    const ckpts = [...new Set(
-      jobs.map((j) => j.checkpoint_path).filter((p): p is string => !!p),
-    )]
-    const onRetry = status === 'failed' && !retrying && pid && vid && ckpts.length
+    // 重试：重新入队**同一个** Session，走 worker 的断点续跑 —— 已出完图的候选跳过
+    // 出图、已算完的指标跳过重算，所以「跑到第 180 个 checkpoint 才崩」补的只是剩下
+    // 那些。以前这里是按同一批 checkpoint 另建一个 Session，等于整轮重来。
+    const retriable = ['failed', 'canceled', 'partial'].includes(session.status)
+    const onRetry = retriable && !retrying && pid && vid
       ? () => {
           setRetrying(true)
-          api.runTaskEval(pid, vid, { task_id: taskId, checkpoints: ckpts })
-            .then(() => { toast(t('queueDetail.evalRetryQueued'), 'success'); return loadJobs() })
+          void api.retryEvalSession(pid, vid, session.id)
+            .then(() => { toast(t('queueDetail.evalRetryQueued'), 'success'); return load() })
             .catch((e) => toast(String(e), 'error'))
             .finally(() => setRetrying(false))
         }
       : undefined
     return { key: `eval-${taskId}`, label: '评估', status, lines, onCancel, onRetry }
-  }, [jobs, buffers, taskId, loadJobs, retrying, pid, vid, t, toast])
+  }, [session, baseLines, liveLines, taskId, load, retrying, pid, vid, t, toast])
 }
 
-function EvalTab({ taskId }: { taskId: number }) {
-  const { state, connected } = useMonitorProgress(taskId)
-  const evalLog = useEvalLogSource(state?.project_id, state?.version_id, taskId)
+/** 指标 / 样图两个 tab 共用的上下文：看的是哪个 project/version、哪一次评估。
+ *
+ *  - eval_session 作业：钉死自己那一次（params.session_id），taskId 不参与过滤
+ *  - train 作业：看这次训练名下的评估，`sessionId` 由面板自己选最新那次
+ */
+function useEvalContext(task: Task, sessionId: number | null) {
+  const isEvalJob = task.task_type === 'eval_session'
+  return {
+    pid: task.project_id ?? undefined,
+    vid: task.version_id ?? undefined,
+    // 评估作业自己那条不该按 parent_task_id 过滤（那是触发它的训练 task）
+    taskId: isEvalJob ? undefined : task.id,
+    sessionId: isEvalJob ? sessionId : undefined,
+  }
+}
+
+function EvalMetricsTab({ task, sessionId }: { task: Task; sessionId: number | null }) {
+  const ctx = useEvalContext(task, sessionId)
+  const { connected } = useMonitorProgress(task.task_type === 'eval_session' ? -1 : task.id)
+  const evalLog = useEvalLogSource(ctx.pid, ctx.vid, task.id)
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
       <div className="flex-1 min-h-0 overflow-auto p-4">
-        <EvalMetricsPanel state={state} connected={connected} taskId={taskId} />
+        <EvalMetricsPanel
+          pid={ctx.pid} vid={ctx.vid} taskId={ctx.taskId}
+          sessionId={ctx.sessionId} connected={connected}
+        />
       </div>
       <TaskLogDrawer sources={[evalLog]} />
+    </div>
+  )
+}
+
+function EvalSamplesTab({ task, sessionId }: { task: Task; sessionId: number | null }) {
+  const ctx = useEvalContext(task, sessionId)
+  // 训练作业没钉 session（它名下可能有好几次评估）→ 取最新那次的样图
+  const [latest, setLatest] = useState<number | null>(null)
+  useEffect(() => {
+    if (ctx.sessionId != null || !ctx.pid || !ctx.vid) return
+    let alive = true
+    void api.listEvalSessions(ctx.pid, ctx.vid, ctx.taskId)
+      .then(({ sessions }) => { if (alive) setLatest(sessions[0]?.id ?? null) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [ctx.sessionId, ctx.pid, ctx.vid, ctx.taskId])
+
+  const sid = ctx.sessionId ?? latest
+  if (!ctx.pid || !ctx.vid) {
+    return (
+      <div className="p-4 text-sm text-fg-tertiary">
+        该作业未绑定项目版本，没有样图可看。
+      </div>
+    )
+  }
+  if (sid == null) {
+    return (
+      <div className="p-4 text-sm text-fg-tertiary">
+        还没有评估出图（存量的老评估结果没有候选矩阵，拼不出样图对比）。
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col flex-1 min-h-0 min-w-0 p-4">
+      <EvalSampleGrid pid={ctx.pid} vid={ctx.vid} sessionId={sid} />
     </div>
   )
 }
