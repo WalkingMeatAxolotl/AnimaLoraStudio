@@ -290,3 +290,73 @@ def test_missing_image_bytes_is_an_error_not_a_silent_skip(isolated) -> None:
     ) as generate:
         with pytest.raises(eval_generation.EvalGenerationError, match="cache_images"):
             generate(run, vdir, lambda _l: None)
+
+
+# ---------------------------------------------------------------------------
+# 族条件旋钮不能跨族污染
+# ---------------------------------------------------------------------------
+
+def _set_generate_settings(monkeypatch: pytest.MonkeyPatch, **values: Any) -> None:
+    class _Gen:
+        pass
+
+    gen = _Gen()
+    for k, v in values.items():
+        setattr(gen, k, v)
+
+    class _Secrets:
+        generate = gen
+
+    monkeypatch.setattr(secrets, "load", lambda: _Secrets())
+
+
+def test_block_swap_is_dropped_for_families_without_the_capability(
+    isolated, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回归：全局出图设置里的 blocks_to_swap 是为 krea2 调的，anima 不支持。
+
+    测试出图跑的是用户在那儿选的模型，评估跑的是这个 version 训练时那个底模 ——
+    两者的族可以不同。原样透传会让 daemon fail-fast（`model_family='anima' 不支持
+    block swap`），整个出图阶段每个候选都崩，最后 8 个候选全 failed。
+    """
+    _, _, vdir, run = _run_for(isolated)
+    _set_generate_settings(monkeypatch, blocks_to_swap=14, vram_policy="save_vram")
+
+    cfg = eval_generation.build_daemon_config(run, vdir, output_dir=vdir / "out")
+
+    assert cfg["model_family"] == "anima"
+    assert cfg["blocks_to_swap"] == 0
+    # 非族条件的旋钮照常继承
+    assert cfg["vram_policy"] == "save_vram"
+
+
+def test_block_swap_survives_for_a_family_that_supports_it(
+    isolated, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """门控只砍不支持的族 —— krea2 项目仍该拿到用户调好的层数。"""
+    import json
+
+    _, _, vdir, run = _run_for(isolated)
+    cfg_path = vdir / "config.json"
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw["model_family"] = "krea2"
+    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
+    _set_generate_settings(monkeypatch, blocks_to_swap=14)
+
+    cfg = eval_generation.build_daemon_config(run, vdir, output_dir=vdir / "out")
+    assert cfg["blocks_to_swap"] == 14
+
+
+def test_unreadable_settings_fall_back_to_safe_defaults(
+    isolated, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """设置文件坏了不该让评估跑不起来 —— 给保守默认（含 block swap 关闭）。"""
+    def _boom():
+        raise RuntimeError("secrets.json 损坏")
+
+    monkeypatch.setattr(secrets, "load", _boom)
+    _, _, vdir, run = _run_for(isolated)
+
+    cfg = eval_generation.build_daemon_config(run, vdir, output_dir=vdir / "out")
+    assert cfg["blocks_to_swap"] == 0
+    assert cfg["vram_policy"] == "auto"

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from studio import secrets
+from studio.domain.common import FAMILY_CAPABILITIES
 from studio.services import version_config
 from studio.services.inference.daemon import InferenceDaemon
 
@@ -45,15 +46,26 @@ class EvalGenerationError(RuntimeError):
     pass
 
 
-def _generate_settings() -> dict[str, Any]:
+_FALLBACK_SETTINGS: dict[str, Any] = {
+    "vae_precision": "bf16", "lora_merge_precision": "fp32",
+    "vram_policy": "auto", "ram_guard": True, "blocks_to_swap": 0,
+}
+
+
+def _generate_settings(family_id: str) -> dict[str, Any]:
     """daemon 运行时旋钮（显存策略 / 精度 / block swap）取全局出图设置。
 
-    这些是「怎么跑」而不是「跑什么」—— 评估该和测试出图用同一套，用户在设置里
-    调完对两边同时生效。读失败给保守默认，不让评估因为设置文件坏了跑不起来。
+    这些是「怎么跑」而不是「跑什么」，评估和测试出图共用一套 —— 但**族条件的能力
+    必须门控**：测试出图跑的是用户在那儿选的模型，评估跑的是这个 version 训练时
+    那个底模，两者的族可以不同。`blocks_to_swap` 只有 krea2 有
+    （`FAMILY_CAPABILITIES`），把为 krea2 调的层数原样喂给 anima，daemon 会
+    fail-fast 直接崩掉整个出图阶段。
+
+    读失败给保守默认，不让评估因为设置文件坏了跑不起来。
     """
     try:
         gen = secrets.load().generate
-        return {
+        settings = {
             "vae_precision": str(getattr(gen, "vae_precision", "bf16") or "bf16"),
             "lora_merge_precision": str(
                 getattr(gen, "lora_merge_precision", "fp32") or "fp32"
@@ -64,10 +76,17 @@ def _generate_settings() -> dict[str, Any]:
         }
     except Exception:
         logger.warning("读取出图设置失败，评估出图用保守默认", exc_info=True)
-        return {
-            "vae_precision": "bf16", "lora_merge_precision": "fp32",
-            "vram_policy": "auto", "ram_guard": True, "blocks_to_swap": 0,
-        }
+        return dict(_FALLBACK_SETTINGS)
+
+    if settings["blocks_to_swap"] and "block_swap" not in FAMILY_CAPABILITIES.get(
+        family_id, frozenset()
+    ):
+        logger.info(
+            "model_family=%s 不支持 block swap，评估出图忽略全局设置的 blocks_to_swap=%s",
+            family_id, settings["blocks_to_swap"],
+        )
+        settings["blocks_to_swap"] = 0
+    return settings
 
 
 def build_daemon_config(
@@ -96,8 +115,9 @@ def build_daemon_config(
     lora_scale = float(raw_scale) if raw_scale is not None else 1.0
     checkpoint = version_dir / run["checkpoint"]["path"]
 
+    family_id = str(cfg.get("model_family") or "anima")
     out: dict[str, Any] = {
-        "model_family": str(cfg.get("model_family") or "anima"),
+        "model_family": family_id,
         # 路径原样传，daemon 侧统一 resolve_path_best_effort
         "transformer_path": str(cfg["transformer_path"]),
         "vae_path": str(cfg["vae_path"]),
@@ -133,7 +153,7 @@ def build_daemon_config(
         "attention_backend": str(cfg.get("attention_backend") or "flash_attn"),
         # 评估不需要中间预览（没人盯着看），关掉省 b64 编码和管道带宽
         "preview_every_n_steps": 0,
-        **_generate_settings(),
+        **_generate_settings(family_id),
     }
     return out
 
