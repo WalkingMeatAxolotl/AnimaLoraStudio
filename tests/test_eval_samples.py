@@ -113,34 +113,23 @@ def test_create_and_run_eval_samples_with_fake_generator(isolated) -> None:
     assert (vdir / item["path"]).read_bytes() == b"PNG"
 
 
-def test_default_generator_path_has_no_dead_schema_import(isolated) -> None:
-    """Regression: every other test injects a fake generator, so the real
-    ``generator=None`` path (``_default_generator``) was never exercised and a
-    stale ``from studio.schema import migrate_legacy_attention`` shipped — the
-    symbol was removed in the 0.11.0 schema split, so the default auto-eval /
-    worker path raised ImportError before generating anything.
+def test_run_sample_job_requires_a_generator(isolated) -> None:
+    """出图改走 daemon 后 generator 是必需参数。
 
-    No version config is written here, so the real generator must fail with a
-    *config* error, never an ImportError/NameError on that removed symbol.
+    以前它有个默认实现（`_default_generator`，自己加载底模自己循环），于是
+    「每个候选重载一次底模」是隐式默认。现在生成器的生命周期是一次评估，必须由
+    调用方在候选循环之外持有 —— 给默认值就会退化成每候选起一个 daemon。
     """
     project, version, vdir = _new_project(isolated)
     _seed_validation_and_ckpt(vdir)
-
     run = eval_samples.create_run(
-        project,
-        version,
-        vdir,
-        checkpoint_path="model_step100.safetensors",
-        now=2000.0,
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", now=2000.0,
     )
 
-    with pytest.raises(Exception) as excinfo:  # noqa: PT011 - asserting on message
-        eval_samples.run_sample_job(project, version, vdir, run["run_id"])
-    assert "migrate_legacy_attention" not in str(excinfo.value)
+    with pytest.raises(TypeError):
+        eval_samples.run_sample_job(project, version, vdir, run["run_id"])  # type: ignore[call-arg]
 
-    reloaded = eval_samples.load_run(vdir, run["run_id"])
-    assert reloaded["status"] == "failed"
-    assert "migrate_legacy_attention" not in str(reloaded.get("error") or "")
 
 
 def test_create_run_plans_items_from_validation_set(isolated) -> None:
@@ -365,87 +354,3 @@ def test_run_task_eval_endpoint_validates_task_ownership(client, isolated) -> No
 # ---------------------------------------------------------------------------
 # 模型释放（EvalSession 同进程连续跑多个候选，不释放会显存单调上涨）
 # ---------------------------------------------------------------------------
-
-class _FakeAdapter:
-    def __init__(self, *, boom: bool = False) -> None:
-        self.detached = False
-        self._boom = boom
-
-    def detach(self) -> bool:
-        if self._boom:
-            raise RuntimeError("detach exploded")
-        self.detached = True
-        return True
-
-
-class _FakeCuda:
-    def __init__(self, available: bool = True) -> None:
-        self._available = available
-        self.emptied = 0
-        self.ipc = 0
-
-    def is_available(self) -> bool:
-        return self._available
-
-    def empty_cache(self) -> None:
-        self.emptied += 1
-
-    def ipc_collect(self) -> None:
-        self.ipc += 1
-
-
-class _FakeTorch:
-    def __init__(self, available: bool = True) -> None:
-        self.cuda = _FakeCuda(available)
-
-
-def test_release_detaches_loras_and_empties_cuda_cache() -> None:
-    adapters = [_FakeAdapter(), _FakeAdapter()]
-    torch_ = _FakeTorch()
-    lines: list[str] = []
-
-    eval_samples._release_generation_models(
-        adapters, object(), object(), object(), torch_, lines.append,
-    )
-
-    assert all(a.detached for a in adapters)
-    assert torch_.cuda.emptied == 1
-    assert torch_.cuda.ipc == 1
-    assert any("released base model" in ln for ln in lines)
-
-
-def test_release_survives_detach_failure() -> None:
-    """某个 adapter detach 炸了也要继续释放剩下的 + 清缓存 —— 否则一个失败就漏掉全部。"""
-    boom, ok = _FakeAdapter(boom=True), _FakeAdapter()
-    torch_ = _FakeTorch()
-
-    eval_samples._release_generation_models(
-        [boom, ok], object(), object(), object(), torch_, lambda _l: None,
-    )
-
-    assert ok.detached
-    assert torch_.cuda.emptied == 1
-
-
-def test_release_skips_cuda_when_unavailable() -> None:
-    torch_ = _FakeTorch(available=False)
-    eval_samples._release_generation_models(
-        [], object(), object(), object(), torch_, lambda _l: None,
-    )
-    assert torch_.cuda.emptied == 0
-
-
-def test_release_tolerates_empty_cache_failure() -> None:
-    """empty_cache 抛错（驱动层偶发）不该让整个候选算失败。"""
-    class _Boom(_FakeTorch):
-        def __init__(self) -> None:
-            super().__init__()
-            self.cuda.empty_cache = self._boom  # type: ignore[method-assign]
-
-        @staticmethod
-        def _boom() -> None:
-            raise RuntimeError("driver hiccup")
-
-    eval_samples._release_generation_models(
-        [], object(), object(), object(), _Boom(), lambda _l: None,
-    )  # 不抛就算过

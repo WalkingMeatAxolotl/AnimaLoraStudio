@@ -13,7 +13,7 @@ import pytest
 
 from studio import db, secrets
 from studio.infrastructure import paths as infra_paths
-from studio.services import eval_samples, eval_session
+from studio.services import eval_generation, eval_samples, eval_session
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.workers import eval_session_worker as worker
 
@@ -78,6 +78,27 @@ def _fake_generator(run: dict[str, Any], version_dir: Path, progress) -> None:
         run = eval_samples.mark_item_done(version_dir, run, idx, eval_root)
 
 
+class _NoopGenerator:
+    """替掉 DaemonSampleGenerator：出图由 `_fake_generator` 顶，不许起真 daemon。
+
+    真实现的 `__enter__` 会 spawn `runtime/anima_daemon.py` 子进程（torch import
+    好几秒、READY_TIMEOUT 30s），在测试里既慢又依赖机器状态 —— CI 无 GPU、runner
+    忙的时候正好是 flake 的温床。
+    """
+
+    def __init__(self, *_a, **_kw) -> None:
+        pass
+
+    def __enter__(self) -> "_NoopGenerator":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        return None
+
+    def __call__(self, *_a, **_kw) -> None:  # 不会被调到（run_sample_job 已被换掉）
+        raise AssertionError("测试不该走到真的 daemon 出图")
+
+
 @pytest.fixture
 def fake_generate(monkeypatch: pytest.MonkeyPatch):
     """让 run_sample_job 走假 generator（真签名、真 run.json 写入）。"""
@@ -88,6 +109,9 @@ def fake_generate(monkeypatch: pytest.MonkeyPatch):
         return real(project, version, vdir, run_id, generator=_fake_generator, **kw)
 
     monkeypatch.setattr(eval_samples, "run_sample_job", patched)
+    monkeypatch.setattr(
+        eval_generation, "DaemonSampleGenerator", _NoopGenerator,
+    )
     return patched
 
 
@@ -273,6 +297,9 @@ def test_one_candidate_failing_leaves_session_partial(
         return real(project_, version_, vdir_, run_id, generator=_fake_generator, **kw)
 
     monkeypatch.setattr(eval_samples, "run_sample_job", flaky)
+    monkeypatch.setattr(
+        eval_generation, "DaemonSampleGenerator", _NoopGenerator,
+    )
 
     assert worker.run(int(session["task_id"])) == 0
 
@@ -430,6 +457,9 @@ def test_all_candidates_failing_gives_failed_and_exit_1(
         raise RuntimeError("nope")
 
     monkeypatch.setattr(eval_samples, "run_sample_job", always_bad)
+    monkeypatch.setattr(
+        eval_generation, "DaemonSampleGenerator", _NoopGenerator,
+    )
 
     assert worker.run(int(session["task_id"])) == 1
 
