@@ -15,10 +15,10 @@
 标那一格。整体状态由 `eval_session.rollup_status` 汇总成 done / partial / failed ——
 部分结果仍然可看，不会因为一个 checkpoint 崩了就报整体失败。
 
-**首版复用**：出图与指标算法直接调现有的 `eval_samples.run_sample_job` /
-`eval_*.run_*_job`（设计稿 §0.6 B），每个候选内部仍是一个 eval_samples run，只是
-`eval_root` 指向 `eval/sessions/<id>/samples/`。所以本刀不动任何算法，只换编排。
-基础模型「只加载一次、LoRA 热切换」是后续 Phase 2 的事。
+**出图走测试出图那条常驻 daemon**：整个出图阶段共用**一个** daemon 实例
+（`eval_generation.DaemonSampleGenerator`），底模只加载一次，候选之间由 daemon 的
+`ModelCache` 热换 LoRA 权重。指标算法仍直接调 `eval_*.run_*_job`，每个候选内部仍是
+一个 eval_samples run，只是 `eval_root` 指向 `eval/sessions/<id>/samples/`。
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from studio.services import (
     eval_ccip,
     eval_clip,
     eval_dino,
+    eval_generation,
     eval_registry,
     eval_samples,
     eval_session,
@@ -101,7 +102,7 @@ def run(task_id: int) -> int:
     )
 
     try:
-        _stage_generate(session_id, project, version, vdir, progress)
+        _stage_generate(session_id, task_id, project, version, vdir, progress)
         for runner in runners:
             _stage_metric(session_id, runner, project, version, vdir, progress)
         return _stage_aggregate(session_id, progress)
@@ -119,6 +120,7 @@ def run(task_id: int) -> int:
 
 def _stage_generate(
     session_id: int,
+    task_id: int,
     project: dict[str, Any],
     version: dict[str, Any],
     vdir: Path,
@@ -129,6 +131,29 @@ def _stage_generate(
         eval_session.update_session(conn, session_id, stage=eval_session.STAGE_GENERATE)
         candidates = eval_session.list_candidates(conn, session_id)
 
+    pending = [c for c in candidates if not _generation_complete(c, vdir, eval_root)]
+    if not pending:
+        progress("[generate] 全部候选已完成，跳过出图阶段")
+        return
+
+    # daemon 的生命周期是**整个出图阶段**，不是单个候选 —— 底模常驻的收益全在这里。
+    # 断点续跑时只为真正要跑的候选起 daemon（上面先算 pending）。
+    with eval_generation.DaemonSampleGenerator(progress, task_id=task_id) as generate:
+        _generate_candidates(
+            session_id, candidates, generate, project, version, vdir, eval_root, progress,
+        )
+
+
+def _generate_candidates(
+    session_id: int,
+    candidates: list[dict[str, Any]],
+    generate: Any,
+    project: dict[str, Any],
+    version: dict[str, Any],
+    vdir: Path,
+    eval_root: Path,
+    progress: Callable[[str], None],
+) -> None:
     for cand in candidates:
         cid = int(cand["id"])
         label = f"{cand['role']}#{cand['ordinal']}"
@@ -173,6 +198,7 @@ def _stage_generate(
             progress(f"[generate] {label} run={run_id}")
             result = eval_samples.run_sample_job(
                 project, version, vdir, run_id,
+                generator=generate,
                 on_progress=progress, eval_root=eval_root,
             )
             summary = result.get("summary") or {}

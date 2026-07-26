@@ -53,3 +53,47 @@ def test_is_distilled_path_by_official_variant():
     assert not krea2.is_distilled_path("")
     assert not get_assets("anima").is_distilled_path(
         "G:/models/diffusion_models/anima-base-v1.0.safetensors")
+
+
+# ── 族条件的运行时旋钮门控 ──────────────────────────────────────────────────
+# blocks_to_swap 来自**全局**出图设置（用户为某个模型调的），但每次请求可以是另一
+# 个族的底模。原样透传时 runtime 会 fail-fast（"model_family=X 不支持 block swap"）。
+# schema 的写时门控走 cap_gate，运行时这条走 supports_capability —— 同一张
+# FAMILY_CAPABILITIES 表，不是第二份镜像。
+
+def test_supports_capability_matches_the_family_table():
+    from studio.domain.common import FAMILY_CAPABILITIES, supports_capability
+
+    assert supports_capability("krea2", "block_swap") is True
+    assert supports_capability("anima", "block_swap") is False
+    # 未知族保守拒绝，不放行族条件旋钮
+    assert supports_capability("no_such_family", "block_swap") is False
+    # 与表本身同源（防有人再抄一份镜像）
+    for family, caps in FAMILY_CAPABILITIES.items():
+        for cap in caps:
+            assert supports_capability(family, cap) is True
+
+
+def test_eval_and_generate_gate_block_swap_the_same_way(monkeypatch: pytest.MonkeyPatch):
+    """评估和测试出图共用同一条规则 —— 两处各写一份迟早会漂。"""
+    from studio.domain.common import supports_capability
+    from studio.services import eval_generation
+
+    class _Gen:
+        vae_precision = "bf16"
+        lora_merge_precision = "fp32"
+        vram_policy = "auto"
+        ram_guard = True
+        blocks_to_swap = 14
+
+    class _Secrets:
+        generate = _Gen()
+
+    monkeypatch.setattr("studio.secrets.load", lambda: _Secrets())
+    eval_generation._BLOCK_SWAP_NOTICED.discard("anima")
+
+    assert eval_generation._generate_settings("anima")["blocks_to_swap"] == 0
+    assert eval_generation._generate_settings("krea2")["blocks_to_swap"] == 14
+    # generate 路由用的是同一个判据
+    assert supports_capability("anima", "block_swap") is False
+    assert supports_capability("krea2", "block_swap") is True

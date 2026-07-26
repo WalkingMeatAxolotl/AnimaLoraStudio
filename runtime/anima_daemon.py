@@ -29,7 +29,7 @@ import random
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import torch
 
@@ -72,6 +72,42 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("anima_daemon")
+
+
+# 会往 stdout 写日志的第三方 logger。stdout 是本进程的协议流，它们必须掰到 stderr。
+_STDOUT_NOISY_LOGGERS: tuple[str, ...] = ("LyCORIS",)
+
+
+def _keep_third_party_logs_off_stdout(
+    names: Iterable[str] = _STDOUT_NOISY_LOGGERS,
+) -> None:
+    """把往 stdout 写的第三方 logger 掰到 stderr。
+
+    lycoris 在 import 时给 `LyCORIS` logger 挂了 `StreamHandler(sys.stdout)` 且
+    `propagate=False`（`lycoris/logging.py`）—— 那是它做 CLI 工具时的合理默认，但
+    本进程的 stdout 是**协议流**，每条 LyCORIS 日志都会让 server 侧的 reader 记一条
+    「daemon stdout non-JSON」warning。
+
+    它那段是 `if not logger.handlers:` 守卫的，所以**抢先**挂一个 stderr handler
+    就能让它整段跳过（本函数在 lycoris import 之前跑）。同时也清掉已存在的 stdout
+    handler —— 万一将来 import 顺序变了，行为依然正确。
+    """
+    for name in names:
+        third = logging.getLogger(name)
+        for handler in list(third.handlers):
+            if getattr(handler, "stream", None) is sys.stdout:
+                third.removeHandler(handler)
+        if not third.handlers:
+            stderr_handler = logging.StreamHandler(sys.stderr)
+            stderr_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S",
+                )
+            )
+            third.addHandler(stderr_handler)
+
+
+_keep_third_party_logs_off_stdout()
 
 _GIB = 1024 ** 3
 _TE_LOAD_FALLBACK_FP8 = 7 * _GIB
