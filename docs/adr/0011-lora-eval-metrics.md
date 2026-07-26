@@ -445,3 +445,70 @@ eval_metric_results  某个候选在某个指标上的结果
 ### 不在本轮范围
 
 「后处理」一级页面、全局 Artifact Library、Metadata 编辑、LoRA Merge、发布流程、把旧 eval 结果迁进新数据模型。前端保持现有布局：Session 读侧返回与既有 `EvalMetricResult` 兼容的形状，指标卡 / 曲线 / 表格不动，只加一个历史 Session 切换。
+
+---
+
+## Addendum: 评估的归属与信息架构（2026-07-25，issue #465 续）
+
+上一条 Addendum 末尾写「前端保持现有布局，只加一个历史 Session 切换」。真机试用后
+这条**被推翻**：后端把评估变成一等作业之后，前端仍把它当「训练监控页里的一个指标
+section」，结果是评估有了独立的生命周期却没有独立的入口 —— 想看结果必须先猜是哪次
+训练产生的，评估作业的详情页则是死胡同（看不到结果也跳不过去）。
+
+### 评估属于 version，不属于 task
+
+`eval_sessions.parent_task_id` 降为**溯源**字段（「这次评估是那次训练结束后自动触发
+的」），不再是归属或导航的必经路径。理由是评估的对象是 `output/` 里的一组 checkpoint：
+
+- checkpoint 比 task 活得久 —— 删了队列历史，权重还在
+- resume 续训后，同一批 checkpoint 横跨两个 task
+- 手动丢进 `output/` 的 LoRA 根本没有对应 task
+- 用户想的是「比 epoch 34/36/38」，不是「比 task #217 的产物」
+
+连带 `POST /eval/run` 的 `task_id` 改为可选：省略即版本级评估。数据层零改动 —— 表里
+本来就存 `project_id` / `version_id`，`parent_task_id` 本来就可空。
+
+### 信息架构：列表在概览，结果在作业详情
+
+| 位置 | 职责 |
+|---|---|
+| 项目概览「评估」tab | 评估作业列表 + 「创建新评估」（modal 填参数）+ 运行中日志抽屉 |
+| 评估作业详情 | 概览 / 指标 / 样图 / 日志 —— 结果的规范位置 |
+| 训练作业详情 | 同样的指标 / 样图两个 tab，按 `parent_task_id` 过滤；本次训练没评估过则隐藏 |
+
+**评估不进流水线导航**：sidebar 那串是编号 phase（靠 version cursor 推进），评估没有
+「做完了往下走」的语义 —— 训练完随时可跑、可跑很多次。它属于概览里「详情 / 任务 /
+LoRA 文件」那一排，紧挨着它的对象。
+
+结果**只在作业详情渲染一份**。曾短暂在作业详情里嵌完整结果面板 + 在概览也放一份，
+两处的勾选状态、后续的导出 / 对比功能必然分叉，改回单一实现 + 深链。
+
+「这次训练有没有评估过」的判据用**本 task 名下有没有 EvalSession**，不读配置开关：
+配置是*当前*的、训练跑完后可能又被改过，而且用户可能手动为这次训练发起过评估。
+
+### 运行状态：DB 是真相，但终态要跟 task 对齐
+
+`eval_sessions.status` 由 worker 自己写，所以 worker 进程被 kill（cancel 的 SIGTERM、
+显存撞崖后强杀、断电）时最后那次写根本不会发生，Session 永远停在 `running`：队列里
+task 已经 failed，面板还在转圈，删不掉也没有重试入口。
+
+读侧统一过一遍 `reconcile_with_task`：`tasks` 的终态由 supervisor 兜底维护，是唯一
+可靠来源，据它反推 Session 并收口挂在 pending/running 的候选与指标。终态 Session 直接
+短路，代价是一条主键查询。
+
+「重试」= 重新入队**同一个** Session（新建一条 task 行，每次尝试留档），复用 worker
+已有的断点续跑：已 done 的候选跳过出图、已 done 的指标跳过重算。跑到第 180 个
+checkpoint 才崩时补的只是剩下那些，不是整轮重来。
+
+### 同一个进程连跑多候选必须显式释放底模
+
+旧模型每个候选一个子进程，进程退出由 OS 回收显存，所以出图路径从来不需要自己释放。
+Session 把全部候选放进**同一个 worker 进程**顺序跑之后这条隐含前提消失了：adapter 的
+forward hook 与 model 互相持有引用，引用计数回收不掉；CUDA caching allocator 也不把
+reserved 段还给驱动。真机症状是第 3 个候选起每张图 VAE decode 都要 offload 腾地方，
+第 4 个候选加载 transformer 时撞 WDDM 崖（显存被换到系统内存），表现为无报错卡死。
+
+出图循环用 `try/finally` 包住，退出前 detach 全部 adapter + `gc.collect()` +
+`empty_cache()`。这是止血；「底模只加载一次 + LoRA 热切换」（上一条 Addendum 说的
+下一刀）从「优化」升级为**必须** —— 每候选重载一次底模在 21 个候选上就是 ~10 分钟
+纯开销。

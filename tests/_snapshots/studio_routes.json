@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 205,
+  "count": 208,
   "routes": [
     {
       "path": "/",
@@ -842,14 +842,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/projects/{pid}/versions/{vid}/eval/jobs",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_task_eval_jobs_endpoint",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/projects/{pid}/versions/{vid}/eval/metrics",
       "methods": [
         "GET"
@@ -898,19 +890,51 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/clip",
+      "path": "/api/projects/{pid}/versions/{vid}/eval/scale",
       "methods": [
-        "POST"
+        "GET"
       ],
-      "name": "start_eval_clip_metrics_endpoint",
+      "name": "eval_scale_endpoint",
       "type": "APIRoute"
     },
     {
-      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/dino",
+      "path": "/api/projects/{pid}/versions/{vid}/eval/sessions",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_eval_sessions_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_eval_session_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/cancel",
       "methods": [
         "POST"
       ],
-      "name": "start_eval_dino_metrics_endpoint",
+      "name": "cancel_eval_session_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/grid",
+      "methods": [
+        "GET"
+      ],
+      "name": "eval_session_grid_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/sessions/{sid}/retry",
+      "methods": [
+        "POST"
+      ],
+      "name": "retry_eval_session_endpoint",
       "type": "APIRoute"
     },
     {
