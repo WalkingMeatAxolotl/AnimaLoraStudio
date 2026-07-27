@@ -105,7 +105,7 @@ class GenerateConfig(BaseModel):
     )
     attention_backend: AttentionBackend = Field(
         "flash_attn",
-        description="Attention backend：none（SDPA）/ xformers / flash_attn",
+        description="Attention backend：SDPA / xFormers / Flash Attention",
     )
     blocks_to_swap: int = Field(
         0, ge=0,

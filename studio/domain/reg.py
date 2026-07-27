@@ -59,7 +59,7 @@ class RegAiConfig(BaseModel):
     mixed_precision: str = Field("bf16")
     attention_backend: AttentionBackend = Field(
         "flash_attn",
-        description="Attention backend：none（SDPA）/ xformers / flash_attn",
+        description="Attention backend：SDPA / xFormers / Flash Attention",
     )
 
     @model_validator(mode="after")

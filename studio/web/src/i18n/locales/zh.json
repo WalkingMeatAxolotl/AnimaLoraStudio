@@ -349,7 +349,7 @@
         "no": "不使用"
       },
       "attentionBackend": {
-        "none": "PyTorch SDPA",
+        "none": "SDPA",
         "xformers": "xFormers",
         "flashAttn": "Flash Attention"
       },
@@ -491,7 +491,7 @@
       "leap_traj_sim_min": "【LeapAlign】轨迹相似度加权下限 τ：防止近乎相同的跳跃对被 1/d 过度放大。越小越激进。典型 0.05-0.2",
       "grad_clip_max_norm": "梯度范数上限：本步所有可训练参数的梯度总范数超过该值时按比例缩到该值，防止单步极端梯度把模型推飞。默认 1.0 适合绝大多数场景；bf16+DoRA/LoKr 不稳可降到 0.5；0=禁用。",
       "mixed_precision": "训练精度。bf16 推荐（与 fp32 同动态范围、稳定）；fp16 同显存但动态范围小、梯度易溢出；no 用 fp32 最稳但显存翻倍",
-      "attention_backend": "Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
+      "attention_backend": "Attention 后端。SDPA 由 PyTorch 自动选择可用实现；xFormers 显存更省；Flash Attention 最快（需 Ampere+ GPU 支持）",
       "num_workers": "数据加载并行线程数；越大加载越快但内存占用上升。Windows 必须填 0",
       "output_dir": "输出目录",
       "output_name": "输出文件名前缀",
@@ -1226,7 +1226,7 @@
     "install": "安装",
     "confirmInstallXformers": "将 pip install xformers，按当前 torch+cu 选 PyTorch index URL。\n装包几分钟到十几分钟，装完后必须重启 Studio。继续？",
     "xformersSubtitle": "attention 加速（与 Flash Attention 二选一）",
-    "xformersHelp1": "xformers 与 Flash Attention <strong>互斥</strong>，每个训练 / 出图任务的 <code>attention_backend</code> 字段三选一（无 / xformers / flash_attn）。",
+    "xformersHelp1": "xFormers 与 Flash Attention <strong>互斥</strong>，每个训练 / 出图任务的 <code>attention_backend</code> 字段三选一（SDPA / xFormers / Flash Attention）。",
     "xformersHelp2": "xformers 泛用性更广（支持 sm_70+），flash_attn 性能更高（sm_80+ Ampere 起）。",
     "xformersHelp3": "装失败多数是上游 PyPI / PyTorch index 没出对应 torch+cu 组合的 wheel（5090 / 新 GPU 常见）。失败时按钮 toast 会显示 stderr 末尾，可根据提示降 torch 版本或等上游覆盖。",
     "reinstallAutoMatchPlain": "重装（自动匹配）",

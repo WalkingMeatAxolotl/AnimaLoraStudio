@@ -923,7 +923,7 @@ class TrainingConfig(BaseModel):
 
     attention_backend: AttentionBackend = Field(
         "flash_attn",
-        description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
+        description="Attention 后端。SDPA 由 PyTorch 自动选择可用实现；xFormers 显存更省；Flash Attention 最快（需 Ampere+ GPU 支持）",
         json_schema_extra=_meta(
             "system",
             disable_when="navit_packing==true",

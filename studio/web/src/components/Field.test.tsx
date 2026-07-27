@@ -209,6 +209,35 @@ describe('Field number input (PP10.3)', () => {
   })
 })
 
+describe('Field attention backend select', () => {
+  it('shows SDPA while preserving the compatible none value', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    const prop: SchemaProperty = {
+      type: 'string',
+      enum: ['none', 'xformers', 'flash_attn'],
+      default: 'none',
+      group: 'misc',
+      control: 'select',
+      description: '',
+    }
+
+    render(
+      <Field
+        name="attention_backend"
+        prop={prop}
+        value="xformers"
+        onChange={onChange}
+      />,
+    )
+
+    const option = screen.getByRole('option', { name: 'SDPA' })
+    expect(option).toHaveValue('none')
+    await user.selectOptions(screen.getByRole('combobox'), option)
+    expect(onChange).toHaveBeenCalledWith('none')
+  })
+})
+
 const stringListProp: SchemaProperty = {
   type: 'array',
   items: { type: 'string' },
