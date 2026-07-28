@@ -40,6 +40,15 @@ def test_webui_lifespan_calls_setup_logging(tmp_path: Path,
     monkeypatch.setenv("ANIMA_LOG_DIR", str(tmp_path))
     from fastapi.testclient import TestClient
     from studio import server
+    from studio.infrastructure import paths
+
+    # 隔离 STUDIO_DATA：lifespan 会拿单实例锁 + disk_cache.init（其
+    # startup_clean 会 rmtree root 下所有 session-*）。不隔离的话：
+    # (a) 本机 dev server 在跑时锁被占，本测试假红；
+    # (b) 更糟 —— 老版本没锁时曾把活 server 的出图 cache 目录整个删掉。
+    # lifespan 内部是函数级 `from ..infrastructure.paths import STUDIO_DATA`，
+    # setattr 模块属性即可生效。
+    monkeypatch.setattr(paths, "STUDIO_DATA", tmp_path / "studio_data")
 
     # 触发 lifespan
     with TestClient(server.app) as client:
