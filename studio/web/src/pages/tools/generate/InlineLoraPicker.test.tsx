@@ -464,4 +464,48 @@ describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
     // 没有受控 value 时仍能看到 projects[0] 的 ckpts（fallback 行为）
     await waitFor(() => expect(screen.getByText('step 2000')).toBeInTheDocument())
   })
+
+  it('父级重渲染（value 同内容新对象）不打回用户正在切换的项目下拉', async () => {
+    // 回归：SidebarLoras 每次渲染都新建 value 字面量。sync effect 若依赖对象
+    // 本身，任何父级重渲染都会把 pid 打回槽里已存值 —— 用户刚在下拉切到别的
+    // 项目，1-2s 内被刷回（catalog 懒加载返回 / SSE setState 都会触发）。
+    const catalog = catalogFrom(sample, ckptsV3)
+    const onChange = vi.fn()
+    const onClose = vi.fn()
+    const savedValue = (): PickedLora => ({
+      path: '/loras/cute_chibi/v3/final.safetensors',
+      projectId: 1, versionId: 11,
+    })
+    const { rerender } = render(
+      <InlineLoraPicker
+        mode="single"
+        catalog={catalog}
+        value={savedValue()}
+        weight={1.0}
+        onChange={onChange}
+        onClose={onClose}
+      />
+    )
+    const projectSelect = () => screen.getAllByRole('combobox')[0] as HTMLSelectElement
+    await waitFor(() => expect(projectSelect().value).toBe('1'))
+
+    // 用户在下拉切到项目 2（还没点 ckpt chip，槽值不变）
+    fireEvent.change(projectSelect(), { target: { value: '2' } })
+    expect(projectSelect().value).toBe('2')
+
+    // 父级因无关原因重渲染：value 内容相同但对象是新建的
+    rerender(
+      <InlineLoraPicker
+        mode="single"
+        catalog={catalog}
+        value={savedValue()}
+        weight={1.0}
+        onChange={onChange}
+        onClose={onClose}
+      />
+    )
+    // 下拉必须停在用户选的项目 2，不被打回槽里的项目 1
+    await waitFor(() => expect(projectSelect().value).toBe('2'))
+    expect(projectSelect().value).toBe('2')
+  })
 })
