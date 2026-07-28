@@ -930,21 +930,21 @@ def _write_png_with_anima(path: Path, params: dict, *, zip: bool) -> None:
 @pytest.mark.parametrize("zip_flag", [True, False])
 def test_read_png_anima_params_ascii_roundtrip(tmp_path: Path, zip_flag: bool) -> None:
     """ascii 内容：zip=True → zTXt，zip=False → tEXt，都要读出原 dict。"""
-    from studio.api.routers import generate as _gen
+    from studio.services import generate_history_index as _ghi
     p = tmp_path / "a.png"
     params = _params(seed=123, prompts=["1girl, anime"])
     _write_png_with_anima(p, params, zip=zip_flag)
-    assert _gen._read_png_anima_params(p) == params
+    assert _ghi.read_png_anima_params(p) == params
 
 
 def test_read_png_anima_params_cjk_uses_itxt(tmp_path: Path) -> None:
     """CJK 内容（ensure_ascii=False）→ Pillow 落 iTXt；reader utf-8 解出，逐值
     与 PIL 读法一致（防 latin-1 误解码导致的静默乱码）。"""
-    from studio.api.routers import generate as _gen
+    from studio.services import generate_history_index as _ghi
     p = tmp_path / "a.png"
     params = _params(prompts=["1girl, 白发, 红眼"], negative_prompt="模糊")
     _write_png_with_anima(p, params, zip=True)
-    out = _gen._read_png_anima_params(p)
+    out = _ghi.read_png_anima_params(p)
     assert out == params
     with Image.open(p) as img:
         img.load()
@@ -953,21 +953,21 @@ def test_read_png_anima_params_cjk_uses_itxt(tmp_path: Path) -> None:
 
 def test_read_png_anima_params_missing_returns_none(tmp_path: Path) -> None:
     """没有 anima_params 块（只有像素 / 只有 a1111 parameters 块）→ None。"""
-    from studio.api.routers import generate as _gen
+    from studio.services import generate_history_index as _ghi
     p = tmp_path / "a.png"
     Image.new("RGB", (8, 8)).save(p, format="PNG")
-    assert _gen._read_png_anima_params(p) is None
+    assert _ghi.read_png_anima_params(p) is None
     info = PngImagePlugin.PngInfo()
     info.add_text("parameters", "fake a1111 block")
     Image.new("RGB", (8, 8)).save(p, format="PNG", pnginfo=info)
-    assert _gen._read_png_anima_params(p) is None
+    assert _ghi.read_png_anima_params(p) is None
 
 
 def test_read_png_anima_params_non_png_returns_none(tmp_path: Path) -> None:
     """非 PNG / 截断文件 → None（不抛）。"""
-    from studio.api.routers import generate as _gen
+    from studio.services import generate_history_index as _ghi
     p = tmp_path / "a.png"
     p.write_bytes(b"not a png file at all")
-    assert _gen._read_png_anima_params(p) is None
+    assert _ghi.read_png_anima_params(p) is None
     p.write_bytes(b"\x89PNG\r\n\x1a\n")  # 只有签名，无 chunk
-    assert _gen._read_png_anima_params(p) is None
+    assert _ghi.read_png_anima_params(p) is None
