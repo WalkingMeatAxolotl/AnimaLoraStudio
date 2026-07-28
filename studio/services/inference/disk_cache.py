@@ -132,6 +132,10 @@ class SessionCache:
 
         file_id = uuid.uuid4().hex
         file_path = self.session_dir / f"{file_id}.bin"
+        # 自愈：session 目录可能被外部整个删掉（另一进程的 startup_clean /
+        # 手删）。没有这行，目录一旦消失，之后每张图都 FileNotFoundError 丢弃，
+        # 直到 clear_all / 重启才恢复 —— 正是「出图完成后图消失」的放大器。
+        self.session_dir.mkdir(parents=True, exist_ok=True)
         # 原子写：写 tmp + rename。session 目录是独占的，不存在并发写同名情况
         tmp = file_path.with_suffix(".bin.tmp")
         tmp.write_bytes(blob)
