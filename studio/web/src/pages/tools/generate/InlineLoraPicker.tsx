@@ -119,12 +119,20 @@ export default function InlineLoraPicker(props: Props) {
   // 旧值（之前靠父级 bump urlConsumedKey 强制 remount 兜底，Step 6 砍掉）。
   // setPid 函数式更新 + 值未变跳过自动免无限循环。
   // value=null 时不 sync（保留 fallback：未选 LoRA 时给用户看 projects[0] ckpts）
+  //
+  // deps 必须用**原始值**（path/projectId/versionId），不能用 singleValue 对象：
+  // SidebarLoras 每次渲染都新建 value 字面量，对象做 dep 会让任何父级重渲染
+  // （catalog 懒加载返回 / SSE 驱动的 setState…）都重跑本 effect，把用户正在
+  // 下拉里切换的 pid/vid 打回槽里已存值 —— 表现为「刚切到别的项目，1-2s 内
+  // 被刷回进入页面时的状态」。原始值 deps 下只有槽值真正变化才重新锚定。
   const singleValue = isSingle ? props.value : null
+  const singleValuePath = singleValue?.path ?? null
+  const singleValuePid = singleValue?.projectId ?? null
+  const singleValueVid = singleValue?.versionId ?? null
   useEffect(() => {
-    if (!isSingle || singleValue == null) return
-    const next = singleValue.projectId
-    setPid((cur) => (cur === next ? cur : next))
-  }, [isSingle, singleValue])
+    if (!isSingle || singleValuePath == null) return
+    setPid((cur) => (cur === singleValuePid ? cur : singleValuePid))
+  }, [isSingle, singleValuePath, singleValuePid])
 
   // multi mode：当 caller 给 initialPid（XY 历史回填），pid 跟着 prop 走
   useEffect(() => {
@@ -150,11 +158,11 @@ export default function InlineLoraPicker(props: Props) {
 
   const [vid, setVid] = useState<number | null>(initialVid)
   // 同 pid：single 模式下 value 非 null 时 vid 跟 props.value.versionId 同步
+  //（deps 同上，用原始值防父级重渲染打回用户的下拉切换）
   useEffect(() => {
-    if (!isSingle || singleValue == null) return
-    const next = singleValue.versionId
-    setVid((cur) => (cur === next ? cur : next))
-  }, [isSingle, singleValue])
+    if (!isSingle || singleValuePath == null) return
+    setVid((cur) => (cur === singleValueVid ? cur : singleValueVid))
+  }, [isSingle, singleValuePath, singleValueVid])
 
   // multi mode：受控 vid（同 multiInitialPid 一对儿）
   useEffect(() => {
