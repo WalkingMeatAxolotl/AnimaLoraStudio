@@ -2,11 +2,17 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type AnnouncementPost } from '../api/client'
 import { AnnouncementsProvider } from '../lib/Announcements'
-import { AnnouncementCenter } from './AnnouncementCenter'
+import {
+  AnnouncementCenter,
+  announcementUrlTransform,
+  parseSettingsLink,
+} from './AnnouncementCenter'
 
-// 公告栏的更新按钮要 useSettingsDrawer；测试里 stub 掉，省去 provider 嵌套。
+// 公告栏的更新按钮 + 正文应用内链接要 useSettingsDrawer；测试里 stub 掉，省去
+// provider 嵌套。openSpy 用来断言深链真的打开了对应 section。
+const openSpy = vi.fn()
 vi.mock('../lib/SettingsDrawer', () => ({
-  useSettingsDrawer: () => ({ open: () => {} }),
+  useSettingsDrawer: () => ({ open: openSpy }),
 }))
 
 const POSTS: AnnouncementPost[] = [
@@ -111,5 +117,65 @@ describe('AnnouncementCenter', () => {
     expect(screen.getByRole('heading', { name: '新增' })).toBeInTheDocument()
     // - 解析成列表项
     expect(screen.getByText('甲项')).toBeInTheDocument()
+  })
+
+  // ── 应用内深链（迁移类公告靠它把用户直接送到工具那一屏）────────────────
+  describe('parseSettingsLink', () => {
+    it('普通外链返回 null（照旧新标签页打开）', () => {
+      expect(parseSettingsLink('https://example.com')).toBeNull()
+      expect(parseSettingsLink('#anchor')).toBeNull()
+      expect(parseSettingsLink(undefined)).toBeNull()
+    })
+
+    it('已注册的 section → 带 section 跳转', () => {
+      expect(parseSettingsLink('app://settings/eval-metrics'))
+        .toEqual({ section: 'eval-metrics' })
+    })
+
+    it('未注册 / 已随工具退役的 section → 只开设置，不静默失效', () => {
+      expect(parseSettingsLink('app://settings/gone-with-the-tool'))
+        .toEqual({ section: null })
+      expect(parseSettingsLink('app://settings/')).toEqual({ section: null })
+    })
+  })
+
+  describe('announcementUrlTransform', () => {
+    it('放行设置协议', () => {
+      expect(announcementUrlTransform('app://settings/eval-metrics'))
+        .toBe('app://settings/eval-metrics')
+    })
+
+    it('普通 URL 原样通过', () => {
+      expect(announcementUrlTransform('https://example.com/a?b=1'))
+        .toBe('https://example.com/a?b=1')
+      expect(announcementUrlTransform('#section')).toBe('#section')
+    })
+
+    it('危险协议仍被上游默认净化剥掉（放行设置协议没有削弱这层）', () => {
+      expect(announcementUrlTransform('javascript:alert(1)')).toBe('')
+      expect(announcementUrlTransform('data:text/html,<script>')).toBe('')
+    })
+  })
+
+  it('正文里的 app:// 链接走应用内跳转并关掉公告栏', async () => {
+    vi.spyOn(api, 'getAnnouncements').mockResolvedValue([
+      { id: 'mig', date: '2026-07-24', tag: 'migration', pin: false, version: '9.0.0',
+        title: { zh: '清理残留', en: 'Clean up' },
+        body: {
+          zh: '[去清理](app://settings/eval-metrics)',
+          en: '[Clean up](app://settings/eval-metrics)',
+        } },
+    ])
+    localStorage.setItem('studio.announcements.lastVersion', '0.15.0')
+    renderCenter()
+    await waitFor(() =>
+      expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('去清理'))
+
+    expect(openSpy).toHaveBeenCalledWith({ section: 'eval-metrics' })
+    // 跳转后公告栏让位给设置抽屉，不叠两层 modal
+    await waitFor(() =>
+      expect(screen.queryByTestId('announcement-center')).toBeNull())
   })
 })

@@ -97,30 +97,6 @@ def _vdir_for(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]
     return project, version, vdir
 
 
-def test_start_eval_dino_job_marks_dino_metric_pending(isolated) -> None:
-    project, version, vdir = _new_project(isolated)
-    run = _sample_run(project, version, vdir)
-
-    with db.connection_for(isolated["db"]) as conn:
-        job, result = eval_dino.start_job(
-            conn,
-            project,
-            version,
-            vdir,
-            run["run_id"],
-            model_name="mock/dino",
-        )
-
-    assert job["kind"] == "eval_dino"
-    assert job["version_id"] == version["id"]
-    assert job["params_decoded"]["run_id"] == run["run_id"]
-    assert job["params_decoded"]["model_name"] == "mock/dino"
-    assert result["status"] == "running"
-    assert result["metric_states"]["dino_i"]["status"] == "pending"
-    assert result["metric_states"]["clip_t"]["status"] == "not_run"
-    assert result["metrics"] == {}
-
-
 def test_run_dino_job_with_fake_scorer_preserves_existing_metrics(isolated) -> None:
     project, version, vdir = _new_project(isolated)
     run = _sample_run(project, version, vdir)
@@ -202,39 +178,6 @@ def test_feature_tensor_uses_cls_token_when_pooler_missing() -> None:
     got = eval_dino._feature_tensor(FakeOutput())
 
     assert got == ("slice", (slice(None, None, None), 0))
-
-
-def test_eval_dino_http_start_queues_job(client: TestClient) -> None:
-    pid, vid = _make(client)
-    project, version, vdir = _vdir_for(pid, vid)
-    run = _sample_run(project, version, vdir)
-
-    started = client.post(
-        f"/api/projects/{pid}/versions/{vid}/eval/samples/{run['run_id']}/metrics/dino",
-        json={"model_name": "mock/dino"},
-    )
-
-    assert started.status_code == 200, started.text
-    body = started.json()
-    assert body["job"]["kind"] == "eval_dino"
-    assert body["result"]["metric_states"]["dino_i"]["status"] == "pending"
-
-
-def test_eval_dino_http_start_uses_saved_default_model(client: TestClient) -> None:
-    pid, vid = _make(client)
-    project, version, vdir = _vdir_for(pid, vid)
-    run = _sample_run(project, version, vdir)
-    secrets.update({"eval_metrics": {"dino_model_name": "/models/local-dino"}})
-
-    started = client.post(
-        f"/api/projects/{pid}/versions/{vid}/eval/samples/{run['run_id']}/metrics/dino",
-        json={},
-    )
-
-    assert started.status_code == 200, started.text
-    body = started.json()
-    assert body["job"]["params_decoded"]["model_name"] == "/models/local-dino"
-    assert body["result"]["metric_states"]["dino_i"]["model_name"] == "/models/local-dino"
 
 
 def test_eval_dino_job_kind_is_schedulable_and_gpu_bound(isolated) -> None:

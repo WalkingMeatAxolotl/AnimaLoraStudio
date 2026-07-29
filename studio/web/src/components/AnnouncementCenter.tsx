@@ -7,13 +7,36 @@
 import type { ComponentPropsWithoutRef } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AnnouncementPost } from '../api/client'
 import { useAnnouncements } from '../lib/Announcements'
 import { useSettingsDrawer } from '../lib/SettingsDrawer'
+import { SECTION_TO_TAB } from '../pages/tools/settings/constants'
 
 const TAG_ORDER: AnnouncementPost['tag'][] = ['release', 'notice', 'migration']
+
+// 公告正文里的**应用内**链接协议。写 `[清理评估日志残留](app://settings/migrate-eval-orphans)`
+// 就能从公告直接跳到 Settings 对应 section（抽屉自己会切到该 section 所属 tab）。
+// 迁移类公告尤其需要 —— 否则只能写「去 设置 → 迁移 → …」这种指路。
+const SETTINGS_LINK_PREFIX = 'app://settings/'
+
+/** 解析公告正文里的应用内链接。
+ *
+ * 返回 `null` = 普通外链（照旧新标签页打开）。返回 `{ section }` = 打开设置抽屉；
+ * `section` 为 null 时只开抽屉不跳转 —— 公告把 section id 写错（或该 section 已随
+ * 工具退役被删）时，行为是「打开设置」而不是静默失效或蹦出 app:// 协议错误。 */
+export function parseSettingsLink(href?: string): { section: string | null } | null {
+  if (!href || !href.startsWith(SETTINGS_LINK_PREFIX)) return null
+  const section = href.slice(SETTINGS_LINK_PREFIX.length).trim()
+  return { section: section && SECTION_TO_TAB[section] ? section : null }
+}
+
+/** react-markdown 默认只放行 http/https/mailto/tel 等协议，`app://` 会被剥成空 href。
+ *  这里只额外放行我们自己的设置协议，其余 URL 仍走上游的默认净化。 */
+export function announcementUrlTransform(url: string): string {
+  return url.startsWith(SETTINGS_LINK_PREFIX) ? url : (defaultUrlTransform(url) ?? '')
+}
 
 // markdown 元素 → Tailwind class（公告正文用，复用 modal 既有 token）。
 type MdProps<T extends keyof React.JSX.IntrinsicElements> = ComponentPropsWithoutRef<T>
@@ -30,6 +53,7 @@ const MD_COMPONENTS = {
   ul: (p: MdProps<'ul'>) => <ul className="my-2 pl-5 list-disc space-y-2 marker:text-fg-tertiary" {...p} />,
   ol: (p: MdProps<'ol'>) => <ol className="my-2 pl-5 list-decimal space-y-2 marker:text-fg-tertiary" {...p} />,
   li: (p: MdProps<'li'>) => <li className="leading-7" {...p} />,
+  // a 在组件内覆盖（要拿 settingsDrawer / closeCenter 处理应用内链接），见 mdComponents。
   a: (p: MdProps<'a'>) => <a className="text-accent underline hover:opacity-80" target="_blank" rel="noreferrer" {...p} />,
   code: (p: MdProps<'code'>) => <code className="rounded bg-surface border border-dim px-1.5 py-0.5 text-[0.85em] font-mono text-fg-primary" {...p} />,
   hr: () => <hr className="my-4 border-dim" />,
@@ -60,6 +84,32 @@ export function AnnouncementCenter() {
     () => TAG_ORDER.filter((tg) => posts.some((p) => p.tag === tg)),
     [posts],
   )
+
+  // 正文里的 `app://settings/<section>` 链接走应用内跳转（打开设置抽屉 + 关公告栏），
+  // 其余照旧新标签页打开。
+  const mdComponents = useMemo(() => ({
+    ...MD_COMPONENTS,
+    a: (p: MdProps<'a'>) => {
+      const internal = parseSettingsLink(p.href)
+      if (!internal) {
+        return <a className="text-accent underline hover:opacity-80" target="_blank" rel="noreferrer" {...p} />
+      }
+      const { href: _href, ...rest } = p
+      return (
+        <a
+          className="text-accent underline hover:opacity-80 cursor-pointer"
+          role="link"
+          tabIndex={0}
+          onClick={(e) => {
+            e.preventDefault()
+            settingsDrawer.open(internal.section ? { section: internal.section } : undefined)
+            closeCenter()
+          }}
+          {...rest}
+        />
+      )
+    },
+  }), [settingsDrawer, closeCenter])
 
   // 打开 / 切换过滤后，默认选中第一篇。必须用函数式更新读「当前」选中值：
   // 旧实现直接读闭包里的 selectedId，慢机上用户点击（setSelectedId）可能发生在
@@ -197,7 +247,11 @@ export function AnnouncementCenter() {
                   {selected.date}{selected.version ? ` · v${selected.version}` : ''}
                 </div>
                 <div className="mt-4 text-sm text-fg-secondary [&_ul_ul]:list-[circle] [&_li_p]:my-1">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={mdComponents}
+                    urlTransform={announcementUrlTransform}
+                  >
                     {selected.body[lang]}
                   </ReactMarkdown>
                 </div>

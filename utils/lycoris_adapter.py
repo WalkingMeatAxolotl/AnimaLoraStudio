@@ -16,6 +16,8 @@ import json
 import logging
 import math
 import re
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -35,6 +37,57 @@ _ADAPTER_DTYPES = frozenset({torch.float16, torch.bfloat16, torch.float32, torch
 # 模块级调用：任何路径走到 lycoris_adapter（CLI 训练 / Studio worker / 测试）
 # 都会先 patch 一次。返回值供测试断言；正常 import 路径下结果落到 logger。
 _LOKR_PATCH_STATUS = apply_lokr_device_patch()
+
+# lycoris 的 LokrModule/LohaModule 在 dropout>0 时，每个模块实例都会 print 一行
+#   "[WARN]LoHa/LoKr haven't implemented normal dropout yet."
+# 280 层就刷 280 行。行为上等于静默忽略 normal dropout（rank/module dropout 不受影响）。
+# 注入期临时按行过滤 stdout，把这些行吞掉并计数，最后汇总成一条 logger 记录。
+_LOKR_DROPOUT_MARKER = "haven't implemented normal dropout yet"
+
+
+class _LineFilteredStdout:
+    """按行包装 stdout，丢弃含 marker 的整行并计数；其余原样透传。"""
+
+    def __init__(self, wrapped: Any, marker: str) -> None:
+        self._wrapped = wrapped
+        self._marker = marker
+        self._buf = ""
+        self.dropped = 0
+
+    def write(self, s: str) -> int:
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if self._marker in line:
+                self.dropped += 1
+            else:
+                self._wrapped.write(line + "\n")
+        return len(s)
+
+    def flush(self) -> None:
+        if self._buf:
+            if self._marker in self._buf:
+                self.dropped += 1
+            else:
+                self._wrapped.write(self._buf)
+            self._buf = ""
+        self._wrapped.flush()
+
+    def __getattr__(self, name: str) -> Any:  # encoding/fileno/isatty 等透传
+        return getattr(self._wrapped, name)
+
+
+@contextmanager
+def _suppress_lokr_dropout_spam():
+    """注入期临时收敛 lycoris 的 normal-dropout print 刷屏。"""
+    original = sys.stdout
+    flt = _LineFilteredStdout(original, _LOKR_DROPOUT_MARKER)
+    sys.stdout = flt
+    try:
+        yield flt
+    finally:
+        flt.flush()
+        sys.stdout = original
 
 
 class LycorisAdapter:
@@ -143,18 +196,27 @@ class LycorisAdapter:
             extra["bypass_mode"] = True
             logger.info("FP8 base detected: forcing LoKr bypass forward")
 
-        self.network = LycorisNetwork(
-            model,
-            multiplier=1.0,
-            lora_dim=self.rank,
-            alpha=self.alpha,
-            dropout=self.dropout,
-            rank_dropout=self.rank_dropout,
-            module_dropout=self.module_dropout,
-            network_module=net_module,
-            **extra,
-        )
-        self.network.apply_to()
+        with _suppress_lokr_dropout_spam() as _dropout_filter:
+            self.network = LycorisNetwork(
+                model,
+                multiplier=1.0,
+                lora_dim=self.rank,
+                alpha=self.alpha,
+                dropout=self.dropout,
+                rank_dropout=self.rank_dropout,
+                module_dropout=self.module_dropout,
+                network_module=net_module,
+                **extra,
+            )
+            self.network.apply_to()
+
+        if _dropout_filter.dropped:
+            logger.info(
+                "LoKr/LoHa 不支持 normal dropout（lora_dropout=%s），已静默忽略；"
+                "上游逐层告警 %d 条已收敛。rank_dropout/module_dropout 不受影响。",
+                self.dropout,
+                _dropout_filter.dropped,
+            )
 
         if self.lora_reg_dims:
             _apply_reg_dims_(self.network, self.lora_reg_dims)

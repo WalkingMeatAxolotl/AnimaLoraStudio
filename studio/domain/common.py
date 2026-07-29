@@ -140,6 +140,16 @@ def cap_gate(capability: str) -> str:
     return "||".join(f"model_family=={f}" for f in fams)
 
 
+def supports_capability(model_family: str, capability: str) -> bool:
+    """该族是否支持某能力位。未知族一律 False（保守：不放行族条件的旋钮）。
+
+    消费方是**运行时**的族条件门控 —— 全局设置里的旋钮（如出图设置的
+    `blocks_to_swap`）是用户为某个模型调的，换个族的模型跑时必须先过这一关，
+    否则 runtime 会 fail-fast。schema 的写时门控走 `cap_gate`，两者同一张表。
+    """
+    return capability in FAMILY_CAPABILITIES.get(str(model_family), frozenset())
+
+
 def capability_violations(model_family: str, values: dict) -> list[str]:
     """返回「已启用但当前族不支持」的字段名列表（validator / bootstrap 共用）。"""
     caps = FAMILY_CAPABILITIES.get(str(model_family))

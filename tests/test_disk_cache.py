@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,21 @@ def test_put_writes_different_ciphertext_each_time(cache: disk_cache.SessionCach
     cache.put(1, "x.png", png, {}, mode="single")
     blob2 = next(iter(cache._index.values())).file_path.read_bytes()
     assert blob1 != blob2
+
+
+def test_put_recreates_session_dir_if_deleted(cache: disk_cache.SessionCache) -> None:
+    """session 目录被外部 rmtree（另一进程 startup_clean / 手删）后 put 自愈。
+
+    2026-07-28 丢图 root cause 回归：没有自愈时目录一旦消失，每张
+    cache_image 都 FileNotFoundError 丢弃，直到 clear_all / 重启。
+    """
+    cache.put(1, "a.png", _png_bytes(b"a"), {}, mode="single")
+    shutil.rmtree(cache.session_dir)
+    cache.put(1, "b.png", _png_bytes(b"b"), {}, mode="single")
+    assert cache.get_image(1, "b.png") == _png_bytes(b"b")
+    # 旧 entry 文件已随目录消失：get 返 None 并剔出 index（既有语义不变）
+    assert cache.get_image(1, "a.png") is None
+    assert cache.total_count() == 1
 
 
 def test_overwrite_same_key_deletes_old_file(cache: disk_cache.SessionCache) -> None:

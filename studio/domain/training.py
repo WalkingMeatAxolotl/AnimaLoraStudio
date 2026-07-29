@@ -923,7 +923,7 @@ class TrainingConfig(BaseModel):
 
     attention_backend: AttentionBackend = Field(
         "flash_attn",
-        description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
+        description="Attention 后端。SDPA 由 PyTorch 自动选择可用实现；xFormers 显存更省；Flash Attention 最快（需 Ampere+ GPU 支持）",
         json_schema_extra=_meta(
             "system",
             disable_when="navit_packing==true",
@@ -1261,6 +1261,13 @@ class TrainingConfig(BaseModel):
     eval_validation_split_seed: int = Field(
         0, ge=0,
         description="验证集随机划分的种子，固定后划分结果可复现。",
+        json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
+    )
+    eval_checkpoint_skip_count: int = Field(
+        0, ge=0,
+        description="评估一个 checkpoint 后跳过几个再评下一个。0 = 每个保存的 checkpoint 都评；"
+                    "填 2 = 评一个跳两个（每 3 个里评 1 个）。最终权重始终评估。"
+                    "每个被评的 checkpoint 都要出一整套验证图再算指标，200 个 checkpoint 填 0 就是 200 套。",
         json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
     )
 

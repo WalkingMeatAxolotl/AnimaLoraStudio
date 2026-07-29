@@ -91,8 +91,15 @@ class InferenceDaemon:
     READY_TIMEOUT = 30.0  # 子进程 import 完成给 ready 的最长等待
     UNLOAD_TIMEOUT = 60.0  # unload 后等 unloaded 事件最长
 
-    def __init__(self, *, script_path: Optional[Path] = None) -> None:
+    def __init__(
+        self, *, script_path: Optional[Path] = None, cache_images: bool = True,
+    ) -> None:
         self._script = script_path or _DAEMON_SCRIPT
+        # image_done 的 PNG 入 generate_cache（测试页历史）+ 转发瘦身版。这是
+        # **测试出图**的服务端行为，不是 daemon 协议的一部分 —— 评估自己起 daemon
+        # 实例复用同一套编排时必须关掉：图要归评估的 run 目录，不能混进测试页历史，
+        # 而且 b64 被剥掉调用方就拿不到图了。
+        self._cache_images = cache_images
         self._lock = threading.RLock()
         self._proc: Optional[subprocess.Popen] = None
         self._state: str = STATE_STOPPED
@@ -623,7 +630,7 @@ class InferenceDaemon:
         # 仍走 cache 中转（持久模式下 cache 是落盘前的临时存放，前端落盘成功后
         # 用户可手动删 cache 或等 LRU 自然剔）。
         forward_msg = msg
-        if kind == "image_done" and "image_b64" in msg:
+        if kind == "image_done" and "image_b64" in msg and self._cache_images:
             filename = msg.get("filename") or ""
             xy_info = msg.get("xy") if isinstance(msg.get("xy"), dict) else None
             try:

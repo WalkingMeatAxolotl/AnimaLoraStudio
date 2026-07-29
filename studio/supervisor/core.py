@@ -434,9 +434,8 @@ class Supervisor:
         取队首；running 永不被中断。路由：train/reg_ai → TRAIN 槽子进程；
         generate → daemon（daemon 是 exclusive 档的执行器之一，不是独立车道）。
 
-        eval_samples（project_jobs 表）在 R-3 台账合并前由 `_dispatch_data`
-        派发，但共享同一个 `_exclusive_busy` 准入 —— 过渡期跨表顺序为
-        tasks 侧优先抢空隙，R-3 后统一进同表 FIFO。
+        eval_session（一次评估一个作业，#465）也在这条 FIFO 里：它先出图再算指标，
+        整段占底模栈，跟 train / generate 同规格竞争。执行位在 DATA 槽（worker 子进程）。
 
         ADR 0006 PR-2：queue_held=True 时跳过本次派发（ADR §3.2）。
         """
@@ -445,7 +444,7 @@ class Supervisor:
         if self._exclusive_busy():
             return
         task = self._next_pending_task_in(
-            ("train", "reg_ai", "generate", "eval_samples")
+            ("train", "reg_ai", "generate", "eval_session")
         )
         if task is None:
             return
@@ -459,10 +458,10 @@ class Supervisor:
                 return
             self._submit_to_daemon(task)
             return
-        if ttype == "eval_samples":
-            # R-3：exclusive 档数据作业。排队语义与 train/generate 同一 FIFO
-            # （D-R3 跨类型平级），执行位在 DATA 槽（worker 子进程）。DATA 槽
-            # 被 light 作业占着时等它结束（light 都是短任务），不越队。
+        if ttype == "eval_session":
+            # exclusive 档数据作业。排队语义与 train/generate 同一 FIFO（D-R3 跨类型
+            # 平级），执行位在 DATA 槽（worker 子进程）。DATA 槽被 light 作业占着时
+            # 等它结束（light 都是短任务），不越队。
             data_slot = next(
                 (s for s in self._slots if s.name == SLOT_DATA), None
             )
@@ -518,12 +517,12 @@ class Supervisor:
         """DATA 槽：跑 project_jobs。R-1 按资源档位准入（修 L2/L3）：
 
         - io（download）：恒放行（仅受 queue_held 约束）
-        - light（tag / preprocess / reg_build / eval 指标）：无 exclusive 运行时
-          恒放行（daemon idle 常驻模型无碍——小模型体量）；有 exclusive 运行时看
+        - light（tag / preprocess / reg_build）：无 exclusive 运行时恒放行（daemon
+          idle 常驻模型无碍——小模型体量）；有 exclusive 运行时看
           `queue.light_tasks_during_train`（默认开）。开关**关闭**时保守等同
           旧默认：额外要求 daemon 租约已释放
-        - exclusive（eval_samples，底模级）：与 train 同规格——无 exclusive
-          运行 + daemon 租约吊销后才派，**无视 light 开关**（修 L3）
+        - exclusive（eval_session，底模级）：不在这里派——见
+          `_dispatch_exclusive_tasks` 的统一 FIFO
 
         ADR 0006 PR-2：queue_held=True 时跳过本次派发，包含 download。语义上
         hold 是"全队列暂停新派活"，不区分档位。
@@ -537,7 +536,7 @@ class Supervisor:
         for job in pending:
             cls = job_resource_class(job["kind"])
             if cls == RESOURCE_EXCLUSIVE:
-                # eval_samples 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks
+                # eval_session 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks
                 # 与 train/generate 平级排队），本函数只管 light + io。
                 continue
             if cls == RESOURCE_LIGHT:
@@ -794,31 +793,28 @@ class Supervisor:
     def _queue_auto_eval_after_training(
         self, tid: int, payload: dict[str, Any]
     ) -> None:
+        """训练完成 → 建一个 EvalSession（#465：不再逐 checkpoint fan-out 子作业）。"""
         try:
             with db.connection_for(self._db_path) as conn:
                 task = db.get_task(conn, tid)
                 if not task:
                     return
-                queued = eval_auto.queue_training_finished_eval(conn, task, payload)
+                session = eval_auto.queue_training_finished_eval(conn, task, payload)
         except Exception:
             logger.exception("after-training auto eval enqueue failed for task=%s", tid)
             return
-        if not queued:
+        if not session:
             return
-        for job, run in queued:
-            self._on_event({
-                "type": "eval_auto_sample_queued",
-                "task_id": tid,
-                "job_id": job.get("id"),
-                "project_id": job.get("project_id"),
-                "version_id": job.get("version_id"),
-                "run_id": run.get("run_id"),
-                "checkpoint": run.get("checkpoint"),
-            })
+        plan = session.get("plan") or {}
+        candidates = len(plan.get("candidates") or [])
+        if plan.get("baseline", {}).get("enabled"):
+            candidates += 1
         self._on_event({
             "type": "eval_auto_after_training_queued",
             "task_id": tid,
-            "count": len(queued),
+            "session_id": session.get("id"),
+            "eval_task_id": session.get("task_id"),
+            "count": candidates,
         })
 
     def _make_monitor_callback(

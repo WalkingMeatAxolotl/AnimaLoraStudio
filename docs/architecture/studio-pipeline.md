@@ -117,8 +117,9 @@ CREATE TABLE tasks (
     exit_code    INTEGER,
     output_dir   TEXT,
     error_msg    TEXT
-    -- 迁移追加列（节选）：task_type（12 类：train / reg_ai / generate / eval_* /
-    -- download / preprocess / tag / reg_build …，_v17）、params（kind 专属参数
+    -- 迁移追加列（节选）：task_type（train / reg_ai / generate / eval_session /
+    -- download / preprocess / tag / reg_build …，_v17 引入；eval_* 五类 _v19 起
+    -- 由 eval_session 取代）、params（kind 专属参数
     -- JSON，_v17）、project_id / version_id、scheduled_at（计划任务，_v15）、
     -- generate_params / generate_cover（出图时间线 forward-write，_v14）
 );
@@ -193,7 +194,7 @@ Pydantic 模型在 `studio/infrastructure/secrets.py`（`studio/secrets.py` 是�
 ```
 ┌──────────────────────┐
 │  Anima                │
-│  lora studio · 0.21.1 │ ← 版本号从 /api/health 拉，single source of truth
+│  lora studio · 0.22.0 │ ← 版本号从 /api/health 拉，single source of truth
 ├──────────────────────┤
 │ ▶ 项目 (Projects)    │ /
 │   队列 (Queue)       │ /queue

@@ -52,7 +52,10 @@ import {
   type GenerateFamily, type SamplerName, type SchedulerName,
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
-import { buildXYMatrix, cellCount, parseAxisValues, type XYAxisDraft } from './generate/xy'
+import {
+  axisText, axisView, buildXYMatrix, cellCount, parseAxisValues,
+  type XYAxisDraft,
+} from './generate/xy'
 
 const GENERATE_PREFS_KEY = 'studio:generate:params:v1'
 
@@ -407,21 +410,20 @@ export default function GeneratePage() {
     if (snapMode === 'single') {
       await saveSingleSamples(taskId, filenames, params)
     } else {
-      const xd = runSnap!.xDraft
-      const yd = runSnap!.yDraft
-      const xValues = xd.raw.split(',').map((v) => v.trim()).filter(Boolean)
-      const yValues = yd ? yd.raw.split(',').map((v) => v.trim()).filter(Boolean) : [null as string | null]
+      const xv = axisView(runSnap!.xDraft)
+      const yv = runSnap!.yDraft ? axisView(runSnap!.yDraft) : null
       const xySamples = s
         .filter((x): x is typeof x & { xy: NonNullable<typeof x.xy> } => x.xy != null)
         .map((x) => ({ path: x.path, xy: { xi: x.xy.xi, yi: x.xy.yi } }))
       await saveXYMatrix({
         samples: xySamples,
         taskId,
-        xAxis: xd.axis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
-        yAxis: (yd?.axis ?? null) as Parameters<typeof saveXYMatrix>[0]['yAxis'],
-        xValues,
-        yValues,
-      }, params)
+        xLabels: xv.values.map((v) => axisText(xv, v)),
+        yLabels: yv ? yv.values.map((v) => axisText(yv, v)) : null,
+      }, params, {
+        x: { axis: runSnap!.xDraft.axis, values: xv.values },
+        y: yv ? { axis: runSnap!.yDraft!.axis, values: yv.values } : null,
+      })
     }
     await historyRef.current.refresh()
   }, [])
@@ -1129,16 +1131,16 @@ export default function GeneratePage() {
                         imageUrl: s.imageUrl,
                       }))}
                       taskId={historyOverride.source === 'cache' ? historyOverride.taskId : -1}
-                      xDraft={{
+                      xAxis={axisView({
                         axis: historyOverride.xyMeta.xAxis as never,
                         raw: historyOverride.xyMeta.xValues.join(', '),
                         loraIndex: null,
-                      }}
-                      yDraft={historyOverride.xyMeta.yAxis ? {
+                      })}
+                      yAxis={historyOverride.xyMeta.yAxis ? axisView({
                         axis: historyOverride.xyMeta.yAxis as never,
                         raw: (historyOverride.xyMeta.yValues as string[]).filter(Boolean).join(', '),
                         loraIndex: null,
-                      } : null}
+                      }) : null}
                       onCellClick={undefined /* 历史回看不允许选 cell 进 compare */}
                       selectedIndices={[]}
                       compositeUrl={historyOverride.source === 'disk' ? historyOverride.imageUrl : undefined}
@@ -1182,8 +1184,8 @@ export default function GeneratePage() {
                 <PreviewXYGrid
                   samples={samples}
                   taskId={currentTask.id}
-                  xDraft={gridXDraft}
-                  yDraft={gridYDraft}
+                  xAxis={axisView(gridXDraft)}
+                  yAxis={gridYDraft ? axisView(gridYDraft) : null}
                   onCellClick={handleCellClick}
                   selectedIndices={selectedIndices}
                 />

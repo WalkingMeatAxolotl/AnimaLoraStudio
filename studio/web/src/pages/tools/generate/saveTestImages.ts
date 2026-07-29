@@ -14,6 +14,7 @@
  * 失败 / 后端 403（开关被关）都静默吞掉 —— 不打扰用户主流程。
  */
 import { api } from '../../../api/client'
+import type { XYAxisType } from '../../../api/client'
 import { composeXYMatrix, type ExportInput } from './exportXY'
 import { buildCellSnapshot, type GenerateParamsSnapshot } from './paramsSnapshot'
 
@@ -69,9 +70,21 @@ export async function saveSingleSamples(
 export async function saveXYMatrix(
   input: ExportInput,
   xySnapshot: GenerateParamsSnapshot,
+  /** 轴**元信息**（落盘 per-cell snapshot 用）。
+   *
+   *  ExportInput 只带已格式化的显示标签（composite 画字用），而这里要写进 metadata 的
+   *  是轴类型 + 原始值 —— 两者不是一回事，lora_ckpt 轴尤其明显（显示 basename、
+   *  metadata 要完整值）。所以显式传，不从 labels 反推。 */
+  axes: {
+    x: { axis: XYAxisType; values: string[] }
+    y: { axis: XYAxisType; values: Array<string | null> } | null
+  },
 ): Promise<string | null> {
   try {
-    const { samples, taskId, xAxis, yAxis, xValues, yValues } = input
+    const { samples, taskId } = input
+    const { axis: xAxis, values: xValues } = axes.x
+    const yAxis = axes.y?.axis ?? null
+    const yValues = axes.y?.values ?? []
     const xLoraIndex = xySnapshot.xy_draft?.x.loraIndex ?? null
     const yLoraIndex = xySnapshot.xy_draft?.y?.loraIndex ?? null
 

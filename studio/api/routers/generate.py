@@ -26,7 +26,6 @@ import os
 import re
 import shutil
 import time
-import zlib
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -47,8 +46,16 @@ from ...domain.errors import (
     ValidationError,
 )
 from ...domain.comfy_parity import force_comfy_parity_runtime_config
+from ...domain.common import supports_capability
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
+from ...services import generate_history_index as history_index
+from ...services.generate_history_index import (
+    DATE_RE as _DATE_RE,
+    SCHEMA_VERSION,
+    XY_COMPOSITE_NAME as _XY_COMPOSITE_NAME,
+    XY_FOLDER_RE as _XY_FOLDER_RE,
+)
 from ...services.generation_metadata import (
     build_external_metadata,
     write_manifest as write_generation_metadata_manifest,
@@ -86,13 +93,11 @@ _V1_NAME_RE = re.compile(r"^image_(\d+)\.png$")
 # XY 文件夹布局（恢复 PreviewXYGrid 历史回看）：
 #   <date>/xy/xy plot <N>/{xy plot.png, cell x<i> y<j>.png, ...}
 # composite 是合成大图（导出 + 缩略图来源）；cell 是每格原图（PreviewXYGrid + 拖进 Comfy）
-_XY_FOLDER_RE = re.compile(r"^xy plot (\d+)$")
+# _XY_FOLDER_RE / _XY_COMPOSITE_NAME / _DATE_RE 移到 services.generate_history_index
+#（索引服务与本 router 共用一套布局约定），顶部 import 回来。
 _XY_TMP_FOLDER_RE = re.compile(r"^\.xy plot \d+\.tmp$")
-_XY_CELL_RE = re.compile(r"^cell x(\d+) y(\d+)\.png$")
-_XY_COMPOSITE_NAME = "xy plot.png"
 
 # 路径校验（disk-image / thumb / delete 全套共用）
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DISK_MODES = ("single", "xy")
 _PNG_NAME_SAFE_RE = re.compile(r"^[a-zA-Z0-9 ._-]+\.png$")
 
@@ -235,6 +240,17 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
             attn = detect_attention_backend()
+
+        # 族条件门控：blocks_to_swap 来自**全局**出图设置，是用户为某个模型调的，
+        # 但这次请求可以是另一个族的底模。原样透传时 daemon 在加载 DiT 时 fail-fast
+        # （"model_family=X 不支持 block swap"），整个出图直接崩。用户并没有为这个
+        # 模型要求 block swap，所以忽略而不是报错。
+        if blocks_to_swap and not supports_capability(body.model_family, "block_swap"):
+            logger.info(
+                "model_family=%s 不支持 block swap，本次出图忽略全局设置的 "
+                "blocks_to_swap=%s", body.model_family, blocks_to_swap,
+            )
+            blocks_to_swap = 0
 
         cfg = GenerateConfig(
             **model_paths,
@@ -498,7 +514,7 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     )
 
 
-SCHEMA_VERSION = 2
+# SCHEMA_VERSION 移到 services.generate_history_index（顶部 import 回来）
 
 
 def _format_a1111_parameters(
@@ -616,109 +632,8 @@ def _inject_png_metadata(
         return raw
 
 
-_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-
-
-def _decode_png_text_chunk(ctype: bytes, data: bytes) -> str | None:
-    """从 PNG 文本 chunk 取出 keyword==`anima_params` 的文本；非该 keyword /
-    解析失败返 None。
-
-    - tEXt：keyword\\0 + latin-1 明文
-    - zTXt：keyword\\0 + 压缩方法(1 字节) + zlib 压缩流（latin-1）
-    - iTXt：keyword\\0 + 压缩 flag(1) + 压缩方法(1) + 语言\\0 + 翻译 keyword\\0 + 文本(utf-8)
-
-    解码用 PIL 读 PNG 文本块的同一套规则（tEXt/zTXt → latin-1，iTXt → utf-8），
-    保证与旧 PIL 实现逐值一致。
-    """
-    keyword, sep, rest = data.partition(b"\x00")
-    if not sep or keyword != b"anima_params":
-        return None
-    try:
-        if ctype == b"tEXt":
-            return rest.decode("latin-1")
-        if ctype == b"zTXt":
-            return zlib.decompress(rest[1:]).decode("latin-1") if rest else None
-        if ctype == b"iTXt":
-            if len(rest) < 2:
-                return None
-            comp_flag = rest[0]
-            body = rest[2:]
-            _, _, body = body.partition(b"\x00")  # 跳语言 tag
-            _, _, body = body.partition(b"\x00")  # 跳翻译 keyword
-            return (zlib.decompress(body) if comp_flag else body).decode("utf-8")
-    except Exception:
-        return None
-    return None
-
-
-def _read_png_anima_params(path: Path) -> dict[str, Any] | None:
-    """从 PNG `anima_params` tEXt / zTXt / iTXt 块解析 params；无 / 解析失败返 None。
-
-    直接顺序扫 PNG chunk，读到第一个 IDAT（像素数据起始）前找 `anima_params`
-    文本块即停。`anima_params` 由 `PngInfo.add_text(..., zip=True)` 写成 zTXt 且
-    位于 IDAT 之前，必然在 header 区命中。
-
-    原实现走 `PIL.Image.open` 只读 header（不 decode 像素），但实测 PIL open 每
-    文件 ~30-40ms，disk-history 扫数百张落盘图要 10-15s（冷缓存可达 ~1min）。
-    手写 chunk 扫描每文件 ~0.1ms（实测 356 张 15s → 0.04s，~350×），且对全部
-    历史 PNG 与旧实现逐值一致。
-    """
-    try:
-        with open(path, "rb") as f:
-            if f.read(8) != _PNG_SIGNATURE:
-                return None
-            while True:
-                head = f.read(8)
-                if len(head) < 8:
-                    return None
-                length = int.from_bytes(head[:4], "big")
-                ctype = head[4:8]
-                if ctype == b"IDAT":
-                    return None  # 到像素数据，header 区没有 anima_params
-                if ctype in (b"tEXt", b"zTXt", b"iTXt"):
-                    text = _decode_png_text_chunk(ctype, f.read(length))
-                    f.read(4)  # CRC
-                    if text is not None:
-                        parsed = json.loads(text)
-                        return parsed if isinstance(parsed, dict) else None
-                else:
-                    f.seek(length + 4, 1)  # 跳 chunk data + CRC（IHDR 等）
-    except Exception:
-        return None
-
-
-def _migrate_anima_params(meta: dict[str, Any]) -> dict[str, Any]:
-    """v1 → v2 schema 迁移（决策 #18）。
-
-    v1: `lora_configs[].path` 是绝对路径（旧 schema 直接存 path）
-    v2: `loras[].name` basename + project_id/version_id；不存绝对路径
-
-    迁移规则：v1 PNG → 把 `lora_configs[].path` 末段 basename 当 v2 `loras[].name`，
-    保留 project_id/version_id/scale；旧 path 丢弃（隐私 + 跨机器死链）。
-    """
-    version = meta.get("schema_version", 1)
-    if version >= 2:
-        return meta
-    if version == 1:
-        legacy_loras = meta.pop("lora_configs", None)
-        if isinstance(legacy_loras, list):
-            new_loras: list[dict[str, Any]] = []
-            for lc in legacy_loras:
-                if not isinstance(lc, dict):
-                    continue
-                path = str(lc.get("path") or "")
-                name = path.replace("\\", "/").rsplit("/", 1)[-1] if path else ""
-                new_loras.append({
-                    "name": name,
-                    "scale": float(lc.get("scale", 1.0)),
-                    "project_id": lc.get("project_id"),
-                    "version_id": lc.get("version_id"),
-                })
-            meta["loras"] = new_loras
-        meta["schema_version"] = 2
-        return meta
-    # 未知版本 → 当作 v2 透传（forward-compat）
-    return meta
+# PNG anima_params 读取（_read_png_anima_params 等）与 v1→v2 迁移移到
+# services.generate_history_index —— 索引服务是唯一消费方。
 
 
 def _enrich_params_server_side(
@@ -965,194 +880,25 @@ async def save_test_image(
 
 
 # ---------------------------------------------------------------------------
-# 磁盘历史浏览：扫 PNG `anima_params` tEXt 块列 entries，按图片 URL 单独服务
+# 磁盘历史浏览：SQLite 索引（services.generate_history_index，sync-on-read）
+# 列 entries；图片 URL 单独服务。扫描/解析/迁移逻辑全在索引服务里。
 # ---------------------------------------------------------------------------
 
 
-def _disk_history_id(date_str: str, mode: str, filename: str) -> str:
-    """前端 dedup / merge 用的稳定 id。
-
-    用 sha1 短哈希替代直接拼 filename —— filename 含空格（决策 #6 "single image 1"）
-    塞进 React key / data-testid / URL fragment 会踩坑。哈希 12 位足够全局唯一。
-    """
-    h = hashlib.sha1(f"{date_str}/{mode}/{filename}".encode("utf-8")).hexdigest()[:12]
-    return f"disk:{h}"
-
-
-def _url_quote_filename(filename: str) -> str:
-    """文件名内空格 / 中文等 URL encode（决策 #6 文件名带空格）。后端返 URL
-    时直接 encode 好，前端拼接禁止。"""
-    return quote(filename, safe="")
-
-
-def _scan_single_dir(single_dir: Path, date_str: str) -> list[dict[str, Any]]:
-    """扫一个 `<date>/single/` 目录的所有 PNG，返回 disk-history entry 列表。"""
-    out: list[dict[str, Any]] = []
-    for img in single_dir.glob("*.png"):
-        if img.name.endswith(".tmp.png"):
-            continue  # atomic write tmp file 兜底
-        params = _read_png_anima_params(img)
-        if params is None:
-            continue
-        params = _migrate_anima_params(params)
-        try:
-            created_at = img.stat().st_mtime
-        except OSError:
-            continue
-        encoded = _url_quote_filename(img.name)
-        out.append({
-            "id": _disk_history_id(date_str, "single", img.name),
-            "date": date_str,
-            "mode": "single",
-            "filename": img.name,
-            "path": str(img),
-            "image_url": f"/api/generate/disk/image/{date_str}/single/{encoded}",
-            "thumb_url": f"/api/generate/disk/thumb/{date_str}/single/{encoded}?w=128",
-            "created_at": float(created_at),
-            "schema_version": int(params.get("schema_version", SCHEMA_VERSION)),
-            "params": params,
-        })
-    return out
-
-
-def _build_xy_meta_from_folder(
-    folder: Path, composite_params: dict[str, Any], date_str: str, folder_name: str,
-) -> dict[str, Any] | None:
-    """读 XY 文件夹下所有 cell 文件，按 composite 的 xy_draft 反查 xv/yv，
-    拼成 disk-history entry 的 `xy_meta` 字段。
-
-    决策：只读 composite 的 anima_params（一次 file open），cell 的 xi/yi
-    从文件名 parse（regex），xv/yv 从 composite.xy_draft.x.raw/y.raw split
-    后查表。**不**逐 cell 打开 anima_params —— 5×5 矩阵 1 次 open 而非 26 次。
-
-    返回 None 表示 composite 缺 xy_draft（异常状态，前端兜底走 <img>）。
-    """
-    xy_draft = composite_params.get("xy_draft")
-    if not isinstance(xy_draft, dict):
-        return None
-    x_axis_info = xy_draft.get("x")
-    if not isinstance(x_axis_info, dict):
-        return None
-    x_raw = str(x_axis_info.get("raw", ""))
-    x_values = [s.strip() for s in x_raw.split(",") if s.strip()]
-    x_axis = x_axis_info.get("axis")
-
-    y_axis_info = xy_draft.get("y") if xy_draft.get("y") else None
-    y_values: list[str | None]
-    y_axis: str | None
-    if isinstance(y_axis_info, dict):
-        y_raw = str(y_axis_info.get("raw", ""))
-        y_values = [s.strip() for s in y_raw.split(",") if s.strip()]
-        y_axis = y_axis_info.get("axis")
-    else:
-        y_values = [None]
-        y_axis = None
-
-    samples: list[dict[str, Any]] = []
-    for cell_file in folder.glob("cell x*.png"):
-        m = _XY_CELL_RE.match(cell_file.name)
-        if not m:
-            continue
-        xi = int(m.group(1))
-        yi = int(m.group(2))
-        xv: str | None = x_values[xi] if 0 <= xi < len(x_values) else None
-        yv: str | None = y_values[yi] if 0 <= yi < len(y_values) else None
-        enc_folder = _url_quote_filename(folder_name)
-        enc_file = _url_quote_filename(cell_file.name)
-        samples.append({
-            "path": cell_file.name,
-            "xy": {"xi": xi, "yi": yi, "xv": xv, "yv": yv},
-            "image_url": f"/api/generate/disk/image/{date_str}/xy/{enc_folder}/{enc_file}",
-        })
-    samples.sort(key=lambda s: (s["xy"]["yi"], s["xy"]["xi"]))
-    return {
-        "x_axis": x_axis,
-        "y_axis": y_axis,
-        "x_values": x_values,
-        "y_values": y_values,
-        "samples": samples,
-    }
-
-
-def _scan_xy_dir(xy_dir: Path, date_str: str) -> list[dict[str, Any]]:
-    """扫一个 `<date>/xy/` 目录 —— 只看子文件夹（新布局），跳所有平铺文件（legacy）。
-
-    每个匹配 `_XY_FOLDER_RE` 的子文件夹：
-    - 必须有 `xy plot.png` composite，否则跳过整个 folder
-    - 读 composite 的 anima_params，调 `_build_xy_meta_from_folder` 出 cells
-    """
-    out: list[dict[str, Any]] = []
-    for folder in xy_dir.iterdir():
-        if not folder.is_dir():
-            continue  # legacy 平铺 `xy plot N.png` 文件不再出现在 history（用户决策）
-        if not _XY_FOLDER_RE.match(folder.name):
-            continue
-        composite = folder / _XY_COMPOSITE_NAME
-        if not composite.is_file():
-            continue  # 没 composite 的文件夹（半成品 / 用户手动 mkdir）跳过
-        params = _read_png_anima_params(composite)
-        if params is None:
-            continue
-        params = _migrate_anima_params(params)
-        try:
-            created_at = composite.stat().st_mtime
-        except OSError:
-            continue
-        xy_meta = _build_xy_meta_from_folder(folder, params, date_str, folder.name)
-        enc_folder = _url_quote_filename(folder.name)
-        enc_composite = _url_quote_filename(_XY_COMPOSITE_NAME)
-        out.append({
-            "id": _disk_history_id(date_str, "xy", folder.name),
-            "date": date_str,
-            "mode": "xy",
-            "folder": folder.name,
-            "path": str(folder),
-            "image_url": f"/api/generate/disk/image/{date_str}/xy/{enc_folder}/{enc_composite}",
-            "thumb_url": f"/api/generate/disk/thumb/{date_str}/xy/{enc_folder}/{enc_composite}?w=128",
-            "created_at": float(created_at),
-            "schema_version": int(params.get("schema_version", SCHEMA_VERSION)),
-            "params": params,
-            "xy_meta": xy_meta,
-        })
-    return out
-
-
-def _scan_png_metadata(limit: int) -> list[dict[str, Any]]:
-    """扫 TEST_IMAGES_DIR 下所有 <date>/{single,xy}/ 的 anima_params。
-
-    - single 模式：扫 `<date>/single/*.png`
-    - xy 模式：扫 `<date>/xy/xy plot <N>/{composite + cells}` 子文件夹
-      （legacy 平铺 `<date>/xy/xy plot N.png` 不入列表 —— 用户决策 hide）
-
-    没 anima_params 的 PNG 不入列表（老数据 / 客户端没传 params）。
-    决策 #16：composite 只读 header（不 load 像素）；cell 不读 PNG（用文件名 parse + composite xy_draft 反查 xv/yv）。
-    决策 #18：v1→v2 migrate。
-    """
-    if not TEST_IMAGES_DIR.is_dir():
-        return []
-    out: list[dict[str, Any]] = []
-    for date_dir in TEST_IMAGES_DIR.iterdir():
-        if not date_dir.is_dir() or not _DATE_RE.match(date_dir.name):
-            continue
-        single_dir = date_dir / "single"
-        if single_dir.is_dir():
-            out.extend(_scan_single_dir(single_dir, date_dir.name))
-        xy_dir = date_dir / "xy"
-        if xy_dir.is_dir():
-            out.extend(_scan_xy_dir(xy_dir, date_dir.name))
-    out.sort(key=lambda e: e["created_at"], reverse=True)
-    return out[:limit]
-
-
 @router.get("/api/generate/disk/history")
-def list_disk_history(limit: int = 500) -> dict[str, Any]:
-    """列出所有落盘测试图（按 PNG `anima_params` tEXt 扫），按 created_at desc 排。
+def list_disk_history(limit: int = 2000) -> dict[str, Any]:
+    """列出所有落盘测试图，按 created_at desc 排。
 
-    前端历史栏拉一次 merge 到 IndexedDB 视图；entry.id 稳定，前端按 id dedup。
-    没有 anima_params 的图（老数据 / 客户端没传 params）不入列表。
+    数据来自 sync-on-read 的 SQLite 索引（PNG 仍是唯一 canonical，索引可
+    随时删除重建）：请求先做 scandir 快照 diff，只解析新增/变化的 PNG ——
+    落盘图上千张后每次进页面的全量重扫从秒级降到 ~10ms 级。
+
+    entry.id 稳定，前端按 id dedup。没有 anima_params 的图（老数据 /
+    客户端没传 params）不入列表。默认 limit 从 500 提到 2000 —— 索引化后
+    500 截断没有存在意义，老历史应该列得出来。
     """
-    limit = max(1, min(int(limit), 2000))
-    return {"entries": _scan_png_metadata(limit)}
+    limit = max(1, min(int(limit), 10000))
+    return {"entries": history_index.sync_and_list(TEST_IMAGES_DIR, limit)}
 
 
 @router.get("/api/generate/cache/index")
@@ -1372,9 +1118,10 @@ def delete_disk_xy_folder(date_str: str, folder: str) -> dict[str, Any]:
         return {"ok": True, "noop": True}
     try:
         shutil.rmtree(base)
-        return {"ok": True, "noop": False}
     except OSError as e:
         raise HTTPException(500, f"delete failed: {e}")
+    history_index.remove_entry(TEST_IMAGES_DIR, date_str, "xy", folder)
+    return {"ok": True, "noop": False}
 
 
 @router.delete("/api/generate/disk/{date_str}/{mode}/{filename}")
@@ -1391,6 +1138,7 @@ def delete_disk_image(date_str: str, mode: str, filename: str) -> dict[str, Any]
         return {"ok": True, "noop": True}
     try:
         path.unlink()
-        return {"ok": True, "noop": False}
     except OSError as e:
         raise HTTPException(500, f"delete failed: {e}")
+    history_index.remove_entry(TEST_IMAGES_DIR, date_str, mode, filename)
+    return {"ok": True, "noop": False}

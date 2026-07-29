@@ -98,31 +98,6 @@ def _vdir_for(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]
     return project, version, vdir
 
 
-def test_start_eval_clip_job_marks_clip_metrics_pending(isolated) -> None:
-    project, version, vdir = _new_project(isolated)
-    run = _sample_run(project, version, vdir)
-
-    with db.connection_for(isolated["db"]) as conn:
-        job, result = eval_clip.start_job(
-            conn,
-            project,
-            version,
-            vdir,
-            run["run_id"],
-            model_name="mock/clip",
-        )
-
-    assert job["kind"] == "eval_clip"
-    assert job["version_id"] == version["id"]
-    assert job["params_decoded"]["run_id"] == run["run_id"]
-    assert job["params_decoded"]["model_name"] == "mock/clip"
-    assert result["status"] == "running"
-    assert result["metric_states"]["clip_t"]["status"] == "pending"
-    assert result["metric_states"]["clip_i"]["status"] == "pending"
-    assert result["metric_states"]["dino_i"]["status"] == "not_run"
-    assert result["metrics"] == {}
-
-
 def test_run_clip_job_with_fake_scorer_preserves_existing_metrics(isolated) -> None:
     project, version, vdir = _new_project(isolated)
     run = _sample_run(project, version, vdir)
@@ -241,43 +216,6 @@ def test_feature_tensor_skips_mismatched_projection() -> None:
 
     assert got is output.pooler_output
     assert got.projected is False
-
-
-def test_eval_clip_http_start_queues_job(client: TestClient) -> None:
-    pid, vid = _make(client)
-    project, version, vdir = _vdir_for(pid, vid)
-    run = _sample_run(project, version, vdir)
-
-    started = client.post(
-        f"/api/projects/{pid}/versions/{vid}/eval/samples/{run['run_id']}/metrics/clip",
-        json={"model_name": "mock/clip"},
-    )
-
-    assert started.status_code == 200, started.text
-    body = started.json()
-    assert body["job"]["kind"] == "eval_clip"
-    assert body["result"]["metric_states"]["clip_t"]["status"] == "pending"
-    assert body["result"]["metric_states"]["clip_i"]["status"] == "pending"
-
-
-def test_eval_clip_http_start_uses_saved_default_model(client: TestClient) -> None:
-    pid, vid = _make(client)
-    project, version, vdir = _vdir_for(pid, vid)
-    run = _sample_run(project, version, vdir)
-    secrets.update({"eval_metrics": {"clip_model_name": "/models/local-clip"}})
-
-    started = client.post(
-        f"/api/projects/{pid}/versions/{vid}/eval/samples/{run['run_id']}/metrics/clip",
-        json={},
-    )
-
-    assert started.status_code == 200, started.text
-    body = started.json()
-    assert body["job"]["params_decoded"]["model_name"] == "/models/local-clip"
-    assert (
-        body["result"]["metric_states"]["clip_t"]["model_name"]
-        == "/models/local-clip"
-    )
 
 
 def test_eval_clip_job_kind_is_schedulable_and_gpu_bound(isolated) -> None:

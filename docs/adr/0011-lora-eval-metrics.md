@@ -381,3 +381,134 @@ ADR 背景里「学得像 ≠ 复制训练图」的目标相悖。本次重构�
 6. **统一日志走 `TaskLogDrawer`**。评估日志接全 app 统一的底部抽屉（与打标等页一致），把该 task 所有评估 job（出图 + 各指标 + baseline）按时间拼成一条流，header 右侧可中断（取消未完成 job、保留已算结果）。
 
 7. **仍未实现（二轮调研标记的真盲区，后续 PR）**：记忆护栏（生成图 vs 训练集最近邻 / SSCD，抓背诵训练图——DINO/CCIP 对 copy-paste 反给高分）、多样性塌缩（同 prompt 多 seed 不变=过拟合）。调研全文见 `docs/todo/eval-metrics-anime-adaptation.md`。
+
+## Addendum: EvalSession —— 一次评估 = 一个作业（2026-07-25，issue #465）
+
+线上反馈（[#465](https://github.com/WalkingMeatAxolotl/AnimaLoraStudio/issues/465)）：训练几个 200 epoch 的 LoRA 后跑指标评估，`studio_data/tasks` 涨到几千个目录，绝大多数里面只有一个 `run.log`。
+
+**根因不是日志路径选错，是作业粒度错。** 本 ADR 此前的设计（§候选方案 C + Addendum 2026-06-26 §1）把一次评估拆成一串普通队列作业：每个 checkpoint 一个出图作业，出图 worker 完成后再回头给每个启用指标各排一个作业。作业数是
+
+```
+(checkpoint 数 + baseline) × (1 出图 + 指标 runner 数)
+```
+
+200 个 checkpoint、默认 2 个 runner 就是 **603 个** tasks 行 + 603 个日志目录（0.17 R-2 起数据作业与 GPU 任务同台账，每个作业派发时建 `tasks/<id>/run.log`）。附带问题：运行状态散在三处（tasks 行 / `run.json` / `metrics.json`）、多个指标 worker 并发改写同一个 `metrics.json`、每个 checkpoint 重载底模、前端按子作业逐个拉日志。
+
+### 决策
+
+评估提升为一等领域对象，**一次评估 = 一个 `eval_session` 作业**：
+
+```
+eval_sessions        一次完整评估，拥有不可变 EvalPlan 和整体生命周期
+eval_candidates      本次评估的一个被测对象（某个 checkpoint，或 baseline 纯底模对照）
+eval_metric_results  某个候选在某个指标上的结果
+```
+
+`1 + M` 个执行阶段（出图 + 每个指标 runner）跑在同一个 worker 进程内部，阶段状态落这几张表 —— **DB 成为运行状态的唯一真相**，文件只存 artifacts 与导出（`report.json` 可从 DB 重新生成）。200 个 checkpoint 从 603 个作业降到 **1 个**。
+
+「Candidate」只是技术名称，不表示 Session 会替用户选优或晋级 —— 评估提供量化信号，选哪个 checkpoint 仍由用户在测试页的 XY 对比里凭视觉判断。
+
+### 推翻本 ADR 的两处旧决策
+
+1. **推翻 Addendum 2026-06-26 §5「重跑数据模型：永远只显示当次」**。改为**历史 Session 全部保留**：每次评估创建一个新 Session，旧的留档，UI 默认显示最新、可翻历史。
+
+   理由：一次评估一个作业之后，历史本身就是干净可读的（一次一条，不再是几百条散装记录），删掉就白费了；而「改了配置重训后指标怎么变」是评估的核心用途之一。原设计要删上一轮，是因为几百条散装 run 混在一起没法看 —— 那个前提已经不存在。
+
+   连带删除 `_clear_previous_task_eval`。
+
+2. **推翻 Addendum 2026-06-26 §6 的「多子作业合并日志」**。Session 只有一个作业，日志直接走统一的 `/api/logs/{task_id}`，不需要合并端点（`/eval/jobs`、`/eval/log` 一并删除）。
+
+### 组成
+
+- **EvalPlan（创建时冻结，之后只读）**：候选清单 + digest、验证集 manifest + digest、生成参数、启用的指标 runner、baseline 定义、checkpoint 策略。冻结验证集口径是为了「同一个 plan 跑出来的结果可比」—— 创建后用户往 `validation/` 加删图不影响这次评估。
+- **checkpoint 采样**（训练配置 `eval_checkpoint_skip_count`）：一个数值旋钮，「评一个后跳过几个」，**默认 0 = 每个保存的 checkpoint 都评**（与 0.21 行为一致，不是行为变更）。最终权重不参与采样、始终在内。
+
+  这里刻意**不做** `final` / `all` 之类的枚举档位：#465 的作业膨胀已经在 Session 层根治（603 → 1），不需要再靠限制 checkpoint 数来止血，所以默认全评；真嫌出图慢的用户调一个数字就够，多一层枚举只是多一个要解释的概念。
+
+  语义选「跳过 N 个」而不是「每 N 个取一个」，是因为用户不预先知道自己有几个 checkpoint —— 「评一个跳两个」可以直接想象，「每 3 个取 1 个」得先数总数。采样按**训练顺序**走（`list_lora_ckpts` 给的是展示序：final 在前、step/epoch 降序），这样同一批 checkpoint 的采样结果稳定、不随展示序变化。
+- **存储**：`studio_data/eval/sessions/<id>/`（`plan.json` / `samples/` / `report.json`），从训练 task 目录迁出 —— 删训练 task 不带走评估历史，反之亦然。checkpoint 不复制，plan 里只存**相对 version 目录**的便携路径 + digest（绝对路径会在 `studio_data` 迁移后失效）。
+- **调度**：`eval_session` 是 exclusive 档（按最重的阶段定档），跟 train / generate 走同一条平级 FIFO，执行位落 DATA 槽。这也消除了旧设计「出图作业彼此排队、指标作业等着各自的出图」的饥饿问题。
+- **digest 是廉价指纹**（size + mtime_ns 的短 hash），语义是「文件后来被换掉了吗」，不是内容校验 —— LoRA safetensors 几百 MB 到几 GB，创建 Session 时全文件 hash 会让入队卡住数十秒。
+
+### 存量处理
+
+- **代际判据清理**：`task_type ∈ (eval_samples, eval_clip, eval_dino, eval_tag, eval_ccip)` = 旧模型散装记录 → 清；`eval_session` = 正常历史记录 → 永久保留。判据刻意**不看**「run 文件还在不在」—— 那个口径会把正常历史当垃圾清掉（旧设计每次重跑删上一轮 run 文件、故意保留作业行）。
+- 启动期后台线程跑一次，标记存 `queue_settings`。旧那五种 kind 不再产生 → 有明确终点 → 存量清完的版本之后连同 `services/eval_cleanup.py` 一起退役。
+- `_v19` 迁移把升级瞬间残留的 pending/running 旧作业标 canceled（它们的 worker 模块已随本次改造删除），同 `_v18` 冻结旧 `project_jobs` 的处理方式。
+- **已知取舍**：旧评估的指标数据在 `metrics.json` 里、不依赖作业行，所以清理后旧结果的**指标仍可读**；但日志关联依赖作业行，清理后**旧结果看不到日志了**。历史结果的日志价值很低，而这批日志正是 #465 抱怨的东西。
+- 读侧对存量回落：该 version 没有任何 Session 时 `/eval/metrics` 读旧文件结果并带 `legacy: true`。
+
+### 首版留的桥梁
+
+`eval_candidates.run_id`：Session worker 内部仍复用现有 `eval_samples` 的 run 结构出图和算指标（`eval_root` 指向 `eval/sessions/<id>/samples/`），不改算法。等提取出 `GenerationEngine`、实现「底模只加载一次 + LoRA 热切换」之后这个字段退役。**本轮不做执行效率优化** —— 先消除作业 fan-out，模型重复加载是下一刀。
+
+### 不在本轮范围
+
+「后处理」一级页面、全局 Artifact Library、Metadata 编辑、LoRA Merge、发布流程、把旧 eval 结果迁进新数据模型。前端保持现有布局：Session 读侧返回与既有 `EvalMetricResult` 兼容的形状，指标卡 / 曲线 / 表格不动，只加一个历史 Session 切换。
+
+---
+
+## Addendum: 评估的归属与信息架构（2026-07-25，issue #465 续）
+
+上一条 Addendum 末尾写「前端保持现有布局，只加一个历史 Session 切换」。真机试用后
+这条**被推翻**：后端把评估变成一等作业之后，前端仍把它当「训练监控页里的一个指标
+section」，结果是评估有了独立的生命周期却没有独立的入口 —— 想看结果必须先猜是哪次
+训练产生的，评估作业的详情页则是死胡同（看不到结果也跳不过去）。
+
+### 评估属于 version，不属于 task
+
+`eval_sessions.parent_task_id` 降为**溯源**字段（「这次评估是那次训练结束后自动触发
+的」），不再是归属或导航的必经路径。理由是评估的对象是 `output/` 里的一组 checkpoint：
+
+- checkpoint 比 task 活得久 —— 删了队列历史，权重还在
+- resume 续训后，同一批 checkpoint 横跨两个 task
+- 手动丢进 `output/` 的 LoRA 根本没有对应 task
+- 用户想的是「比 epoch 34/36/38」，不是「比 task #217 的产物」
+
+连带 `POST /eval/run` 的 `task_id` 改为可选：省略即版本级评估。数据层零改动 —— 表里
+本来就存 `project_id` / `version_id`，`parent_task_id` 本来就可空。
+
+### 信息架构：列表在概览，结果在作业详情
+
+| 位置 | 职责 |
+|---|---|
+| 项目概览「评估」tab | 评估作业列表 + 「创建新评估」（modal 填参数）+ 运行中日志抽屉 |
+| 评估作业详情 | 概览 / 指标 / 样图 / 日志 —— 结果的规范位置 |
+| 训练作业详情 | 同样的指标 / 样图两个 tab，按 `parent_task_id` 过滤；本次训练没评估过则隐藏 |
+
+**评估不进流水线导航**：sidebar 那串是编号 phase（靠 version cursor 推进），评估没有
+「做完了往下走」的语义 —— 训练完随时可跑、可跑很多次。它属于概览里「详情 / 任务 /
+LoRA 文件」那一排，紧挨着它的对象。
+
+结果**只在作业详情渲染一份**。曾短暂在作业详情里嵌完整结果面板 + 在概览也放一份，
+两处的勾选状态、后续的导出 / 对比功能必然分叉，改回单一实现 + 深链。
+
+「这次训练有没有评估过」的判据用**本 task 名下有没有 EvalSession**，不读配置开关：
+配置是*当前*的、训练跑完后可能又被改过，而且用户可能手动为这次训练发起过评估。
+
+### 运行状态：DB 是真相，但终态要跟 task 对齐
+
+`eval_sessions.status` 由 worker 自己写，所以 worker 进程被 kill（cancel 的 SIGTERM、
+显存撞崖后强杀、断电）时最后那次写根本不会发生，Session 永远停在 `running`：队列里
+task 已经 failed，面板还在转圈，删不掉也没有重试入口。
+
+读侧统一过一遍 `reconcile_with_task`：`tasks` 的终态由 supervisor 兜底维护，是唯一
+可靠来源，据它反推 Session 并收口挂在 pending/running 的候选与指标。终态 Session 直接
+短路，代价是一条主键查询。
+
+「重试」= 重新入队**同一个** Session（新建一条 task 行，每次尝试留档），复用 worker
+已有的断点续跑：已 done 的候选跳过出图、已 done 的指标跳过重算。跑到第 180 个
+checkpoint 才崩时补的只是剩下那些，不是整轮重来。
+
+### 同一个进程连跑多候选必须显式释放底模
+
+旧模型每个候选一个子进程，进程退出由 OS 回收显存，所以出图路径从来不需要自己释放。
+Session 把全部候选放进**同一个 worker 进程**顺序跑之后这条隐含前提消失了：adapter 的
+forward hook 与 model 互相持有引用，引用计数回收不掉；CUDA caching allocator 也不把
+reserved 段还给驱动。真机症状是第 3 个候选起每张图 VAE decode 都要 offload 腾地方，
+第 4 个候选加载 transformer 时撞 WDDM 崖（显存被换到系统内存），表现为无报错卡死。
+
+出图循环用 `try/finally` 包住，退出前 detach 全部 adapter + `gc.collect()` +
+`empty_cache()`。这是止血；「底模只加载一次 + LoRA 热切换」（上一条 Addendum 说的
+下一刀）从「优化」升级为**必须** —— 每候选重载一次底模在 21 个候选上就是 ~10 分钟
+纯开销。

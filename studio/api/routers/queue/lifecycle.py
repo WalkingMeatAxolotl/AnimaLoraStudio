@@ -42,7 +42,7 @@ from ....supervisor.resources import (
 
 router = APIRouter()
 
-# R-5 档位视图：GPU 视图 = exclusive 档（train/reg_ai/generate/eval_samples），
+# R-5 档位视图：GPU 视图 = exclusive 档（train/reg_ai/generate/eval_session），
 # 数据视图 = light + io 档。由 resources.py 档位映射派生，防漂移。
 EXCLUSIVE_VIEW_TYPES: tuple[str, ...] = tuple(TASK_TYPE_RESOURCE_CLASS) + tuple(
     k for k, c in JOB_KIND_RESOURCE_CLASS.items() if c == RESOURCE_EXCLUSIVE

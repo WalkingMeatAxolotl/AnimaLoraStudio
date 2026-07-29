@@ -86,16 +86,6 @@ def test_parse_booru_tags_normalizes_and_dedupes() -> None:
     assert eval_tag.parse_booru_tags(None) == []
 
 
-def test_start_eval_tag_job_marks_tag_recall_pending(isolated) -> None:
-    project, version, vdir = _new_project(isolated)
-    run = _sample_run(project, version, vdir)
-    with db.connection_for(isolated["db"]) as conn:
-        job, result = eval_tag.start_job(conn, project, version, vdir, run["run_id"])
-    assert job["kind"] == "eval_tag"
-    assert result["metric_states"]["tag_recall"]["status"] == "pending"
-    assert result["metric_states"]["clip_t"]["status"] == "not_run"
-
-
 def test_run_tag_job_default_scorer_computes_recall(isolated, monkeypatch) -> None:
     project, version, vdir = _new_project(isolated)
     run = _sample_run(project, version, vdir)

@@ -5,9 +5,11 @@ Reference + prompts come from the version's held-out ``validation/`` set (see
 When ``validation/`` is empty the run falls back to the training config's sample
 prompts and scores CLIP-T only (no reference image → no CLIP-I / DINO-I).
 Generation params come from the version's ``sample_*`` config. There is no
-separate manifest file — each ``run.json`` is self-contained. Heavy model
-imports stay inside the default generator so API/tests can exercise the contract
-without loading torch.
+separate manifest file — each ``run.json`` is self-contained.
+
+**出图本身不在这个模块**：`run_sample_job` 只管 run 状态机，实际生成由调用方传入
+的 generator 完成（`eval_generation.DaemonSampleGenerator` —— 走测试出图那条常驻
+daemon）。所以本模块不 import torch，API / 测试可以只验契约。
 """
 from __future__ import annotations
 
@@ -21,7 +23,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import eval_validation
-from .projects import jobs as project_jobs
 from .projects import versions
 
 logger = logging.getLogger(__name__)
@@ -240,8 +241,13 @@ def _planned_items(
                 "prompt_id": f"val:{rel}",
                 "prompt": prompt,
                 "prompt_source": "caption" if _caption_text(image) else "empty",
-                "seed": gen_seed,
-                "filename": f"sample_{idx:04d}_s{gen_seed}.png",
+                # daemon 的多 prompt 循环是 seed = base_seed + img_idx（`prompts`
+                # 逐条出一张），所以逐 item 记真实 seed 而不是全用 run 级 base。
+                # 跨候选的可比性靠「同一个 prompt 在所有候选上同 seed」保证 ——
+                # 那个不变量仍然成立，而且不同 prompt 用同一 seed 反而容易出
+                # 相关性伪影。
+                "seed": gen_seed + idx,
+                "filename": f"sample_{idx:04d}_s{gen_seed + idx}.png",
                 "path": "",
                 "reference_image": rel,
                 "status": "pending",
@@ -255,8 +261,8 @@ def _planned_items(
             "prompt_id": f"prompt:{idx}",
             "prompt": prompt,
             "prompt_source": "sample_prompt",
-            "seed": gen_seed,
-            "filename": f"sample_{idx:04d}_s{gen_seed}.png",
+            "seed": gen_seed + idx,
+            "filename": f"sample_{idx:04d}_s{gen_seed + idx}.png",
             "path": "",
             "reference_image": None,
             "status": "pending",
@@ -397,61 +403,23 @@ def create_run(
     return run
 
 
-def start_job(
-    conn,
-    project: dict[str, Any],
-    version: dict[str, Any],
-    version_dir: Path,
-    *,
-    checkpoint_path: str | None = None,
-    auto_metrics: bool = False,
-    auto_source: dict[str, Any] | None = None,
-    eval_root: Path | None = None,
-    baseline: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    run = create_run(
-        project,
-        version,
-        version_dir,
-        checkpoint_path=checkpoint_path,
-        auto_metrics=auto_metrics,
-        auto_source=auto_source,
-        eval_root=eval_root,
-        baseline=baseline,
-    )
-    params: dict[str, Any] = {
-        "version_id": int(version["id"]),
-        "run_id": run["run_id"],
-        "checkpoint_path": run["checkpoint"]["path"],
-    }
-    if auto_metrics:
-        params["auto_metrics"] = True
-    if auto_source:
-        params["auto_source"] = dict(auto_source)
-    if eval_root is not None:
-        task_id = int((auto_source or {}).get("task_id") or 0)
-        if task_id:
-            params["task_id"] = task_id
-    job = project_jobs.create_job(
-        conn,
-        project_id=int(project["id"]),
-        version_id=int(version["id"]),
-        kind=JOB_KIND,
-        params=params,
-    )
-    return job, run
-
-
 def run_sample_job(
     project: dict[str, Any],
     version: dict[str, Any],
     version_dir: Path,
     run_id: str,
     *,
-    generator: SampleGenerator | None = None,
+    generator: SampleGenerator,
     on_progress: Callable[[str], None] | None = None,
     eval_root: Path | None = None,
 ) -> dict[str, Any]:
+    """跑一个候选的出图。
+
+    `generator` 是必需参数：出图现在走 `eval_generation.DaemonSampleGenerator`，
+    它的生命周期是**一次评估**（底模常驻、候选之间只热换 LoRA 权重），必须由调用
+    方在候选循环之外持有。给个默认值会退化成每候选起一个 daemon —— 比旧的自己
+    加载还慢。
+    """
     progress = on_progress or (lambda _line: None)
     run = load_run(version_dir, run_id, eval_root)
     if run is None:
@@ -467,7 +435,7 @@ def run_sample_job(
     save_run(version_dir, run, eval_root)
 
     try:
-        (generator or _default_generator)(run, version_dir, progress)
+        generator(run, version_dir, progress)
     except Exception as exc:
         run = load_run(version_dir, run_id, eval_root) or run
         run["status"] = "failed"
@@ -527,165 +495,3 @@ def sample_image_path(version_dir: Path, run_id: str, filename: str, eval_root: 
     except ValueError as exc:
         raise EvalSamplesError(f"sample image 路径逃逸: {filename!r}") from exc
     return resolved
-
-
-def _default_generator(
-    run: dict[str, Any],
-    version_dir: Path,
-    progress: Callable[[str], None],
-) -> None:
-    import random
-    import sys
-
-    import torch
-
-    runtime_dir = Path(__file__).resolve().parents[2] / "runtime"
-    repo_root = runtime_dir.parent
-    for path in (runtime_dir, repo_root):
-        text = str(path)
-        if text not in sys.path:
-            sys.path.insert(0, text)
-
-    import anima_train as _T  # noqa: WPS433
-    from studio import secrets
-    from studio.services import version_config
-    from studio.services.inference.core import LoRASpec, apply_loras
-
-    project = {"id": run["project_id"], "slug": run["project_slug"]}
-    version = {"id": run["version_id"], "label": run["version_label"]}
-    cfg = version_config.read_version_config(project, version)
-
-    generation = run.get("generation") if isinstance(run.get("generation"), dict) else {}
-    width = int(generation.get("width") or cfg.get("sample_width") or cfg.get("resolution") or 1024)
-    height = int(generation.get("height") or cfg.get("sample_height") or cfg.get("resolution") or 1024)
-    width = max(16, (width // 16) * 16)
-    height = max(16, (height // 16) * 16)
-    steps = int(generation.get("steps") or cfg.get("sample_infer_steps") or 25)
-    cfg_scale = float(
-        generation.get("guidance_scale")
-        or generation.get("cfg_scale")
-        or cfg.get("sample_cfg_scale")
-        or 4.0
-    )
-    negative_prompt = str(generation.get("negative_prompt") or cfg.get("sample_negative_prompt") or "")
-    sampler_name = str(generation.get("sampler_name") or cfg.get("sample_sampler_name") or "er_sde")
-    scheduler = str(generation.get("scheduler") or cfg.get("sample_scheduler") or "simple")
-    # baseline run 用 lora_scale=0（纯底模对照）。不能写 `or 1.0`——0.0 是 falsy 会被
-    # 当成「没设」回退到 1.0，baseline 就变成正常 LoRA 跑、Δ 恒为 0。
-    _raw_scale = generation.get("lora_scale")
-    lora_scale = float(_raw_scale) if _raw_scale is not None else 1.0
-    precision = str(cfg.get("mixed_precision") or "bf16")
-    try:
-        lora_merge_precision = str(
-            getattr(secrets.load().generate, "lora_merge_precision", "fp32") or "fp32"
-        )
-    except Exception:
-        lora_merge_precision = "fp32"
-    backend = str(cfg.get("attention_backend") or "flash_attn")
-    use_flash = backend == "flash_attn"
-    use_xformers = backend == "xformers"
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if precision == "bf16" else torch.float32
-
-    bases = [Path.cwd(), runtime_dir, repo_root]
-    transformer_path = _T.resolve_path_best_effort(str(cfg["transformer_path"]), bases)
-    vae_path = _T.resolve_path_best_effort(str(cfg["vae_path"]), bases)
-    text_encoder_path = _T.resolve_path_best_effort(str(cfg["text_encoder_path"]), bases)
-    t5_tokenizer_path = str(cfg.get("t5_tokenizer_path") or "")
-    if t5_tokenizer_path:
-        t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
-
-    progress("[eval-samples] loading base model")
-    diffusion_root = _T.find_diffusion_pipe_root()
-    family = _T.resolve_family(cfg)  # D8'
-    items_for_precache = run.get("items") if isinstance(run.get("items"), list) else []
-    from training.sysmem import check_load_budget
-
-    check_load_budget(
-        True,
-        weight_paths=[transformer_path, vae_path, text_encoder_path],
-        stage="评估出图模型加载",
-    )
-    vae = family.load_vae(vae_path, device, dtype)
-    # 族 opaque 文本栈不拆包；eval prompt 是 ad-hoc 输入，关缓存
-    text_stack = family.load_text(
-        text_encoder_path, device, dtype,
-        t5_tokenizer_path=t5_tokenizer_path or None,
-        purpose="generate",
-        cache_enabled=False,
-    )
-    # TE 先行编排（krea2，daemon/CLI 同款）：items 的 prompt 集合封闭——
-    # DiT 加载前预编码全部并彻底释放 TE，任一时刻 GPU 只有一个大模型。
-    # anima 文本栈无此 API 自然跳过。
-    precache = getattr(text_stack, "precache_online_prompts", None)
-    if callable(precache):
-        try:
-            prompts_all = [
-                str(item.get("prompt") or "") for item in items_for_precache
-            ] + [str(negative_prompt or "")]
-            encoded = precache(prompts_all)
-            release = getattr(text_stack, "release_model", None)
-            if callable(release):
-                release()
-            if encoded:
-                progress(f"[eval-samples] precached {encoded} prompts; TE released")
-        except Exception:
-            logger.exception("eval prompt 预编码失败；退回逐图惰性编码")
-
-    model = family.load_dit(
-        transformer_path, device, dtype,
-        attention_backend=("flash_attn" if use_flash else "none"), repo_root=diffusion_root,
-        purpose="generate",
-    )
-    if use_xformers:
-        _T.enable_xformers(model)
-
-    checkpoint = version_dir / run["checkpoint"]["path"]
-    adapters = apply_loras(
-        model, [LoRASpec(path=str(checkpoint), scale=lora_scale)], device, dtype,
-        family_id=family.spec.family_id,
-        lora_merge_precision=lora_merge_precision,
-    )
-    _ = adapters  # keep adapter references alive for forward hooks
-    model.eval()
-
-    items = run.get("items") if isinstance(run.get("items"), list) else []
-    scoped_root = (
-        Path(str(run.get("eval_root")))
-        if str(run.get("storage_scope") or "") == "task" and run.get("eval_root")
-        else None
-    )
-    for idx, item in enumerate(items):
-        run = mark_item_running(version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, scoped_root)
-        seed = int(item["seed"])
-        random.seed(seed)
-        torch.manual_seed(seed)
-        output = sample_image_path(version_dir, run["run_id"], item["filename"], scoped_root)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        progress(
-            f"[eval-samples] {idx + 1}/{len(items)} seed={seed} "
-            f"prompt={str(item.get('prompt') or '')[:80]}"
-        )
-        try:
-            img = family.sample_image(
-                model, vae, text_stack,
-                str(item.get("prompt") or ""),
-                height=height,
-                width=width,
-                steps=steps,
-                cfg_scale=cfg_scale,
-                negative_prompt=negative_prompt or None,
-                sampler_name=sampler_name,
-                scheduler=scheduler,
-                device=device,
-                dtype=dtype,
-                seed=seed,
-                vram_policy="auto",
-            )
-            img.save(output)
-            run = mark_item_done(version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, scoped_root)
-        except Exception as exc:  # noqa: BLE001
-            run = mark_item_failed(
-                version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, str(exc), scoped_root
-            )

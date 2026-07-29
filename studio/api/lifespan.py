@@ -111,6 +111,23 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     # 装 shutdown 取消 SSE 连接时的 CancelledError 日志过滤器（详见 class docstring）
     _install_uvicorn_cancelled_asgi_filter()
 
+    # 单实例锁：必须在一切破坏性启动副作用（db migration、startup_clean rmtree
+    # 活 session 目录……）之前。uvicorn 先跑 lifespan 后 bind 端口 —— 双开时
+    # 注定 bind 失败的实例没有这把锁会先把活 server 的 cache 目录清掉再死
+    # （2026-07-28 丢图 root cause）。锁随进程退出自动释放，无 stale 问题。
+    from ..infrastructure.paths import STUDIO_DATA
+    from ..infrastructure.single_instance import LOCK_FILENAME, SingleInstanceLock
+    instance_lock = SingleInstanceLock(STUDIO_DATA / LOCK_FILENAME)
+    if not instance_lock.acquire():
+        logger.error(
+            "another Studio server is already running for %s; "
+            "refusing to start (close the other instance first)", STUDIO_DATA,
+        )
+        raise RuntimeError(
+            f"another Studio server is already running for {STUDIO_DATA}; "
+            "close the other instance first"
+        )
+
     # PR-5：从 server.py 顶层搬来的 import-time 副作用 —— 现在跟随 app 启动
     # 才落盘，便于测试 / 工具 import 而不写文件系统。
     ensure_dirs()
@@ -121,7 +138,6 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     from ..services.inference import disk_cache as generate_cache
     from ..services import models as _md
     from ..services import system_stats
-    from ..infrastructure.paths import STUDIO_DATA
     cleanup_stale_generate_tempdirs()
 
     # 加密磁盘 cache 初始化：startup_clean 清掉残留 session-* 目录（上次 SIGKILL
@@ -159,6 +175,20 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
                 exc,
             )
     threading.Thread(target=_bg_download_tag_dict, name="tag-dict-bg-download", daemon=True).start()
+
+    # 旧模型 eval 作业存量清理（#465）：0.21 及以前一次评估散成几百条作业行 + 几百个
+    # 只含 run.log 的目录。跑一次、写标记、之后跳过。放后台线程是因为几千条存量要逐个
+    # rmtree，不该拖慢启动。存量清完的版本之后连同 services/eval_cleanup.py 一起退役。
+    def _bg_cleanup_legacy_eval() -> None:
+        from ..services import eval_cleanup
+        try:
+            with db.connection_for() as conn:
+                eval_cleanup.cleanup_legacy_eval_on_startup(conn)
+        except Exception:
+            logger.exception("legacy eval cleanup failed (harmless; will retry next start)")
+    threading.Thread(
+        target=_bg_cleanup_legacy_eval, name="legacy-eval-cleanup", daemon=True
+    ).start()
 
     bus.attach_loop(asyncio.get_running_loop())
 
@@ -218,3 +248,5 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         # shutdown 清整个 session 目录 + 进程退出 aes_key 一起没（即便 rmtree
         # 失败，残留文件无 key 也是乱字节，下次启动 startup_clean 兜底）
         generate_cache.clear_all()
+        # 最后放单实例锁（启动中途 raise 不经这里没关系：锁随进程退出自动释放）
+        instance_lock.release()

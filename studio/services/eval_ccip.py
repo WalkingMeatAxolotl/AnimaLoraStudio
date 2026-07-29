@@ -11,10 +11,12 @@ metric head，出成对 difference 矩阵），按变体 ``metrics.json`` 的 th
 """
 from __future__ import annotations
 
+import contextlib
+import functools
 from pathlib import Path
 from typing import Any, Callable
 
-from . import eval_metrics, eval_samples
+from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
 
 JOB_KIND = "eval_ccip"
@@ -39,49 +41,6 @@ class EvalCcipError(Exception):
 # ---------------------------------------------------------------------------
 # job lifecycle（与 eval_dino 同构，metric key = ccip_i）
 # ---------------------------------------------------------------------------
-
-
-def start_job(
-    conn,
-    project: dict[str, Any],
-    version: dict[str, Any],
-    version_dir: Path,
-    run_id: str,
-    *,
-    model_name: str | None = None,
-    eval_root: Path | None = None,
-    task_id: int | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Queue a CCIP-I metric job and mark ccip_i pending."""
-    model = _normalize_model_name(model_name)
-    run = _load_scored_run(project, version, version_dir, run_id, eval_root)
-    scoped_root = _run_eval_root(run, eval_root)
-    inferred_task_id = _run_task_id(run, task_id)
-    params: dict[str, Any] = {
-        "version_id": int(version["id"]),
-        "run_id": str(run["run_id"]),
-        "model_name": model,
-    }
-    if inferred_task_id:
-        params["task_id"] = int(inferred_task_id)
-    job = project_jobs.create_job(
-        conn,
-        project_id=int(project["id"]),
-        version_id=int(version["id"]),
-        kind=JOB_KIND,
-        params=params,
-    )
-    result = _save_state(
-        version_dir,
-        str(run["run_id"]),
-        _metric_state(
-            "pending", reason="eval_ccip job queued",
-            model_name=model, job_id=int(job["id"]),
-        ),
-        clear_value=True,
-        eval_root=scoped_root,
-    )
-    return job, result
 
 
 def run_ccip_job(
@@ -319,10 +278,27 @@ def _ccip_preprocess(path: Path):
     return (arr - mean) / std  # (3, 384, 384)
 
 
-def _default_scorer(run, version_dir, model_name, progress):
+def _load_ccip(model_name: str, progress: Callable[[str], None]):
     import json
-    import numpy as np
+
     from studio.services.models.downloader import ensure_ccip_model
+
+    model_dir = ensure_ccip_model(model_name, on_log=progress)
+    threshold = float(
+        json.loads((model_dir / "metrics.json").read_text(encoding="utf-8"))["threshold"]
+    )
+    progress(f"[eval-ccip] loading CCIP onnx (threshold={threshold:.4f})")
+    feat_sess = _make_session(model_dir / "model_feat.onnx")
+    metric_sess = _make_session(model_dir / "model_metrics.onnx")
+    return (
+        feat_sess, metric_sess,
+        feat_sess.get_inputs()[0].name, metric_sess.get_inputs()[0].name,
+        threshold,
+    )
+
+
+def _default_scorer(run, version_dir, model_name, progress, pool=None):
+    import numpy as np
 
     eval_root = _run_eval_root(run)
     items = _done_image_items(run, version_dir, eval_root)
@@ -338,15 +314,10 @@ def _default_scorer(run, version_dir, model_name, progress):
             "ccip_i_reason": "no paired reference/image pairs",
         }
 
-    model_dir = ensure_ccip_model(model_name, on_log=progress)
-    threshold = float(
-        json.loads((model_dir / "metrics.json").read_text(encoding="utf-8"))["threshold"]
+    pool = pool if pool is not None else eval_model_pool.ModelPool("ccip")
+    feat_sess, metric_sess, feat_in, metric_in, threshold = pool.get(
+        model_name, lambda: _load_ccip(model_name, progress),
     )
-    progress(f"[eval-ccip] loading CCIP onnx (threshold={threshold:.4f})")
-    feat_sess = _make_session(model_dir / "model_feat.onnx")
-    metric_sess = _make_session(model_dir / "model_metrics.onnx")
-    feat_in = feat_sess.get_inputs()[0].name
-    metric_in = metric_sess.get_inputs()[0].name
 
     def _feat(path: Path):
         data = _ccip_preprocess(path)[None].astype(np.float32)  # (1,3,384,384)
@@ -370,3 +341,21 @@ def _default_scorer(run, version_dir, model_name, progress):
             if same else "no paired reference/image pairs"
         ),
     }
+
+
+@contextlib.contextmanager
+def shared_scorer(progress: Callable[[str], None] | None = None):
+    """阶段级共享的 scorer：CCIP session 只加载一次，跑完全部候选后释放。
+
+    `_stage_metric` 本来就是「一个指标跑完所有候选再换下一个」，但
+    `_default_scorer` 是旧模型（每候选一个子进程）留下的形状 —— 模型写在函数体里
+    加载，于是 200 个 checkpoint 就加载 200 次。池子交给调用方持有而不是放模块级
+    全局：全局状态会跨测试泄漏（成组跑时上一个用例的 tagger 被下一个复用）。
+
+    `run_*_job(scorer=None)` 独立调用时仍是「加载 → 用一次 → 返回即释放」，行为不变。
+    """
+    pool = eval_model_pool.ModelPool("ccip")
+    try:
+        yield functools.partial(_default_scorer, pool=pool)
+    finally:
+        pool.release(progress)
