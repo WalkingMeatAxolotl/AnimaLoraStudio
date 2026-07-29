@@ -281,7 +281,7 @@ LoRA 参数全精度——kohya / musubi 生态的 `fp8_base` 语义）：
 | `sample_sampler_name` / `sample_scheduler` | `euler` / `simple` | 与 ComfyUI 里挂 Krea 2 模型时选的 **euler + simple** 逐字对应 |
 | `sample_infer_steps` / `sample_cfg_scale` | 28 / 4.5 | Raw 官方口径 |
 | `text_encoder_cache` | `true` | 训练开始先把全部 caption 预编码成缓存、随即释放 Qwen3-VL（省约 9 GB 显存）；关闭则 TE 常驻在线编码（适合大显存、小磁盘的云端） |
-| `attention_backend` | `none`（PyTorch SDPA） | Krea 2 加载器固定 SDPA |
+| `attention_backend` | SDPA（配置值为 `none`） | Krea 2 加载器固定 SDPA |
 | `shuffle_caption` / `keep_tokens` / `tag_dropout` | 关闭 | tag 生态操作对自然语言 caption 不适用 |
 
 **能力差异**：NaViT 打包、SRA、LeapAlign、compile_blocks 为仅 Anima 功能（Krea 2 下自动隐藏）；
