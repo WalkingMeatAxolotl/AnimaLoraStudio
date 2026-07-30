@@ -1008,12 +1008,22 @@ class CachedLatentDataset(Dataset):
         """图像对应的 npz 缓存路径。
 
         单分辨率图 → ``img.npz``（不动现有缓存）；同图 fan-out 到多分辨率 →
-        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。
+        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。指定
+        ``cache_dir`` 时保留图片相对数据集根目录的子目录结构，避免同名文件冲突。
         """
         img_path = Path(img_path)
+        cache_path = img_path
+        cache_dir = getattr(self, "cache_dir", None)
+        if cache_dir is not None:
+            data_root = getattr(self.base_image_dataset, "data_dir", None)
+            try:
+                relative = img_path.resolve().relative_to(Path(data_root).resolve())
+            except (AttributeError, TypeError, ValueError):
+                relative = Path(img_path.name)
+            cache_path = cache_dir / relative
         if target_reso is not None and str(img_path) in getattr(self, "_multi_reso", set()):
-            return img_path.with_suffix(f".r{int(target_reso)}.npz")
-        return img_path.with_suffix(".npz")
+            return cache_path.with_suffix(f".r{int(target_reso)}.npz")
+        return cache_path.with_suffix(".npz")
 
     def _is_cache_valid(self, img_path, npz_path, target_reso=None):
         """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
@@ -1220,6 +1230,7 @@ class CachedLatentDataset(Dataset):
                     _entry_sample = self.samples[entry["index"]]
                     npz_path = self._get_npz_path(
                         _entry_sample["image"], _entry_sample.get("target_reso"))
+                    npz_path.parent.mkdir(parents=True, exist_ok=True)
                     self.np.savez(
                         npz_path,
                         bucket_w=entry["bucket_w"],
@@ -1248,6 +1259,7 @@ class CachedLatentDataset(Dataset):
                 _entry_sample = self.samples[entry["index"]]
                 npz_path = self._get_npz_path(
                     _entry_sample["image"], _entry_sample.get("target_reso"))
+                npz_path.parent.mkdir(parents=True, exist_ok=True)
                 self.np.savez(
                     npz_path,
                     bucket_w=entry["bucket_w"],

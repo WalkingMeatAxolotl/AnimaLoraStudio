@@ -4,6 +4,10 @@
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。支持两个模型族的 LoRA 训练：[Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调，轻量入门）与 [Krea 2](https://huggingface.co/krea/Krea-2-Raw)（12.9B 单流 MMDiT，Raw 训练 / Turbo 快速出图）。
 
+> **Windows ROCm 分支**：支持外部 ROCm Python、AMD/HIP 状态检测、bf16 SDPA 和
+> ComfyUI 单文件 Anima 文本编码器。先运行 `studio_rocm.bat --check`，完整说明见
+> [Windows ROCm 指南](docs/user-guide/rocm-windows.md)。
+
 ![Studio 训练页](docs/images/studio-train.png)
 
 ## 特性
@@ -26,12 +30,13 @@
 
 ## 快速开始
 
-**先决条件**（需自备）：NVIDIA GPU + CUDA · Python 3.10+ · Node.js 18+ · Git。
+**先决条件**（需自备）：NVIDIA GPU + CUDA，或已配置的 Windows ROCm Python（Anima）· Python 3.10+ · Node.js 18+ · Git。
 
 ```bash
 git clone https://github.com/WalkingMeatAxolotl/AnimaLoraStudio
 cd AnimaLoraStudio
 studio.bat          # Windows
+studio_rocm.bat     # Windows ROCm（复用已有 Python/torch）
 ./studio.sh         # Linux / macOS
 ```
 
@@ -41,7 +46,7 @@ studio.bat          # Windows
 
 ## 硬件要求
 
-- **GPU**：NVIDIA（A 卡 / Apple Silicon 不支持），按模型族分档：
+- **GPU**：CUDA 为上游默认；本分支另验证了 Windows ROCm + RX 7900 XTX 的 Anima 训练（见 ROCm 指南）。Apple Silicon 不支持。按模型族分档：
   - **Anima**：**16 GB+ 显存推荐**（RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090 等）；**8 GB 极限可跑**（需关 sample 输出 + 减小 batch / 分辨率，速度明显下降）。
   - **Krea 2**（12.9B）：**训练**用官方 fp8 底模 24 GB 级可跑，bf16 底模需 32 GB；**出图**用 fp8 底模 16 GB 起（「省显存」档），bf16 底模建议 32 GB。开 **Block 交换**（fp8 底模换出全部层）：**训练**下探到 **12 GB**（整卡约 10 GB，16 GB 更从容），**出图**下探到 **8 GB**（1024² 整卡约 6.3 GB），代价是速度约慢 4% 与相应的内存占用。
 - **RAM**：16 GB+；Krea 2 建议 32 GB+（加载 26.3 GB 单文件权重时内存峰值约等于文件大小）；开 Block 交换按换出层数额外常驻（fp8 底模全换出约 11 GB）
@@ -51,7 +56,7 @@ studio.bat          # Windows
 
 总入口 [docs/README.md](docs/README.md)。
 
-- **上手** → [getting-started.md](docs/user-guide/getting-started.md)
+- **上手** → [getting-started.md](docs/user-guide/getting-started.md) · [Windows ROCm](docs/user-guide/rocm-windows.md)
 - **用户向** → [标签格式](docs/user-guide/tagging-guide.md) · [训练技巧 / 算法](docs/user-guide/training-tips.md) · [优化器](docs/user-guide/optimizers.md) · [caption 格式](docs/user-guide/caption-format.md)
 - **架构** → [跨步骤总览](docs/architecture/studio-pipeline.md) · [项目结构](docs/architecture/project-structure.md) · [studio 内部](studio/README.md)
 - **CLI 工具** → [tools/README.md](tools/README.md)

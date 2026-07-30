@@ -158,6 +158,11 @@ class TrainingConfig(BaseModel):
             disable_hint="NaViT 打包按 latent token 数预算分包，必须预编码缓存",
         ),
     )
+    latent_cache_dir: str = Field(
+        "",
+        description="独立 VAE latent 缓存目录；留空时仍写在图片旁，训练集只读时请指定可写目录",
+        json_schema_extra=_meta("system", show_when="cache_latents==true", advanced=True),
+    )
     vae_cache_batch_size: int = Field(
         0, ge=0,
         description="VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",

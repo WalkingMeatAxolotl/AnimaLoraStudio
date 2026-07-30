@@ -21,6 +21,7 @@
 | 0013 | [Changelog 迁入公告系统（移除 release_notes.yaml + 旧端点）](0013-changelog-into-announcements.md) | Accepted | 2026-06-28 |
 | 0014 | [测试出图延迟加载 VAE，并分块合并 FP8 LoRA](0014-lazy-vae-and-chunked-fp8-lora-merge.md) | Accepted | 2026-07-20 |
 | 0015 | [用实测峰值协调测试出图的 TE / DiT 驻留](0015-calibrated-te-dit-vram-orchestration.md) | Accepted | 2026-07-20 |
+| 0016 | [以外部 Python 运行时接入 Windows ROCm](0016-windows-rocm-external-runtime.md) | Accepted | 2026-07-30 |
 
 ## 状态值
 

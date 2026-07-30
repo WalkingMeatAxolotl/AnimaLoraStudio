@@ -1,0 +1,47 @@
+# Copy this file outside the repository and replace the paths for your machine.
+model_family: anima
+transformer_path: E:/aiwork/ComfyUI/models/unet/oneObsessionAnima_v20.safetensors
+vae_path: E:/aiwork/ComfyUI/models/vae/qwen_image_vae.safetensors
+# This is a Qwen text encoder, not a second VAE. Single-file ComfyUI weights are supported.
+text_encoder_path: E:/aiwork/ComfyUI/models/clip/anima_baseV10_txt.safetensors
+# Leave empty to auto-discover ComfyUI/comfy/text_encoders/t5_tokenizer.
+t5_tokenizer_path: ""
+data_dir: D:/10_Sylvia_V01
+
+# Minimal end-to-end smoke resolution. Raise after this 1-step test passes.
+resolution: [256]
+aspect_ratio_limit: 2.0
+cache_latents: true
+latent_cache_dir: ./.cache/latents/sylvia
+vae_tiling: auto
+num_workers: 0
+
+lora_type: lora
+lora_rank: 8
+lora_alpha: 8.0
+epochs: 1
+max_steps: 1
+batch_size: 1
+grad_accum: 1
+# The 256 px one-step smoke fits a 24 GB card without recomputation.
+grad_checkpoint: false
+kv_trim: true
+learning_rate: 0.0001
+optimizer_type: adamw
+lr_scheduler: none
+mixed_precision: bf16
+
+# ROCm uses PyTorch's CUDA device API but must use the portable SDPA kernel.
+attention_backend: none
+
+output_dir: ./output/rocm-smoke
+output_name: anima_rocm_smoke
+save_every_epochs: 0
+save_every_steps: 0
+save_state_every_epochs: 0
+save_state_every_steps: 0
+sample_every: 0
+sample_steps: 0
+no_progress: true
+log_every: 1
+seed: 42

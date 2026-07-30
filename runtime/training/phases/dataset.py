@@ -178,8 +178,10 @@ def run(ctx: TrainingContext) -> None:
         cache_batch_size = int(getattr(args, "vae_cache_batch_size", 0) or 0)
         if cache_batch_size <= 0:
             cache_batch_size = int(getattr(args, "batch_size", 1) or 1)
+        latent_cache_dir = str(getattr(args, "latent_cache_dir", "") or "").strip()
         ctx.dataset = CachedLatentDataset(
             ctx.dataset, ctx.vae, ctx.device, ctx.vae_dtype,
+            cache_dir=latent_cache_dir or None,
             cache_batch_size=cache_batch_size,
             encode_tiled=getattr(args, "cache_encode_tiled", False),
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
@@ -188,8 +190,10 @@ def run(ctx: TrainingContext) -> None:
             label="训练集",
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
+        reg_cache_dir = str(Path(latent_cache_dir) / "reg") if latent_cache_dir else None
         ctx.reg_dataset = CachedLatentDataset(
             ctx.reg_dataset, ctx.vae, ctx.device, ctx.vae_dtype,
+            cache_dir=reg_cache_dir,
             cache_batch_size=cache_batch_size,
             encode_tiled=getattr(args, "cache_encode_tiled", False),
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),

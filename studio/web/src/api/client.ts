@@ -430,9 +430,12 @@ export type TorchCuTag = 'cu128' | 'cu126' | 'cu124' | 'cu118' | 'cpu'
 export interface TorchStatus {
   installed: boolean
   version: string | null              // "2.5.0+cu128"
-  cuda_build: TorchCuTag | null       // 解析自 +suffix
+  cuda_build: string | null           // cu128 / cpu / rocm7.x（兼容旧字段名）
   cuda_available: boolean             // torch.cuda.is_available()
   device_name: string | null          // "NVIDIA GeForce RTX 5090"
+  accelerator_backend: 'cuda' | 'rocm' | 'cpu' | null
+  accelerator_build: string | null
+  hip_version: string | null
   cuda_detect: {
     available: boolean
     driver_version: string | null
@@ -443,6 +446,7 @@ export interface TorchStatus {
   is_cpu_with_gpu: boolean
   /** 装了 CUDA wheel 但 cuda.is_available()=False → 驱动 / WSL 问题，pip 修不了。 */
   is_cuda_build_unavailable: boolean
+  is_rocm: boolean
 }
 /** torch reinstall 总是 deferred：server 写 marker，下次 launcher 启动时跑 pip。
  *  这样避开 Windows 上 torch .pyd 已被 server 进程加载、pip 无法 replace 的死锁。 */

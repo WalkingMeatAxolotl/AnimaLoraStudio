@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import onnxruntime as onnxruntime_setup
+from utils.accelerator import detect_accelerator
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ def detect_torch() -> dict[str, Any]:
             "cuda_build": None,
             "cuda_available": False,
             "device_name": None,
+            "accelerator_backend": None,
+            "accelerator_build": None,
+            "hip_version": None,
         }
 
     cuda_build: Optional[str] = None
@@ -94,9 +98,15 @@ def detect_torch() -> dict[str, Any]:
     device_name: Optional[str] = None
     try:
         import torch  # type: ignore[import-not-found]  # noqa: PLC0415
-        # torch.__version__ 形如 "2.5.0+cu128" / "2.5.0+cpu" / "2.5.0"
+        accelerator = detect_accelerator(torch)
+        hip_version = getattr(torch.version, "hip", None)
+        # torch.__version__ 形如 "2.5.0+cu128" / "2.5.0+cpu" /
+        # "2.9.1+rocm7.14..."。ROCm 仍通过 torch.cuda 运行，不能按
+        # torch.version.cuda is None 误判成 CPU。
         m = re.search(r"\+(cu\d+|cpu)$", torch.__version__)
-        if m:
+        if accelerator.backend == "rocm":
+            cuda_build = accelerator.build
+        elif m:
             cuda_build = m.group(1)
         else:
             # 兼容旧 build 没 + 后缀的情况，靠 torch.version.cuda
@@ -107,14 +117,11 @@ def detect_torch() -> dict[str, Any]:
                 # cuda_v 形如 "12.8"；映射到 wheel tag
                 clean = cuda_v.replace(".", "")
                 cuda_build = f"cu{clean}"
-        cuda_available = bool(torch.cuda.is_available())
-        if cuda_available:
-            try:
-                device_name = torch.cuda.get_device_name(0)
-            except Exception:  # noqa: BLE001
-                device_name = "?"
+        cuda_available = accelerator.available
+        device_name = accelerator.device_name
     except ImportError:
-        pass
+        accelerator = None
+        hip_version = None
 
     return {
         "installed": True,
@@ -122,6 +129,9 @@ def detect_torch() -> dict[str, Any]:
         "cuda_build": cuda_build,
         "cuda_available": cuda_available,
         "device_name": device_name,
+        "accelerator_backend": accelerator.backend if accelerator else None,
+        "accelerator_build": accelerator.build if accelerator else None,
+        "hip_version": str(hip_version) if hip_version else None,
     }
 
 
@@ -130,17 +140,21 @@ def current_status() -> dict[str, Any]:
     torch_state = detect_torch()
     cuda_detect = onnxruntime_setup.detect_cuda()
     recommended = recommend_cu_tag(cuda_detect.get("driver_version"))
+    backend = torch_state.get("accelerator_backend")
+    if backend is None:
+        build = str(torch_state.get("cuda_build") or "")
+        backend = "cpu" if build == "cpu" else ("rocm" if build.startswith("rocm") else "cuda")
 
     # 误装诊断：装了 CPU wheel 但有 NVIDIA GPU → UI 应该显著提示
     is_cpu_with_gpu = (
         torch_state["installed"]
-        and torch_state["cuda_build"] == "cpu"
+        and backend == "cpu"
         and cuda_detect["available"]
     )
     # 装了 CUDA wheel 但 cuda.is_available()=False → 驱动 / WSL 问题，不是 pip 能修的
     is_cuda_build_unavailable = (
         torch_state["installed"]
-        and torch_state["cuda_build"] not in (None, "cpu")
+        and backend == "cuda"
         and not torch_state["cuda_available"]
     )
 
@@ -150,6 +164,7 @@ def current_status() -> dict[str, Any]:
         "recommended_cu_tag": recommended,
         "is_cpu_with_gpu": is_cpu_with_gpu,
         "is_cuda_build_unavailable": is_cuda_build_unavailable,
+        "is_rocm": backend == "rocm",
     }
 
 

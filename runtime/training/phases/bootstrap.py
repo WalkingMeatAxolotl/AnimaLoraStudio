@@ -17,6 +17,7 @@ from training.bootstrap import apply_yaml_config, ensure_dependencies, load_yaml
 from training.cli import prompt_for_args
 from training.context import TrainingContext
 from training.observability import init_wandb_monitor
+from utils.accelerator import detect_accelerator, torch_device_type
 
 
 logger = logging.getLogger(__name__)
@@ -165,7 +166,21 @@ def run(ctx: TrainingContext) -> None:
 
     _resolve_sample_seed(args)
 
-    ctx.device = "cuda" if torch.cuda.is_available() else "cpu"
+    accelerator = detect_accelerator(torch)
+    ctx.device = torch_device_type(torch)
+    logger.info(
+        "PyTorch accelerator: backend=%s, build=%s, available=%s, device=%s",
+        accelerator.backend,
+        accelerator.build,
+        accelerator.available,
+        accelerator.device_name or "CPU",
+    )
+    if accelerator.backend == "rocm" and args.attention_backend != "none":
+        raise RuntimeError(
+            "ROCm 训练仅支持 attention_backend=none（PyTorch SDPA）。"
+            f"当前值为 {args.attention_backend!r}；xformers/flash_attn 是 CUDA 扩展，"
+            "不能用于该 ROCm 环境。"
+        )
     if args.mixed_precision == "bf16":
         ctx.dtype = torch.bfloat16
     elif args.mixed_precision == "fp16":
