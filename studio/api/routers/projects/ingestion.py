@@ -48,6 +48,7 @@ from ...schemas.ingestion import (
     PreprocessCropRequest,
     PreprocessRestoreRequest,
     PreprocessStartRequest,
+    RegionAnnotationRequest,
     UploadFromPathBody,
 )
 from ._shared import _publish_job_state, _publish_project_state
@@ -565,6 +566,38 @@ def delete_mask_train_endpoint(pid: int, vid: int, name: str) -> dict[str, Any]:
     res = preprocess_svc.mask_delete_train(p, v["label"], name=name)
     _publish_project_state(p)
     return res
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/preprocess/region")
+def get_region_train_endpoint(pid: int, vid: int, name: str) -> dict[str, Any]:
+    p, v = _resolve_pv_or_404(pid, vid)
+    document = preprocess_svc.region_read_train(p, v["label"], name=name)
+    if document is None:
+        raise NotFoundError(
+            "Region annotation not found", code="preprocess.region_not_found",
+            details={"name": name},
+        )
+    return document
+
+
+@router.put("/api/projects/{pid}/versions/{vid}/preprocess/region")
+def put_region_train_endpoint(
+    pid: int, vid: int, name: str, body: RegionAnnotationRequest,
+) -> dict[str, Any]:
+    p, v = _resolve_pv_or_404(pid, vid)
+    result = preprocess_svc.region_save_train(
+        p, v["label"], name=name, document=body.model_dump(),
+    )
+    _publish_project_state(p)
+    return result
+
+
+@router.delete("/api/projects/{pid}/versions/{vid}/preprocess/region")
+def delete_region_train_endpoint(pid: int, vid: int, name: str) -> dict[str, Any]:
+    p, v = _resolve_pv_or_404(pid, vid)
+    result = preprocess_svc.region_delete_train(p, v["label"], name=name)
+    _publish_project_state(p)
+    return result
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/preprocess/files/reset")

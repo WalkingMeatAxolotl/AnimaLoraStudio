@@ -24,6 +24,8 @@ Provenance:
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import json
 import logging
 from fnmatch import fnmatch
@@ -294,6 +296,17 @@ class OrthoLoRAAdapter:
 
     def excludes_weight_decay(self, param_name: str) -> bool:
         return False
+
+    @contextmanager
+    def temporarily_disabled(self):
+        previous = [float(layer.multiplier) for layer in self.loras]
+        try:
+            for layer in self.loras:
+                layer.multiplier = 0.0
+            yield
+        finally:
+            for layer, value in zip(self.loras, previous):
+                layer.multiplier = value
 
     def get_params(self) -> list[nn.Parameter]:
         return [p for layer in self.loras for p in layer.parameters() if p.requires_grad]

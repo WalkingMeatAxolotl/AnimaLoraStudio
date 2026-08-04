@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import masks as train_masks
+from . import regions as train_regions
 
 MANIFEST_NAME = "manifest.json"
 DUPLICATE_REMOVED_KIND = "duplicate_removed"
@@ -517,7 +518,7 @@ def train_mark_duplicate_removed(
                     src.unlink()
                 except OSError:
                     pass
-            for ext in (".txt", ".json"):
+            for ext in (".txt", ".json", train_regions.REGION_SUFFIX):
                 sidecar = src.with_suffix(ext)
                 if sidecar.is_file():
                     try:
@@ -525,6 +526,7 @@ def train_mark_duplicate_removed(
                     except OSError:
                         pass
             train_masks.delete_mask(train_dir, name)
+            train_regions.delete_region(train_dir, name)
             m["images"][name] = {
                 "kind": DUPLICATE_REMOVED_KIND,
                 "origin": origin,
@@ -660,7 +662,7 @@ def train_restore(
                         sib_path.unlink()
                     except OSError:
                         pass
-                for ext in (".txt", ".json"):
+                for ext in (".txt", ".json", train_regions.REGION_SUFFIX):
                     side = sib_path.with_suffix(ext)
                     if side.is_file():
                         try:
@@ -685,6 +687,7 @@ def train_restore(
             # mask sidecar：restore 语义 = 回到 download 原点，整组 mask
             # 一律作废（D8，即便尺寸恰好吻合也删——可预测性优先）
             train_masks.delete_masks_for(train_dir, {*group, dst_rel})
+            train_regions.delete_regions_for(train_dir, {*group, dst_rel})
             # manifest：删整组 + 写新 entry at dst_rel
             for sib in group:
                 m["images"].pop(sib, None)

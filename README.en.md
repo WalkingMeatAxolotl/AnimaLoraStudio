@@ -4,6 +4,10 @@
 
 **End-to-end pipeline**: Booru scraping → curation → tagging → regularization set → training → image-gen testing, all in one browser panel. Trains LoRAs for two model families: [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-specialized, lightweight) and [Krea 2](https://huggingface.co/krea/Krea-2-Raw) (12.9B single-stream MMDiT; train on Raw, test fast on Turbo).
 
+> **Windows ROCm fork**: external ROCm Python runtimes, AMD/HIP status detection,
+> bf16 SDPA, and single-file ComfyUI Anima text encoders are supported. Run
+> `studio_rocm.bat --check`; see the [Windows ROCm guide](docs/user-guide/rocm-windows.en.md).
+
 ![Studio training page](docs/images/studio-train-en.png)
 
 ## Features
@@ -26,12 +30,13 @@
 
 ## Quick start
 
-**Prerequisites** (install yourself): NVIDIA GPU + CUDA · Python 3.10+ · Node.js 18+ · Git.
+**Prerequisites** (install yourself): NVIDIA GPU + CUDA, or a configured Windows ROCm Python for Anima · Python 3.10+ · Node.js 18+ · Git.
 
 ```bash
 git clone https://github.com/WalkingMeatAxolotl/AnimaLoraStudio
 cd AnimaLoraStudio
 studio.bat          # Windows
+studio_rocm.bat     # Windows ROCm (reuse existing Python/torch)
 ./studio.sh         # Linux / macOS
 ```
 
@@ -41,7 +46,7 @@ First run automatically creates `venv/` → installs GPU-matched CUDA torch → 
 
 ## Hardware requirements
 
-- **GPU**: NVIDIA (AMD / Apple Silicon not supported), per family:
+- **GPU**: CUDA remains the upstream default. This fork also validates Anima training on Windows ROCm with an RX 7900 XTX; see the ROCm guide. Apple Silicon is unsupported. Per family:
   - **Anima**: **16 GB+ VRAM recommended** (RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090, etc.); **8 GB barely works** (turn off sample output + reduce batch / resolution; noticeably slower).
   - **Krea 2** (12.9B): **training** runs on 24 GB-class GPUs with the official fp8 base model, or 32 GB for bf16; **generation** with an fp8 base runs from 16 GB (on the "save VRAM" policy), bf16 bases want 32 GB. With **block swap** (all blocks swapped out on an fp8 base), **training** reaches **12 GB** (about 10 GB total GPU usage; 16 GB is roomier) and **generation** reaches **8 GB** (about 6.3 GB total at 1024²), at the cost of about 4% speed plus the matching RAM.
 - **RAM**: 16 GB+; 32 GB+ recommended for Krea 2 (loading a 26.3 GB single-file checkpoint peaks at roughly file size in RAM); block swap holds the swapped-out blocks resident (about 11 GB with all blocks on an fp8 base)
@@ -51,7 +56,7 @@ First run automatically creates `venv/` → installs GPU-matched CUDA torch → 
 
 Entry point: [docs/README.md](docs/README.md).
 
-- **Getting started** → [getting-started.md](docs/user-guide/getting-started.en.md)
+- **Getting started** → [getting-started.md](docs/user-guide/getting-started.en.md) · [Windows ROCm](docs/user-guide/rocm-windows.en.md)
 - **User guide** → [tag format](docs/user-guide/tagging-guide.md) · [training tips / algorithms](docs/user-guide/training-tips.md) · [optimizers](docs/user-guide/optimizers.md) · [caption format](docs/user-guide/caption-format.md)
 - **Architecture** → [pipeline overview](docs/architecture/studio-pipeline.md) · [project structure](docs/architecture/project-structure.en.md) · [studio internals](studio/README.md)
 - **CLI tools** → [tools/README.md](tools/README.md)

@@ -793,6 +793,8 @@ export function PyTorchSection() {
       ? t('settings.loadingStatus')
       : !status.installed
         ? t('settings.notInstalledShort')
+        : status.is_rocm && status.cuda_available
+          ? `ROCm ✓ ${status.accelerator_build}`
         : status.is_cpu_with_gpu
           ? t('settings.cpuBuildMisinstalled')
           : !status.cuda_available && status.cuda_build !== 'cpu'
@@ -830,9 +832,11 @@ export function PyTorchSection() {
             </div>
             <div className="flex gap-4 flex-wrap">
               <span className="text-fg-tertiary">
-                {t('settings.driverLabel')}:{' '}
+                {status.is_rocm ? 'HIP' : t('settings.driverLabel')}:{' '}
                 <code className="text-fg-secondary font-mono">
-                  {status.cuda_detect.driver_version ?? t('settings.notDetected')}
+                  {status.is_rocm
+                    ? (status.hip_version ?? t('settings.notDetected'))
+                    : (status.cuda_detect.driver_version ?? t('settings.notDetected'))}
                 </code>
               </span>
               {status.cuda_detect.gpu_name && !status.cuda_available && (
@@ -865,30 +869,42 @@ export function PyTorchSection() {
             </div>
           )}
 
+          {status.is_rocm && (
+            <div className="rounded-sm border border-ok bg-ok-soft px-2 py-1.5 text-ok text-xs">
+              {t('settings.torchRocmActive', {
+                build: status.accelerator_build ?? 'ROCm',
+              })}
+            </div>
+          )}
+
           {/* 操作按钮 */}
           <div className="flex gap-1.5 items-center flex-wrap">
-            <button
-              onClick={() => void reinstall('auto')}
-              disabled={busy || !status.cuda_detect.available}
-              className={status.is_cpu_with_gpu ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
-              title={status.cuda_detect.available
-                ? t('settings.autoSelect', { tag: status.recommended_cu_tag })
-                : t('settings.noNvidiaDriverCannotCuda')}
-            >
-              {busy ? t('settings.installing') : status.is_cpu_with_gpu
-                ? t('settings.reinstallCudaBuild', { tag: status.recommended_cu_tag })
-                : t('settings.reinstallAuto', { tag: status.recommended_cu_tag })}
-            </button>
+            {!status.is_rocm && (
+              <button
+                onClick={() => void reinstall('auto')}
+                disabled={busy || !status.cuda_detect.available}
+                className={status.is_cpu_with_gpu ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                title={status.cuda_detect.available
+                  ? t('settings.autoSelect', { tag: status.recommended_cu_tag })
+                  : t('settings.noNvidiaDriverCannotCuda')}
+              >
+                {busy ? t('settings.installing') : status.is_cpu_with_gpu
+                  ? t('settings.reinstallCudaBuild', { tag: status.recommended_cu_tag })
+                  : t('settings.reinstallAuto', { tag: status.recommended_cu_tag })}
+              </button>
+            )}
             <button onClick={() => void refresh()} disabled={busy}
               className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm">↻</button>
-            <button type="button" onClick={() => setAdvancedOpen(!advancedOpen)}
-              className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
-              {advancedOpen ? '▾' : '▸'} {t('settings.advancedManualCuda')}
-            </button>
+            {!status.is_rocm && (
+              <button type="button" onClick={() => setAdvancedOpen(!advancedOpen)}
+                className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
+                {advancedOpen ? '▾' : '▸'} {t('settings.advancedManualCuda')}
+              </button>
+            )}
           </div>
 
           {/* 手动选版本 */}
-          {advancedOpen && (
+          {advancedOpen && !status.is_rocm && (
             <div className="flex flex-col gap-1.5 pt-2 border-t border-subtle text-xs">
               <p className="text-fg-tertiary m-0">
                 {t('settings.manualCudaHint')}

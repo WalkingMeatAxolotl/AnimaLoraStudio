@@ -67,9 +67,33 @@ def test_check_wd14(client: TestClient, env, monkeypatch: pytest.MonkeyPatch) ->
     # 模块级 binding 在 server 命名空间，需要在那打补丁。
     # PR-6 commit 1：/api/tagger/{name}/check 搬到 api/routers/tagger.py
     from studio.api.routers import tagger as _tagger_router
-    monkeypatch.setattr(_tagger_router, "get_tagger", lambda name: fake)
+    monkeypatch.setattr(_tagger_router, "get_tagger", lambda name, overrides=None: fake)
     r = client.get("/api/tagger/wd14/check").json()
     assert r == {"name": "wd14", "ok": True, "msg": "ready", "requires_service": False}
+
+
+def test_check_llm_uses_selected_preset(
+    client: TestClient, env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = MagicMock()
+    fake.is_available.return_value = (True, "/v1/chat/completions · joycaption")
+    fake.requires_service = True
+    seen: dict[str, object] = {}
+
+    from studio.api.routers import tagger as _tagger_router
+
+    def _fake_get_tagger(name: str, overrides=None):
+        seen.update(name=name, overrides=overrides)
+        return fake
+
+    monkeypatch.setattr(_tagger_router, "get_tagger", _fake_get_tagger)
+    r = client.get("/api/tagger/llm/check?preset_id=joycaption_ollama")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert seen == {
+        "name": "llm",
+        "overrides": {"current_preset": "joycaption_ollama"},
+    }
 
 
 # ---------------------------------------------------------------------------

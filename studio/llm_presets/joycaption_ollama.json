@@ -1,0 +1,12 @@
+{
+  "id": "joycaption_ollama",
+  "label": "JoyCaption（Ollama 本地）",
+  "builtin": true,
+  "base_url": "http://localhost:11434/v1",
+  "model": "llama-joycaption-beta-one-hf-llava",
+  "endpoint": "chat_completions",
+  "output_format": "text",
+  "temperature": 0.4,
+  "max_tokens": 300,
+  "prompt": "Write one accurate English training caption for this image. Describe only visible subject appearance, pose, clothing, composition, lighting, and background. Do not guess names or identity. Do not add quality boilerplate, watermark, signature, or camera metadata."
+}

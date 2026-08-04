@@ -80,6 +80,26 @@ def test_encode_text_for_batch_default_stays_bare_cross(monkeypatch) -> None:
     assert isinstance(cross, torch.Tensor)
 
 
+def test_encode_text_casts_comfy_qwen_output_to_training_dtype(monkeypatch) -> None:
+    family = AnimaFamily()
+    max_len = family.spec.text.max_seq_len
+    _stub_text_encoding(monkeypatch, torch.ones(1, 4, dtype=torch.long))
+    captured = {}
+
+    def preprocess(qwen_emb, t5_ids, t5xxl_weights):
+        captured["dtype"] = qwen_emb.dtype
+        return torch.zeros(t5_ids.shape[0], max_len, 4, dtype=qwen_emb.dtype)
+
+    family.encode_text_for_batch(
+        (None, None, None),
+        SimpleNamespace(preprocess_text_embeds=preprocess),
+        ["a"],
+        "cpu",
+        torch.bfloat16,
+    )
+    assert captured["dtype"] is torch.bfloat16
+
+
 # ── 2. symtable 未定义名静态扫描 ────────────────────────────────────────
 
 _TRAINING_ROOT = Path(__file__).resolve().parents[1] / "runtime" / "training"

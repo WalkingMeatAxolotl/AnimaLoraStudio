@@ -133,6 +133,9 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         params["on_existing"] = body.on_existing
     if trigger_word:
         params["trigger_word"] = trigger_word
+    class_word = str(body.class_word or "").strip()
+    if class_word:
+        params["class_word"] = class_word
     # "all" 是 worker 默认，不写入减小 payload。
     if body.scope != "all":
         params["scope"] = body.scope

@@ -430,9 +430,12 @@ export type TorchCuTag = 'cu128' | 'cu126' | 'cu124' | 'cu118' | 'cpu'
 export interface TorchStatus {
   installed: boolean
   version: string | null              // "2.5.0+cu128"
-  cuda_build: TorchCuTag | null       // 解析自 +suffix
+  cuda_build: string | null           // cu128 / cpu / rocm7.x（兼容旧字段名）
   cuda_available: boolean             // torch.cuda.is_available()
   device_name: string | null          // "NVIDIA GeForce RTX 5090"
+  accelerator_backend: 'cuda' | 'rocm' | 'cpu' | null
+  accelerator_build: string | null
+  hip_version: string | null
   cuda_detect: {
     available: boolean
     driver_version: string | null
@@ -443,6 +446,7 @@ export interface TorchStatus {
   is_cpu_with_gpu: boolean
   /** 装了 CUDA wheel 但 cuda.is_available()=False → 驱动 / WSL 问题，pip 修不了。 */
   is_cuda_build_unavailable: boolean
+  is_rocm: boolean
 }
 /** torch reinstall 总是 deferred：server 写 marker，下次 launcher 启动时跑 pip。
  *  这样避开 Windows 上 torch .pyd 已被 server 进程加载、pip 无法 replace 的死锁。 */
@@ -1082,6 +1086,28 @@ export interface CropWorkspaceItem {
   processed: boolean
   /** 训练 mask sidecar 的 mtime；无 mask 时 null。兼作角标判据 + cache-buster。 */
   mask_mtime: number | null
+  /** Primary region annotation mtime; null when the image has no region. */
+  region_mtime: number | null
+}
+
+export interface RegionBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface RegionAnnotation {
+  version: 1
+  image_size: { w: number; h: number }
+  regions: Array<{
+    id: 'primary'
+    label: string
+    class_word: string
+    caption: string
+    weight: number
+    box: RegionBox
+  }>
 }
 
 /** 涂抹保存结果：产物统一 .png，源非 png 时 name 会改（X.jpg → X.png）。 */
@@ -2532,6 +2558,24 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/preprocess/mask?name=${encodeURIComponent(name)}`,
       { method: 'DELETE' },
     ),
+  getRegionTrain: (pid: number, vid: number, name: string) =>
+    req<RegionAnnotation>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/region?name=${encodeURIComponent(name)}`,
+    ),
+  saveRegionTrain: (
+    pid: number,
+    vid: number,
+    name: string,
+    annotation: RegionAnnotation,
+  ) => req<RegionAnnotation & { name: string; mtime: number; size: number }>(
+    `/api/projects/${pid}/versions/${vid}/preprocess/region?name=${encodeURIComponent(name)}`,
+    { method: 'PUT', body: JSON.stringify(annotation) },
+  ),
+  deleteRegionTrain: (pid: number, vid: number, name: string) =>
+    req<{ deleted: boolean }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/region?name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    ),
 
   // R-5 台账合并：/api/jobs* 已删，作业与任务同源 /api/queue（单一 ID 空间）。
   // getJob / cancelJob 保留函数名给步骤页（Download/Tagging/Reg/Preprocess），
@@ -2554,8 +2598,10 @@ export const api = {
     ),
 
   // Tagging (PP4) --------------------------------------------------------
-  checkTagger: (name: TaggerName) =>
-    req<TaggerStatus>(`/api/tagger/${name}/check`),
+  checkTagger: (name: TaggerName, presetId?: string | null) =>
+    req<TaggerStatus>(
+      `/api/tagger/${name}/check${presetId ? `?preset_id=${encodeURIComponent(presetId)}` : ''}`,
+    ),
   startTag: (
     pid: number,
     vid: number,
@@ -2601,6 +2647,8 @@ export const api = {
        * 第一个 tag，并同步落库到 version.trigger_word，后续 train 读出。
        */
       trigger_word?: string
+      /** SID / subject preset template value; defaults to 1girl. */
+      class_word?: string
       /**
        * 打标范围：'all'（默认，train 全部 + validation）/ 'validation'（只打
        * held-out 验证集）/ 某个 train 子文件夹名（只打那一个）。
@@ -3070,6 +3118,7 @@ export const api = {
       trainLatentCache?: boolean
       regLatentCache?: boolean
       trainMasks?: boolean
+      trainRegions?: boolean
     },
   ): string => {
     const p = new URLSearchParams()
@@ -3081,6 +3130,7 @@ export const api = {
     p.set('train_latent_cache', opts.trainLatentCache ? '1' : '0')
     p.set('reg_latent_cache', opts.regLatentCache ? '1' : '0')
     p.set('train_masks', opts.trainMasks ? '1' : '0')
+    p.set('train_regions', opts.trainRegions ? '1' : '0')
     return `/api/projects/${pid}/versions/${vid}/bundle.zip?${p.toString()}`
   },
   exportBundleToDataExports: (
@@ -3095,6 +3145,7 @@ export const api = {
       trainLatentCache?: boolean
       regLatentCache?: boolean
       trainMasks?: boolean
+      trainRegions?: boolean
     },
   ) =>
     req<DataExportItem>(`/api/projects/${pid}/versions/${vid}/export-bundle`, {
@@ -3108,6 +3159,7 @@ export const api = {
         train_latent_cache: opts.trainLatentCache === true,
         reg_latent_cache: opts.regLatentCache === true,
         train_masks: opts.trainMasks === true,
+        train_regions: opts.trainRegions === true,
       }),
     }),
   listDataExports: () => req<DataExportItem[]>('/api/data-exports'),

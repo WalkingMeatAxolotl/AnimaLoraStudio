@@ -402,6 +402,7 @@ def test_install_no_candidate_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_install_pip_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = MagicMock(returncode=1, stdout="", stderr="ERROR: some pip failure")
     monkeypatch.setattr(fa.subprocess, "run", lambda *a, **k: fake)
+    monkeypatch.setattr(fa, "detect_env", lambda: {"accelerator_backend": "cuda"})
     with pytest.raises(RuntimeError, match="pip install 失败"):
         fa.install("https://x/wheel.whl")
 
@@ -410,9 +411,16 @@ def test_install_success_returns_status(monkeypatch: pytest.MonkeyPatch) -> None
     fake = MagicMock(returncode=0, stdout="Successfully installed flash_attn-2.8.3\n", stderr="")
     monkeypatch.setattr(fa.subprocess, "run", lambda *a, **k: fake)
     monkeypatch.setattr(fa.importlib.metadata, "version", lambda _: "2.8.3")
+    monkeypatch.setattr(fa, "detect_env", lambda: {"accelerator_backend": "cuda"})
     res = fa.install("https://x/wheel.whl")
     assert res["installed"] is True
     assert res["version"] == "2.8.3"
     assert res["url"] == "https://x/wheel.whl"
     assert res["restart_required"] is True
     assert "Successfully installed" in res["stdout_tail"]
+
+
+def test_install_rejects_rocm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fa, "detect_env", lambda: {"accelerator_backend": "rocm"})
+    with pytest.raises(RuntimeError, match="ROCm"):
+        fa.install("https://x/cuda-only.whl")

@@ -107,6 +107,8 @@ def test_llm_tagger_defaults(secrets_file: Path) -> None:
         "general_json",
         "txt_tags",
         "joycaption",
+        "joycaption_ollama",
+        "sid_subject_json",
         "assist_json",
         "assist_text",
     ]

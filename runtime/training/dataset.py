@@ -261,7 +261,8 @@ class ImageDataset(Dataset):
                  resolutions=None, aspect_ratio_limit=2.0,
                  native_resolution=False, native_token_budget=0,
                  native_over_budget="downscale", native_max_side_tokens=0,
-                 native_align=_ANIMA_LATENT.align_px, load_masks=False):
+                 native_align=_ANIMA_LATENT.align_px, load_masks=False,
+                 load_regions=False):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
@@ -299,6 +300,11 @@ class ImageDataset(Dataset):
         # 几何变换后 area 下采样到 latent 分辨率，作为 loss 空间权重。
         self.load_masks = bool(load_masks)
         self._mask_warned: set = set()
+        # Region balance uses a separate positive-focus sidecar.  It follows
+        # the same geometry as the image but remains independent from the
+        # existing ignore mask.
+        self.load_regions = bool(load_regions)
+        self._region_warned: set = set()
         
         # 尝试导入 caption_utils（直接导入避开 __init__.py）
         self.caption_utils = None
@@ -662,6 +668,56 @@ class ImageDataset(Dataset):
             return None
         return mask
 
+    def _region_path_for(self, img_path) -> Path:
+        img_path = Path(img_path)
+        return img_path.parent / f"{img_path.stem}.regions.json"
+
+    def _load_region_image(self, img_path, size):
+        """Load the v1 normalized primary rectangle as an L-mode focus map."""
+        import json
+        from PIL import Image, ImageDraw
+
+        rp = self._region_path_for(img_path)
+        if not rp.is_file():
+            return None, 1.0
+        try:
+            # utf-8-sig accepts both ordinary UTF-8 and Windows tools that
+            # emit a BOM (PowerShell 5 Set-Content -Encoding UTF8).
+            raw = json.loads(rp.read_text(encoding="utf-8-sig"))
+            if int(raw.get("version", 1)) != 1:
+                raise ValueError("unsupported version")
+            regions = raw.get("regions")
+            if not isinstance(regions, list) or len(regions) != 1:
+                raise ValueError("one primary region required")
+            region = regions[0]
+            box = region["box"]
+            x, y, w, h = (float(box[k]) for k in ("x", "y", "w", "h"))
+            weight = float(region.get("weight", 1.0) or 1.0)
+            if (
+                x < 0 or y < 0 or w <= 0 or h <= 0
+                or x + w > 1.000001 or y + h > 1.000001
+                or not (0.1 <= weight <= 10.0)
+            ):
+                raise ValueError("box/weight out of bounds")
+            iw, ih = int(size[0]), int(size[1])
+            declared = raw.get("image_size") or {}
+            if int(declared.get("w", iw)) != iw or int(declared.get("h", ih)) != ih:
+                raise ValueError("image_size mismatch")
+            focus = Image.new("L", (iw, ih), 0)
+            draw = ImageDraw.Draw(focus)
+            x0, y0 = int(round(x * iw)), int(round(y * ih))
+            x1, y1 = int(round((x + w) * iw)), int(round((y + h) * ih))
+            draw.rectangle((x0, y0, max(x0, x1 - 1), max(y0, y1 - 1)), fill=255)
+            return focus, weight
+        except Exception as e:  # noqa: BLE001
+            if str(rp) not in self._region_warned:
+                self._region_warned.add(str(rp))
+                logger.warning(
+                    "[region-balance] region sidecar invalid; using whole-image fallback: %s (%s)",
+                    rp, e,
+                )
+            return None, 1.0
+
     def caption_for_sample(self, sample) -> str:
         """解析一个 sample 的最终 caption，不打开图片。
 
@@ -719,6 +775,12 @@ class ImageDataset(Dataset):
         mask_img = None
         if self.load_masks:
             mask_img = self._load_mask_image(sample["image"], (img.width, img.height))
+        region_img = None
+        region_weight = 1.0
+        if self.load_regions:
+            region_img, region_weight = self._load_region_image(
+                sample["image"], (img.width, img.height),
+            )
 
         # 缩放裁剪
         scale = max(tw / img.width, th / img.height)
@@ -745,11 +807,29 @@ class ImageDataset(Dataset):
                 np.array(m).astype(np.float32) / 255.0
             )
 
+        region_tensor = None
+        if region_img is not None:
+            r = region_img.resize((nw, nh), Image.NEAREST)
+            r = r.crop((left, top, left + tw, top + th))
+            if flip:
+                r = r.transpose(Image.FLIP_LEFT_RIGHT)
+            _vs = _ANIMA_LATENT.spatial_stride
+            r = r.resize((max(1, tw // _vs), max(1, th // _vs)), Image.BOX)
+            region_tensor = torch.from_numpy(
+                np.array(r).astype(np.float32) / 255.0
+            )
+
         # 转 tensor [-1, 1]
         arr = np.array(img).astype(np.float32) / 127.5 - 1.0
         tensor = torch.from_numpy(arr).permute(2, 0, 1)
 
-        return {"pixel_values": tensor, "caption": caption, "mask": mask_tensor}
+        return {
+            "pixel_values": tensor,
+            "caption": caption,
+            "mask": mask_tensor,
+            "region": region_tensor,
+            "region_weight": region_weight,
+        }
 
 
 class RepeatDataset(Dataset):
@@ -956,6 +1036,9 @@ class CachedLatentDataset(Dataset):
         self.load_masks = bool(
             getattr(self.base_image_dataset, "load_masks", False)
         )
+        self.load_regions = bool(
+            getattr(self.base_image_dataset, "load_regions", False)
+        )
         # cache_encode_tiled（opt-in）：超大图改走分块 encode + latent 羽化拼接，
         # 峰值显存 ∝ 单块像素。阈值内的图路径不变（逐字节等价）。
         self.encode_tiled = bool(encode_tiled)
@@ -1008,12 +1091,22 @@ class CachedLatentDataset(Dataset):
         """图像对应的 npz 缓存路径。
 
         单分辨率图 → ``img.npz``（不动现有缓存）；同图 fan-out 到多分辨率 →
-        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。
+        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。指定
+        ``cache_dir`` 时保留图片相对数据集根目录的子目录结构，避免同名文件冲突。
         """
         img_path = Path(img_path)
+        cache_path = img_path
+        cache_dir = getattr(self, "cache_dir", None)
+        if cache_dir is not None:
+            data_root = getattr(self.base_image_dataset, "data_dir", None)
+            try:
+                relative = img_path.resolve().relative_to(Path(data_root).resolve())
+            except (AttributeError, TypeError, ValueError):
+                relative = Path(img_path.name)
+            cache_path = cache_dir / relative
         if target_reso is not None and str(img_path) in getattr(self, "_multi_reso", set()):
-            return img_path.with_suffix(f".r{int(target_reso)}.npz")
-        return img_path.with_suffix(".npz")
+            return cache_path.with_suffix(f".r{int(target_reso)}.npz")
+        return cache_path.with_suffix(".npz")
 
     def _is_cache_valid(self, img_path, npz_path, target_reso=None):
         """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
@@ -1039,6 +1132,19 @@ class CachedLatentDataset(Dataset):
         mask_path = None
         if getattr(self, "load_masks", False) and self.base_image_dataset is not None:
             mask_path = self.base_image_dataset._mask_path_for(img_path)
+        region_path = None
+        region_file_valid = False
+        if getattr(self, "load_regions", False) and self.base_image_dataset is not None:
+            region_path = self.base_image_dataset._region_path_for(img_path)
+            if region_path.is_file():
+                try:
+                    from PIL import Image
+                    with Image.open(img_path) as source:
+                        region_file_valid = self.base_image_dataset._load_region_image(
+                            img_path, (source.width, source.height),
+                        )[0] is not None
+                except Exception:
+                    region_file_valid = False
         try:
             with self.np.load(npz_path) as data:
                 if "latent" not in data.files:
@@ -1083,6 +1189,18 @@ class CachedLatentDataset(Dataset):
                         has_mask_key
                         and getattr(self, "flip_augment", False)
                         and "mask_flipped" not in data.files
+                    ):
+                        return False
+                if region_path is not None:
+                    has_region_key = "region" in data.files
+                    if region_file_valid != has_region_key:
+                        return False
+                    if region_file_valid and npz_path.stat().st_mtime < region_path.stat().st_mtime:
+                        return False
+                    if (
+                        has_region_key
+                        and getattr(self, "flip_augment", False)
+                        and "region_flipped" not in data.files
                     ):
                         return False
         except Exception:
@@ -1205,6 +1323,15 @@ class CachedLatentDataset(Dataset):
                     out["mask_flipped"] = entry["mask_flipped"].numpy()
                 return out
 
+            def _region_kwargs(entry):
+                out = {}
+                if entry.get("region") is not None:
+                    out["region"] = entry["region"].numpy()
+                    out["region_weight"] = float(entry.get("region_weight", 1.0))
+                if entry.get("region_flipped") is not None:
+                    out["region_flipped"] = entry["region_flipped"].numpy()
+                return out
+
             if use_tiled:
                 logger.info(
                     "[cache-tiled] %dx%d 超像素预算，分块 encode（tile=%d overlap=%d）",
@@ -1217,9 +1344,11 @@ class CachedLatentDataset(Dataset):
                     if lat_f is not None:
                         npz_kwargs["latent_flipped"] = lat_f.numpy()
                     npz_kwargs.update(_mask_kwargs(entry))
+                    npz_kwargs.update(_region_kwargs(entry))
                     _entry_sample = self.samples[entry["index"]]
                     npz_path = self._get_npz_path(
                         _entry_sample["image"], _entry_sample.get("target_reso"))
+                    npz_path.parent.mkdir(parents=True, exist_ok=True)
                     self.np.savez(
                         npz_path,
                         bucket_w=entry["bucket_w"],
@@ -1244,10 +1373,12 @@ class CachedLatentDataset(Dataset):
                 if want_flip:
                     npz_kwargs["latent_flipped"] = latents_flipped[n].numpy()
                 npz_kwargs.update(_mask_kwargs(entry))
+                npz_kwargs.update(_region_kwargs(entry))
 
                 _entry_sample = self.samples[entry["index"]]
                 npz_path = self._get_npz_path(
                     _entry_sample["image"], _entry_sample.get("target_reso"))
+                npz_path.parent.mkdir(parents=True, exist_ok=True)
                 self.np.savez(
                     npz_path,
                     bucket_w=entry["bucket_w"],
@@ -1273,10 +1404,12 @@ class CachedLatentDataset(Dataset):
 
             pixels_flipped = None
             mask_flipped = None
+            region_flipped = None
             if want_flip:
                 item_f = base_img.get_with_flip(i, flip=True)
                 pixels_flipped = item_f["pixel_values"]
                 mask_flipped = item_f.get("mask")
+                region_flipped = item_f.get("region")
 
             bucket_key = (bucket_h, bucket_w)
             pending.setdefault(bucket_key, []).append({
@@ -1285,6 +1418,9 @@ class CachedLatentDataset(Dataset):
                 "pixels_flipped": pixels_flipped,
                 "mask": item.get("mask"),
                 "mask_flipped": mask_flipped,
+                "region": item.get("region"),
+                "region_flipped": region_flipped,
+                "region_weight": item.get("region_weight", 1.0),
                 "bucket_w": bucket_w,
                 "bucket_h": bucket_h,
             })
@@ -1320,6 +1456,14 @@ class CachedLatentDataset(Dataset):
             mask_key = "mask_flipped" if use_flip and "mask_flipped" in data.files else "mask"
             if mask_key in data.files:
                 mask = torch.from_numpy(data[mask_key])
+        region = None
+        region_weight = 1.0
+        if getattr(self, "load_regions", False):
+            region_key = "region_flipped" if use_flip and "region_flipped" in data.files else "region"
+            if region_key in data.files:
+                region = torch.from_numpy(data[region_key])
+                if "region_weight" in data.files:
+                    region_weight = float(data["region_weight"])
 
         # 获取 base_dataset 的引用（处理可能的嵌套）
         base = self.base_dataset
@@ -1348,6 +1492,8 @@ class CachedLatentDataset(Dataset):
             "latent": latent,
             "caption": caption,
             "mask": mask,
+            "region": region,
+            "region_weight": region_weight,
             # navit collate 需要逐图 image 路径
             "image": str(sample["image"]),
         }
@@ -1366,6 +1512,21 @@ def _stack_masks(batch, h, w):
     ])
 
 
+def _stack_regions(batch, h, w):
+    """Return focus maps and per-region metadata; missing regions stay zero."""
+    if not any(b.get("region") is not None for b in batch):
+        return None, None
+    regions = torch.stack([
+        b["region"] if b.get("region") is not None else torch.zeros(h, w)
+        for b in batch
+    ])
+    weights = torch.tensor(
+        [float(b.get("region_weight", 1.0)) for b in batch],
+        dtype=torch.float32,
+    )
+    return regions, weights
+
+
 def collate_fn(batch):
     """DataLoader collate"""
     pixels = torch.stack([b["pixel_values"] for b in batch])
@@ -1378,6 +1539,14 @@ def collate_fn(batch):
     )
     if masks is not None:
         result["masks"] = masks
+    regions, region_weights = _stack_regions(
+        batch,
+        pixels.shape[-2] // _ANIMA_LATENT.spatial_stride,
+        pixels.shape[-1] // _ANIMA_LATENT.spatial_stride,
+    )
+    if regions is not None:
+        result["regions"] = regions
+        result["region_weights"] = region_weights
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
         result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
@@ -1392,6 +1561,10 @@ def collate_fn_cached(batch):
     masks = _stack_masks(batch, latents.shape[-2], latents.shape[-1])
     if masks is not None:
         result["masks"] = masks
+    regions, region_weights = _stack_regions(batch, latents.shape[-2], latents.shape[-1])
+    if regions is not None:
+        result["regions"] = regions
+        result["region_weights"] = region_weights
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
         result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)

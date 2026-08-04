@@ -136,6 +136,7 @@ export default function ProjectLayout() {
       trainLatentCache: opts.trainLatentCache,
       regLatentCache: opts.regLatentCache,
       trainMasks: opts.trainMasks,
+      trainRegions: opts.trainRegions,
     }
     if (opts.destination === 'download') {
       const filename = `${projectRef.current.slug}-${av.label}.bundle.zip`

@@ -43,6 +43,8 @@ def test_detect_torch_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert res == {
         "installed": False, "version": None, "cuda_build": None,
         "cuda_available": False, "device_name": None,
+        "accelerator_backend": None, "accelerator_build": None,
+        "hip_version": None,
     }
 
 
@@ -53,6 +55,7 @@ def test_detect_torch_cpu_build(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_torch.__version__ = "2.5.0+cpu"
     fake_torch.cuda.is_available.return_value = False
     fake_torch.version.cuda = None
+    fake_torch.version.hip = None
     monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
 
     res = ts.detect_torch()
@@ -70,6 +73,7 @@ def test_detect_torch_cuda_build(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_torch.cuda.is_available.return_value = True
     fake_torch.cuda.get_device_name.return_value = "RTX 5090"
     fake_torch.version.cuda = "12.8"
+    fake_torch.version.hip = None
     monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
 
     res = ts.detect_torch()
@@ -88,11 +92,47 @@ def test_detect_torch_cuda_build_no_suffix_falls_back_to_version_cuda(
     fake_torch.cuda.is_available.return_value = True
     fake_torch.cuda.get_device_name.return_value = "Tesla T4"
     fake_torch.version.cuda = "11.8"
+    fake_torch.version.hip = None
     monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
 
     res = ts.detect_torch()
     assert res["cuda_build"] == "cu118"
     assert res["cuda_available"] is True
+
+
+def test_detect_torch_rocm_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ts, "_pkg_version", lambda _: "2.9.1+rocm7.14")
+    fake_torch = MagicMock()
+    fake_torch.__version__ = "2.9.1+rocm7.14"
+    fake_torch.version.cuda = None
+    fake_torch.version.hip = "7.14"
+    fake_torch.cuda.is_available.return_value = True
+    fake_torch.cuda.device_count.return_value = 1
+    fake_torch.cuda.get_device_name.return_value = "AMD Radeon RX 7900 XTX"
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+    res = ts.detect_torch()
+    assert res["cuda_build"] == "rocm7.14"
+    assert res["accelerator_backend"] == "rocm"
+    assert res["hip_version"] == "7.14"
+    assert res["cuda_available"] is True
+    assert res["device_name"] == "AMD Radeon RX 7900 XTX"
+
+
+def test_current_status_rocm_is_not_cpu_misinstall(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ts, "detect_torch", lambda: {
+        "installed": True, "version": "2.9.1+rocm7.14", "cuda_build": "rocm7.14",
+        "cuda_available": True, "device_name": "AMD Radeon RX 7900 XTX",
+        "accelerator_backend": "rocm", "accelerator_build": "rocm7.14",
+        "hip_version": "7.14",
+    })
+    monkeypatch.setattr(ts.onnxruntime_setup, "detect_cuda", lambda: {
+        "available": False, "driver_version": None, "gpu_name": None,
+    })
+    status = ts.current_status()
+    assert status["is_rocm"] is True
+    assert status["is_cpu_with_gpu"] is False
+    assert status["is_cuda_build_unavailable"] is False
 
 
 # ---------------------------------------------------------------------------

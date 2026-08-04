@@ -39,6 +39,12 @@ def detect_attention_backend() -> str:
     给 secrets.generate.attention_backend='auto' 时用。
     """
     try:
+        import torch  # noqa: PLC0415
+        if getattr(getattr(torch, "version", None), "hip", None):
+            return "none"
+    except ImportError:
+        pass
+    try:
         importlib.metadata.version("flash_attn")
         return "flash_attn"
     except importlib.metadata.PackageNotFoundError:
@@ -104,6 +110,16 @@ def install() -> dict[str, Any]:
     `restart_required=True` 因为 xformers 是 C extension —— 装好后必须重启
     Studio 进程才能 import（与 flash_attn 同）。
     """
+    try:
+        import torch  # noqa: PLC0415
+        if getattr(getattr(torch, "version", None), "hip", None):
+            raise RuntimeError(
+                "当前是 ROCm PyTorch；xformers 官方 wheel 是 CUDA 扩展，不能安装。"
+                "请使用 attention_backend=none（PyTorch SDPA）。"
+            )
+    except ImportError:
+        pass
+
     cmd = [sys.executable, "-m", "pip", "install", "xformers"]
     index = _torch_cuda_index()
     if index:

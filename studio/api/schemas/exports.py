@@ -17,6 +17,7 @@ class BundleOptionsBody(BaseModel):
     train_latent_cache: bool = False
     reg_latent_cache: bool = False
     train_masks: bool = False
+    train_regions: bool = False
 
     def to_options(self) -> train_io.BundleOptions:
         return train_io.BundleOptions(
@@ -28,6 +29,7 @@ class BundleOptionsBody(BaseModel):
             train_latent_cache=self.train_latent_cache,
             reg_latent_cache=self.reg_latent_cache,
             train_masks=self.train_masks,
+            train_regions=self.train_regions,
         )
 
 

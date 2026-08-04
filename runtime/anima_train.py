@@ -37,6 +37,14 @@ for _p in (_REPO_ROOT, _REPO_ROOT / "runtime"):
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
 
+# Windows ROCm / MIOpen needs writable database and kernel-cache directories.
+# This must happen before any training import can import torch. CUDA builds
+# simply ignore these MIOpen-specific environment variables.
+if os.name == "nt":
+    from utils.accelerator import configure_miopen_cache
+
+    configure_miopen_cache(_REPO_ROOT)
+
 # Windows 控制台默认 cp936，logging / print 写中文会 UnicodeEncodeError，
 # 默认 handler 的 errors='backslashreplace' 会把中文转成 \uXXXX 形式 ——
 # 这就是 task log 里看到的「检查 VAE」之类乱码的来源。

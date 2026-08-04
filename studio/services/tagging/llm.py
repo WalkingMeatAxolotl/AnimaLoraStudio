@@ -397,14 +397,16 @@ def test_openai_compatible_connection(
 
 
 def _apply_tags(
-    messages: list["secrets.LLMMessage"], tags_str: str
+    messages: list["secrets.LLMMessage"], tags_str: str, class_word: str = ""
 ) -> list["secrets.LLMMessage"]:
-    """Replace {{tags}} placeholders without mutating the shared preset messages."""
+    """Replace request placeholders without mutating shared preset messages."""
     out: list[secrets.LLMMessage] = []
     for m in messages:
-        if m.type == "text" and "{{tags}}" in m.content:
+        if m.type == "text" and ("{{tags}}" in m.content or "{{class_word}}" in m.content):
+            content = m.content.replace("{{tags}}", tags_str)
+            content = content.replace("{{class_word}}", class_word or "subject")
             out.append(
-                m.model_copy(update={"content": m.content.replace("{{tags}}", tags_str)})
+                m.model_copy(update={"content": content})
             )
         else:
             out.append(m)
@@ -431,6 +433,7 @@ class LLMTagger:
             for k, v in (overrides or {}).items()
             if v is not None and k != "api_key"
         }
+        self._class_word = str(self._overrides.pop("class_word", "") or "").strip()
         self._external_session = session is not None
         self._session = session or requests.Session()
 
@@ -576,7 +579,7 @@ class LLMTagger:
                 quality=cfg.jpeg_quality,
                 max_image_mb=cfg.max_image_mb,
             )
-            messages = _apply_tags(cfg.messages, tags_str)
+            messages = _apply_tags(cfg.messages, tags_str, self._class_word)
             content = self._call_with_retry(
                 cfg,
                 data_url,

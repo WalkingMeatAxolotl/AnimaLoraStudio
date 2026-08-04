@@ -22,6 +22,7 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
     "anima": frozenset({
         "navit", "sra", "leap", "compile_blocks",
         "caption_tag_ops", "online_text", "masked_loss",
+        "region_balance", "apt_personalization",
     }),
     "krea2": frozenset({"masked_loss", "text_cache", "block_swap"}),
 }
@@ -121,6 +122,8 @@ FIELD_CAPABILITY_REQUIREMENTS: dict[str, str] = {
     "sra_enabled": "sra",
     "leap_enabled": "leap",
     "masked_loss": "masked_loss",
+    "region_balance_enabled": "region_balance",
+    "apt_enabled": "apt_personalization",
     "shuffle_caption": "caption_tag_ops",
     "keep_tokens": "caption_tag_ops",
     "tag_dropout": "caption_tag_ops",

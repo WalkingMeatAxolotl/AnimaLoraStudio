@@ -114,7 +114,7 @@ class ModelSpec:
 KNOWN_CAPABILITIES = frozenset({
     "navit", "sra", "leap", "compile_blocks",
     "caption_tag_ops", "online_text", "text_cache", "masked_loss",
-    "block_swap",
+    "block_swap", "region_balance", "apt_personalization",
 })
 
 

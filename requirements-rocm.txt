@@ -1,0 +1,5 @@
+# Install into an existing ROCm-enabled Python environment.  Its torch and
+# torchvision already satisfy requirements.txt's lower bounds, so pip keeps
+# the ROCm wheels while filling in the application's pure-Python dependencies.
+-r requirements.txt
+

@@ -70,17 +70,24 @@ def detect_env() -> dict[str, Any]:
     # 是 CUDA C extension，CPU 版 torch 上压根装不了，UI 要给「先重装 CUDA 版 torch」
     # 而不是「找不到 wheel」这种误导。
     torch_cuda_build: Optional[str] = None
+    accelerator_backend: Optional[str] = None
     # 历史 except 只挡 ImportError，但 Windows 上 torch DLL 加载失败抛 OSError
     # （WinError 126），新 torch 版本里 __version__ 解析也可能出 IndexError —— 任何
     # 异常都不该让 status endpoint 500。捕获到走 None。
     try:
         import torch  # type: ignore[import-not-found]  # noqa: PLC0415
         torch_ver = torch.__version__
+        hip_v = getattr(getattr(torch, "version", None), "hip", None)
+        accelerator_backend = "rocm" if hip_v else "cuda"
         parts = torch_ver.split("+")[0].split(".")
         if len(parts) >= 2:
             torch_tag = f"torch{parts[0]}.{parts[1]}"
         m = re.search(r"\+(cu\d+|cpu)", torch_ver)
-        if m:
+        if hip_v:
+            torch_cuda_build = f"rocm{hip_v}"
+            cuda_tag = None
+            cuda_ver = None
+        elif m:
             tag = m.group(1)
             torch_cuda_build = tag
             if tag.startswith("cu"):
@@ -135,6 +142,7 @@ def detect_env() -> dict[str, Any]:
         "torch_tag": torch_tag,
         "torch_ver": torch_ver,
         "torch_cuda_build": torch_cuda_build,
+        "accelerator_backend": accelerator_backend,
         "platform": plat,
     }
 
@@ -293,6 +301,12 @@ def install(url: Optional[str] = None) -> dict[str, Any]:
     pip 重装后必须重启进程才能切换；返回 `restart_required=True` 让 UI 提示。
     """
     env = detect_env()
+
+    if env.get("accelerator_backend") == "rocm":
+        raise RuntimeError(
+            "当前是 ROCm PyTorch；flash_attn wheel 是 CUDA 扩展，不能安装。"
+            "请使用 attention_backend=none（PyTorch SDPA）。"
+        )
 
     if url is None:
         # CPU 版 torch 装不了 flash_attn —— flash_attn 是 CUDA C extension，必须配

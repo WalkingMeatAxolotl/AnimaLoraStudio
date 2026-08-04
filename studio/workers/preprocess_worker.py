@@ -34,6 +34,7 @@ from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import models as model_downloader
 from studio.services.preprocess import manifest as preprocess_manifest
 from studio.services.preprocess import masks as train_masks
+from studio.services.preprocess import regions as train_regions
 from studio.services.inference import upscaler
 
 
@@ -57,7 +58,7 @@ def _unlink_image_and_sidecars(path: Path, *, keep_sidecars: bool = False) -> No
         path.unlink(missing_ok=True)
     if keep_sidecars:
         return
-    for ext in (".txt", ".json"):
+    for ext in (".txt", ".json", train_regions.REGION_SUFFIX):
         path.with_suffix(ext).unlink(missing_ok=True)
 
 
@@ -262,8 +263,9 @@ def _run_upscale_train(
             try:
                 with Image.open(dst_path) as up_img:
                     train_masks.resize_mask_like(train_dir, src_rel, up_img.size)
+                    train_regions.resize_region_like(train_dir, src_rel, up_img.size)
             except Exception as exc:  # noqa: BLE001
-                log(f"   ⚠ mask 跟随放大失败: {exc}")
+                log(f"   ⚠ mask/region 跟随放大失败: {exc}")
             succeeded += 1
             emit_event(
                 "preprocess_progress",
@@ -435,8 +437,11 @@ def _run_crop_train(
                 train_masks.crop_mask_like(
                     train_dir, src_rel, crop_boxes, out_rels,
                 )
+                train_regions.crop_region_like(
+                    train_dir, src_rel, crop_boxes, out_rels,
+                )
             except Exception as exc:  # noqa: BLE001
-                log(f"   ⚠ mask 跟随裁剪失败: {exc}")
+                log(f"   ⚠ mask/region 跟随裁剪失败: {exc}")
 
             preprocess_manifest.train_replace_with_crops(
                 project_dir, version["label"],

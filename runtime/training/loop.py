@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import re
 import time
 from typing import Any
 
@@ -21,6 +22,7 @@ from training.context import TrainingContext
 from training.loss_weighting import compute_loss_weight
 from training.noise import make_noise, noise_params_from_args
 from training.observability import render_curve_panel
+from training.personalization import apply_adaptive_affine, build_region_spatial_weight
 from training.sample_runner import run_sample
 from training.snapshot import (
     build_auto_epoch_config_path,
@@ -34,6 +36,16 @@ from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_
 
 
 logger = logging.getLogger(__name__)
+
+
+def _apt_reference_captions(captions: list[str], identifier: str, class_token: str) -> list[str]:
+    """Replace the learned identifier only in the frozen-base reference prompt."""
+    identifier = str(identifier or "").strip()
+    class_token = str(class_token or "").strip()
+    if not identifier or not class_token:
+        return [str(c) for c in captions]
+    pattern = re.compile(rf"(?<!\w){re.escape(identifier)}(?!\w)", re.IGNORECASE)
+    return [pattern.sub(class_token, str(c)) for c in captions]
 
 
 def _resolve_sra_weight(args: Any) -> float:
@@ -217,6 +229,23 @@ def run(ctx: TrainingContext) -> None:
                     latents = ctx.vae.model.encode(pixels_5d, ctx.vae.scale)
                 bs = latents.shape[0]
 
+            # 两类空间标注独立进入循环：ignore mask 表示不学习，region 表示前期
+            # 强化。它们会和 APT 仿射增广共用同一几何变换，防止权重图错位。
+            ignore_map = None
+            if bool(getattr(args, "masked_loss", False)) and "masks" in batch:
+                ignore_map = batch["masks"].to(ctx.device, dtype=torch.float32)
+            region_map = None
+            region_weights = None
+            if bool(getattr(args, "region_balance_enabled", False)) and "regions" in batch:
+                region_map = batch["regions"].to(ctx.device, dtype=torch.float32)
+                region_weights = batch.get("region_weights")
+                if region_weights is not None:
+                    region_weights = region_weights.to(ctx.device, dtype=torch.float32)
+            main_mask = (
+                ~batch["is_reg"].to(ctx.device).bool()
+                if "is_reg" in batch else torch.ones(bs, device=ctx.device, dtype=torch.bool)
+            )
+
             # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
             # pad-to-512 / kv_trim / LLMAdapter 融合均为 Anima 私货）
             _enc_kwargs = dict(
@@ -234,6 +263,18 @@ def run(ctx: TrainingContext) -> None:
             else:
                 cross = ctx.family.encode_text_for_batch(
                     ctx.text_stack, ctx.model, captions,
+                    ctx.device, ctx.dtype,
+                    **_enc_kwargs,
+                )
+            apt_reference_cross = None
+            if ctx.apt_controller is not None:
+                reference_captions = _apt_reference_captions(
+                    captions,
+                    getattr(args, "apt_identifier_token", ""),
+                    getattr(args, "apt_class_token", "1girl"),
+                )
+                apt_reference_cross = ctx.family.encode_text_for_batch(
+                    ctx.text_stack, ctx.model, reference_captions,
                     ctx.device, ctx.dtype,
                     **_enc_kwargs,
                 )
@@ -257,6 +298,18 @@ def run(ctx: TrainingContext) -> None:
                         navit_latents if navit_latents is not None else latents
                     ),
                     res_shift_base_tokens,
+                )
+
+            apt_aug_fraction = 0.0
+            if ctx.apt_controller is not None and navit_latents is None:
+                apt_gamma = ctx.apt_controller.gamma_for(t, device=ctx.device)
+                # 正则图承载底模先验，不参加主体过拟合驱动的自适应增广。
+                apt_gamma = torch.where(main_mask, apt_gamma, torch.zeros_like(apt_gamma))
+                latents, region_map, ignore_map, apt_aug_fraction = apply_adaptive_affine(
+                    latents, region_map, ignore_map, apt_gamma,
+                    p_max=float(getattr(args, "apt_p_max", 0.8) or 0.0),
+                    zoom_max=float(getattr(args, "apt_zoom_max", 3.0) or 1.0),
+                    rotation_degrees=float(getattr(args, "apt_rotation_degrees", 15.0) or 0.0),
                 )
 
             # PR-C：adapter hook — 允许变体按 sigma_t / step 调整运行时结构
@@ -307,6 +360,8 @@ def run(ctx: TrainingContext) -> None:
             sra_align_loss_log = None
             sra_weighted_loss_log = None
             sra_effective_weight_log = None
+            region_stats_log = None
+            apt_status_log = None
             with torch.autocast("cuda", dtype=ctx.dtype):
                 if navit_latents is not None:
                     # ── NaViT / Patch-n-Pack 块对角打包路径 ──
@@ -405,20 +460,45 @@ def run(ctx: TrainingContext) -> None:
                     loss = loss_per_sample.mean()
                     denoise_loss_log = loss.detach()
                 else:
-                    # ── 标准 rectified flow 路径（零行为变化）──
+                    # ── 标准 rectified flow 路径 ──
                     noisy = (1 - t_exp) * latents + t_exp * noise
                     target = noise - latents
+                    base_pred = None
+                    if ctx.apt_controller is not None:
+                        # APT 参考误差来自同一底模、同一 noisy latent/t，只临时关闭
+                        # adapter；冻结前向不建图。reference caption 把标识词替换成
+                        # 类别词，使指标比较“底模先验 vs 个性化拟合”。
+                        disable_adapter = getattr(ctx.injector, "temporarily_disabled", None)
+                        if not callable(disable_adapter):
+                            raise RuntimeError(
+                                "当前 adapter 未实现 temporarily_disabled，无法运行 APT 冻结底模参考前向"
+                            )
+                        with torch.no_grad(), disable_adapter():
+                            base_pred = ctx.family.forward_train(
+                                ctx.model, noisy, t, apt_reference_cross,
+                                use_checkpoint=False,
+                            )
                     pred = ctx.family.forward_train(
                         ctx.model, noisy, t, cross,
                         use_checkpoint=args.grad_checkpoint,
                     )
-                    # masked loss（B2）：dataset 已把 mask 下采样到 latent 分辨率，
-                    # (B,h,w) → (B,1,1,h,w) 广播到 loss 的 (B,C,T,H,W)。
-                    # masked_loss 关闭或本 batch 全无 mask 时为 None（零开销）。
-                    spatial_mask = None
-                    if bool(getattr(args, "masked_loss", False)) and "masks" in batch:
-                        _m = batch["masks"].to(ctx.device, dtype=torch.float32)
-                        spatial_mask = _m.view(bs, 1, 1, *_m.shape[-2:])
+                    # 区域正权重与 ignore mask 在这里合并；分母按有效权重归一，
+                    # 因而框大小不会改变整张图在 batch 中的总权重。55% 之后
+                    # region helper 返回 None（无 ignore mask 时），严格回到整图 mean。
+                    _spatial_2d, region_stats_log = build_region_spatial_weight(
+                        region_map,
+                        ignore_map,
+                        region_weights,
+                        global_step=ctx.global_step,
+                        total_steps=ctx.total_steps,
+                        max_weight=float(getattr(args, "region_max_weight", 3.0) or 3.0),
+                        hold_ratio=float(getattr(args, "region_hold_ratio", 0.45) or 0.0),
+                        end_ratio=float(getattr(args, "region_end_ratio", 0.55) or 0.0),
+                    )
+                    spatial_mask = (
+                        _spatial_2d.view(bs, 1, 1, *_spatial_2d.shape[-2:])
+                        if _spatial_2d is not None else None
+                    )
                     # 训练 loss 通过 losses/ plugin registry 派发（mse / huber / ...）
                     loss_per_sample = ctx.loss_fn.compute(pred.float(), target.float(), t)
                     # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（不受 huber/loss_weighting 等
@@ -434,6 +514,22 @@ def run(ctx: TrainingContext) -> None:
                             _raw_mse = _raw_mse_per_sample.mean(
                                 dim=list(range(1, _raw_mse_per_sample.dim()))
                             )
+                        if base_pred is not None:
+                            _base_mse_per_sample = F.mse_loss(
+                                base_pred.float(), target.float(), reduction="none",
+                            )
+                            if spatial_mask is not None:
+                                _base_mse = _masked_mean_per_sample(
+                                    _base_mse_per_sample, spatial_mask,
+                                )
+                            else:
+                                _base_mse = _base_mse_per_sample.mean(
+                                    dim=list(range(1, _base_mse_per_sample.dim()))
+                                )
+                            ctx.apt_controller.update(
+                                t, _base_mse, _raw_mse, main_mask=main_mask,
+                            )
+                            apt_status_log = ctx.apt_controller.status()
                     # 仅 main 集样本进 InfoNoise schedule 学习：I-MMSE 假设单一数据分布，
                     # reg 集典型是通用图（booru）vs main 集是单一主题，混入 record 学到的是
                     # mixture MMSE 不是 mmse_main(t)。用 is_reg flag 而非 loss_weight 阈值
@@ -454,6 +550,11 @@ def run(ctx: TrainingContext) -> None:
                     lw = _compute_loss_weight_from_args(args, t, ctx.device)
                     if lw is not None:
                         loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
+                    if ctx.apt_controller is not None:
+                        apt_lw = ctx.apt_controller.loss_weights(t, main_mask=main_mask)
+                        loss_per_sample = loss_per_sample * apt_lw.view(
+                            -1, *([1] * (loss_per_sample.dim() - 1))
+                        )
                     if spatial_mask is not None:
                         loss = _masked_mean(loss_per_sample, spatial_mask)
                     else:
@@ -563,6 +664,12 @@ def run(ctx: TrainingContext) -> None:
                             monitor_metrics["sra_weighted_loss"] = sra_weighted_loss_val
                         if sra_effective_weight_log is not None:
                             monitor_metrics["sra_effective_weight"] = float(sra_effective_weight_log)
+                        if bool(getattr(args, "region_balance_enabled", False)) and region_stats_log is not None:
+                            monitor_metrics["region_scale"] = float(region_stats_log.scale)
+                            monitor_metrics["region_mean_weight"] = float(region_stats_log.mean_weight)
+                        if apt_status_log is not None:
+                            monitor_metrics["apt_gamma_mean"] = float(apt_status_log["gamma_mean"])
+                            monitor_metrics["apt_aug_fraction"] = float(apt_aug_fraction)
                         update_monitor(
                             loss=loss_val, lr=lr, epoch=epoch + 1,
                             total_epochs=int(args.epochs or 0),
@@ -587,6 +694,16 @@ def run(ctx: TrainingContext) -> None:
                     log_payload["train/sra_weighted_loss"] = sra_weighted_loss_val
                 if sra_effective_weight_log is not None:
                     log_payload["train/sra_effective_weight"] = float(sra_effective_weight_log)
+                if bool(getattr(args, "region_balance_enabled", False)) and region_stats_log is not None:
+                    log_payload["region/schedule_scale"] = float(region_stats_log.scale)
+                    log_payload["region/coverage"] = float(region_stats_log.coverage)
+                    log_payload["region/annotated_fraction"] = float(region_stats_log.annotated_fraction)
+                    log_payload["region/mean_weight"] = float(region_stats_log.mean_weight)
+                if apt_status_log is not None:
+                    log_payload["apt/gamma_mean"] = float(apt_status_log["gamma_mean"])
+                    log_payload["apt/gamma_max"] = float(apt_status_log["gamma_max"])
+                    log_payload["apt/initialized_bins"] = int(apt_status_log["initialized_bins"])
+                    log_payload["apt/augmented_fraction"] = float(apt_aug_fraction)
                 if "d" in optimizer_metrics:
                     log_payload["train/optimizer_d"] = float(optimizer_metrics["d"])
                 if "base_lr" in optimizer_metrics:
@@ -684,6 +801,7 @@ def run(ctx: TrainingContext) -> None:
                             ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
                             timestep_sampler=ctx.timestep_sampler,
                             sra_aligner=ctx.sra_aligner,
+                            apt_controller=ctx.apt_controller,
                             scaler=ctx.scaler,
                             model_family=ctx.family.spec.family_id,
                         )
@@ -751,6 +869,7 @@ def run(ctx: TrainingContext) -> None:
                         ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
                         timestep_sampler=ctx.timestep_sampler,
                         sra_aligner=ctx.sra_aligner,
+                        apt_controller=ctx.apt_controller,
                         scaler=ctx.scaler,
                         model_family=ctx.family.spec.family_id,
                     )
@@ -784,6 +903,7 @@ def run(ctx: TrainingContext) -> None:
                     monitor_state=monitor_data, scheduler=ctx.scheduler,
                     timestep_sampler=ctx.timestep_sampler,
                     sra_aligner=ctx.sra_aligner,
+                    apt_controller=ctx.apt_controller,
                     scaler=ctx.scaler,
                     model_family=ctx.family.spec.family_id,
                 )

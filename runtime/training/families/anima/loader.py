@@ -18,6 +18,64 @@ from training.model_loading import (
 logger = logging.getLogger(__name__)
 
 
+def _find_comfyui_root(path: str | Path) -> Path | None:
+    """Find a ComfyUI checkout from one of its model paths.
+
+    ComfyUI distributes the Qwen/T5 tokenizer assets with the application, not
+    inside single-file text encoder checkpoints.  Walking up from
+    ``ComfyUI/models/clip/*.safetensors`` lets the trainer reuse those exact
+    assets without copying model files or requiring a network download.
+    """
+    resolved = Path(path).expanduser().resolve(strict=False)
+    for candidate in (resolved, *resolved.parents):
+        if (candidate / "comfy" / "text_encoders").is_dir():
+            return candidate
+    return None
+
+
+def _resolve_qwen_tokenizer_path(qwen_path: str | Path) -> Path:
+    path = Path(qwen_path).expanduser()
+    # Preserve the historical Hugging Face directory path: AutoTokenizer owns
+    # validation (and may support custom remote-code layouts without a local
+    # tokenizer_config.json).  Extra discovery is only needed for a bare
+    # ComfyUI safetensors checkpoint.
+    if path.is_dir():
+        return path
+
+    candidates: list[Path] = []
+    comfy_root = _find_comfyui_root(path)
+    if comfy_root is not None:
+        candidates.append(comfy_root / "comfy" / "text_encoders" / "qwen25_tokenizer")
+    candidates.extend([
+        path.parent / "qwen25_tokenizer",
+        path.parent.parent / "qwen25_tokenizer",
+    ])
+    for candidate in candidates:
+        if (candidate / "tokenizer_config.json").is_file():
+            return candidate
+    raise FileNotFoundError(
+        "单文件 Anima Qwen 文本编码器缺少 tokenizer。请保留标准 ComfyUI 目录结构"
+        "（需要 comfy/text_encoders/qwen25_tokenizer），或把 text_encoder_path "
+        "改为包含 tokenizer_config.json 的完整 Qwen3-0.6B 目录。"
+    )
+
+
+def _resolve_t5_tokenizer_path(
+    configured_path: str | Path | None, qwen_path: str | Path,
+) -> Path | None:
+    if configured_path:
+        configured = Path(configured_path).expanduser()
+        if configured.exists():
+            return configured
+
+    comfy_root = _find_comfyui_root(qwen_path)
+    if comfy_root is not None:
+        candidate = comfy_root / "comfy" / "text_encoders" / "t5_tokenizer"
+        if (candidate / "tokenizer_config.json").is_file():
+            return candidate
+    return None
+
+
 def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: bool = True):
     """加载 Anima transformer 模型。
 
@@ -125,9 +183,17 @@ def load_text_encoders(
     """加载文本编码器（Qwen + T5）。"""
     from transformers import AutoModelForCausalLM, AutoTokenizer, T5Tokenizer, T5TokenizerFast
 
-    # Qwen
-    qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
-    if comfy_qwen:
+    qwen_path = Path(qwen_path).expanduser()
+    qwen_tokenizer_path = _resolve_qwen_tokenizer_path(qwen_path)
+    single_file_qwen = qwen_path.is_file()
+
+    # Qwen: a ComfyUI single-file checkpoint always uses the repo's lightweight
+    # Comfy-compatible encoder.  HF AutoModel requires a config directory and
+    # cannot load this shape from a bare safetensors file.
+    qwen_tokenizer = AutoTokenizer.from_pretrained(
+        qwen_tokenizer_path, trust_remote_code=True
+    )
+    if comfy_qwen or single_file_qwen:
         from training.families.anima.comfy_qwen import load_comfy_qwen3_encoder
 
         qwen_model = load_comfy_qwen3_encoder(qwen_path, device=device, dtype=dtype)
@@ -137,14 +203,25 @@ def load_text_encoders(
         ).to(device).eval().requires_grad_(False)
 
     # T5 tokenizer
-    t5_cls = T5TokenizerFast if t5_fast else T5Tokenizer
-    if t5_tokenizer_path and Path(t5_tokenizer_path).exists():
-        t5_tokenizer = t5_cls.from_pretrained(t5_tokenizer_path)
+    resolved_t5_path = _resolve_t5_tokenizer_path(t5_tokenizer_path, qwen_path)
+    # ComfyUI ships tokenizer.json but no SentencePiece model.  Auto-select the
+    # fast implementation for that layout even when the historical config says
+    # "slow"; a full google/t5-v1_1-xxl directory keeps the requested backend.
+    fast_only_layout = bool(
+        resolved_t5_path
+        and (resolved_t5_path / "tokenizer.json").is_file()
+        and not (resolved_t5_path / "spiece.model").is_file()
+    )
+    t5_cls = T5TokenizerFast if (t5_fast or fast_only_layout) else T5Tokenizer
+    if resolved_t5_path is not None:
+        t5_tokenizer = t5_cls.from_pretrained(resolved_t5_path)
+        if not t5_tokenizer_path:
+            logger.info("自动复用 ComfyUI T5 tokenizer: %s", resolved_t5_path)
     else:
         logger.warning(
             "T5 tokenizer 本地目录缺失（t5_tokenizer_path=%s），"
             "开始从 Hugging Face 下载 google/t5-v1_1-xxl",
-            t5_tokenizer_path or "未配置",
+            t5_tokenizer_path or "未配置且未找到 ComfyUI tokenizer",
         )
         try:
             t5_tokenizer = t5_cls.from_pretrained("google/t5-v1_1-xxl")

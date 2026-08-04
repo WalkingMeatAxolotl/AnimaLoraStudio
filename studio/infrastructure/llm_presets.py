@@ -13,6 +13,8 @@ BUILTIN_PRESET_ORDER = (
     "general_json",
     "txt_tags",
     "joycaption",
+    "joycaption_ollama",
+    "sid_subject_json",
     "assist_json",
     "assist_text",
 )

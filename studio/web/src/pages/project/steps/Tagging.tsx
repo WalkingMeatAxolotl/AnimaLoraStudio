@@ -92,6 +92,7 @@ export default function TaggingPage() {
   // 触发词：初值从 activeVersion 取（持久化在 version 表）；启动打标时一并提交，
   // 后端会同步落库 + 传给 worker prepend 到每张 caption。
   const [triggerWord, setTriggerWord] = useState<string>('')
+  const [classWord, setClassWord] = useState<string>('1girl')
   // 打标范围：'all'（默认 train + validation）/ 'validation' / 某个 train 文件夹名。
   // folders 给 dropdown 列 train 子文件夹选项（从 curation 拿）。
   const [scope, setScope] = useState<string>('all')
@@ -153,12 +154,12 @@ export default function TaggingPage() {
   useEffect(() => {
     setTaggerStatus(null)
     void api
-      .checkTagger(tagger)
+      .checkTagger(tagger, tagger === 'llm' ? llmPresetId : null)
       .then(setTaggerStatus)
       .catch((e) =>
         setTaggerStatus({ name: tagger, ok: false, msg: String(e), requires_service: false })
       )
-  }, [tagger])
+  }, [tagger, llmPresetId])
 
   // 刷新 / 进入页面时回放最近一次打标 job：锁回 id + 回放历史日志。
   useEffect(() => {
@@ -321,6 +322,7 @@ export default function TaggingPage() {
         wd14_overrides, cltagger_overrides, llm_overrides,
         // 传 trigger 永远，让 server 决定是否落库（与现有值比较），空串显式清空
         trigger_word: trigger,
+        class_word: classWord.trim() || '1girl',
       })
       setJob(j)
       setLogs([])
@@ -470,6 +472,19 @@ export default function TaggingPage() {
                   style={fieldCtlStyle(triggerWord.trim() !== (activeVersion.trigger_word ?? ''))}
                 />
               </TagField>
+              {tagger === 'llm' && (
+                <TagField label={t('tag.classWord')} helpTooltip={t('tag.classWordHint')}>
+                  <input
+                    type="text"
+                    value={classWord}
+                    onChange={(e) => setClassWord(e.target.value)}
+                    placeholder="1girl"
+                    disabled={isLive}
+                    className="input input-mono"
+                    style={fieldInputStyle}
+                  />
+                </TagField>
+              )}
             </div>
           </section>
 

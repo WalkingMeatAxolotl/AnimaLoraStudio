@@ -16,14 +16,15 @@ router = APIRouter()
 
 
 @router.get("/api/tagger/{name}/check")
-def check_tagger(name: str) -> dict[str, Any]:
+def check_tagger(name: str, preset_id: str | None = None) -> dict[str, Any]:
     if name not in VALID_TAGGER_NAMES:
         raise ValidationError(
             f'Unknown tagger: "{name}"',
             code="tag.tagger_invalid", details={"name": name}, http_status=400,
         )
     try:
-        t = get_tagger(name)
+        overrides = {"current_preset": preset_id} if name == "llm" and preset_id else None
+        t = get_tagger(name, overrides=overrides)
     except Exception as exc:  # noqa: BLE001
         return {"name": name, "ok": False, "msg": str(exc)}
     ok, msg = t.is_available()

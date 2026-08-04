@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...services.preprocess import core as preprocess_svc
 
@@ -60,3 +60,26 @@ class PreprocessCropRequest(BaseModel):
     stem_c1.png / ... 并删除原 stem.png。
     """
     crops: dict[str, list[CropRect]]
+
+
+class RegionBox(BaseModel):
+    """Normalized primary training region."""
+    x: float = Field(ge=0.0, lt=1.0)
+    y: float = Field(ge=0.0, lt=1.0)
+    w: float = Field(gt=0.0, le=1.0)
+    h: float = Field(gt=0.0, le=1.0)
+
+
+class PrimaryRegion(BaseModel):
+    id: str = "primary"
+    label: str = "primary"
+    class_word: str = ""
+    caption: str = ""
+    weight: float = Field(default=1.0, ge=0.1, le=10.0)
+    box: RegionBox
+
+
+class RegionAnnotationRequest(BaseModel):
+    version: int = 1
+    image_size: Optional[dict[str, int]] = None
+    regions: list[PrimaryRegion]

@@ -154,3 +154,12 @@ def test_install_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xs.subprocess, "run", boom)
     with pytest.raises(RuntimeError, match="超时"):
         xs.install()
+
+
+def test_install_rejects_rocm(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = types.ModuleType("torch")
+    fake.__version__ = "2.9.1+rocm7.14"  # type: ignore[attr-defined]
+    fake.version = types.SimpleNamespace(hip="7.14", cuda=None)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    with pytest.raises(RuntimeError, match="ROCm"):
+        xs.install()

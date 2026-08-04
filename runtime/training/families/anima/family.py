@@ -98,6 +98,11 @@ class AnimaFamily:
             t5_ids = t5_ids.to(device)
             t5_attn = t5_attn.to(device)
             t5_w = t5_w.to(device, dtype=torch.float32)
+            # The standalone Comfy Qwen loader intentionally emits fp32 (its
+            # manual-cast path mirrors ComfyUI). The Anima LLM adapter follows
+            # the DiT dtype, so ROCm/CUDA linear kernels require an explicit
+            # boundary cast instead of relying on implicit mixed matmul.
+            qwen_emb = qwen_emb.to(device=device, dtype=dtype)
             # t5_w 在 preprocess_text_embeds 内乘到 LLMAdapter 输出上（ComfyUI 对齐）
             cross = dit.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
             if cross.shape[1] < max_len:

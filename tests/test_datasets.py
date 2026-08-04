@@ -49,6 +49,27 @@ def test_cached_latent_invalidates_when_resolution_bucket_changes(tmp_path: Path
     assert cached._is_cache_valid(img_path, npz_path) is True
 
 
+def test_cached_latent_can_use_separate_cache_directory(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    from types import SimpleNamespace
+
+    from runtime.training.dataset import CachedLatentDataset
+
+    data_root = tmp_path / "read-only-source"
+    image = data_root / "subject" / "frame.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+
+    cached = object.__new__(CachedLatentDataset)
+    cached.cache_dir = tmp_path / "writable-cache"
+    cached.base_image_dataset = SimpleNamespace(data_dir=data_root)
+    cached._multi_reso = set()
+
+    assert cached._get_npz_path(image) == (
+        tmp_path / "writable-cache" / "subject" / "frame.npz"
+    )
+
+
 def test_cached_latent_keeps_third_party_caption_fallback(tmp_path: Path) -> None:
     """Phase 2 resolver 抽取不能把 duck-typed dataset 的 caption 变成空串。"""
     pytest.importorskip("torch")
