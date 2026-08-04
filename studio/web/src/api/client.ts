@@ -2554,8 +2554,14 @@ export const api = {
     ),
 
   // Tagging (PP4) --------------------------------------------------------
-  checkTagger: (name: TaggerName) =>
-    req<TaggerStatus>(`/api/tagger/${name}/check`),
+  // overrides 与 startTag 的 `<name>_overrides` 同构：check 必须按本次打标
+  // 实际生效的配置检查，否则页面覆盖（模型版本 / 预设）不被感知（issue #477）。
+  checkTagger: (name: TaggerName, overrides?: Record<string, unknown>) =>
+    req<TaggerStatus>(
+      `/api/tagger/${name}/check${
+        overrides ? `?overrides=${encodeURIComponent(JSON.stringify(overrides))}` : ''
+      }`,
+    ),
   startTag: (
     pid: number,
     vid: number,
