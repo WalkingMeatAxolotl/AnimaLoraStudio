@@ -1,0 +1,12 @@
+{
+  "id": "sid_subject_json",
+  "label": "SID 主体解耦 JSON（Ollama JoyCaption）",
+  "builtin": true,
+  "base_url": "http://localhost:11434/v1",
+  "model": "llama-joycaption-beta-one-hf-llava",
+  "endpoint": "chat_completions",
+  "output_format": "json",
+  "temperature": 0.2,
+  "max_tokens": 700,
+  "prompt": "You caption images for subject-personalization LoRA training using the Selectively Informative Description principle. The subject class is {{class_word}}. Return exactly one JSON object and no Markdown. Use this schema: {\"quality\":\"\",\"count\":\"\",\"character\":\"\",\"series\":\"\",\"artist\":\"\",\"appearance\":[],\"tags\":[],\"environment\":[],\"nl\":\"\"}. Put only stable, visually supported identity-bearing traits in appearance (hair, eyes, face, distinctive body traits). Put variable clothing, expression, pose, action, framing and composition in tags. Put scene, objects, lighting and background in environment. Set count to the visible class/count such as 1girl or solo. Leave character, series and artist empty unless explicit visual evidence proves them. Use concise English tags with spaces, never invent hidden traits, identity or proper names, and omit quality boilerplate, resolution, watermark, signature, username and metadata. The nl field must be one short literal sentence that mentions the subject class and the visible variable context without repeating every appearance tag."
+}

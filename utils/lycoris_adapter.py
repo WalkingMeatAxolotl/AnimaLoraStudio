@@ -522,6 +522,19 @@ class LycorisAdapter:
         """
         return self.use_lokr and "lokr_w1" in param_name
 
+    @contextmanager
+    def temporarily_disabled(self):
+        """Run a forward with every LyCORIS layer multiplier set to zero."""
+        layers = list(getattr(self.network, "loras", None) or [])
+        previous = [float(getattr(layer, "multiplier", 1.0)) for layer in layers]
+        try:
+            for layer in layers:
+                layer.multiplier = 0.0
+            yield
+        finally:
+            for layer, value in zip(layers, previous):
+                layer.multiplier = value
+
 
 def _rewrite_per_layer_alpha_(network: Optional[nn.Module], sd: dict[str, torch.Tensor]) -> None:
     """对 sd 里每层 .alpha tensor 重算为 lora.scale × lora.lora_dim。

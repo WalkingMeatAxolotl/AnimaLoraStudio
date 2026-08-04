@@ -64,6 +64,7 @@ def run(ctx: TrainingContext) -> None:
             args.resume_state, ctx.injector, ctx.optimizer, ctx.scheduler,
             timestep_sampler=ctx.timestep_sampler,
             sra_aligner=ctx.sra_aligner,
+            apt_controller=ctx.apt_controller,
             scaler=ctx.scaler,
             expected_family=ctx.family.spec.family_id,
         )

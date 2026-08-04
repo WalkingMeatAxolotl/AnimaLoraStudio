@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def save_training_state(
     path, injector, optimizer, epoch, global_step,
     loss_history=None, rng_state=None, monitor_state=None,
-    scheduler=None, timestep_sampler=None, sra_aligner=None,
+    scheduler=None, timestep_sampler=None, sra_aligner=None, apt_controller=None,
     scaler=None, model_family=None,
 ):
     """保存完整训练状态，支持断点续训。
@@ -64,6 +64,11 @@ def save_training_state(
             sampler_state = None
         if sampler_state:  # 空 dict（baseline）不存
             state["timestep_sampler_state"] = sampler_state
+    if apt_controller is not None and hasattr(apt_controller, "state_dict"):
+        try:
+            state["apt_controller_state"] = apt_controller.state_dict()
+        except Exception as e:
+            logger.warning(f"APT controller state_dict() 失败（跳过）: {e}")
     if scaler is not None:
         # fp16 GradScaler 的 scale 因子 / growth tracker。resume 不带 → 重置成默认 2^16，
         # 头几步重新溢出空跳直到收敛。bf16/fp32 时 ctx.scaler 为 None，跳过不存。
@@ -82,7 +87,7 @@ def save_training_state(
     logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
 
 
-def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None, expected_family=None):
+def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, apt_controller=None, scaler=None, expected_family=None):
     """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)。
 
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
@@ -163,6 +168,16 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
             logger.info("timestep_sampler 状态已恢复（自适应 schedule 接力）")
         except Exception as e:
             logger.warning(f"timestep_sampler 状态恢复失败（冷启动重 warmup）: {e}")
+
+    if apt_controller is not None:
+        if "apt_controller_state" in state and hasattr(apt_controller, "load_state_dict"):
+            try:
+                apt_controller.load_state_dict(state["apt_controller_state"])
+                logger.info("APT 自适应分箱状态已恢复")
+            except Exception as e:
+                logger.warning(f"APT 自适应状态恢复失败（冷启动）: {e}")
+        else:
+            logger.warning("checkpoint 不含 APT 自适应状态；分箱 EMA 将冷启动")
 
     # ADR 0006 Addendum 1 第 7 条：Schedule-Free 系优化器（PPSF 等）resume 守护。
     # PPSF 内部维护 group['train_mode'] flag + Polyak averaged x/y/z 三组权重；

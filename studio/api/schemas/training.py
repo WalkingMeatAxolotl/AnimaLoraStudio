@@ -71,6 +71,8 @@ class TagJobRequest(BaseModel):
     # 并记到 version.trigger_word 供页面回显 —— 它是一次打标操作的参数，不外溢
     # 到训练 config（采样图要带 trigger 请自己写进 sample prompt）。
     trigger_word: Optional[str] = None
+    # SID / subject-personalization LLM preset 的类别词模板变量（{{class_word}}）。
+    class_word: Optional[str] = "1girl"
     # 打标范围："all"（默认，train 全部文件夹 + validation）| "validation"（只打
     # held-out 验证集）|  某个 train 子文件夹名（如 "1_data"，只打那一个）。
     # 手动加入的验证图原本没 caption，靠这个把验证集纳入打标。

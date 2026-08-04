@@ -4,6 +4,7 @@ import PreprocessCropPage from './PreprocessCrop'
 import PreprocessDuplicatesPage from './PreprocessDuplicates'
 import PreprocessInpaintPage from './PreprocessInpaint'
 import PreprocessOverviewPage from './PreprocessOverview'
+import PreprocessRegionPage from './PreprocessRegion'
 
 /** Route entry for `/projects/:pid/preprocess`.
  *
@@ -30,5 +31,6 @@ export default function PreprocessHub() {
   if (tool === 'upscale') return <PreprocessUpscalePage />
   if (tool === 'crop') return <PreprocessCropPage />
   if (tool === 'inpaint') return <PreprocessInpaintPage />
+  if (tool === 'region') return <PreprocessRegionPage />
   return <PreprocessOverviewPage />
 }

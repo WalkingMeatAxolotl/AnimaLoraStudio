@@ -35,7 +35,11 @@ def _find_comfyui_root(path: str | Path) -> Path | None:
 
 def _resolve_qwen_tokenizer_path(qwen_path: str | Path) -> Path:
     path = Path(qwen_path).expanduser()
-    if path.is_dir() and (path / "tokenizer_config.json").is_file():
+    # Preserve the historical Hugging Face directory path: AutoTokenizer owns
+    # validation (and may support custom remote-code layouts without a local
+    # tokenizer_config.json).  Extra discovery is only needed for a bare
+    # ComfyUI safetensors checkpoint.
+    if path.is_dir():
         return path
 
     candidates: list[Path] = []

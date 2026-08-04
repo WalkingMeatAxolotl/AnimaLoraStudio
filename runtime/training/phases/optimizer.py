@@ -89,3 +89,16 @@ def run(ctx: TrainingContext) -> None:
     # Timestep 采样器（baseline 或 InfoNoise；total_steps 确定后才能算 N_warm）
     from training.timestep_samplers import build_timestep_sampler
     ctx.timestep_sampler = build_timestep_sampler(args, ctx.total_steps)
+
+    ctx.apt_controller = None
+    if bool(getattr(args, "apt_enabled", False)):
+        from training.personalization import AptAdaptiveController
+
+        ctx.apt_controller = AptAdaptiveController(
+            bins=int(getattr(args, "apt_bins", 10) or 10),
+            ema_alpha=float(getattr(args, "apt_ema_alpha", 0.1) or 0.1),
+        )
+        logger.info(
+            "[APT-inspired] 已启用：bins=%d, ema_alpha=%.3f；每步增加一次冻结底模参考前向",
+            ctx.apt_controller.bins, ctx.apt_controller.alpha,
+        )

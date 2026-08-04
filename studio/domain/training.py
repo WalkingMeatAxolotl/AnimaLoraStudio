@@ -796,6 +796,76 @@ class TrainingConfig(BaseModel):
             disable_hint="Leap（per-sample loss 无空间维度）/ NaViT 打包路径不支持 mask（schema 互斥）",
         ),
     )
+    region_balance_enabled: bool = Field(
+        False,
+        description="启用主区域平衡训练：读取每张图的 .regions.json，前期提高主区域的像素级 loss 权重，45%-55% 余弦退火，后半程恢复严格整图训练以稳住构图与底模先验",
+        json_schema_extra=_meta(
+            "loss",
+            show_when=cap_gate("region_balance"),
+            disable_when="leap_enabled==true||navit_packing==true",
+            disable_hint="区域平衡需要标准批量网格的逐像素 loss；Leap / NaViT 路径暂不支持",
+        ),
+    )
+    region_max_weight: float = Field(
+        3.0, ge=1.0, le=10.0,
+        description="区域阶段主区域相对整图的最大 loss 权重；最终按有效像素权重归一，不会因框面积改变整张图的样本权重",
+        json_schema_extra=_meta("loss", show_when="region_balance_enabled==true", advanced=True),
+    )
+    region_hold_ratio: float = Field(
+        0.45, ge=0.0, le=1.0,
+        description="保持完整区域强化的训练进度比例",
+        json_schema_extra=_meta("loss", show_when="region_balance_enabled==true", advanced=True),
+    )
+    region_end_ratio: float = Field(
+        0.55, ge=0.0, le=1.0,
+        description="区域强化完全退火为整图训练的进度比例；之后权重严格为 1",
+        json_schema_extra=_meta("loss", show_when="region_balance_enabled==true", advanced=True),
+    )
+    apt_enabled: bool = Field(
+        False,
+        description="启用 APT-inspired 个性化训练：按时间步分箱比较冻结底模与当前 LoRA 的去噪误差，用过拟合指标自适应降低 loss，并在指标升高时做 latent 仿射增广",
+        json_schema_extra=_meta(
+            "loss",
+            show_when=cap_gate("apt_personalization"),
+            disable_when="leap_enabled==true||navit_packing==true||infonoise_enabled==true",
+            disable_hint="APT-inspired v1 需要标准单时间步前向；与 Leap / NaViT / InfoNoise 互斥",
+        ),
+    )
+    apt_identifier_token: str = Field(
+        "",
+        description="主体标识词（如 yuemeng）。冻结底模参考前向会把它替换为类别词，避免把底模不认识的触发词误判成过拟合",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true"),
+    )
+    apt_class_token: str = Field(
+        "1girl",
+        description="APT 冻结底模参考 caption 中用于替换主体标识词的类别词",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true"),
+    )
+    apt_bins: int = Field(
+        10, ge=2, le=100,
+        description="APT 连续时间步分箱数量",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true", advanced=True),
+    )
+    apt_ema_alpha: float = Field(
+        0.1, ge=0.001, le=1.0,
+        description="APT 分箱误差 EMA 的新值权重",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true", advanced=True),
+    )
+    apt_p_max: float = Field(
+        0.8, ge=0.0, le=1.0,
+        description="自适应仿射增广的最大触发概率",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true", advanced=True),
+    )
+    apt_zoom_max: float = Field(
+        3.0, ge=1.0, le=5.0,
+        description="自适应 zoom-out 的最大比例",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true", advanced=True),
+    )
+    apt_rotation_degrees: float = Field(
+        15.0, ge=0.0, le=45.0,
+        description="自适应旋转增广的最大绝对角度",
+        json_schema_extra=_meta("loss", show_when="apt_enabled==true", advanced=True),
+    )
     min_snr_gamma: float = Field(
         5.0, ge=0.1, le=20.0,
         description="Min-SNR 阈值：高 SNR 简单步（低 t 端）的权重压制阈值。默认 5.0；越小压制越强",
@@ -1092,6 +1162,15 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 f"detail_inv_t_min ({self.detail_inv_t_min}) 不能大于 "
                 f"detail_inv_t_max ({self.detail_inv_t_max})。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_region_schedule(self) -> "TrainingConfig":
+        if self.region_hold_ratio > self.region_end_ratio:
+            raise ValueError(
+                f"region_hold_ratio ({self.region_hold_ratio}) 不能大于 "
+                f"region_end_ratio ({self.region_end_ratio})。"
             )
         return self
 

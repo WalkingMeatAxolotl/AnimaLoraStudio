@@ -128,6 +128,9 @@ def run(job_id: int) -> int:
         scope = str(params.get("scope") or "all")
         # 约定：每个支持本次覆盖的 tagger 都把 overrides 存在 `<name>_overrides` 键下
         overrides = params.get(f"{tagger_name}_overrides") or None
+        if tagger_name == "llm":
+            overrides = dict(overrides or {})
+            overrides["class_word"] = str(params.get("class_word") or "1girl").strip()
 
         with db.connection_for() as conn:
             v = versions.get_version(conn, version_id)

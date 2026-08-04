@@ -24,6 +24,7 @@
     "cropZoomHint": "滚轮缩放 · 空格拖拽平移",
     "gotIt": "知道了",
     "save": "保存",
+    "clear": "清除",
     "delete": "删除",
     "restore": "还原",
     "close": "关闭",
@@ -1820,6 +1821,7 @@
     "exportBundleConfigHint": "（当前版本超参数，路径字段不含）",
     "exportBundleLatentCache": "包含 VAE latent 缓存 (.npz)",
     "exportBundleTrainMasks": "包含训练 mask（涂抹页 Mask 数据）",
+    "exportBundleTrainRegions": "包含主区域标注（区域平衡训练数据）",
     "exportBundleDestinationHint": "导出的 bundle 会即时生成，可交给浏览器下载，也可保存到 data_exports/。",
     "exportBundleDestination": "导出目标",
     "exportBundleDownload": "下载到本地",
@@ -1941,7 +1943,8 @@
       "dedupe": "去重审核",
       "upscale": "放大",
       "crop": "裁剪",
-      "inpaint": "涂抹"
+      "inpaint": "涂抹",
+      "region": "区域标注"
     },
     "imagesTitle": "图片",
     "totalCount": "共 {{n}} 张",
@@ -2052,6 +2055,19 @@
     "rrFromCrops": "裁剪框 AR",
     "toastStarted": "开始裁剪 #{{id}}",
     "toastNoCrops": "没有可提交的裁剪框（先在画布上画几个框）"
+  },
+  "preprocessRegion": {
+    "title": "区域平衡标注",
+    "subtitle": "为每张训练图框选一个主要学习区域；拖拽画布即可重画",
+    "noVersion": "请先选择一个版本",
+    "empty": "训练集中没有图片",
+    "drawHint": "在图片上拖拽框选脸部或主体。训练前段会相对强化该区域，后段自动恢复整图。",
+    "label": "区域标签",
+    "classWord": "类别词",
+    "caption": "区域说明（用于审核）",
+    "weight": "区域自身权重",
+    "saved": "区域标注已保存",
+    "cleared": "区域标注已清除"
   },
   "preprocessInpaint": {
     "subtitle": "放大 / 裁剪 / 涂抹 — 涂抹工具",
@@ -2274,6 +2290,8 @@
     "triggerWord": "触发词",
     "triggerWordPlaceholder": "如 ohwx / mychar",
     "triggerWordHint": "打标时作为第一个 tag 写入每张 caption；空 = 不启用。改后启动打标会同步落库到当前 version。",
+    "classWord": "主体类别词",
+    "classWordHint": "供 SID 主体标注预设使用，如 1girl、1boy、dog；它描述类别，不应使用唯一触发词。",
     "onExisting": "已有 caption",
     "onExistingHint": "图片已有 caption 文件（.txt 或 .json）时怎么处理。",
     "onExistingOverwrite": "覆盖",

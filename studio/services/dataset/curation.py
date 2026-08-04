@@ -26,6 +26,7 @@ from ..projects import projects, versions
 from .scan import IMAGE_EXTS
 from ..preprocess import manifest as preprocess_manifest
 from ..preprocess import masks as train_masks
+from ..preprocess import regions as train_regions
 
 # Kohya: 可选 `N_` 前缀 + 字母（不允许纯数字 / `5_` 这种空 label）
 _FOLDER_PATTERN = re.compile(r"^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$")
@@ -424,6 +425,7 @@ def remove_from_train(
                         except OSError:
                             pass
                 train_masks.delete_mask(train, f"{folder}/{origin_name}")
+                train_regions.delete_region(train, f"{folder}/{origin_name}")
                 removed.append(origin_name)
             else:
                 missing.append(origin_name)
@@ -445,6 +447,7 @@ def remove_from_train(
                     except OSError:
                         pass
             train_masks.delete_mask(train, rel)
+            train_regions.delete_region(train, rel)
         rels_to_pop.extend(rels)
         removed.append(origin_name)
 

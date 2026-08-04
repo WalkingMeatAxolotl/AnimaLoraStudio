@@ -1,0 +1,60 @@
+# Copy to a local ignored directory before editing/running.
+model_family: anima
+transformer_path: E:/aiwork/ComfyUI/models/unet/oneObsessionAnima_v20.safetensors
+vae_path: E:/aiwork/ComfyUI/models/vae/qwen_image_vae.safetensors
+text_encoder_path: E:/aiwork/ComfyUI/models/clip/anima_baseV10_txt.safetensors
+t5_tokenizer_path: ""
+data_dir: D:/path/to/copied/5_yuemeng3_train
+
+resolution: [1024]
+aspect_ratio_limit: 2.0
+cache_latents: true
+latent_cache_dir: ./.cache/latents/yuemeng-region
+vae_tiling: auto
+num_workers: 0
+
+shuffle_caption: true
+keep_tokens: 2
+flip_augment: false
+tag_dropout: 0.05
+prefer_json: true
+
+lora_type: lora
+lora_rank: 32
+lora_alpha: 32.0
+epochs: 10
+max_steps: 0
+batch_size: 1
+grad_accum: 4
+grad_checkpoint: true
+kv_trim: true
+learning_rate: 0.00005
+optimizer_type: adamw
+lr_scheduler: cosine
+mixed_precision: bf16
+attention_backend: none
+
+region_balance_enabled: true
+region_max_weight: 3.0
+region_hold_ratio: 0.45
+region_end_ratio: 0.55
+apt_enabled: true
+apt_identifier_token: yuemeng
+apt_class_token: 1girl
+apt_bins: 10
+apt_ema_alpha: 0.1
+apt_p_max: 0.8
+apt_zoom_max: 3.0
+apt_rotation_degrees: 15.0
+
+output_dir: ./output/yuemeng-region-balance
+output_name: yuemeng_region_balance
+save_every_epochs: 1
+save_every_steps: 0
+save_state_every_epochs: 1
+save_state_every_steps: 0
+sample_every: 0
+sample_steps: 0
+no_progress: false
+log_every: 10
+seed: 42

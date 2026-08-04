@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 208,
+  "count": 211,
   "routes": [
     {
       "path": "/",
@@ -1055,6 +1055,30 @@
         "PUT"
       ],
       "name": "put_mask_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/region",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_region_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/region",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_region_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/region",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_region_train_endpoint",
       "type": "APIRoute"
     },
     {

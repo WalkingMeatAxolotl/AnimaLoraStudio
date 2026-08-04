@@ -36,6 +36,7 @@ from ...services.projects import jobs as project_jobs, projects
 from ...services.dataset.scan import IMAGE_EXTS
 from . import manifest as preprocess_manifest
 from . import masks as train_masks
+from . import regions as train_regions
 
 
 PREPROCESS_KIND = "preprocess"
@@ -492,6 +493,7 @@ def list_crop_workspace_train(
             continue
         st = f.stat()
         mask_info = train_masks.mask_stat(train_dir, rel)
+        region_info = train_regions.region_stat(train_dir, rel)
         items.append({
             "name": rel,
             "source": origin,
@@ -502,6 +504,7 @@ def list_crop_workspace_train(
             # 训练 mask sidecar：无 mask 时 None。前端用它画角标 + 决定
             # 是否 GET mask（值兼作 cache-buster）。
             "mask_mtime": mask_info["mtime"] if mask_info else None,
+            "region_mtime": region_info["mtime"] if region_info else None,
         })
     return items
 
@@ -727,3 +730,35 @@ def mask_file_train(
     _validate_rel_name(name)
     train_dir = version_train_dir(p, version_label)
     return train_masks.mask_file(train_dir, name)
+
+
+# ---------------------------------------------------------------------------
+# Primary region sidecar
+# ---------------------------------------------------------------------------
+
+
+def region_save_train(
+    p: dict[str, Any], version_label: str, *, name: str, document: Any,
+) -> dict[str, Any]:
+    train_dir, size = _mask_source_size(p, version_label, name)
+    return train_regions.write_region(
+        train_dir, name, document, expected_size=size,
+    )
+
+
+def region_read_train(
+    p: dict[str, Any], version_label: str, *, name: str,
+) -> Optional[dict[str, Any]]:
+    _validate_rel_name(name)
+    return train_regions.read_region(version_train_dir(p, version_label), name)
+
+
+def region_delete_train(
+    p: dict[str, Any], version_label: str, *, name: str,
+) -> dict[str, Any]:
+    _validate_rel_name(name)
+    return {
+        "deleted": train_regions.delete_region(
+            version_train_dir(p, version_label), name,
+        )
+    }

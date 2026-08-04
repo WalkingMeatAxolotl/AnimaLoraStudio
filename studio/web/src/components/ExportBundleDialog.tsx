@@ -13,6 +13,7 @@ export interface BundleExportOpts {
   trainLatentCache: boolean
   regLatentCache: boolean
   trainMasks: boolean
+  trainRegions: boolean
   destination: BundleExportDestination
 }
 
@@ -31,6 +32,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
   const [trainLatentCache, setTrainLatentCache] = useState(false)
   const [regLatentCache, setRegLatentCache] = useState(false)
   const [trainMasks, setTrainMasks] = useState(false)
+  const [trainRegions, setTrainRegions] = useState(false)
   const [destination, setDestination] = useState<BundleExportDestination>('download')
 
   const nothingSelected = !train && !reg && !includeConfig
@@ -40,7 +42,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
     if (nothingSelected) return
     onConfirm({
       train, trainCaptions, reg, regCaptions, includeConfig,
-      trainLatentCache, regLatentCache, trainMasks, destination,
+      trainLatentCache, regLatentCache, trainMasks, trainRegions, destination,
     })
   }
 
@@ -134,6 +136,16 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 />
                 <span className="text-sm text-fg-secondary">
                   {t('layout.exportBundleTrainMasks')}
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer pl-5">
+                <input
+                  type="checkbox"
+                  checked={trainRegions}
+                  onChange={(e) => setTrainRegions(e.target.checked)}
+                />
+                <span className="text-sm text-fg-secondary">
+                  {t('layout.exportBundleTrainRegions')}
                 </span>
               </label>
             </>

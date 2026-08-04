@@ -105,6 +105,14 @@ def run(ctx: TrainingContext) -> None:
         load_masks = False
         args.masked_loss = False
 
+    load_regions = bool(getattr(args, "region_balance_enabled", False))
+    if load_regions and bool(getattr(args, "navit_packing", False)):
+        logger.warning(
+            "[region-balance] NaViT 打包路径暂不支持区域平衡：本次训练忽略 region sidecar"
+        )
+        load_regions = False
+        args.region_balance_enabled = False
+
     # 数据集
     ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
     ctx.base_dataset = ImageDataset(
@@ -117,6 +125,7 @@ def run(ctx: TrainingContext) -> None:
         resolutions=res_list,
         aspect_ratio_limit=ar_limit,
         load_masks=load_masks,
+        load_regions=load_regions,
         **native_kwargs,
     )
     ctx.dataset = ctx.base_dataset
@@ -136,6 +145,21 @@ def run(ctx: TrainingContext) -> None:
             logger.info(
                 "[masked-loss] 开关已开但训练集没有任何 mask 文件（无 .mask sidecar）"
                 "——本次训练等效于未开启"
+            )
+
+    if load_regions:
+        n_regions = sum(
+            1 for s in ctx.base_dataset.samples
+            if ctx.base_dataset._region_path_for(s["image"]).is_file()
+        )
+        if n_regions > 0:
+            logger.info(
+                "[region-balance] 已启用：%d/%d 个训练样本带主区域；无标注样本按整图训练",
+                n_regions, len(ctx.base_dataset.samples),
+            )
+        else:
+            logger.warning(
+                "[region-balance] 开关已开但没有 .regions.json；本次训练等效于整图训练"
             )
 
     # 正则数据集（Kohya 风格，防过拟合）

@@ -61,6 +61,7 @@ TEXT_CACHE_SIDECAR_SUFFIX = ".text.safetensors"
 # 训练 mask sidecar（train/{folder}/{stem}.mask，与图同目录，详
 # services/preprocess/masks.py）。arcname 两段与图片同构。
 MASK_SUFFIX = ".mask"
+REGION_SUFFIX = ".regions.json"
 
 
 VERSION_CONFIG_ARC = "presets/config.yaml"
@@ -79,6 +80,8 @@ class BundleOptions:
     reg_latent_cache: bool = False
     # True = 一并打包训练 mask sidecar（train/{folder}/{stem}.mask，masked loss 数据面）
     train_masks: bool = False
+    # True = 一并打包主区域 sidecar（区域平衡训练的数据面）
+    train_regions: bool = False
 
 
 from studio.domain.errors import DomainError, NotFoundError
@@ -360,7 +363,7 @@ def import_train(
 
 def _collect_train(
     train_dir: Path, include_captions: bool, include_latent_cache: bool = False,
-    include_masks: bool = False,
+    include_masks: bool = False, include_regions: bool = False,
 ) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
     """扫 train/ 目录，返回 (payload, stats_dict)。
 
@@ -373,11 +376,13 @@ def _collect_train(
     latent_cache_count = 0
     text_cache_count = 0
     mask_count = 0
+    region_count = 0
 
     if not train_dir.exists():
         return payload, {
             "image_count": 0, "tagged_count": 0, "concepts": [],
             "latent_cache_count": 0, "text_cache_count": 0, "mask_count": 0,
+            "region_count": 0,
         }
 
     for sub in sorted(train_dir.iterdir()):
@@ -407,6 +412,9 @@ def _collect_train(
             elif ext == MASK_SUFFIX and include_masks:
                 mask_count += 1
                 payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
+            elif f.name.endswith(REGION_SUFFIX) and include_regions:
+                region_count += 1
+                payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
             elif ext in CAPTION_EXTS and include_captions:
                 # .txt 先由图片那侧 include，这里跳过避免重复
                 pass
@@ -421,6 +429,7 @@ def _collect_train(
         "latent_cache_count": latent_cache_count,
         "text_cache_count": text_cache_count,
         "mask_count": mask_count,
+        "region_count": region_count,
     }
 
 
@@ -522,6 +531,7 @@ def export_bundle(
         tp, train_stats = _collect_train(
             vdir / "train", opts.train_captions, opts.train_latent_cache,
             include_masks=opts.train_masks,
+            include_regions=opts.train_regions,
         )
         if not tp:
             raise TrainIOError(
@@ -581,6 +591,7 @@ def export_bundle(
             "train_latent_cache": opts.train_latent_cache,
             "reg_latent_cache": opts.reg_latent_cache,
             "train_masks": opts.train_masks,
+            "train_regions": opts.train_regions,
         },
         "stats": {
             "train_image_count": train_stats.get("image_count", 0),
@@ -596,6 +607,7 @@ def export_bundle(
                 + reg_stats.get("text_cache_count", 0)
             ),
             "train_mask_count": train_stats.get("mask_count", 0),
+            "train_region_count": train_stats.get("region_count", 0),
         },
     }
 

@@ -22,6 +22,7 @@
 | 0014 | [测试出图延迟加载 VAE，并分块合并 FP8 LoRA](0014-lazy-vae-and-chunked-fp8-lora-merge.md) | Accepted | 2026-07-20 |
 | 0015 | [用实测峰值协调测试出图的 TE / DiT 驻留](0015-calibrated-te-dit-vram-orchestration.md) | Accepted | 2026-07-20 |
 | 0016 | [以外部 Python 运行时接入 Windows ROCm](0016-windows-rocm-external-runtime.md) | Accepted | 2026-07-30 |
+| 0017 | [以可退火空间权重实现区域平衡个性化训练](0017-region-balanced-personalization.md) | Accepted | 2026-08-04 |
 
 ## 状态值
 
