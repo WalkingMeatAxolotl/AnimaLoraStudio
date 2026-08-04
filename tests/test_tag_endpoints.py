@@ -67,9 +67,36 @@ def test_check_wd14(client: TestClient, env, monkeypatch: pytest.MonkeyPatch) ->
     # 模块级 binding 在 server 命名空间，需要在那打补丁。
     # PR-6 commit 1：/api/tagger/{name}/check 搬到 api/routers/tagger.py
     from studio.api.routers import tagger as _tagger_router
-    monkeypatch.setattr(_tagger_router, "get_tagger", lambda name: fake)
+    monkeypatch.setattr(_tagger_router, "get_tagger", lambda name, overrides=None: fake)
     r = client.get("/api/tagger/wd14/check").json()
     assert r == {"name": "wd14", "ok": True, "msg": "ready", "requires_service": False}
+
+
+def test_check_passes_overrides(client: TestClient, env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """check 带 overrides → 解析成 dict 传给 get_tagger（issue #477：check 必须
+    按本次打标实际生效的配置检查，否则页面选的模型版本 / 预设不被感知）。"""
+    import json as _json
+    fake = MagicMock()
+    fake.is_available.return_value = (True, "ready")
+    fake.requires_service = False
+    seen: dict = {}
+    from studio.api.routers import tagger as _tagger_router
+
+    def _get_tagger(name, overrides=None):
+        seen["name"], seen["overrides"] = name, overrides
+        return fake
+
+    monkeypatch.setattr(_tagger_router, "get_tagger", _get_tagger)
+    ov = {"model_id": "cella110n/cl_tagger_v2", "model_path": "v2_01a/model.onnx"}
+    r = client.get("/api/tagger/cltagger/check", params={"overrides": _json.dumps(ov)})
+    assert r.json()["ok"] is True
+    assert seen == {"name": "cltagger", "overrides": ov}
+
+
+def test_check_overrides_invalid_400(client: TestClient) -> None:
+    """overrides 不是合法 JSON dict → 400（不能静默吞掉按全局默认检查）。"""
+    assert client.get("/api/tagger/wd14/check", params={"overrides": "not-json"}).status_code == 400
+    assert client.get("/api/tagger/wd14/check", params={"overrides": "[1, 2]"}).status_code == 400
 
 
 # ---------------------------------------------------------------------------

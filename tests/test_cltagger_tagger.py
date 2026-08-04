@@ -111,6 +111,40 @@ def test_v2_missing_external_data_reports_not_ready(isolated_secrets: Path) -> N
     assert available is False
 
 
+def test_is_available_with_overrides_checks_overridden_model(isolated_secrets: Path) -> None:
+    """override 选中的版本已就绪、全局默认未下载 → is_available 按 override 判可用。
+
+    issue #477 的复刻：页面高级参数里选了已下载的 v2，可用性检查却按全局默认
+    cl_tagger_1_02 报「需下载」，开始按钮被锁死。
+    """
+    base = model_downloader.cltagger_target_root(
+        model_downloader.models_root(),
+        "cella110n/cl_tagger_v2",
+    )
+    version_dir = base / "v2_01a"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / "model.onnx").write_bytes(b"fake-onnx")
+    (version_dir / "model.onnx.data").write_bytes(b"fake-weights")
+    (version_dir / "model_metadata.json").write_text("{}", encoding="utf-8")
+    (version_dir / "model_vocabulary.json").write_text(
+        json.dumps({"idx_to_tag": {"0": "1girl"}}),
+        encoding="utf-8",
+    )
+    # 全局 secrets 保持默认（cl_tagger_1_02，未下载）——不带 overrides 时不可用
+    ok_default, msg_default = cltagger_tagger.CLTagger().is_available()
+    assert ok_default is False
+    assert "需下载模型" in msg_default
+
+    t = cltagger_tagger.CLTagger(overrides={
+        "model_id": "cella110n/cl_tagger_v2",
+        "model_path": "v2_01a/model.onnx",
+        "tag_mapping_path": "v2_01a/model_vocabulary.json",
+    })
+    ok, msg = t.is_available()
+    assert ok is True
+    assert "v2_01a" in msg
+
+
 def test_is_available_does_not_download_when_model_missing(
     isolated_secrets: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
