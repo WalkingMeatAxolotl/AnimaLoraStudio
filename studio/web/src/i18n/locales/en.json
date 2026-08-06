@@ -1236,38 +1236,33 @@
     "reinstallAutoMatchPlain": "Reinstall (auto match)",
     "installAutoMatchPlain": "Install (auto match)",
     "previewThrottle": "Throttle (preview every N steps)",
-    "previewThrottleDesc": "0 = off; recommended 3-5",
+    "previewThrottleHelp": "0 = off; recommended 3-5.",
     "taeFluxHelp": "The TAEFlux decode model is downloaded in the background when the server starts; no separate UI action is needed.",
     "idleTimeout": {
       "title": "Auto-unload VRAM",
       "label": "Unload after idle (minutes)",
-      "desc": "Default: 10 minutes",
       "help": "The generate daemon keeps the model in VRAM after the first run so you can quickly retry with different params. If no new generation arrives within this window, the model is auto-unloaded to free VRAM (next run reloads, ~30-60s). 0 = off, keep the model resident until you manually click \"Free VRAM\". Recommended: 10 minutes.",
       "minutesSuffix": "min",
       "offHint": "Off: model stays resident until manually freed",
       "taskTimeoutLabel": "Task timeout force-kill (minutes)",
-      "taskTimeoutDesc": "Default 0 = disabled",
       "taskTimeoutHelp": "Force-kill the generation process when a task exceeds the given duration (freeze safety net: a system-wide paging freeze or GPU hang makes normal cancellation useless — killing the process is the only way out). The task is marked failed; the next generation restarts the process and reloads models automatically. 0 = disabled.",
       "taskTimeoutOffHint": "Disabled"
     },
     "vramPolicy": {
       "title": "VRAM policy",
       "label": "Test generation VRAM policy",
-      "desc": "Default: release the text encoder after use (krea2)",
       "help": "How the text encoder and DiT share VRAM during test generation (krea2). Each task pre-encodes all of its prompts into a cache first. Default: release the text encoder right after pre-encoding (zero residency during sampling); switching to a new prompt later reloads it from disk (~3s). Save VRAM: additionally force models to yield to each other during encoding — lowest peak (fp8 base models run on 16GB GPUs). Performance: keep the text encoder resident the whole time — zero wait on prompt changes, suited to large-VRAM GPUs.",
       "optAuto": "Default (release after use)",
       "optSaveVram": "Save VRAM",
       "optPerformance": "Performance (resident)",
       "ramGuardLabel": "RAM/VRAM guard",
-      "ramGuardDesc": "Budget system RAM and free VRAM against weight file sizes before loading (on by default)",
       "ramGuardHelp": "Model weights must pass through system RAM (disk → RAM → VRAM) to reach the GPU, so loading temporarily uses RAM roughly equal to the file size. On: before loading, check available RAM and free VRAM against the actual size of the files about to be read, and abort with an error if either falls short — including when another process is holding VRAM (e.g. a leftover generation/training task) — avoiding a system-wide paging freeze. Off: keep loading under pressure, which may make the whole system unresponsive for a long time.",
       "ramGuardOn": "On",
       "ramGuardOff": "Off",
       "blocksToSwapLabel": "Block swap",
-      "blocksToSwapDesc": "0 = off (krea2 only). Keeps later layers in RAM, trading time for VRAM",
       "blocksToSwapSuffix": "layers",
       "blocksToSwapOffHint": "off",
-      "blocksToSwapHelp": "Keeps the weights of the last N DiT layers in system RAM, moving each one onto the GPU only when it is that layer's turn and releasing it right after. This is a different job from VRAM policy: that one decides which model yields to which, this one works inside a single model — when one model alone does not fit in VRAM, this is the only way. The cost is that every sampling step has to move all swapped layers again, so more steps means more total time. Needs an equal amount of free RAM (about 0.4GB per layer for an fp8 base model, 0.8GB for bf16), and that RAM is locked so other programs cannot use it. krea2 has 28 layers; enter 0 to 28, and start around 14 if you are short on VRAM."
+      "blocksToSwapHelp": "Keeps the weights of the last N DiT layers in system RAM, moving each one onto the GPU only when it is that layer's turn and releasing it right after. This is a different job from VRAM policy: that one decides which model yields to which, this one works inside a single model — when one model alone does not fit in VRAM, this is the only way. The cost is that every sampling step has to move all swapped layers again, so more steps means more total time. Needs an equal amount of free RAM (about 0.4GB per layer for an fp8 base model, 0.8GB for bf16), and that RAM is locked so other programs cannot use it. krea2 has 28 layers; enter 0 to 28 (0 = off), and start around 14 if you are short on VRAM."
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
     "deleteAsset": "Delete",
@@ -1280,12 +1275,10 @@
     "vaePrecision": {
       "title": "Test generation precision",
       "label": "Test generation VAE precision",
-      "desc": "Default: bf16 (matches ComfyUI on modern GPUs)",
       "help": "Precision used for the final VAE decode in test generation. bf16 matches ComfyUI's automatic VAE dtype on modern GPUs and is the default. fp32 decodes in full precision: peak VRAM is higher, so the daemon temporarily offloads the DiT/Qwen models to CPU around the decode (slower per image)."
     },
     "loraMergePrecision": {
       "label": "LoRA merge precision",
-      "desc": "Default: fp32 (matches ComfyUI); bf16 lowers delta precision and is usually faster",
       "help": "Controls only the temporary LoRA delta calculation when loading or switching LoRAs on an FP8 base model. fp32 matches ComfyUI; bf16 is usually faster, but the merged result may differ slightly. The overall VRAM peak is dominated by the base model, VAE, fp16 layer workspace, and backups, so it may not decrease. Sampling still uses the merged FP8 weights and does not gain extra VRAM use. Dynamic LoRA adapters on Anima/bf16 base models are unaffected."
     },
     "saveTestImages": {

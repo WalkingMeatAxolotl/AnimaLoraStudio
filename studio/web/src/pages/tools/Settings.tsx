@@ -307,8 +307,12 @@ export default function SettingsPage() {
       <SettingsSection id="download-global" title={t('settings.downloadGlobal')}>
         <SettingsField
           label={t('settings.fieldExcludeTags')}
-          desc={t('settings.commaSeparated')}
-          helpTooltip={<p><Trans i18nKey="settings.excludeTagsHelp" components={{ code: <code /> }} /></p>}
+          helpTooltip={
+            <>
+              <p>{t('settings.commaSeparated')}</p>
+              <p><Trans i18nKey="settings.excludeTagsHelp" components={{ code: <code /> }} /></p>
+            </>
+          }
         >
           <SettingsInput
             type="text"
@@ -366,8 +370,12 @@ export default function SettingsPage() {
       <SettingsSection id="reg" title={t('settings.reg.sectionTitle')}>
         <SettingsField
           label={t('settings.fieldDefaultExcludedTags')}
-          desc={t('settings.commaSeparated')}
-          helpTooltip={<p>{t('settings.reg.defaultExcludedHelp')}</p>}
+          helpTooltip={
+            <>
+              <p>{t('settings.commaSeparated')}</p>
+              <p>{t('settings.reg.defaultExcludedHelp')}</p>
+            </>
+          }
         >
           <TagListInput
             value={draft.reg?.default_excluded_tags ?? []}
@@ -392,7 +400,7 @@ export default function SettingsPage() {
 
         <SettingsField
           label={t('settings.proxy.httpLabel')}
-          desc={t('settings.proxy.httpDesc')}
+          helpTooltip={<p>{t('settings.proxy.httpDesc')}</p>}
         >
           <SettingsInput
             type="text"
@@ -406,7 +414,7 @@ export default function SettingsPage() {
 
         <SettingsField
           label={t('settings.proxy.httpsLabel')}
-          desc={t('settings.proxy.httpsDesc')}
+          helpTooltip={<p>{t('settings.proxy.httpsDesc')}</p>}
         >
           <SettingsInput
             type="text"
@@ -420,7 +428,7 @@ export default function SettingsPage() {
 
         <SettingsField
           label={t('settings.proxy.noProxyLabel')}
-          desc={t('settings.proxy.noProxyDesc')}
+          helpTooltip={<p>{t('settings.proxy.noProxyDesc')}</p>}
         >
           <SettingsInput
             type="text"
@@ -532,7 +540,7 @@ export default function SettingsPage() {
             />
           </SettingsField>
         </div>
-        <SettingsField label={t('settings.fieldBlacklistTags')} desc={t('settings.commaSeparated')}>
+        <SettingsField label={t('settings.fieldBlacklistTags')} helpTooltip={<p>{t('settings.commaSeparated')}</p>}>
           <TagListInput
             value={draft.wd14.blacklist_tags}
             onChange={(tags) => update('wd14', 'blacklist_tags', tags)}
@@ -540,7 +548,7 @@ export default function SettingsPage() {
             commitOnBlur
           />
         </SettingsField>
-        <SettingsField label={t('settings.fieldBatchSize')} desc={t('settings.batchSizeHint')}>
+        <SettingsField label={t('settings.fieldBatchSize')} helpTooltip={<p>{t('settings.batchSizeHint')}</p>}>
           <SettingsInput
             type="number" min={1} max={64}
             value={draft.wd14.batch_size}
@@ -606,7 +614,7 @@ export default function SettingsPage() {
             <Bool value={draft.cltagger.add_quality_tag} onChange={(v) => update('cltagger', 'add_quality_tag', v)} />
           </SettingsField>
         </div>
-        <SettingsField label={t('settings.fieldBlacklistTags')} desc={t('settings.commaSeparated')}>
+        <SettingsField label={t('settings.fieldBlacklistTags')} helpTooltip={<p>{t('settings.commaSeparated')}</p>}>
           <TagListInput
             value={draft.cltagger.blacklist_tags}
             onChange={(tags) => update('cltagger', 'blacklist_tags', tags)}
@@ -614,7 +622,7 @@ export default function SettingsPage() {
             commitOnBlur
           />
         </SettingsField>
-        <SettingsField label={t('settings.fieldBatchSize')} desc={t('settings.batchSizeHint')}>
+        <SettingsField label={t('settings.fieldBatchSize')} helpTooltip={<p>{t('settings.batchSizeHint')}</p>}>
           <SettingsInput
             type="number" min={1} max={64}
             value={draft.cltagger.batch_size}
@@ -862,7 +870,7 @@ export default function SettingsPage() {
               onChange={(v) => update('danbooru', 'api_key', v)}
             />
           </SettingsField>
-          <SettingsField label={t('settings.fieldAccountType')} desc={t('settings.danbooruAccountTypeHint')}>
+          <SettingsField label={t('settings.fieldAccountType')} helpTooltip={<p>{t('settings.danbooruAccountTypeHint')}</p>}>
             <select
               value={draft.danbooru.account_type}
               onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
