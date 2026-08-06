@@ -388,14 +388,14 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <SettingsSection id="proxy" title={t('settings.proxy.sectionTitle')}>
-        <SettingsField label={t('settings.proxy.enableLabel')}>
+        <SettingsField
+          label={t('settings.proxy.enableLabel')}
+          helpTooltip={<p>{t('settings.proxy.enableDesc')}</p>}
+        >
           <Bool
             value={draft.proxy.enabled}
             onChange={(v) => update('proxy', 'enabled', v)}
           />
-          <p className="text-xs text-fg-tertiary mt-1">
-            {t('settings.proxy.enableDesc')}
-          </p>
         </SettingsField>
 
         <SettingsField
