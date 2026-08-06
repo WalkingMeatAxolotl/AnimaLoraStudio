@@ -89,7 +89,7 @@ export function SourceSelect({ opt, onChange }: {
   return (
     <SettingsField
       label={t('settings.downloadSource')}
-      desc={single ? t('settings.singleSourceFixed') : undefined}
+      helpTooltip={single ? <p>{t('settings.singleSourceFixed')}</p> : undefined}
     >
       <select
         value={opt.current}
