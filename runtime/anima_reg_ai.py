@@ -454,12 +454,17 @@ def main() -> None:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
     family = _T.resolve_family(cfg)  # D8'
-    from training.sysmem import check_load_budget, gpu_free_bytes_global
+    from training.sysmem import (
+        check_load_budget, gpu_free_bytes_global, guard_enabled_from_env,
+    )
 
+    # AI 先验与训练同属独占档重载任务，共用训练侧水位保护开关
+    # （设置 → 训练 → 训练参数，supervisor 经 env 注入，默认开）。
     check_load_budget(
-        True,
+        guard_enabled_from_env(),
         weight_paths=[transformer_path, vae_path, text_encoder_path],
         stage="正则生成模型加载",
+        settings_hint="设置 → 训练 → 训练参数",
     )
     logger.info("加载 VAE...")
     vae = family.load_vae(vae_path, device, dtype,

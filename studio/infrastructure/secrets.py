@@ -488,6 +488,20 @@ class QueueConfig(BaseModel):
     light_tasks_during_train: bool = True
 
 
+class TrainingConfig(BaseModel):
+    """训练侧全局行为开关（Settings → 训练 → 训练参数）。
+
+    - `ram_guard`：训练 / AI 先验（正则生成）的内存/显存水位保护。语义同
+      `generate.ram_guard`：加载大模型前按权重文件实际大小预算系统内存与
+      GPU 空闲显存，任一不足时中止并报可操作错误；默认开，关闭后资源不足
+      时继续加载，可能触发整机换页卡顿。经环境变量 ``LORA_RAM_GUARD``
+      注入训练子进程（supervisor `_popen`）。block swap 的 pinned 内存护栏
+      **不受此开关影响**——锁定内存不可换页、占满会硬卡整机，且有独立
+      出路（调小 blocks_to_swap）。
+    """
+    ram_guard: bool = True
+
+
 class ModelsConfig(BaseModel):
     """全局模型配置（PP7）。
 
@@ -714,6 +728,7 @@ class Secrets(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     # 统一模型来源候选：domain → 用户添加的候选列表。domain 白名单校验在

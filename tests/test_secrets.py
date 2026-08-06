@@ -575,6 +575,24 @@ def test_has_gelbooru_credentials(secrets_file: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_training_ram_guard_defaults_on(secrets_file: Path) -> None:
+    """训练侧水位保护默认开；老 secrets.json 没有 training 字段也用默认值。"""
+    assert secrets.load().training.ram_guard is True
+    secrets_file.write_text(
+        json.dumps({"gelbooru": {"user_id": "alice"}}),
+        encoding="utf-8",
+    )
+    assert secrets.load().training.ram_guard is True
+
+
+def test_training_ram_guard_round_trip(secrets_file: Path) -> None:
+    """update + load 持久化（Settings → 训练 → 训练参数 切 toggle）。"""
+    secrets.update({"training": {"ram_guard": False}})
+    assert secrets.load().training.ram_guard is False
+    secrets.update({"training": {"ram_guard": True}})
+    assert secrets.load().training.ram_guard is True
+
+
 def test_system_defaults_update_channel_stable(secrets_file: Path) -> None:
     """新装默认通道偏好 = stable，绝大多数用户只看稳定版。"""
     s = secrets.load()

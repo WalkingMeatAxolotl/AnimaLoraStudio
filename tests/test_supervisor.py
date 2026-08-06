@@ -365,6 +365,37 @@ def test_popen_injects_wandb_env(env, tmp_path, monkeypatch: pytest.MonkeyPatch)
     assert captured["env"]["WANDB_UPLOAD_STATE_AUTO_POLICY"] == "last"
 
 
+def test_popen_injects_ram_guard_off(env, tmp_path, monkeypatch) -> None:
+    """training.ram_guard=False → 子进程 env 带 LORA_RAM_GUARD=0（训练/正则
+    AI 据此跳过水位护栏）；默认开时不注入（runtime 侧缺省即开）。"""
+    monkeypatch.delenv("LORA_RAM_GUARD", raising=False)
+    cfg = secrets.Secrets()
+    cfg.training.ram_guard = False
+    monkeypatch.setattr("studio.supervisor._secrets.load", lambda: cfg)
+    captured: dict[str, Any] = {}
+
+    class FakePopen:
+        pid = 123
+
+    def fake_popen(cmd, **kwargs):  # noqa: ANN001
+        captured["env"] = kwargs["env"]
+        return FakePopen()
+
+    monkeypatch.setattr("studio.supervisor.subprocess.Popen", fake_popen)
+    sup = Supervisor(
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+    )
+    log_path = tmp_path / "x.log"
+    with log_path.open("wb") as fp:
+        sup._popen([sys.executable, "-c", "pass"], fp)
+    assert captured["env"]["LORA_RAM_GUARD"] == "0"
+
+    cfg.training.ram_guard = True
+    with log_path.open("wb") as fp:
+        sup._popen([sys.executable, "-c", "pass"], fp)
+    assert "LORA_RAM_GUARD" not in captured["env"]
+
+
 def test_popen_disables_triton_probe(env, tmp_path, monkeypatch) -> None:
     """子进程注入 XFORMERS_FORCE_DISABLE_TRITON=1，xformers 不再往 task log
     打无害的 triton ImportError traceback（否则会被 _tail_log_for_error_msg
