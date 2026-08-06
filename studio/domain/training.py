@@ -349,7 +349,17 @@ class TrainingConfig(BaseModel):
     batch_size: int = Field(
         1, ge=1,
         description="批次大小",
-        json_schema_extra=_meta("training"),
+        json_schema_extra=_meta(
+            "training",
+            # navit 下 DataLoader 走 NavitPackBatchSampler（一步 = 一个 token 包），
+            # batch_size 完全不参与分批——不钉住的话用户以为在控步数/显存，实际无效
+            # （曾致「预估 2520 实际 5040」误差）。钉 1 的连带语义：vae_cache_batch_size=0
+            # 的「跟随 batch_size」变为逐张编码，需要更大缓存批次时显式设置该字段。
+            disable_when="navit_packing==true",
+            disable_value=1,
+            disable_hint="NaViT 打包按 token 预算分包（navit_token_budget），batch_size 不参与分批；"
+                         "VAE 缓存编码批次改用 vae_cache_batch_size 显式控制",
+        ),
     )
     grad_checkpoint: bool = Field(
         True,

@@ -135,6 +135,33 @@ def _accumulation_step(batch_idx, dl_len, grad_accum):
     return group_size, is_group_end
 
 
+def _display_total_steps(global_step, dl_len, grad_accum, total_epochs, epoch, max_steps):
+    """monitor/进度显示用的总步数动态修正（不动 scheduler horizon）。
+
+    NaViT 打包器每 epoch reshuffle 后包数会变，optimizer_phase 启动时算的
+    ``ctx.total_steps`` 是 epoch-0 快照 → 多 epoch 下监控进度条的分母全程陈旧
+    （结束时 step ≠ total_steps）。本函数在每个 epoch 开始时按
+    「已走步数 + 当前 epoch 步数 × 剩余 epoch 数（含当前）」重估——epoch 越靠后
+    越准，最后一个 epoch 精确。
+
+    非 navit 路径 dl_len 恒定，结果恒等于启动时的 total_steps（纯恒等，
+    零行为变化）。scheduler 的 T_max 一次性构造、无法中途重算，仍用启动时
+    估计（LR 触底点几步偏差可接受，见 optimizer_phase 注释）。
+
+    dl_len=None（dataloader 无 __len__）或 total_epochs<=0 → None，调用方
+    回退 ``ctx.total_steps``。
+    """
+    if dl_len is None or not total_epochs or total_epochs <= 0:
+        return None
+    ga = max(1, int(grad_accum or 1))
+    steps_this_epoch = (int(dl_len) + ga - 1) // ga
+    remaining_epochs = max(0, int(total_epochs) - int(epoch))
+    est = int(global_step) + steps_this_epoch * remaining_epochs
+    if max_steps and int(max_steps) > 0:
+        est = min(est, int(max_steps))
+    return est
+
+
 def _sample_timesteps(timestep_sampler, bs: int, device, latents) -> torch.Tensor:
     """按 sampler 能力声明按需注入 batch context，避免 family 分支进入共享循环。"""
     if getattr(timestep_sampler, "requires_token_counts", False):
@@ -192,6 +219,13 @@ def run(ctx: TrainingContext) -> None:
             # ARB BucketBatchSampler 包数与 shuffle 无关，刷新是幂等的。
             if _has_len:
                 dl_len = len(ctx.dataloader)
+        # 进度显示的总步数按当前 epoch 实际包数渐进修正（非 navit 恒等，见函数注释）
+        _display_total = _display_total_steps(
+            ctx.global_step, dl_len, args.grad_accum, args.epochs, epoch,
+            getattr(args, "max_steps", 0),
+        )
+        if _display_total is not None:
+            ctx.total_steps_display = _display_total
         for batch_idx, batch in enumerate(ctx.dataloader):
             # 在累积周期开始时记录时间
             if batch_idx % args.grad_accum == 0:
@@ -567,7 +601,8 @@ def run(ctx: TrainingContext) -> None:
                             loss=loss_val, lr=lr, epoch=epoch + 1,
                             total_epochs=int(args.epochs or 0),
                             step=ctx.global_step,
-                            total_steps=ctx.total_steps, speed=ctx.speed_ema or 0,
+                            total_steps=ctx.total_steps_display or ctx.total_steps,
+                            speed=ctx.speed_ema or 0,
                             optimizer_metrics=monitor_metrics,
                         )
                     except Exception:
@@ -604,7 +639,7 @@ def run(ctx: TrainingContext) -> None:
                 ctx.wandb_monitor.log(log_payload, step=ctx.global_step)
 
                 if ctx.use_rich:
-                    desc = f"epoch {epoch+1}/{args.epochs} step {ctx.global_step}/{ctx.total_steps or '?'}"
+                    desc = f"epoch {epoch+1}/{args.epochs} step {ctx.global_step}/{ctx.total_steps_display or ctx.total_steps or '?'}"
                     ctx.progress.update(
                         ctx.task_id, advance=1, description=desc,
                         loss=loss_val, lr=float(lr), speed=float(ctx.speed_ema or 0),

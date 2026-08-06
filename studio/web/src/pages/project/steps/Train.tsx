@@ -956,16 +956,55 @@ function DatasetStatsPanel({
   )
   const totalEffective = trainEffective + regEffective
 
+  // 桶分布 + NaViT 打包预估（后端用真 BucketManager / NavitPackBatchSampler 算）。
+  // fetch 在本层做（而非 BucketPreview 内部）：navit 模式下步数公式也吃这份数据。
+  const vid = activeVersion?.id ?? 0
+  const navitOn = config?.navit_packing === true
+  const [dist, setDist] = useState<BucketDistribution | null>(null)
+  const distSig = JSON.stringify([
+    config?.resolution,
+    config?.aspect_ratio_limit,
+    // 文件夹名单（含 px 前缀 / repeat / 图数）—— 改名加 px 也要触发重取，不能只看总数
+    activeVersion?.stats?.train_folders,
+    // navit 打包预估的输入 —— 任何一项变了包数都可能变
+    config?.navit_packing,
+    config?.navit_native_resolution,
+    config?.navit_token_budget,
+    config?.navit_max_images_per_pack,
+    config?.navit_pack_strategy,
+    config?.navit_pack_ffd_window,
+    config?.navit_drop_last,
+    config?.navit_native_over_budget,
+    config?.seed,
+    reg?.exists,
+    reg && reg.exists ? reg.files.length : 0,
+  ])
+  useEffect(() => {
+    if (!projectId || !vid) return
+    let cancelled = false
+    api.getBucketDistribution(projectId, vid)
+      .then((d) => { if (!cancelled) setDist(d) })
+      .catch(() => { if (!cancelled) setDist(null) })
+    return () => { cancelled = true }
+  }, [projectId, vid, distSig])
+
   // 单 epoch 优化器步数估算（与 sd-scripts max_train_steps 同语义）。
-  // 不算 AR bucketing 损失（每桶最后一 batch 可能不满），相同 AR 数据集误差 < 5%。
+  // - 常规路径：样本 ÷ (batch × ga)。不算 AR bucketing 损失（每桶最后一 batch
+  //   可能不满），相同 AR 数据集误差 < 5%。
+  // - navit_packing：batch_size 不参与分批（NavitPackBatchSampler 按 token 预算
+  //   拼包，一步 = 一包）——steps/epoch = ceil(包数 ÷ ga)，包数来自后端真打包模拟；
+  //   模拟结果没到手前不显示估算（宁缺毋假）。
   // schema 字段：batch_size / grad_accum / epochs / max_steps（max_steps=0 表示不限）。
   const bs = Number(config?.batch_size) || 1
   const ga = Number(config?.grad_accum) || 1
   const epochs = Number(config?.epochs) || 0
   const maxSteps = Number(config?.max_steps) || 0
-  const stepsPerEpoch = totalEffective > 0
-    ? Math.ceil(totalEffective / (bs * ga))
-    : null
+  const navitEst = navitOn ? (dist?.navit ?? null) : null
+  const stepsPerEpoch = navitOn
+    ? (navitEst && navitEst.packs_per_epoch > 0
+        ? Math.ceil(navitEst.packs_per_epoch / ga)
+        : null)
+    : (totalEffective > 0 ? Math.ceil(totalEffective / (bs * ga)) : null)
   const naturalTotal = stepsPerEpoch !== null && epochs > 0
     ? stepsPerEpoch * epochs
     : null
@@ -974,6 +1013,11 @@ function DatasetStatsPanel({
     : naturalTotal
   const maxStepsTruncates =
     maxSteps > 0 && naturalTotal !== null && maxSteps < naturalTotal
+  // navit 下有效样本以真打包模拟为准（native 收拢多分辨率 fan-out、含 reg），
+  // 前端 folderEffective 的 resoCount fan-out 在该模式下会虚算
+  const shownEffective = navitEst && navitEst.samples > 0
+    ? navitEst.samples
+    : totalEffective
 
   return (
     <div className="flex flex-col gap-3 min-w-0">
@@ -1001,15 +1045,41 @@ function DatasetStatsPanel({
           empty={reg && !reg.exists ? t('train.regNotBuilt') : t('train.noRegImages')}
         />
 
-        {/* 总计 + 步数估算（不含 AR bucketing 误差） */}
+        {/* 总计 + 步数估算（不含 AR bucketing 误差；navit 走真打包模拟） */}
         <div className="mt-2.5 pt-2 border-t border-subtle flex flex-col gap-1 text-xs">
-          <Row label={t('train.effectiveSamples')} value={String(totalEffective)} bold />
-          {stepsPerEpoch !== null && (
-            <Row
-              label={`÷ batch × ga (${bs} × ${ga})`}
-              value={`≈ ${stepsPerEpoch} steps/epoch`}
-              dim
-            />
+          <Row label={t('train.effectiveSamples')} value={String(shownEffective)} bold />
+          {navitOn ? (
+            navitEst && navitEst.packs_per_epoch > 0 ? (
+              <>
+                <Row
+                  label={t('train.navitPackLine', { budget: navitEst.token_budget })}
+                  value={t('train.navitPacksPerEpoch', { n: navitEst.packs_per_epoch })}
+                  dim
+                />
+                <Row
+                  label={t('train.navitAvgImgs')}
+                  value={`≈ ${navitEst.avg_images_per_pack}`}
+                  dim
+                />
+                {ga > 1 && stepsPerEpoch !== null && (
+                  <Row
+                    label={t('train.navitGaLine', { ga })}
+                    value={`≈ ${stepsPerEpoch} steps/epoch`}
+                    dim
+                  />
+                )}
+              </>
+            ) : (
+              <Row label={t('train.navitEstimating')} value="…" dim />
+            )
+          ) : (
+            stepsPerEpoch !== null && (
+              <Row
+                label={`÷ batch × ga (${bs} × ${ga})`}
+                value={`≈ ${stepsPerEpoch} steps/epoch`}
+                dim
+              />
+            )
           )}
           {naturalTotal !== null && (
             <Row
@@ -1028,16 +1098,7 @@ function DatasetStatsPanel({
         </div>
       </div>
 
-      <BucketPreview
-        projectId={projectId}
-        vid={activeVersion?.id ?? 0}
-        sig={JSON.stringify([
-          config?.resolution,
-          config?.aspect_ratio_limit,
-          // 文件夹名单（含 px 前缀 / repeat / 图数）—— 改名加 px 也要触发重取，不能只看总数
-          activeVersion?.stats?.train_folders,
-        ])}
-      />
+      <BucketPreview dist={dist} />
 
       <MaskedLossHint
         projectId={projectId}
@@ -1080,28 +1141,55 @@ function MaskedLossHint({
   )
 }
 
-/** 训练集实际桶分布（后端用真 BucketManager 算）。按分辨率档分组、每桶有效图数。
- *  trainer 用 drop_last=False —— 桶不满只出短 batch、不丢图，所以这里不做丢图警告。 */
-function BucketPreview({
-  projectId, vid, sig,
-}: {
-  projectId: number
-  vid: number
-  sig: string
-}) {
+/** 训练集实际分布面板（数据由 DatasetStatsPanel 统一 fetch）。
+ *  - 常规 / navit 非 native：ARB 桶分布（后端用真 BucketManager 算）。trainer 用
+ *    drop_last=False —— 桶不满只出短 batch、不丢图，所以这里不做丢图警告。
+ *  - navit-native：训练绕过 ARB 桶（每图原生尺寸 floor-16px），显示原生尺寸
+ *    直方图（真打包模拟返回），不再展示实际不存在的桶。 */
+function BucketPreview({ dist }: { dist: BucketDistribution | null }) {
   const { t } = useTranslation()
-  const [dist, setDist] = useState<BucketDistribution | null>(null)
+  if (!dist) return null
 
-  useEffect(() => {
-    if (!projectId || !vid) return
-    let cancelled = false
-    api.getBucketDistribution(projectId, vid)
-      .then((d) => { if (!cancelled) setDist(d) })
-      .catch(() => { if (!cancelled) setDist(null) })
-    return () => { cancelled = true }
-  }, [projectId, vid, sig])
+  if (dist.navit?.native) {
+    const sizes = dist.navit.sizes
+    if (sizes.length === 0) return null
+    const top = sizes.slice(0, 10)
+    const rest = sizes.slice(10)
+    const restCount = rest.reduce((s, x) => s + x.count, 0)
+    return (
+      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
+        <div className="flex items-center gap-1.5 mb-2.5">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+          <span className="caption uppercase tracking-[0.06em] text-xs">{t('train.navitDistTitle')}</span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          {top.map((b) => (
+            <div
+              key={`${b.w}x${b.h}`}
+              className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
+            >
+              <span className="text-fg-tertiary">{b.w}×{b.h}</span>
+              <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
+              <span className="text-fg-primary">{b.count}</span>
+            </div>
+          ))}
+          {rest.length > 0 && (
+            <div className="text-xs font-mono text-fg-tertiary pl-1">
+              {t('train.navitDistMore', { kinds: rest.length, n: restCount })}
+            </div>
+          )}
+        </div>
+        <div className="text-[10px] text-fg-tertiary mt-2">
+          {t('train.navitDistHint')}
+          {dist.navit.downscaled > 0 && (
+            <> {t('train.navitDistDownscaled', { n: dist.navit.downscaled })}</>
+          )}
+        </div>
+      </div>
+    )
+  }
 
-  if (!dist || dist.groups.length === 0) return null
+  if (dist.groups.length === 0) return null
 
   return (
     <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
@@ -1128,7 +1216,9 @@ function BucketPreview({
           </div>
         ))}
       </div>
-      <div className="text-[10px] text-fg-tertiary mt-2">{t('train.bucketDistHint')}</div>
+      <div className="text-[10px] text-fg-tertiary mt-2">
+        {dist.navit ? t('train.navitBucketHint') : t('train.bucketDistHint')}
+      </div>
     </div>
   )
 }

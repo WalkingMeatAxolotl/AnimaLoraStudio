@@ -1411,6 +1411,21 @@ export interface BucketDistribution {
     reso: number
     buckets: Array<{ w: number; h: number; count: number }>
   }>
+  /** NaViT 打包预估（config.navit_packing 时才有）。packs_per_epoch = 优化器
+   *  steps/epoch 的分子（后端用真 NavitPackBatchSampler 模拟，epoch-0 精确）。
+   *  sizes 仅 native 模式非空 = 原生尺寸直方图（此模式下 ARB 桶不存在）。 */
+  navit?: {
+    packs_per_epoch: number
+    samples: number
+    avg_images_per_pack: number
+    token_min: number
+    token_max: number
+    token_budget: number
+    strategy: string
+    native: boolean
+    downscaled: number
+    sizes: Array<{ w: number; h: number; count: number }>
+  } | null
 }
 
 export interface RegBuildRequest {

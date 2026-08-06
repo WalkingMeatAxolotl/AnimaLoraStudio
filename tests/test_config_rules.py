@@ -30,6 +30,23 @@ def test_pin_setdefault_fills_missing_targets() -> None:
     cfg = TrainingConfig(navit_packing=True)
     assert cfg.attention_backend == "xformers"
     assert cfg.cache_latents is True
+    assert cfg.batch_size == 1  # navit 分批由 token 预算决定，batch_size 不参与
+
+
+def test_navit_batch_size_explicit_violation_rejected() -> None:
+    """navit 下 batch_size 无效却可调曾致步数预估错一倍（预估 2520 实际 5040）。"""
+    with pytest.raises(ValidationError, match="batch_size"):
+        TrainingConfig(navit_packing=True, batch_size=2)
+
+
+def test_navit_batch_size_tolerant_fix_pins_not_gates() -> None:
+    """存量 config（navit + batch_size>1）读盘修复：钉 batch_size=1、保住 navit
+    开关（navit_packing 不在 TOLERANT_FIX_GATE_FIRST）。"""
+    data = {"navit_packing": True, "batch_size": 2}
+    fixed, fields = apply_disable_rule_fixes(data, TrainingConfig)
+    assert fixed["navit_packing"] is True
+    assert fixed["batch_size"] == 1
+    assert "batch_size" in fields
 
 
 def test_pin_setdefault_does_not_touch_when_gate_off() -> None:
