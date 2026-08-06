@@ -653,6 +653,12 @@ export interface TagDictionaryPayload {
   meta: TagDictionaryMeta
 }
 
+export interface TrainingSecretsConfig {
+  /** 训练/AI 先验的内存/显存水位保护（语义同 generate.ram_guard，只管训练侧
+   * 子进程；supervisor 经 LORA_RAM_GUARD 环境变量注入，默认开）。 */
+  ram_guard: boolean
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -673,6 +679,7 @@ export interface Secrets {
   models: ModelsConfig
   queue: QueueConfig
   generate: GenerateSecretsConfig
+  training: TrainingSecretsConfig
   system: SystemPrefsConfig
   proxy: ProxyConfig
 }

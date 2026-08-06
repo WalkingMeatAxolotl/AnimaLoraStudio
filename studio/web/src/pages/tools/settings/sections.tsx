@@ -26,18 +26,24 @@ import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, Sour
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
 //
-// 训练相关的全局开关。当前只有「自动配置模型路径」(auto_sync_paths)：独立 PUT，
-// 不进全局 dirty 流程。原先夹在「训练模型」section 里，挪到这里跟模型下载分开。
+// 训练相关的全局开关，均为独立 PUT，不进全局 dirty 流程：
+// - 「自动配置模型路径」(models.auto_sync_paths)：原先夹在「训练模型」section
+//   里，挪到这里跟模型下载分开。
+// - 「内存/显存水位保护」(training.ram_guard)：训练 / AI 先验加载大模型前的
+//   预算护栏；推理侧的同名保护在 显存策略 section（generate.ram_guard）。
 export function TrainingParamsSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const { runSave } = useSettingsData()
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
+  const [trainRamGuard, setTrainRamGuard] = useState<boolean>(true)
+  const [savingRamGuard, setSavingRamGuard] = useState(false)
 
   useEffect(() => {
     void api.getSecrets().then((sec) => {
       setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
+      setTrainRamGuard(sec.training?.ram_guard ?? true)
     }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
 
@@ -56,6 +62,21 @@ export function TrainingParamsSection() {
     }
   }
 
+  const saveRamGuard = async (next: boolean) => {
+    setSavingRamGuard(true)
+    const prev = trainRamGuard
+    setTrainRamGuard(next)
+    try {
+      await runSave(() => api.updateSecrets({ training: { ram_guard: next } }))
+      toast(next ? t('settings.trainRamGuardOn') : t('settings.trainRamGuardOff'), 'success')
+    } catch (e) {
+      setTrainRamGuard(prev)
+      toast(String(e), 'error')
+    } finally {
+      setSavingRamGuard(false)
+    }
+  }
+
   return (
     <SettingsSection id="training-params" title={t('settings.trainingParams')}>
       <SettingsField
@@ -63,6 +84,12 @@ export function TrainingParamsSection() {
         helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
       >
         <Bool value={autoSyncPaths} onChange={(v) => void saveAutoSync(v)} disabled={savingAutoSync} />
+      </SettingsField>
+      <SettingsField
+        label={t('settings.trainRamGuardLabel')}
+        helpTooltip={<p>{t('settings.trainRamGuardHelp')}</p>}
+      >
+        <Bool value={trainRamGuard} onChange={(v) => void saveRamGuard(v)} disabled={savingRamGuard} />
       </SettingsField>
     </SettingsSection>
   )
