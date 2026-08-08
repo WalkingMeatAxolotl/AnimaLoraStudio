@@ -49,6 +49,22 @@ def test_navit_batch_size_tolerant_fix_pins_not_gates() -> None:
     assert "batch_size" in fields
 
 
+def test_navit_native_orphan_tolerant_fix() -> None:
+    """bug 回归：开 native 后在 UI 关掉 navit_packing —— native 被 show_when
+    藏起来但值还是 true，保存曾直接报错无法自救。现为 disable 规则：
+    tolerant 修复钉 native=False，packing 保持关。"""
+    data = {"navit_packing": False, "navit_native_resolution": True}
+    fixed, fields = apply_disable_rule_fixes(data, TrainingConfig)
+    assert fixed["navit_native_resolution"] is False
+    assert fixed["navit_packing"] is False
+    assert "navit_native_resolution" in fields
+
+
+def test_navit_native_with_packing_still_allowed() -> None:
+    cfg = TrainingConfig(navit_packing=True, navit_native_resolution=True)
+    assert cfg.navit_native_resolution is True
+
+
 def test_pin_setdefault_does_not_touch_when_gate_off() -> None:
     cfg = TrainingConfig()
     assert cfg.attention_backend == "flash_attn"  # schema 默认,不被 setdefault
@@ -83,6 +99,8 @@ def test_explicit_violation_fails_fast_not_coerced() -> None:
     {"navit_packing": True, "sra_enabled": True},
     {"navit_packing": True, "masked_loss": True},
     {"leap_enabled": True, "masked_loss": True},
+    # 手写「native 需要 packing」validator 退役 → disable 规则（拦截面不缩水）
+    {"navit_native_resolution": True},
 ])
 def test_mutex_pairs_still_rejected(overrides) -> None:
     with pytest.raises(ValidationError, match="字段联动约束"):

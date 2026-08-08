@@ -228,7 +228,16 @@ class TrainingConfig(BaseModel):
         False,
         description="按原生分辨率定尺寸（floor 对齐 16px、零 padding），绕过 ARB 桶对单图尺寸的量化；"
                     "超大图按 navit_native_over_budget 处理。需 navit_packing + cache_latents",
-        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+        json_schema_extra=_meta(
+            "system", show_when="navit_packing==true", advanced=True,
+            # 不声明的话：开 native 后关 navit_packing，本字段被 show_when 藏起来
+            # 但值还是 true → 保存撞手写校验「native 需要 packing」报错，用户在 UI
+            # 上无法自救。声明成 disable 规则后前端 takeover 关 gate 时自动钉回
+            # false，tolerant 读盘修复同样自愈；显式违反仍 fail-fast（拦截面不变）。
+            disable_when="navit_packing!=true",
+            disable_value=False,
+            disable_hint="原生定尺寸只在 NaViT 块对角打包路径生效，需先开 navit_packing",
+        ),
     )
     navit_native_over_budget: Literal["downscale", "fail"] = Field(
         "downscale",
@@ -1122,17 +1131,13 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_navit_prerequisites(self) -> "TrainingConfig":
-        """NaViT 打包的两条非「钉值/禁值」前置校验(§6.4 保留手写)。
+        """NaViT 打包的非「钉值/禁值」前置校验(§6.4 保留手写)。
 
         互斥项(leap / infonoise / sra / tlora / cache_latents / attention_backend)
-        已由 disable_when / option_disable_when 声明经 _enforce_disable_rules 强制,
+        与 native→packing 前置(navit_native_resolution 的 disable_when)已由
+        disable_when / option_disable_when 声明经 _enforce_disable_rules 强制,
         领域理由见各字段 disable_hint 与 docs/navit-packing.md 第 3 节。
         """
-        if self.navit_native_resolution and not self.navit_packing:
-            raise ValueError(
-                "navit_native_resolution=true 需要 navit_packing=true"
-                "（原生定尺寸只在 NaViT 块对角打包路径生效）。"
-            )
         if self.navit_packing and self.navit_token_budget <= 0:
             raise ValueError(
                 "navit_packing 需要显式设置 navit_token_budget（>0，按显存定，"
