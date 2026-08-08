@@ -1052,13 +1052,8 @@ function DatasetStatsPanel({
             navitEst && navitEst.packs_per_epoch > 0 ? (
               <>
                 <Row
-                  label={t('train.navitPackLine', { budget: navitEst.token_budget })}
-                  value={t('train.navitPacksPerEpoch', { n: navitEst.packs_per_epoch })}
-                  dim
-                />
-                <Row
-                  label={t('train.navitAvgImgs')}
-                  value={`≈ ${navitEst.avg_images_per_pack}`}
+                  label={t('train.navitPackLine')}
+                  value={`≈ ${navitEst.packs_per_epoch}`}
                   dim
                 />
                 {ga > 1 && stepsPerEpoch !== null && (
