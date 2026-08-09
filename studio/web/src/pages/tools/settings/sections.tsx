@@ -37,13 +37,13 @@ export function TrainingParamsSection() {
   const { runSave } = useSettingsData()
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
-  const [trainRamGuard, setTrainRamGuard] = useState<boolean>(true)
+  const [trainRamGuard, setTrainRamGuard] = useState<boolean>(false)
   const [savingRamGuard, setSavingRamGuard] = useState(false)
 
   useEffect(() => {
     void api.getSecrets().then((sec) => {
       setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
-      setTrainRamGuard(sec.training?.ram_guard ?? true)
+      setTrainRamGuard(sec.training?.ram_guard ?? false)
     }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
 
@@ -1383,7 +1383,7 @@ export function VramPolicySection({
         helpTooltip={<p>{t('settings.vramPolicy.ramGuardHelp')}</p>}
       >
         <Bool
-          value={draft.generate.ram_guard ?? true}
+          value={draft.generate.ram_guard ?? false}
           onChange={(v) => update('generate', 'ram_guard', v)}
         />
       </SettingsField>

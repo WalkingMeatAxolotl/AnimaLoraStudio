@@ -226,7 +226,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
                 getattr(gen_cfg, "lora_merge_precision", "fp32") or "fp32"
             )
             vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
-            ram_guard = bool(getattr(gen_cfg, "ram_guard", True))
+            ram_guard = bool(getattr(gen_cfg, "ram_guard", False))
             blocks_to_swap = int(getattr(gen_cfg, "blocks_to_swap", 0) or 0)
         except Exception:
             attn_default = "auto"
@@ -234,7 +234,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             vae_precision = "bf16"
             lora_merge_precision = "fp32"
             vram_policy = "auto"
-            ram_guard = True
+            ram_guard = False
             blocks_to_swap = 0
         attn = body.attention_backend or attn_default
         if attn == "auto":

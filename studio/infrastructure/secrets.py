@@ -493,13 +493,14 @@ class TrainingConfig(BaseModel):
 
     - `ram_guard`：训练 / AI 先验（正则生成）的内存/显存水位保护。语义同
       `generate.ram_guard`：加载大模型前按权重文件实际大小预算系统内存与
-      GPU 空闲显存，任一不足时中止并报可操作错误；默认开，关闭后资源不足
-      时继续加载，可能触发整机换页卡顿。经环境变量 ``LORA_RAM_GUARD``
+      GPU 空闲显存，任一不足时中止并报可操作错误。**v0.23.1 起默认关**
+      （按文件大小的估算偏保守，误拒率高）；关闭时资源不足会继续加载，
+      可能触发整机换页卡顿。经环境变量 ``LORA_RAM_GUARD``
       注入训练子进程（supervisor `_popen`）。block swap 的 pinned 内存护栏
       **不受此开关影响**——锁定内存不可换页、占满会硬卡整机，且有独立
       出路（调小 blocks_to_swap）。
     """
-    ram_guard: bool = True
+    ram_guard: bool = False
 
 
 class ModelsConfig(BaseModel):
@@ -600,8 +601,9 @@ class GenerateConfig(BaseModel):
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
     - `ram_guard`：内存/显存水位保护。加载大模型前按权重文件实际大小
       预算系统内存与 GPU 空闲显存，任一不足时中止并报可操作错误
-      （默认开；显存检查可拦多进程叠加）；关闭后资源不足时继续加载，
-      可能触发整机换页卡顿。
+      （开启时显存检查可拦多进程叠加）。**v0.23.1 起默认关**（按文件
+      大小的估算偏保守，误拒率高）；关闭时资源不足会继续加载，可能
+      触发整机换页卡顿。
     - `task_timeout_minutes`：出图任务超时兜底。任务开始后超 N 分钟未
       完成 → 强制终止 daemon 进程（卡死场景协议级取消无效，只能进程级
       kill；下次任务自动重启）。0（默认）= 关闭。
@@ -613,7 +615,7 @@ class GenerateConfig(BaseModel):
     idle_timeout_minutes: int = 10
     save_test_images: bool = False
     vram_policy: str = "auto"
-    ram_guard: bool = True
+    ram_guard: bool = False
     #: 换出到内存的 DiT 层数（0=关闭，krea2 生效）。与 vram_policy 分工不同：
     #: 前者管模型之间谁让位，本项管单个 DiT 内部——单个模型自己就装不下显存时
     #: 唯一的办法。见 docs/design/block-swap.md。
@@ -639,6 +641,12 @@ class SystemConfig(BaseModel):
     update_channel: str = "stable"  # "stable" / "dev"
     show_dev_channel: bool = False  # deprecated, 仅作迁移源
     enable_automagic_v2: bool = False  # 实验性：文件级开关，UI 不暴露
+    # v0.23.1 「ram_guard 默认改关」一次性迁移哨兵（_migrate_legacy_schema
+    # 第 10 步）。判据是**盘上键缺失**（只有 v0.23.1 之前写的旧盘没有此键）
+    # → 丢弃盘上的 generate/training ram_guard 旧值让新默认（关）生效；
+    # 新代码落的盘总带此键（save 全量 dump），显式开启的值不会被丢弃。
+    # 默认 True：新装无旧值可迁，「迁移已完成」天然成立。
+    ram_guard_default_off: bool = True
 
 
 class ProxyConfig(BaseModel):
@@ -1058,6 +1066,20 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
         # 新字段已显式设过 → 不覆盖（幂等）
         if "update_channel" not in sys_raw and sys_raw.get("show_dev_channel") is True:
             sys_raw["update_channel"] = "dev"
+
+    # 10. ram_guard 默认改关（v0.23.1 hotfix）：save() 全量落盘使「用户显式
+    #     开启」与「旧默认 true 被动落盘」不可分辨（同第 8 步先例），故对
+    #     旧盘一次性丢弃 ram_guard 值，让所有用户回到新默认（关）。判据是
+    #     哨兵**键缺失**（不能看值：v0.23.1+ 代码落的盘总带此键，值即真源；
+    #     用「值为假」判会把新装用户首次显式开启的值也丢掉）。哨兵在下次
+    #     save() 才落盘，落盘前重复丢弃是幂等的（丢的仍是旧盘值）。
+    sys_raw_rg = raw.setdefault("system", {})
+    if isinstance(sys_raw_rg, dict) and "ram_guard_default_off" not in sys_raw_rg:
+        for section in ("generate", "training"):
+            sec_raw = raw.get(section)
+            if isinstance(sec_raw, dict):
+                sec_raw.pop("ram_guard", None)
+        sys_raw_rg["ram_guard_default_off"] = True
 
     # 8. R-1 资源档位（0.17）：queue.allow_gpu_during_train 废弃。语义变化
     #    （老开关连 eval_samples 等底模级任务一起放行，是 OOM 隐患；新开关

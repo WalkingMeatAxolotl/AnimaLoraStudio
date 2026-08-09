@@ -575,22 +575,61 @@ def test_has_gelbooru_credentials(secrets_file: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_training_ram_guard_defaults_on(secrets_file: Path) -> None:
-    """训练侧水位保护默认开；老 secrets.json 没有 training 字段也用默认值。"""
-    assert secrets.load().training.ram_guard is True
+def test_ram_guard_defaults_off(secrets_file: Path) -> None:
+    """水位保护 v0.23.1 起默认关（训练侧 + 推理侧）；老 secrets.json 没有
+    对应字段也用默认值。"""
+    s = secrets.load()
+    assert s.training.ram_guard is False
+    assert s.generate.ram_guard is False
     secrets_file.write_text(
         json.dumps({"gelbooru": {"user_id": "alice"}}),
         encoding="utf-8",
     )
-    assert secrets.load().training.ram_guard is True
+    s = secrets.load()
+    assert s.training.ram_guard is False
+    assert s.generate.ram_guard is False
 
 
 def test_training_ram_guard_round_trip(secrets_file: Path) -> None:
-    """update + load 持久化（Settings → 训练 → 训练参数 切 toggle）。"""
-    secrets.update({"training": {"ram_guard": False}})
-    assert secrets.load().training.ram_guard is False
+    """update + load 持久化（Settings → 训练 → 训练参数 切 toggle）。
+    显式开启落盘时迁移哨兵一并落盘，之后 load 不得再丢弃显式值。"""
     secrets.update({"training": {"ram_guard": True}})
     assert secrets.load().training.ram_guard is True
+    # 幂等：哨兵已落盘，重复 load 不回退
+    assert secrets.load().training.ram_guard is True
+    secrets.update({"training": {"ram_guard": False}})
+    assert secrets.load().training.ram_guard is False
+
+
+def test_ram_guard_legacy_true_discarded_once(secrets_file: Path) -> None:
+    """v0.23.1 一次性迁移：旧盘的 ram_guard=true（旧默认被动落盘，与显式
+    开启不可分辨）在无哨兵时被丢弃 → 所有用户回到新默认（关）。"""
+    secrets_file.write_text(
+        json.dumps({
+            "generate": {"ram_guard": True},
+            "training": {"ram_guard": True},
+        }),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.generate.ram_guard is False
+    assert s.training.ram_guard is False
+    assert s.system.ram_guard_default_off is True
+
+
+def test_ram_guard_kept_when_sentinel_present(secrets_file: Path) -> None:
+    """哨兵已置位（迁移后用户显式开启）→ 盘上的 true 保留，不再丢弃。"""
+    secrets_file.write_text(
+        json.dumps({
+            "generate": {"ram_guard": True},
+            "training": {"ram_guard": True},
+            "system": {"ram_guard_default_off": True},
+        }),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.generate.ram_guard is True
+    assert s.training.ram_guard is True
 
 
 def test_system_defaults_update_channel_stable(secrets_file: Path) -> None:
