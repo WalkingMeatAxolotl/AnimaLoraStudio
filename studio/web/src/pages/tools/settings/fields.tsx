@@ -108,22 +108,19 @@ export function SectionIndex({
   )
 }
 
-export function SettingsField({ label, desc, helpTooltip, children }: {
+export function SettingsField({ label, helpTooltip, children }: {
   label: string
-  desc?: string
-  /** 可选 ⓘ tooltip slot，渲染在 label 旁边。中长说明（≥20 字 / 详细用法）
-   *  适合放这里，避免 inline desc 把字段名行撑得过长。一般和 desc 二选一。 */
+  /** 说明文案唯一的去处（docs/design/ui-info-design.md）：label 行只有
+   *  「名字 + 控件」，默认值/推荐值/机制说明全部进 ⓘ tooltip——组件有意
+   *  不提供行内 desc，避免设置页长出说明小字。 */
   helpTooltip?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div className="grid grid-cols-[240px_1fr] gap-3 items-start">
-      <div className="flex flex-col gap-0.5 pt-1.5">
-        <div className="flex items-center gap-2 min-w-0">
-          <label className="text-xs text-fg-secondary font-mono leading-none">{label}</label>
-          {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
-        </div>
-        {desc && <p className="text-[10px] text-fg-tertiary m-0 leading-snug">{desc}</p>}
+      <div className="flex items-center gap-2 min-w-0 pt-1.5">
+        <label className="text-xs text-fg-secondary font-mono leading-none">{label}</label>
+        {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
       </div>
       <div className="min-w-0">{children}</div>
     </div>

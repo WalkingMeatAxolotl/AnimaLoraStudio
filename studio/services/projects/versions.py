@@ -741,3 +741,170 @@ def compute_bucket_histogram(
         ]
         out.append({"reso": reso, "buckets": buckets})
     return out
+
+
+class _NavitTokenStub:
+    """给 ``NavitPackBatchSampler`` 喂 token 数列表的最小 dataset 壳。
+
+    ``dataset_token_counts`` 通过 ``token_count_for_index`` 属性发现 token 数，
+    因此打包（含 shuffle/strategy/drop_last）走的是**真打包器同一条代码路径**，
+    不是第二份算法拷贝。
+    """
+
+    def __init__(self, counts: list[int]) -> None:
+        self.token_count_for_index = counts
+
+    def __len__(self) -> int:
+        return len(self.token_count_for_index)
+
+
+def compute_navit_pack_estimate(
+    data_dirs: list[Path],
+    resolutions: list[int],
+    aspect_ratio_limit: float = 2.0,
+    prefer_json: bool = True,
+    *,
+    native_resolution: bool = False,
+    token_budget: int = 16384,
+    max_images_per_pack: int = 0,
+    strategy: str = "next_fit",
+    ffd_window: int = 256,
+    drop_last: bool = False,
+    over_budget: str = "downscale",
+    seed: int = 42,
+) -> dict[str, Any]:
+    """NaViT 打包模式的 epoch 包数预估（= 优化器 steps/epoch 的分子）。
+
+    扫描规则与 ``compute_bucket_histogram`` 同源（镜像 ``ImageDataset._scan``：
+    根目录散图 → 子文件夹 sorted+rglob、只计有 caption 的图、repeat 展开），逐图
+    token 数与打包全部复用 runtime 真实现：
+
+    - ``native_resolution=True``：``plan_native_fit_image``（floor-16 + 超预算
+      downscale），多分辨率 fan-out 收拢为单档（镜像 ``ImageDataset.__init__``）；
+    - 否则按 ARB 桶尺寸推 token（``(w//16)*(h//16)``，与
+      ``dataset_token_counts`` 从 latent 形状推导的口径一致）；
+    - 打包经真 ``NavitPackBatchSampler``（同 shuffle(seed)+strategy+drop_last），
+      epoch-0 包数与训练日志的 ``dataset_len``/steps 逐位一致；后续 epoch 因
+      reshuffle 有 ±几步波动，故对外语义仍是「预估」。
+
+    ``data_dirs`` 传 ``[train_dir]`` 或 ``[train_dir, reg_dir]``（reg 参与同一
+    打包池，与 ``MergedDataset`` 的 main+reg 拼接顺序一致）。
+
+    已知偏差：模型 RoPE 单边 token 上限（训练时从 pos_embedder 读）此处拿不到，
+    按不设限处理——只影响单边 > 上限×16 px 的极端巨图（预算上限仍然生效）。
+
+    返回 ``{packs_per_epoch, samples, avg_images_per_pack, token_min, token_max,
+    token_budget, strategy, native, downscaled, sizes}``；``sizes`` 仅 native 下
+    非空（原生尺寸直方图 ``[{w,h,count}]``，count 含 repeat，按 count 降序）。
+    """
+    from runtime.training.dataset import (
+        ImageDataset,
+        NavitPackBatchSampler,
+        plan_native_fit_image,
+    )
+    from PIL import Image
+
+    base_resos = [int(r) for r in resolutions]
+    if native_resolution and len(base_resos) > 1:
+        # 镜像 ImageDataset.__init__：native 下 fan-out 无意义，收拢为单档
+        base_resos = base_resos[:1]
+    mgrs: dict[int, Any] = {}
+
+    def mgr_for(reso: int):
+        if reso not in mgrs:
+            from runtime.training.dataset import BucketManager
+            mgrs[reso] = BucketManager(int(reso), aspect_ratio_limit=aspect_ratio_limit)
+        return mgrs[reso]
+
+    def has_caption(img_path: Path) -> bool:
+        if prefer_json and img_path.with_suffix(".json").exists():
+            return True
+        return img_path.with_suffix(".txt").exists() or img_path.with_suffix(".caption").exists()
+
+    token_counts: list[int] = []
+    size_hist: dict[tuple[int, int], int] = {}
+    downscaled = 0
+
+    def add_image(img_path: Path, repeat: int, resos: list[int]) -> None:
+        nonlocal downscaled
+        if not has_caption(img_path):
+            return
+        try:
+            with Image.open(img_path) as im:
+                w, h = im.size
+        except Exception:
+            return
+        if native_resolution:
+            try:
+                plan = plan_native_fit_image(
+                    w, h, max_tokens=token_budget, max_side_tokens=0,
+                    over_budget=over_budget,
+                )
+            except ValueError:
+                # over_budget="fail" 的超限图：训练会 fail-fast；预估侧跳过并
+                # 不计入（比抛 500 砸掉整个分布面板好）
+                return
+            token_counts.extend([plan.token_count] * repeat)
+            key = (plan.width, plan.height)
+            size_hist[key] = size_hist.get(key, 0) + repeat
+            if plan.was_downscaled:
+                downscaled += repeat
+        else:
+            # 镜像 _scan 展开顺序：reso fan-out 外层、repeat 内层
+            for target_reso in resos:
+                bw, bh = mgr_for(target_reso).get_bucket(w, h)
+                # 与 dataset_token_counts 的 latent 形状推导同口径：
+                # (px/8 latent) // patch_spatial(2) → px // 16
+                token_counts.extend([(bw // 16) * (bh // 16)] * repeat)
+
+    for data_dir in data_dirs:
+        data_dir = Path(data_dir)
+        if not data_dir.exists():
+            continue
+        for p in sorted(data_dir.iterdir()):
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+                add_image(p, 1, base_resos)
+        for sub in sorted(data_dir.iterdir()):
+            if not sub.is_dir():
+                continue
+            reso_override, repeat, _label = ImageDataset._parse_folder_meta(sub.name)
+            resos = [reso_override] if reso_override else base_resos
+            for f in sorted(sub.rglob("*")):
+                if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                    add_image(f, repeat, resos)
+
+    if not token_counts:
+        return {
+            "packs_per_epoch": 0, "samples": 0, "avg_images_per_pack": 0,
+            "token_min": 0, "token_max": 0, "token_budget": int(token_budget),
+            "strategy": str(strategy), "native": bool(native_resolution),
+            "downscaled": 0, "sizes": [],
+        }
+
+    sampler = NavitPackBatchSampler(
+        _NavitTokenStub(token_counts),
+        token_budget=int(token_budget),
+        max_images_per_pack=int(max_images_per_pack or 0),
+        shuffle=True,
+        seed=int(seed),
+        drop_last=bool(drop_last),
+        strategy=str(strategy or "next_fit"),
+        ffd_window=int(ffd_window or 0),
+    )
+    packs = len(sampler)
+    samples = len(token_counts)
+    return {
+        "packs_per_epoch": packs,
+        "samples": samples,
+        "avg_images_per_pack": round(samples / packs, 1) if packs else 0,
+        "token_min": min(token_counts),
+        "token_max": max(token_counts),
+        "token_budget": int(token_budget),
+        "strategy": str(strategy),
+        "native": bool(native_resolution),
+        "downscaled": downscaled,
+        "sizes": [
+            {"w": w, "h": h, "count": c}
+            for (w, h), c in sorted(size_hist.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+        ],
+    }

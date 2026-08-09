@@ -26,18 +26,24 @@ import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, Sour
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
 //
-// 训练相关的全局开关。当前只有「自动配置模型路径」(auto_sync_paths)：独立 PUT，
-// 不进全局 dirty 流程。原先夹在「训练模型」section 里，挪到这里跟模型下载分开。
+// 训练相关的全局开关，均为独立 PUT，不进全局 dirty 流程：
+// - 「自动配置模型路径」(models.auto_sync_paths)：原先夹在「训练模型」section
+//   里，挪到这里跟模型下载分开。
+// - 「内存/显存水位保护」(training.ram_guard)：训练 / AI 先验加载大模型前的
+//   预算护栏；推理侧的同名保护在 显存策略 section（generate.ram_guard）。
 export function TrainingParamsSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const { runSave } = useSettingsData()
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
+  const [trainRamGuard, setTrainRamGuard] = useState<boolean>(true)
+  const [savingRamGuard, setSavingRamGuard] = useState(false)
 
   useEffect(() => {
     void api.getSecrets().then((sec) => {
       setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
+      setTrainRamGuard(sec.training?.ram_guard ?? true)
     }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
 
@@ -56,6 +62,21 @@ export function TrainingParamsSection() {
     }
   }
 
+  const saveRamGuard = async (next: boolean) => {
+    setSavingRamGuard(true)
+    const prev = trainRamGuard
+    setTrainRamGuard(next)
+    try {
+      await runSave(() => api.updateSecrets({ training: { ram_guard: next } }))
+      toast(next ? t('settings.trainRamGuardOn') : t('settings.trainRamGuardOff'), 'success')
+    } catch (e) {
+      setTrainRamGuard(prev)
+      toast(String(e), 'error')
+    } finally {
+      setSavingRamGuard(false)
+    }
+  }
+
   return (
     <SettingsSection id="training-params" title={t('settings.trainingParams')}>
       <SettingsField
@@ -63,6 +84,12 @@ export function TrainingParamsSection() {
         helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
       >
         <Bool value={autoSyncPaths} onChange={(v) => void saveAutoSync(v)} disabled={savingAutoSync} />
+      </SettingsField>
+      <SettingsField
+        label={t('settings.trainRamGuardLabel')}
+        helpTooltip={<p>{t('settings.trainRamGuardHelp')}</p>}
+      >
+        <Bool value={trainRamGuard} onChange={(v) => void saveRamGuard(v)} disabled={savingRamGuard} />
       </SettingsField>
     </SettingsSection>
   )
@@ -497,7 +524,7 @@ export function TagDictionarySection() {
 
       <SettingsField
         label={t('settings.tagDictionary.uploadLabel')}
-        desc={t('settings.tagDictionary.uploadHint')}
+        helpTooltip={<p>{t('settings.tagDictionary.uploadHint')}</p>}
       >
         <div className="flex gap-1.5 items-center flex-wrap">
           <input
@@ -525,14 +552,14 @@ export function TagDictionarySection() {
 
       <SettingsField
         label={t('settings.tagDictionary.showToggleLabel')}
-        desc={t('settings.tagDictionary.showToggleHint')}
+        helpTooltip={<p>{t('settings.tagDictionary.showToggleHint')}</p>}
       >
         <Bool value={show} onChange={(v) => applyLocal(() => setShow(v))} />
       </SettingsField>
 
       <SettingsField
         label={t('settings.tagDictionary.autocompleteToggleLabel')}
-        desc={t('settings.tagDictionary.autocompleteToggleHint')}
+        helpTooltip={<p>{t('settings.tagDictionary.autocompleteToggleHint')}</p>}
       >
         <Bool value={acEnabled} onChange={(v) => applyLocal(() => setAcEnabled(v))} />
       </SettingsField>
@@ -1241,7 +1268,6 @@ export function IdleTimeoutSection({
     <SettingsSection id="idle-timeout" title={t('settings.idleTimeout.title')}>
       <SettingsField
         label={t('settings.idleTimeout.label')}
-        desc={t('settings.idleTimeout.desc')}
         helpTooltip={<p>{t('settings.idleTimeout.help')}</p>}
       >
         <div className="flex items-center gap-2">
@@ -1262,7 +1288,6 @@ export function IdleTimeoutSection({
       </SettingsField>
       <SettingsField
         label={t('settings.idleTimeout.taskTimeoutLabel')}
-        desc={t('settings.idleTimeout.taskTimeoutDesc')}
         helpTooltip={<p>{t('settings.idleTimeout.taskTimeoutHelp')}</p>}
       >
         <div className="flex items-center gap-2">
@@ -1299,7 +1324,6 @@ export function VaePrecisionSection({
     <SettingsSection id="vae-precision" title={t('settings.vaePrecision.title')}>
       <SettingsField
         label={t('settings.vaePrecision.label')}
-        desc={t('settings.vaePrecision.desc')}
         helpTooltip={<p>{t('settings.vaePrecision.help')}</p>}
       >
         <select
@@ -1313,7 +1337,6 @@ export function VaePrecisionSection({
       </SettingsField>
       <SettingsField
         label={t('settings.loraMergePrecision.label')}
-        desc={t('settings.loraMergePrecision.desc')}
         helpTooltip={<p>{t('settings.loraMergePrecision.help')}</p>}
       >
         <select
@@ -1343,7 +1366,6 @@ export function VramPolicySection({
     <SettingsSection id="vram-policy" title={t('settings.vramPolicy.title')}>
       <SettingsField
         label={t('settings.vramPolicy.label')}
-        desc={t('settings.vramPolicy.desc')}
         helpTooltip={<p>{t('settings.vramPolicy.help')}</p>}
       >
         <select
@@ -1358,7 +1380,6 @@ export function VramPolicySection({
       </SettingsField>
       <SettingsField
         label={t('settings.vramPolicy.ramGuardLabel')}
-        desc={t('settings.vramPolicy.ramGuardDesc')}
         helpTooltip={<p>{t('settings.vramPolicy.ramGuardHelp')}</p>}
       >
         <Bool
@@ -1368,7 +1389,6 @@ export function VramPolicySection({
       </SettingsField>
       <SettingsField
         label={t('settings.vramPolicy.blocksToSwapLabel')}
-        desc={t('settings.vramPolicy.blocksToSwapDesc')}
         helpTooltip={<p>{t('settings.vramPolicy.blocksToSwapHelp')}</p>}
       >
         <div className="flex items-center gap-2">
@@ -1408,9 +1428,11 @@ export function TaeFluxSection({
     <SettingsSection id="preview" title={t('settings.intermediatePreview')}>
       <SettingsField
         label={t('settings.previewThrottle')}
-        desc={t('settings.previewThrottleDesc')}
         helpTooltip={
-          <p>{t('settings.taeFluxHelp')}</p>
+          <>
+            <p>{t('settings.previewThrottleHelp')}</p>
+            <p>{t('settings.taeFluxHelp')}</p>
+          </>
         }
       >
         <SettingsInput

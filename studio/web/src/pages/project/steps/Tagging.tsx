@@ -78,6 +78,17 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
   }
 }
 
+// form 与全局默认不同的字段挑出来作 check override（判据与 buildXXXOverrides
+// 一致，但只取 keys 列出的影响可用性的字段）。form / defaults 未加载 → 不覆盖。
+export function availabilityOverrides<T extends object>(
+  form: T | null, defaults: T | null, keys: (keyof T)[],
+): Partial<T> | undefined {
+  if (!form || !defaults) return undefined
+  const out: Partial<T> = {}
+  for (const k of keys) if (form[k] !== defaults[k]) out[k] = form[k]
+  return Object.keys(out).length ? out : undefined
+}
+
 export default function TaggingPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -150,15 +161,38 @@ export default function TaggingPage() {
     })
   }, [llmDefaults])
 
+  // 可用性检查跟着「本次打标实际生效的配置」走（issue #477）：模型版本 / 预设
+  // 选择属于本次覆盖，不带上会按全局默认误报「需下载 / 未配置」并锁死开始按钮。
+  // 只挑影响可用性的字段——阈值 / 附加标签类别不参与，避免输入过程反复请求。
+  const availabilityKey = JSON.stringify([
+    tagger,
+    tagger === 'wd14'
+      ? availabilityOverrides(wd14Form, wd14Defaults, ['model_id'])
+      : tagger === 'cltagger'
+        ? availabilityOverrides(cltaggerForm, cltaggerDefaults, [
+            'model_id', 'model_path', 'tag_mapping_path',
+          ])
+        : tagger === 'llm' && llmPresetId && llmDefaults && llmPresetId !== llmDefaults.current_preset
+          ? { current_preset: llmPresetId }
+          : undefined,
+  ])
+  // secrets / catalog 进依赖：预设编辑器与设置抽屉保存（instant-apply 回流）、
+  // 模型下载完成（model_download_changed → reloadCatalog）都要触发重查。
   useEffect(() => {
+    const [name, overrides] = JSON.parse(availabilityKey) as [
+      TaggerName,
+      Record<string, unknown> | null,
+    ]
+    let stale = false
     setTaggerStatus(null)
     void api
-      .checkTagger(tagger)
-      .then(setTaggerStatus)
-      .catch((e) =>
-        setTaggerStatus({ name: tagger, ok: false, msg: String(e), requires_service: false })
-      )
-  }, [tagger])
+      .checkTagger(name, overrides ?? undefined)
+      .then((s) => { if (!stale) setTaggerStatus(s) })
+      .catch((e) => {
+        if (!stale) setTaggerStatus({ name, ok: false, msg: String(e), requires_service: false })
+      })
+    return () => { stale = true }
+  }, [availabilityKey, secrets, catalog])
 
   // 刷新 / 进入页面时回放最近一次打标 job：锁回 id + 回放历史日志。
   useEffect(() => {

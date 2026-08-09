@@ -81,6 +81,9 @@ class TrainingContext:
     trainable_params: list = field(default_factory=list)
     steps_per_epoch: Optional[int] = None
     total_steps: Optional[int] = None
+    # 进度显示专用：每 epoch 按实际包数修正的总步数（navit 打包下 total_steps 是
+    # epoch-0 快照会漂移）。只喂 monitor/CLI 进度，scheduler/adapter 仍用 total_steps。
+    total_steps_display: Optional[int] = None
     scheduler: Any = None
     timestep_sampler: Any = None    # training.timestep_samplers.TimestepSamplerProtocol
     loss_fn: Optional["LossProtocol"] = None

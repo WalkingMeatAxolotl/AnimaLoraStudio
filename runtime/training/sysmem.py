@@ -97,8 +97,22 @@ def _file_bytes(paths) -> int:
     return total
 
 
+def guard_enabled_from_env() -> bool:
+    """训练侧水位保护开关（Settings → 训练 → 训练参数）。
+
+    supervisor 在 spawn 训练 / 正则 AI 子进程时按全局设置注入
+    ``LORA_RAM_GUARD=0`` 表示关闭；缺省 = 开（CLI 直跑同样默认受保护）。
+    """
+    import os
+
+    return str(os.environ.get("LORA_RAM_GUARD", "1")).strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
 def check_load_budget(
     enabled: bool, *, weight_paths, stage: str, vram_discount_ratio: float = 0.0,
+    settings_hint: str = "设置 → 显存策略",
 ) -> None:
     """双预算水位护栏：按即将加载的文件实际大小预算 RAM 与 VRAM。
 
@@ -116,7 +130,10 @@ def check_load_budget(
     13GB 减掉按 bf16 估的 11.3GB → 以为只要 1.7GB，实际常驻 7.2GB），护栏形同
     虚设。按比例乘文件实际大小，两种精度都正确。
 
-    ``enabled`` 来自用户配置（Settings → 显存策略）；查询失败静默放行。
+    ``enabled`` 来自用户配置（推理侧 = 设置 → 显存策略；训练侧 = 设置 →
+    训练 → 训练参数，经 ``guard_enabled_from_env`` 读取）；查询失败静默放行。
+    ``settings_hint``：报错里「去哪关这个保护」的指引，两侧开关位置不同，
+    由调用方按自己那侧传入。
     """
     if not enabled:
         return
@@ -133,7 +150,7 @@ def check_load_budget(
             f"{(need + _RAM_BASE_BYTES) / 1024**3:.1f}GB：权重文件 "
             f"{need / 1024**3:.1f}GB + 运行余量），已中止以避免整机换页"
             f"卡死。请关闭其他占用内存的应用后重试；如需强制继续，可在 "
-            f"设置 → 显存策略 关闭内存水位保护。"
+            f"{settings_hint} 关闭内存水位保护。"
         )
 
     free = gpu_free_bytes_global()
@@ -142,7 +159,7 @@ def check_load_budget(
             f"GPU 空闲显存不足（{free / 1024**3:.1f}GB，本次{stage}"
             f"约需 {(vram_need + _VRAM_BASE_BYTES) / 1024**3:.1f}GB）。"
             f"可能有其他进程占用显存（另一个出图/训练任务？）——"
-            f"请先释放后重试；如需强制继续，可在 设置 → 显存策略 "
+            f"请先释放后重试；如需强制继续，可在 {settings_hint} "
             f"关闭内存水位保护。"
         )
 

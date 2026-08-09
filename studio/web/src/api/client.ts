@@ -653,6 +653,12 @@ export interface TagDictionaryPayload {
   meta: TagDictionaryMeta
 }
 
+export interface TrainingSecretsConfig {
+  /** 训练/AI 先验的内存/显存水位保护（语义同 generate.ram_guard，只管训练侧
+   * 子进程；supervisor 经 LORA_RAM_GUARD 环境变量注入，默认开）。 */
+  ram_guard: boolean
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -673,6 +679,7 @@ export interface Secrets {
   models: ModelsConfig
   queue: QueueConfig
   generate: GenerateSecretsConfig
+  training: TrainingSecretsConfig
   system: SystemPrefsConfig
   proxy: ProxyConfig
 }
@@ -1404,6 +1411,21 @@ export interface BucketDistribution {
     reso: number
     buckets: Array<{ w: number; h: number; count: number }>
   }>
+  /** NaViT 打包预估（config.navit_packing 时才有）。packs_per_epoch = 优化器
+   *  steps/epoch 的分子（后端用真 NavitPackBatchSampler 模拟，epoch-0 精确）。
+   *  sizes 仅 native 模式非空 = 原生尺寸直方图（此模式下 ARB 桶不存在）。 */
+  navit?: {
+    packs_per_epoch: number
+    samples: number
+    avg_images_per_pack: number
+    token_min: number
+    token_max: number
+    token_budget: number
+    strategy: string
+    native: boolean
+    downscaled: number
+    sizes: Array<{ w: number; h: number; count: number }>
+  } | null
 }
 
 export interface RegBuildRequest {
@@ -2554,8 +2576,14 @@ export const api = {
     ),
 
   // Tagging (PP4) --------------------------------------------------------
-  checkTagger: (name: TaggerName) =>
-    req<TaggerStatus>(`/api/tagger/${name}/check`),
+  // overrides 与 startTag 的 `<name>_overrides` 同构：check 必须按本次打标
+  // 实际生效的配置检查，否则页面覆盖（模型版本 / 预设）不被感知（issue #477）。
+  checkTagger: (name: TaggerName, overrides?: Record<string, unknown>) =>
+    req<TaggerStatus>(
+      `/api/tagger/${name}/check${
+        overrides ? `?overrides=${encodeURIComponent(JSON.stringify(overrides))}` : ''
+      }`,
+    ),
   startTag: (
     pid: number,
     vid: number,

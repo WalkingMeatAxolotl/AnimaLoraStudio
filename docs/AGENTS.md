@@ -248,6 +248,7 @@ CI 已覆盖，AI 不必重复手测：本地 tsc / lint / pytest / vitest / plu
 - 不引入"runtime 解析 free-form 文本"的数据流（用 yaml/schema + 工具校验）
 - 不"修正"外部论文实现凭直觉(先 verify 论文 / 上游)
 - 不为假想的未来需求加抽象（三处相似代码再抽）
+- 设置项不放行内说明小字：说明文案（默认值/推荐值/机制）一律进 label 旁 ⓘ tooltip（见 docs/design/ui-info-design.md）
 
 ---
 

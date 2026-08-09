@@ -87,3 +87,36 @@ def test_budget_sums_directory_contents(tmp_path):
     (d / "a.safetensors").write_bytes(b"\0" * 100)
     (d / "b.safetensors").write_bytes(b"\0" * 200)
     assert sysmem._file_bytes([d]) == 300
+
+
+def test_guard_enabled_from_env_defaults_on(monkeypatch):
+    """训练侧开关：env 缺省 = 开（CLI 直跑训练同样默认受保护）。"""
+    monkeypatch.delenv("LORA_RAM_GUARD", raising=False)
+    assert sysmem.guard_enabled_from_env() is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", "no", " OFF "])
+def test_guard_enabled_from_env_off_values(monkeypatch, value):
+    monkeypatch.setenv("LORA_RAM_GUARD", value)
+    assert sysmem.guard_enabled_from_env() is False
+
+
+def test_guard_enabled_from_env_on_values(monkeypatch):
+    monkeypatch.setenv("LORA_RAM_GUARD", "1")
+    assert sysmem.guard_enabled_from_env() is True
+
+
+def test_budget_error_uses_caller_settings_hint(tmp_path, monkeypatch):
+    """报错指引跟着调用方走：训练侧开关在 设置 → 训练 → 训练参数，
+    不能再把用户指去只管推理的 显存策略。"""
+    weight = _write_weight(tmp_path)
+    monkeypatch.setattr(sysmem, "_file_bytes", lambda paths: 13 * 1024**3)
+    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 10 * 1024**3)
+    with pytest.raises(RuntimeError, match="设置 → 训练 → 训练参数"):
+        sysmem.check_load_budget(
+            True, weight_paths=[weight], stage="训练模型加载",
+            settings_hint="设置 → 训练 → 训练参数",
+        )
+    # 缺省 hint 保持推理侧文案
+    with pytest.raises(RuntimeError, match="设置 → 显存策略"):
+        sysmem.check_load_budget(True, weight_paths=[weight], stage="模型加载")

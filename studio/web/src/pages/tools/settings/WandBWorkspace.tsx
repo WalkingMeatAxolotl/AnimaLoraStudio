@@ -239,7 +239,7 @@ export default function WandBWorkspace({
             className={textInputClass}
           />
         </SettingsField>
-        <SettingsField label={t('settings.fieldEntity')} desc={t('settings.wandbEntityHint')}>
+        <SettingsField label={t('settings.fieldEntity')} helpTooltip={<p>{t('settings.wandbEntityHint')}</p>}>
           <SettingsInput
             type="text"
             value={currentPreset.entity}
@@ -247,7 +247,7 @@ export default function WandBWorkspace({
             className={textInputClass}
           />
         </SettingsField>
-        <SettingsField label={t('settings.fieldBaseUrl')} desc={t('settings.wandbBaseUrlHint')}>
+        <SettingsField label={t('settings.fieldBaseUrl')} helpTooltip={<p>{t('settings.wandbBaseUrlHint')}</p>}>
           <SettingsInput
             type="text"
             value={currentPreset.base_url}

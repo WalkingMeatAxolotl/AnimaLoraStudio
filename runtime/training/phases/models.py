@@ -255,7 +255,7 @@ def _validate_fp8_base(ctx: TrainingContext) -> None:
 
 def run(ctx: TrainingContext) -> None:
     """Resolve paths and load either the complete stack or the cache-first half."""
-    from training.sysmem import check_load_budget
+    from training.sysmem import check_load_budget, guard_enabled_from_env
 
     if ctx.family is None:
         ctx.family = resolve_family(ctx.args)
@@ -267,12 +267,13 @@ def run(ctx: TrainingContext) -> None:
             "文本缓存已开启：先加载 VAE/Qwen3-VL，缓存并释放 TE 后再加载 Transformer"
         )
         # 分段预算：本段只加载 VAE + TE（DiT 由 finish 段单独预算）。
-        # 训练侧常开（多小时任务，中途换页卡死代价远高于一条报错）。
+        # 开关来自 设置 → 训练 → 训练参数（supervisor 经 env 注入，默认开）。
         check_load_budget(
-            True,
+            guard_enabled_from_env(),
             weight_paths=[getattr(ctx.args, "vae_path", ""),
                           getattr(ctx.args, "text_encoder_path", "")],
             stage="训练模型加载（VAE/文本编码器）",
+            settings_hint="设置 → 训练 → 训练参数",
         )
         _load_vae(ctx)
         _load_text(ctx)
@@ -281,7 +282,7 @@ def run(ctx: TrainingContext) -> None:
     # Preserve the historical Anima order. Storage-free Krea2 deliberately keeps
     # the DiT resident while its text encoder is loaded for per-batch encoding.
     check_load_budget(
-        True,
+        guard_enabled_from_env(),
         weight_paths=[
             getattr(ctx.args, "transformer_path", ""),
             getattr(ctx.args, "vae_path", ""),
@@ -289,6 +290,7 @@ def run(ctx: TrainingContext) -> None:
         ],
         stage="训练模型加载",
         vram_discount_ratio=_swap_vram_discount(ctx),
+        settings_hint="设置 → 训练 → 训练参数",
     )
     _load_dit(ctx)
     _load_vae(ctx)
@@ -301,14 +303,15 @@ def finish(ctx: TrainingContext) -> None:
     """Load/inject a DiT deferred by cached text preparation; otherwise no-op."""
     if ctx.model is not None:
         return
-    from training.sysmem import check_load_budget
+    from training.sysmem import check_load_budget, guard_enabled_from_env
 
     logger.info("文本缓存完成且文本编码器已释放；继续加载 Transformer...")
     check_load_budget(
-        True,
+        guard_enabled_from_env(),
         weight_paths=[getattr(ctx.args, "transformer_path", "")],
         stage="训练模型加载（Transformer）",
         vram_discount_ratio=_swap_vram_discount(ctx),
+        settings_hint="设置 → 训练 → 训练参数",
     )
     _load_dit(ctx)
     _inject_adapter(ctx)

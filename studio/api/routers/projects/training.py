@@ -35,6 +35,7 @@ import logging
 import re
 import time
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -717,6 +718,7 @@ def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
     resolutions: list[int] = [1024]
     ar_limit = 2.0
     prefer_json = True
+    cfg: dict[str, Any] = {}
     if version_config.has_version_config(project, ver):
         try:
             cfg, _dropped, _defaulted = version_config.read_version_config_with_warnings(project, ver)
@@ -728,9 +730,32 @@ def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
             ar_limit = float(cfg.get("aspect_ratio_limit", 2.0) or 2.0)
             prefer_json = bool(cfg.get("prefer_json", True))
         except version_config.VersionConfigError:
-            pass
+            cfg = {}
     groups = versions.compute_bucket_histogram(train_dir, resolutions, ar_limit, prefer_json)
-    return {"resolutions": resolutions, "aspect_ratio_limit": ar_limit, "groups": groups}
+
+    # NaViT 打包模式：附带真打包模拟的包数预估（前端步数公式在此模式下不能用
+    # batch_size 除 —— 分批由 token 预算决定，见 NavitPackBatchSampler）。
+    navit: dict[str, Any] | None = None
+    if cfg.get("navit_packing"):
+        dirs: list[Path] = [train_dir]
+        reg_dir = str(cfg.get("reg_data_dir") or "")
+        if reg_dir and Path(reg_dir).exists():
+            dirs.append(Path(reg_dir))
+        navit = versions.compute_navit_pack_estimate(
+            dirs, resolutions, ar_limit, prefer_json,
+            native_resolution=bool(cfg.get("navit_native_resolution", False)),
+            token_budget=int(cfg.get("navit_token_budget", 16384) or 16384),
+            max_images_per_pack=int(cfg.get("navit_max_images_per_pack", 0) or 0),
+            strategy=str(cfg.get("navit_pack_strategy", "next_fit") or "next_fit"),
+            ffd_window=int(cfg.get("navit_pack_ffd_window", 256) or 0),
+            drop_last=bool(cfg.get("navit_drop_last", False)),
+            over_budget=str(cfg.get("navit_native_over_budget", "downscale") or "downscale"),
+            seed=int(cfg.get("seed", 42) or 42),
+        )
+    return {
+        "resolutions": resolutions, "aspect_ratio_limit": ar_limit,
+        "groups": groups, "navit": navit,
+    }
 
 
 @router.put("/api/projects/{pid}/versions/{vid}/config")
