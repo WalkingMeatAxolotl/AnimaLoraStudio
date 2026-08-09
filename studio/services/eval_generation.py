@@ -51,7 +51,7 @@ _BLOCK_SWAP_NOTICED: set[str] = set()
 
 _FALLBACK_SETTINGS: dict[str, Any] = {
     "vae_precision": "bf16", "lora_merge_precision": "fp32",
-    "vram_policy": "auto", "ram_guard": True, "blocks_to_swap": 0,
+    "vram_policy": "auto", "ram_guard": False, "blocks_to_swap": 0,
 }
 
 
@@ -74,7 +74,7 @@ def _generate_settings(family_id: str) -> dict[str, Any]:
                 getattr(gen, "lora_merge_precision", "fp32") or "fp32"
             ),
             "vram_policy": str(getattr(gen, "vram_policy", "auto") or "auto"),
-            "ram_guard": bool(getattr(gen, "ram_guard", True)),
+            "ram_guard": bool(getattr(gen, "ram_guard", False)),
             "blocks_to_swap": int(getattr(gen, "blocks_to_swap", 0) or 0),
         }
     except Exception:

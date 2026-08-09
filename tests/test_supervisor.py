@@ -366,11 +366,12 @@ def test_popen_injects_wandb_env(env, tmp_path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_popen_injects_ram_guard_off(env, tmp_path, monkeypatch) -> None:
-    """training.ram_guard=False → 子进程 env 带 LORA_RAM_GUARD=0（训练/正则
-    AI 据此跳过水位护栏）；默认开时不注入（runtime 侧缺省即开）。"""
+    """training.ram_guard=False（v0.23.1 起即默认值）→ 子进程 env 带
+    LORA_RAM_GUARD=0（训练/正则 AI 据此跳过水位护栏）；显式开启时不注入
+    （runtime 侧 env 缺省=开，CLI 直跑的安全兜底）。"""
     monkeypatch.delenv("LORA_RAM_GUARD", raising=False)
     cfg = secrets.Secrets()
-    cfg.training.ram_guard = False
+    assert cfg.training.ram_guard is False  # 默认即关 → 无需显式设值
     monkeypatch.setattr("studio.supervisor._secrets.load", lambda: cfg)
     captured: dict[str, Any] = {}
 

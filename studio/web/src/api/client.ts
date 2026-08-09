@@ -655,7 +655,7 @@ export interface TagDictionaryPayload {
 
 export interface TrainingSecretsConfig {
   /** 训练/AI 先验的内存/显存水位保护（语义同 generate.ram_guard，只管训练侧
-   * 子进程；supervisor 经 LORA_RAM_GUARD 环境变量注入，默认开）。 */
+   * 子进程；supervisor 经 LORA_RAM_GUARD 环境变量注入，v0.23.1 起默认关）。 */
   ram_guard: boolean
 }
 

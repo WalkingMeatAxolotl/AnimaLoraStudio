@@ -1279,9 +1279,10 @@ class Supervisor:
         # （Windows 无官方 triton wheel），被失败摘要误当失败原因；本 app 的
         # xformers 路径不用 triton kernel，无条件短路。
         _xformers_svc.disable_triton_probe(env)
-        # 训练侧内存/显存水位保护开关（Settings → 训练 → 训练参数）。runtime
-        # 侧默认开，只有关闭时才需要显式传；训练与正则 AI 子进程读它，
-        # generate daemon 走自己的 cfg.ram_guard 不受影响。
+        # 训练侧内存/显存水位保护开关（Settings → 训练 → 训练参数，v0.23.1
+        # 起默认关）。runtime 侧 env 缺省=开（CLI 直跑的安全兜底），只有
+        # 关闭时才需要显式传；训练与正则 AI 子进程读它，generate daemon
+        # 走自己的 cfg.ram_guard 不受影响。
         try:
             if not _secrets.load().training.ram_guard:
                 env.setdefault("LORA_RAM_GUARD", "0")

@@ -1100,7 +1100,7 @@
     "autoSyncPathsOn": "On · fork auto-syncs global",
     "autoSyncPathsOff": "Off · fork respects preset values",
     "trainRamGuardLabel": "RAM/VRAM guard",
-    "trainRamGuardHelp": "Before training or AI prior (regularization) generation loads large models, budget system RAM and free VRAM against the actual weight file sizes, aborting with an error if either falls short to avoid system-wide paging freezes (on by default). When off, loading continues even with insufficient resources. The test-generation counterpart has its own toggle under VRAM policy.",
+    "trainRamGuardHelp": "Before training or AI prior (regularization) generation loads large models, budget system RAM and free VRAM against the actual weight file sizes, aborting with an error if either falls short to avoid system-wide paging freezes (off by default; the file-size-based estimate is conservative and can wrongly report insufficient memory). When off, loading continues even with insufficient resources. The test-generation counterpart has its own toggle under VRAM policy.",
     "trainRamGuardOn": "On · check memory before loading",
     "trainRamGuardOff": "Off · load even when memory is low",
     "defaultTransformerHelp": "The selected version becomes the default transformer for <strong>new versions</strong>.",

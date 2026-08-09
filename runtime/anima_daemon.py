@@ -388,7 +388,7 @@ class ModelCache:
         self.lora_merge_precision: str = "fp32"
         self.text_encoder_backend: Optional[str] = None
         self.t5_tokenizer_backend: Optional[str] = None
-        self.ram_guard: bool = True
+        self.ram_guard: bool = False
         #: TE 先行栈的身份键（family_id, text_encoder_path）——ensure_text_ready
         #: 据此复用/重建；_load 据此避免重复加载
         self._text_ready_key: Optional[tuple] = None
@@ -486,7 +486,7 @@ class ModelCache:
         if t5_tokenizer_path:
             t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
-        self.ram_guard = bool(cfg.get("ram_guard", True))
+        self.ram_guard = bool(cfg.get("ram_guard", False))
 
         # 比较是否需要 reload（换族 = 换整套模型栈，全重载）
         needs_reload = (
