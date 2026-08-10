@@ -44,9 +44,12 @@ logger = logging.getLogger(__name__)
 
 TEST_IMAGES_DIR = STUDIO_DATA / "test"
 
-# 前端 params snapshot 的 schema 版本(v1→v2 迁移见 generate_history_index)
+# 落盘 PNG anima_params 的 schema 版本(server enrich 时强制写入;v1 是
+# 2025 早期落盘格式 lora_configs[].path,现行工具链只产 v2)
 SCHEMA_VERSION = 2
 
+# 目录 / 文件名布局约定(#245 / 决策 #6;disk image 路由校验共用)
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # v2 命名(决策 #6):父目录区分 mode,文件名仅 "<label> N.png"
 DISPLAY_LABELS = {"single": "single image", "xy": "xy plot"}
 V2_SINGLE_RE = re.compile(r"^single image (\d+)\.png$")

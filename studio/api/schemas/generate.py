@@ -37,8 +37,8 @@ class GenerateRequest(BaseModel):
     # XY 矩阵：None=单图模式；设值时 schema 强制 prompts 单条 + count=1
     xy_matrix: Optional[XYMatrixSpec] = None
     # 前端构造的 GenerateParamsSnapshot dict（prefs 视图：含 prompts/loras/
-    # xy_draft/dataset_pick 等），server 不解释结构、原样透传到 daemon →
-    # image_done 时塞进加密 cache payload header。/api/generate/cache/index
-    # 时返还前端，作为 CacheEntry.params 回填用。save_test_images=true 走
-    # 落盘分支也共用这份 snapshot 写入 PNG anima_params metadata。
+    # xy_draft/dataset_pick 等），server 不解释结构、原样透传到 daemon。
+    # enqueue 时同一份写进 tasks.generate_params（时间线回填的唯一来源）；
+    # image_done 时 generate_storage 用它注入 PNG anima_params（save=on）
+    # 或塞加密 cache payload header（temp，文件自包含）。
     params_snapshot: Optional[dict[str, Any]] = None

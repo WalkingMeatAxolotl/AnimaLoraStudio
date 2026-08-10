@@ -1,19 +1,22 @@
 """测试出图 + daemon 控制 + TAEFlux（PR-6 commit 5 从 server.py 抽出）。
 
-8 routes：
+routes：
     POST /api/generate                          启动出图 task（daemon 跑）
     GET  /api/generate/{task_id}                查询测试 task 状态
+    GET  /api/generate/timeline                 出图时间线（DB 单源，tasks 台账）
+    POST /api/generate/{task_id}/xy-composite   XY composite 补传（前端拼好上传）
     GET  /api/generate/taeflux/status           中间步预览模型是否就绪
     POST /api/generate/taeflux/install          同步下载 TAEFlux（~1.6MB 秒级）
+    POST /api/generate/token_count              prompt token 计数
     GET  /api/generate/daemon/status            daemon state / model_loaded / busy
     GET  /api/generate/daemon/logs              ring buffer 日志（since_seq / limit）
     POST /api/generate/daemon/unload            手动卸载（busy 时 409）
-    GET  /api/generate/{task_id}/sample/{filename}  从 generate_cache 取 PNG bytes
+    GET  /api/generate/{task_id}/sample/{filename}  cache 取图（落盘 fallback）
+    GET  /api/generate/disk/image|thumb/...     落盘图读取 / 在线缩略图
 
-测试出图不持久化（commit 10 起）：daemon 把 PNG bytes base64 推回 server 入
-generate_cache（内存 dict），HTTP 这里从 cache 取。tempdir 仅装 config.json，
-task 结束 supervisor 仍调 cleanup_generate_tempdir 清掉空目录。server 重启 →
-内存 cache 自动没；强杀也不残留。
+出图落盘/记账在 services.generate_storage（daemon image_done 的 server 端
+闭环）；本 router 只做读取与入队。列表唯一来源是 tasks 表台账
+（generate_params / generate_images），删除统一走 DELETE /api/queue/{id}。
 """
 from __future__ import annotations
 
@@ -22,16 +25,13 @@ import hashlib
 import io
 import json
 import logging
-import os
 import re
 import shutil
-import time
-from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from ..deps import _resolve_model_paths
@@ -41,7 +41,6 @@ from ... import db, secrets
 from ...domain import GenerateConfig
 from ...domain.errors import (
     ConflictError,
-    ForbiddenError,
     NotFoundError,
     ValidationError,
 )
@@ -49,11 +48,9 @@ from ...domain.comfy_parity import force_comfy_parity_runtime_config
 from ...domain.common import supports_capability
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
-from ...services import generate_history_index as history_index
 from ...services import generate_storage as storage
-from ...services.generate_history_index import (
+from ...services.generate_storage import (
     DATE_RE as _DATE_RE,
-    SCHEMA_VERSION,
     XY_COMPOSITE_NAME as _XY_COMPOSITE_NAME,
     XY_FOLDER_RE as _XY_FOLDER_RE,
 )
@@ -68,58 +65,21 @@ logger = logging.getLogger(__name__)
 TEST_IMAGES_DIR = STUDIO_DATA / "test"
 
 
-def _write_generate_cover(task_id: Optional[int], cover_path: Path) -> None:
-    """0.17 P-I forward-write：落盘时把封面图（磁盘）相对地址写进 task.generate_cover
-    （相对 TEST_IMAGES_DIR，_v14 列）。前端暂不读；未来 DB 驱动出图时间线据此定位/判
-    存在。task_id 缺省（老前端/异常）或写失败时静默跳过——纯攒未来数据，不影响出图。"""
-    if task_id is None:
-        return
-    try:
-        rel = str(cover_path.relative_to(TEST_IMAGES_DIR))
-    except ValueError:
-        rel = str(cover_path)
-    try:
-        with db.connection_for() as conn:
-            db.update_task(conn, task_id, generate_cover=rel)
-    except Exception:
-        logger.warning("write generate_cover for task %s failed", task_id, exc_info=True)
-
-# v2 命名（决策 #6）：父目录区分 mode，文件名仅 "<label> N.png"
-_DISPLAY_LABELS = {"single": "single image", "xy": "xy plot"}
-_V2_SINGLE_RE = re.compile(r"^single image (\d+)\.png$")
-_V2_XY_RE = re.compile(r"^xy plot (\d+)\.png$")
-# v1 legacy：image_N.png（旧版命名），扫描时仍读取，但新写入只用 v2
-_V1_NAME_RE = re.compile(r"^image_(\d+)\.png$")
-
-# XY 文件夹布局（恢复 PreviewXYGrid 历史回看）：
+# XY 文件夹布局（历史回看 / 拖进 Comfy）：
 #   <date>/xy/xy plot <N>/{xy plot.png, cell x<i> y<j>.png, ...}
-# composite 是合成大图（导出 + 缩略图来源）；cell 是每格原图（PreviewXYGrid + 拖进 Comfy）
-# _XY_FOLDER_RE / _XY_COMPOSITE_NAME / _DATE_RE 移到 services.generate_history_index
-#（索引服务与本 router 共用一套布局约定），顶部 import 回来。
+# 布局常量在 services.generate_storage（落盘闭环与本 router 共用），顶部 import。
 _XY_TMP_FOLDER_RE = re.compile(r"^\.xy plot \d+\.tmp$")
 
-# 路径校验（disk-image / thumb / delete 全套共用）
+# 路径校验（disk-image / thumb 共用）
 _DISK_MODES = ("single", "xy")
 _PNG_NAME_SAFE_RE = re.compile(r"^[a-zA-Z0-9 ._-]+\.png$")
 
 
-# 命名序号 / 原子写 / PNG 注入 / server-side enrich 已下沉 services.generate_storage
-#（出图时间线 DB 单源:server 直落闭环与 /save 端点共用同一份实现;/save 端点
-# 前端已不再调用,PR-B 退役)。alias 保持本模块内既有调用点 / 测试引用不变。
-_next_image_index = storage.next_image_index
-_next_xy_folder_index = storage.next_xy_folder_index
-_atomic_write_png = storage.atomic_write_png
-_format_a1111_parameters = storage.format_a1111_parameters
-_inject_png_metadata = storage.inject_png_metadata
-_enrich_params_server_side = storage.enrich_params_server_side
-_build_external_metadata_safe = storage._build_external_metadata_safe
-
-
 def _cleanup_xy_tmp_folders() -> None:
-    """import-time 清理上次 server crash 留下的 `.xy plot N.tmp/` 半成品。
+    """import-time 清理旧版本 server crash 留下的 `.xy plot N.tmp/` 半成品。
 
-    save 流程：先写到 sibling tmp 文件夹，全部 cell 落盘后 os.replace 成
-    正式名。中途 crash 会留 tmp 文件夹。每次模块 import 扫一遍清。
+    旧 /save 流程写 tmp 文件夹再 os.replace；出图时间线单源后 cells 逐格直落
+    不再产生 tmp 文件夹 —— 这里只为老版本升级上来时清一次残留。
     """
     if not TEST_IMAGES_DIR.is_dir():
         return
@@ -251,7 +211,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
 
         # 决策 #15：task 启动时冻结 save_test_images，避免用户中途切开关导致
         # 一 task 内一半图走 cache 一半落盘。daemon submit_task 读这个字段
-        # 存到 _ActiveTask.save_to_disk，_handle_image_done 决定 SSE delivery
+        # 存到 _ActiveTask.save_to_disk，image_done 时交 generate_storage 处置
         try:
             cfg_dict["save_test_images_at_dispatch"] = bool(
                 secrets.load().generate.save_test_images
@@ -487,199 +447,6 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     )
 
 
-# SCHEMA_VERSION 移到 services.generate_history_index（顶部 import 回来）
-
-
-def _decode_params_field(raw: str, field: str) -> dict[str, Any]:
-    """`params` / per-cell manifest 元素 → dict。失败抛 HTTPException 400."""
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValidationError(
-            "Image parameters are not valid JSON",
-            code="generate.params_invalid",
-            details={"field": field, "reason": str(e)}, http_status=400,
-        ) from e
-    if not isinstance(decoded, dict):
-        raise ValidationError(
-            "Image parameters are not valid JSON",
-            code="generate.params_invalid",
-            details={"field": field}, http_status=400,
-        )
-    return decoded
-
-
-@router.post("/api/generate/save")
-async def save_test_image(
-    mode: str = Form(...),
-    image: UploadFile = File(...),
-    params: str = Form(""),
-    task_id: Optional[int] = Form(None),
-    source_filename: str = Form(""),
-    cells: list[UploadFile] = File(default=[]),
-    cells_manifest: str = Form(""),
-) -> dict[str, Any]:
-    """落盘测试出图。
-
-    **single mode** → `studio_data/test/<YYYY-MM-DD>/single/single image <N>.png`
-    返回 `{path, index, filename}` —— `cells` / `cells_manifest` 必须空，否则 400。
-
-    **xy mode** → `studio_data/test/<YYYY-MM-DD>/xy/xy plot <N>/{xy plot.png, cell x<i> y<j>.png ...}`
-    - `image` = composite 大图（导出 + 缩略图来源），按 mode='xy' 注 anima_params，不写 a1111
-    - `cells` = 每格原图 N 张；`cells_manifest` = JSON 数组
-      [{xi:int, yi:int, params:dict, source_filename:str}]，与 `cells` 同序；每 cell
-      按 mode='single' 注 anima_params + a1111
-    - 校验：len(cells)==len(manifest)，无重复 (xi,yi)
-    - atomic：先写 sibling `.xy plot <N>.tmp/`，全部 cell 落盘后 `os.replace` 成正式名；
-      任一步失败 → `shutil.rmtree(tmp)` 抛 500
-    - 返回 `{folder, composite, cells: [path,...]}`
-
-    其它（含 "compare"）→ 400. Settings.save_test_images=False → 403.
-    server 端 enrich 强制 schema_version/created_at/task_id/mode。
-    """
-    if mode not in ("single", "xy"):
-        raise ValidationError(
-            f"Unsupported mode: {mode}", code="generate.mode_invalid",
-            details={"mode": mode}, http_status=400,
-        )
-    if not secrets.load().generate.save_test_images:
-        raise ForbiddenError(
-            "Saving test images is disabled",
-            code="generate.save_disabled", http_status=403,
-        )
-    raw = await image.read()
-    if not raw:
-        raise ValidationError(
-            "The uploaded image is empty",
-            code="generate.empty_image", http_status=400,
-        )
-
-    if mode == "single":
-        if cells or cells_manifest:
-            raise HTTPException(400, "single mode does not accept cells")
-        if params:
-            decoded = _decode_params_field(params, "params")
-            enriched = _enrich_params_server_side(decoded, task_id=task_id, mode=mode)
-            external = await asyncio.to_thread(
-                _build_external_metadata_safe,
-                task_id,
-                enriched,
-                source_filename=source_filename,
-            )
-            raw = _inject_png_metadata(raw, enriched, mode=mode, external=external)
-
-        target_dir = TEST_IMAGES_DIR / date.today().isoformat() / mode
-        target_dir.mkdir(parents=True, exist_ok=True)
-        idx = _next_image_index(target_dir, mode)
-        target = target_dir / f"{_DISPLAY_LABELS[mode]} {idx}.png"
-        _atomic_write_png(target, raw)
-        _write_generate_cover(task_id, target)  # 0.17 P-I forward-write
-        return {"path": str(target), "index": idx, "filename": target.name}
-
-    # ----- mode == "xy" -----
-    if not cells_manifest:
-        raise HTTPException(400, "xy mode requires cells_manifest")
-    try:
-        manifest = json.loads(cells_manifest)
-    except json.JSONDecodeError as e:
-        raise HTTPException(400, f"cells_manifest: invalid JSON ({e})")
-    if not isinstance(manifest, list):
-        raise HTTPException(400, "cells_manifest: must be a JSON array")
-    if len(manifest) != len(cells):
-        raise HTTPException(400, f"cells_manifest length {len(manifest)} != cells {len(cells)}")
-    if not cells:
-        raise HTTPException(400, "xy mode requires at least one cell")
-
-    # 校验 manifest 条目 + 收集 (xi, yi) 防重
-    seen_xy: set[tuple[int, int]] = set()
-    cell_specs: list[tuple[int, int, dict[str, Any], str]] = []
-    for i, entry in enumerate(manifest):
-        if not isinstance(entry, dict):
-            raise HTTPException(400, f"cells_manifest[{i}]: must be an object")
-        try:
-            xi = int(entry["xi"])
-            yi = int(entry["yi"])
-        except (KeyError, TypeError, ValueError):
-            raise HTTPException(400, f"cells_manifest[{i}]: missing xi/yi")
-        if xi < 0 or yi < 0:
-            raise HTTPException(400, f"cells_manifest[{i}]: xi/yi must be non-negative")
-        if (xi, yi) in seen_xy:
-            raise HTTPException(400, f"cells_manifest[{i}]: duplicate (xi={xi}, yi={yi})")
-        seen_xy.add((xi, yi))
-        cell_params = entry.get("params")
-        if cell_params is not None and not isinstance(cell_params, dict):
-            raise HTTPException(400, f"cells_manifest[{i}].params: must be a JSON object")
-        cell_source_filename = str(entry.get("source_filename") or "")
-        cell_specs.append((xi, yi, cell_params or {}, cell_source_filename))
-
-    # composite 注入 anima_params（mode='xy'，不写 a1111）
-    composite_bytes = raw
-    if params:
-        composite_decoded = _decode_params_field(params, "params")
-        composite_enriched = _enrich_params_server_side(composite_decoded, task_id=task_id, mode="xy")
-        composite_bytes = _inject_png_metadata(composite_bytes, composite_enriched, mode="xy")
-
-    # 读所有 cell bytes（在文件夹分配前，避免半写）
-    cell_bytes_list: list[bytes] = []
-    for i, cell_upload in enumerate(cells):
-        cb = await cell_upload.read()
-        if not cb:
-            raise HTTPException(400, f"cells[{i}]: empty body")
-        cell_bytes_list.append(cb)
-
-    # 分配 folder + tmp 路径
-    xy_dir = TEST_IMAGES_DIR / date.today().isoformat() / "xy"
-    xy_dir.mkdir(parents=True, exist_ok=True)
-    idx = _next_xy_folder_index(xy_dir)
-    final_dir = xy_dir / f"{_DISPLAY_LABELS['xy']} {idx}"
-    tmp_dir = xy_dir / f".{_DISPLAY_LABELS['xy']} {idx}.tmp"
-    if final_dir.exists():
-        raise HTTPException(500, f"folder collision: {final_dir} already exists")
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    try:
-        tmp_dir.mkdir(parents=False, exist_ok=False)
-        # composite
-        _atomic_write_png(tmp_dir / _XY_COMPOSITE_NAME, composite_bytes)
-        # cells
-        cell_paths: list[Path] = []
-        for (xi, yi, cell_params, cell_source_filename), cb in zip(
-            cell_specs, cell_bytes_list
-        ):
-            cell_payload = cb
-            if cell_params:
-                enriched_cell = _enrich_params_server_side(cell_params, task_id=task_id, mode="single")
-                external = await asyncio.to_thread(
-                    _build_external_metadata_safe,
-                    task_id,
-                    enriched_cell,
-                    source_filename=cell_source_filename,
-                )
-                cell_payload = _inject_png_metadata(
-                    cell_payload, enriched_cell, mode="single", external=external,
-                )
-            cell_path = tmp_dir / f"cell x{xi} y{yi}.png"
-            _atomic_write_png(cell_path, cell_payload)
-            cell_paths.append(cell_path)
-        # atomic rename tmp → final (Windows: target must not exist, 我们刚 _next_xy_folder_index 保证)
-        os.replace(tmp_dir, final_dir)
-    except HTTPException:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise
-    except Exception as e:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise HTTPException(500, f"failed to write xy folder: {e}")
-
-    _write_generate_cover(task_id, final_dir / _XY_COMPOSITE_NAME)  # 0.17 P-I forward-write
-    return {
-        "folder": str(final_dir),
-        "index": idx,
-        "composite": str(final_dir / _XY_COMPOSITE_NAME),
-        "cells": [str(final_dir / p.name) for p in cell_paths],
-    }
-
-
 # ---------------------------------------------------------------------------
 # 出图时间线（DB 单源）：tasks 表是唯一台账，行=一次图片任务。
 # 蓝图 tmp/generate-timeline-db-refactor-plan.md；替代 disk 扫盘 ∪ cache index
@@ -861,44 +628,8 @@ async def attach_xy_composite(
 
 
 # ---------------------------------------------------------------------------
-# 磁盘历史浏览：SQLite 索引（services.generate_history_index，sync-on-read）
-# 列 entries；图片 URL 单独服务。扫描/解析/迁移逻辑全在索引服务里。
+# 磁盘图读取:image / thumb(时间线 entry 的图 URL 指向这里)
 # ---------------------------------------------------------------------------
-
-
-@router.get("/api/generate/disk/history")
-def list_disk_history(limit: int = 2000) -> dict[str, Any]:
-    """列出所有落盘测试图，按 created_at desc 排。
-
-    数据来自 sync-on-read 的 SQLite 索引（PNG 仍是唯一 canonical，索引可
-    随时删除重建）：请求先做 scandir 快照 diff，只解析新增/变化的 PNG ——
-    落盘图上千张后每次进页面的全量重扫从秒级降到 ~10ms 级。
-
-    entry.id 稳定，前端按 id dedup。没有 anima_params 的图（老数据 /
-    客户端没传 params）不入列表。默认 limit 从 500 提到 2000 —— 索引化后
-    500 截断没有存在意义，老历史应该列得出来。
-    """
-    limit = max(1, min(int(limit), 10000))
-    return {"entries": history_index.sync_and_list(TEST_IMAGES_DIR, limit)}
-
-
-@router.get("/api/generate/cache/index")
-def list_cache_index() -> dict[str, Any]:
-    """当前 session 加密磁盘 cache 里所有 entry 的索引（save_test_images=false
-    时前端历史栏唯一来源）。
-
-    server 进程 SessionCache 维护活跃 entry → 这里直接 dump；按 createdAt
-    desc 排。entry 里的 params snapshot 是图入 cache 时跟 PNG bytes 一起塞
-    进加密 payload header 的那份，进程死了一起没。
-
-    刷新 / 切路由都拉这里 → 前端零持久化层，零脏数据可能。
-    """
-    from ...services.inference import disk_cache as generate_cache
-    try:
-        return {"entries": generate_cache.list_index()}
-    except RuntimeError:
-        # cache 尚未 init（理论上不该发生，lifespan startup 已建好）
-        return {"entries": []}
 
 
 def _resolve_disk_png(date_str: str, mode: str, filename: str) -> Path:
@@ -1079,47 +810,3 @@ def get_disk_xy_thumb(
             "Cache-Control": "public, max-age=86400",
         },
     )
-
-
-@router.delete("/api/generate/disk/{date_str}/xy/{folder}")
-def delete_disk_xy_folder(date_str: str, folder: str) -> dict[str, Any]:
-    """删除整个 XY 文件夹（composite + 所有 cell）。
-
-    历史栏点 × 时调；返回 OK + 是否真删（noop=True 表示文件夹本不存在）。
-    """
-    if not _DATE_RE.match(date_str):
-        raise HTTPException(400, "invalid date")
-    if not _XY_FOLDER_RE.match(folder):
-        raise HTTPException(400, "invalid folder")
-    base = (TEST_IMAGES_DIR / date_str / "xy" / folder).resolve()
-    test_root = TEST_IMAGES_DIR.resolve()
-    if not str(base).startswith(str(test_root)):
-        raise HTTPException(400, "path escapes base dir")
-    if not base.is_dir():
-        return {"ok": True, "noop": True}
-    try:
-        shutil.rmtree(base)
-    except OSError as e:
-        raise HTTPException(500, f"delete failed: {e}")
-    history_index.remove_entry(TEST_IMAGES_DIR, date_str, "xy", folder)
-    return {"ok": True, "noop": False}
-
-
-@router.delete("/api/generate/disk/{date_str}/{mode}/{filename}")
-def delete_disk_image(date_str: str, mode: str, filename: str) -> dict[str, Any]:
-    """删除落盘单文件测试图（single 模式 / admin 清 legacy XY 平铺文件）。
-
-    XY 模式新布局走 `delete_disk_xy_folder`；这条路由保留主要是 single
-    与 legacy flat XY 清理。注册顺序在 XY folder DELETE 之后 —— 否则 3 段通配
-    会先吞 `xy/<folder>` 路径（FastAPI 按注册顺序匹配）。
-    返回 OK + 是否真删（noop=True 表示文件本不存在）。安全校验同 image / thumb。
-    """
-    path = _resolve_disk_png(date_str, mode, filename)
-    if not path.is_file():
-        return {"ok": True, "noop": True}
-    try:
-        path.unlink()
-    except OSError as e:
-        raise HTTPException(500, f"delete failed: {e}")
-    history_index.remove_entry(TEST_IMAGES_DIR, date_str, mode, filename)
-    return {"ok": True, "noop": False}

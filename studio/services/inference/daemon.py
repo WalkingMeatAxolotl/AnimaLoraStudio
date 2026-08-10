@@ -63,8 +63,8 @@ class _ActiveTask:
     # → submit_task 读出来存这里 → _handle_image_done 交 generate_storage 处置
     #（on=落盘+记 generate_images；off=只记 cache 台账）
     save_to_disk: bool = False
-    # 前端构造的 GenerateParamsSnapshot dict；image_done 时跟 PNG bytes 一起
-    # 塞进加密 cache payload header，list_index 时返回给前端历史栏回填用。
+    # 前端构造的 GenerateParamsSnapshot dict；image_done 时交 generate_storage
+    # 注入 PNG（save=on）/ 塞加密 cache payload header（temp，文件自包含）。
     # 走 config.json 透传：路由 → supervisor → daemon.submit_task → 这里。
     params_snapshot: dict[str, Any] = field(default_factory=dict)
     # 'single' | 'xy'；前端历史栏分组用，从 params_snapshot.mode 派生
@@ -640,8 +640,6 @@ class InferenceDaemon:
                 generate_cache.cache_image(
                     active.task_id, filename, data,
                     snapshot=active.params_snapshot,
-                    mode=active.mode,
-                    xy_info=xy_info,
                 )
                 generate_storage.handle_image_done(
                     active.task_id, filename, data, active.params_snapshot,
