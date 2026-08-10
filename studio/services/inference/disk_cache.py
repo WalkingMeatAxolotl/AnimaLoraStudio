@@ -32,8 +32,9 @@ Crypto 选择：纯 stdlib `hashlib.shake_128` keystream + XOR。SHAKE-128 是 S
 需要 integrity——扫盘看 magic bytes / entropy / CNN 分类的就够了。零额外
 依赖避开了 `cryptography` 库的 DLL 兼容麻烦。
 
-API 参考 cache.py（被本模块替代）：put + get_image + list_filenames +
-drop_task + clear_all + configure + list_index（新）。
+API：put + get_image + list_filenames + drop_task + drop_image + clear_all +
+configure。出图时间线单源后本模块只是图字节存储 —— 列表与参数的权威在
+tasks 表台账（generate_params / generate_images）。
 
 """
 from __future__ import annotations
@@ -62,17 +63,16 @@ _SNAPSHOT_LEN_HEADER = 4  # big-endian uint32
 
 @dataclass
 class _Entry:
-    """index 里一条 entry —— 文件路径 + 内存里的 snapshot 缓存 + 大小。"""
+    """index 里一条 entry —— 文件路径 + 大小 + LRU 键。
+
+    出图时间线单源后 cache 只是图字节存储（列表/参数权威在 tasks 台账），
+    旧 list_index 聚合用的 mode / xy_info 字段已随之退役。
+    """
     file_path: Path
-    snapshot: dict[str, Any]
     created_at: float
     size: int  # 文件加密后的字节数（含 nonce + payload）
-    mode: str  # 'single' | 'xy'，前端历史栏分组用
     task_id: int
     filename: str
-    # XY 模式时 daemon image_done 事件里带的 {xi, yi, xv, yv}；single 模式 None。
-    # list_index 重建 xyMeta.samples 给前端 PreviewXYGrid 用。
-    xy_info: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -110,17 +110,12 @@ class SessionCache:
         filename: str,
         data: bytes,
         snapshot: dict[str, Any],
-        *,
-        mode: str = "single",
-        xy_info: Optional[dict[str, Any]] = None,
     ) -> None:
         """daemon image_done 时调；同 (task_id, filename) 重复则覆盖（删旧文件 + 写新）。
 
         snapshot：前端构造的 GenerateParamsSnapshot dict，跟 PNG 绑死塞进加密
-        payload header；list_index() 也用同一份返回给前端，避免双 source。
-
-        xy_info：XY 模式时 daemon image_done 携带的 {xi, yi, xv, yv}，重建
-        PreviewXYGrid 用；single 模式 None。
+        payload header（文件自包含设计不动）；运行时参数权威在 tasks 台账，
+        header 里这份只在文件层面保持自解释。
         """
         snap_bytes = json.dumps(snapshot, ensure_ascii=False).encode("utf-8")
         if len(snap_bytes) >= 2**32:
@@ -149,13 +144,10 @@ class SessionCache:
                 _safe_unlink(old.file_path)
             entry = _Entry(
                 file_path=file_path,
-                snapshot=snapshot,
                 created_at=time.time(),
                 size=len(blob),
-                mode=mode,
                 task_id=task_id,
                 filename=filename,
-                xy_info=xy_info,
             )
             self._index[key] = entry
             self._bytes_total += entry.size
@@ -194,47 +186,6 @@ class SessionCache:
         with self._lock:
             return sorted(fn for (tid, fn) in self._index if tid == task_id)
 
-    def list_index(self) -> list[dict[str, Any]]:
-        """前端历史栏拉 /api/generate/cache/index 用。
-
-        按 task_id 聚合 —— 同 task 的多张图（XY 一格一张）合成一条 history
-        entry。返回结构对齐前端 CacheEntry adapter：
-            { id, taskId, mode, createdAt (ms), filenames[], params, samples? }
-        其中 samples 仅 mode=xy 时存在，列 [{filename, xy:{xi,yi,xv,yv}}]
-        给 PreviewXYGrid 重建网格用。createdAt 取该 task 最新 entry 的时间。
-        按 createdAt desc 排（最新在前）。
-        """
-        with self._lock:
-            entries = list(self._index.values())
-
-        by_task: dict[int, list[_Entry]] = collections.defaultdict(list)
-        for e in entries:
-            by_task[e.task_id].append(e)
-
-        out: list[dict[str, Any]] = []
-        for task_id, group in by_task.items():
-            group_sorted = sorted(group, key=lambda e: e.filename)
-            first = group_sorted[0]
-            latest_created = max(e.created_at for e in group)
-            item: dict[str, Any] = {
-                "id": f"cache:{task_id}",
-                "taskId": task_id,
-                "mode": first.mode,
-                "createdAt": int(latest_created * 1000),
-                "filenames": [e.filename for e in group_sorted],
-                "params": first.snapshot,
-            }
-            if first.mode == "xy":
-                item["samples"] = [
-                    {"filename": e.filename, "xy": e.xy_info}
-                    for e in group_sorted
-                    if e.xy_info is not None
-                ]
-            out.append(item)
-
-        out.sort(key=lambda x: x["createdAt"], reverse=True)
-        return out
-
     def drop_task(self, task_id: int) -> int:
         with self._lock:
             keys = [k for k in self._index if k[0] == task_id]
@@ -243,6 +194,16 @@ class SessionCache:
                 self._bytes_total -= entry.size
                 _safe_unlink(entry.file_path)
             return len(keys)
+
+    def drop_image(self, task_id: int, filename: str) -> bool:
+        """剔单张图(generate_storage 落盘成功后清中转副本用)。"""
+        with self._lock:
+            entry = self._index.pop((task_id, filename), None)
+            if entry is None:
+                return False
+            self._bytes_total -= entry.size
+            _safe_unlink(entry.file_path)
+            return True
 
     def total_count(self) -> int:
         with self._lock:
@@ -357,15 +318,9 @@ def cache_image(
     filename: str,
     data: bytes,
     snapshot: Optional[dict[str, Any]] = None,
-    *,
-    mode: str = "single",
-    xy_info: Optional[dict[str, Any]] = None,
 ) -> None:
     """daemon image_done 时调（替代旧 cache.cache_image）。snapshot 缺省 {}。"""
-    get_session().put(
-        task_id, filename, data, snapshot or {},
-        mode=mode, xy_info=xy_info,
-    )
+    get_session().put(task_id, filename, data, snapshot or {})
 
 
 def get_image(task_id: int, filename: str) -> Optional[bytes]:
@@ -376,12 +331,12 @@ def list_filenames(task_id: int) -> list[str]:
     return get_session().list_filenames(task_id)
 
 
-def list_index() -> list[dict[str, Any]]:
-    return get_session().list_index()
-
-
 def drop_task(task_id: int) -> int:
     return get_session().drop_task(task_id)
+
+
+def drop_image(task_id: int, filename: str) -> bool:
+    return get_session().drop_image(task_id, filename)
 
 
 def total_count() -> int:

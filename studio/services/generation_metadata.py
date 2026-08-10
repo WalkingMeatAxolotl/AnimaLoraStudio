@@ -14,7 +14,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from ..infrastructure.paths import STUDIO_DATA, task_dir
 
@@ -139,6 +139,33 @@ def file_sha256(path_value: str | Path) -> str | None:
         except OSError:
             logger.warning("write generation resource hash cache failed", exc_info=True)
         return result
+
+
+def prewarm_resource_hashes(
+    paths: list[str | Path | None],
+) -> Optional[threading.Thread]:
+    """后台线程预热资源 hash 缓存(出图落盘的 a1111/Civitai 块要用)。
+
+    首次 hash 一个 13-26GB 底模是分钟级全文件读;enqueue 时预热,模型加载
+    (30-60s,同样顺序读整个文件、顺带填热 OS 文件缓存)期间并行完成,首图
+    落盘时 file_sha256 几乎必然缓存命中 —— storage executor 不再有分钟级
+    尾部场景(与 A1111 的 cache.json 预热同思路)。失败静默:hash 是
+    best-effort 元数据。返回线程句柄供测试 join;无待热文件返 None。
+    """
+    todo = [Path(p) for p in paths if p]
+    if not todo:
+        return None
+
+    def _run() -> None:
+        for p in todo:
+            try:
+                file_sha256(p)
+            except Exception:
+                logger.debug("hash prewarm failed for %s", p, exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True, name="hash-prewarm")
+    t.start()
+    return t
 
 
 def _effective_prompt_from_snapshot(params: dict[str, Any]) -> str:

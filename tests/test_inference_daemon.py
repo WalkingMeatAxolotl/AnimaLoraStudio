@@ -113,16 +113,30 @@ def test_daemon_starts_and_reaches_idle(mock_daemon_script: Path) -> None:
     assert d.state == STATE_STOPPED
 
 
-def test_submit_task_runs_to_done(mock_daemon_script: Path, tmp_path: Path) -> None:
+def _isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> int:
+    """tmp DB(最新 schema)+ 一条 generate task 行。
+    出图时间线单源后 image_done 会写 tasks.generate_images 台账。"""
+    monkeypatch.setattr(db, "STUDIO_DB", tmp_path / "studio.db")
+    db.init_db()
+    with db.connection_for() as conn:
+        task_id = db.create_task(conn, name="generate", config_name="generate", priority=0)
+        db.update_task(conn, task_id, task_type="generate")
+    return task_id
+
+
+def test_submit_task_runs_to_done(
+    mock_daemon_script: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from studio.services.inference import disk_cache as generate_cache
 
     generate_cache.init(tmp_path / "cache")
+    task_id = _isolated_db(tmp_path, monkeypatch)
     d = InferenceDaemon(script_path=mock_daemon_script)
     d.start()
     events: list[dict[str, Any]] = []
     try:
         d.submit_task(
-            task_id=42, config={"prompts": ["a"]}, output_dir="/tmp/x",
+            task_id=task_id, config={"prompts": ["a"]}, output_dir="/tmp/x",
             on_event=events.append,
         )
         assert d.state == STATE_BUSY
@@ -139,38 +153,48 @@ def test_submit_task_runs_to_done(mock_daemon_script: Path, tmp_path: Path) -> N
     assert "done" in kinds
     # task_id 透传
     for e in events:
-        assert e.get("task_id") == 42
+        assert e.get("task_id") == task_id
 
     # commit 10：bytes 已入 server-side cache（mock daemon 推的是 b"FAKE-PNG" b64）
-    assert generate_cache.get_image(42, "fake.png") == b"FAKE-PNG"
+    assert generate_cache.get_image(task_id, "fake.png") == b"FAKE-PNG"
     # 转发给 callback 的事件不应该再带 image_b64（已被 reader 剥掉）
     image_done_events = [e for e in events if e.get("kind") == "image_done"]
     assert image_done_events
     for e in image_done_events:
         assert "image_b64" not in e
-    # 决策 #14：image_done 加 delivery 子字段；config 没 save_test_images_at_dispatch
-    # 时默认 'cache'
-    for e in image_done_events:
-        assert e.get("delivery") == "cache"
+        # 出图时间线单源：旧 delivery 字段已退役（前端不再参与写路径）
+        assert "delivery" not in e
+    # temp（save 关）：generate_images 台账同步记 {"cache": filename}
+    from studio.services import generate_storage
+    imgs = generate_storage.load_images(task_id)
+    assert imgs == [{"cache": "fake.png"}]
     generate_cache.clear_all()
 
 
-def test_submit_task_delivery_disk_when_save_to_disk_true(
-    mock_daemon_script: Path,
-    tmp_path: Path,
+def test_submit_task_save_to_disk_stores_and_drops_cache_copy(
+    mock_daemon_script: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """决策 #14 / #15：config 含 save_test_images_at_dispatch=True 时，
-    image_done event 的 delivery 字段是 'disk'。
-    """
+    """决策 #15 + 时间线单源：save_test_images_at_dispatch=True 时 server 直落盘
+    （generate_images 记 file 项），落盘成功后 cache 中转副本被 drop —— 旧双源
+    时代中转残留正是「刷新后列表翻倍」的根源。"""
+    from studio.services import generate_storage
     from studio.services.inference import disk_cache as generate_cache
 
+    from studio.services import generation_metadata as _meta
+
     generate_cache.init(tmp_path / "cache")
+    task_id = _isolated_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(generate_storage, "TEST_IMAGES_DIR", tmp_path / "test")
+    monkeypatch.setattr(
+        _meta, "manifest_path",
+        lambda tid: tmp_path / "tasks" / str(tid) / _meta.MANIFEST_FILENAME,
+    )
     d = InferenceDaemon(script_path=mock_daemon_script)
     d.start()
     events: list[dict[str, Any]] = []
     try:
         d.submit_task(
-            task_id=43,
+            task_id=task_id,
             config={"prompts": ["a"], "save_test_images_at_dispatch": True},
             output_dir="/tmp/x",
             on_event=events.append,
@@ -178,12 +202,22 @@ def test_submit_task_delivery_disk_when_save_to_disk_true(
         assert _wait_for(
             lambda: any(e.get("kind") == "done" for e in events), timeout=3
         ), f"events={events}"
+        # 落盘走单线程 executor（异步）：等台账出现 file 项
+        assert _wait_for(
+            lambda: any("file" in i for i in generate_storage.load_images(task_id)),
+            timeout=5,
+        ), f"images={generate_storage.load_images(task_id)}"
     finally:
         d.stop()
-    image_done_events = [e for e in events if e.get("kind") == "image_done"]
-    assert image_done_events
-    for e in image_done_events:
-        assert e.get("delivery") == "disk"
+    imgs = generate_storage.load_images(task_id)
+    assert imgs[0]["src"] == "fake.png"
+    assert imgs[0]["file"].endswith("/single/single image 1.png")
+    disk_path = generate_storage.find_disk_file(task_id, "fake.png")
+    assert disk_path is not None and disk_path.is_file()
+    # 中转副本已从 cache 剔除（sample 端点靠 find_disk_file fallback 供图）
+    assert _wait_for(
+        lambda: generate_cache.get_image(task_id, "fake.png") is None, timeout=3,
+    )
     generate_cache.clear_all()
 
 
