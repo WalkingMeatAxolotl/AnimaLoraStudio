@@ -310,14 +310,29 @@ def _set_generate_settings(monkeypatch: pytest.MonkeyPatch, **values: Any) -> No
     monkeypatch.setattr(secrets, "load", lambda: _Secrets())
 
 
+def _force_family(vdir: Path, family_id: str) -> None:
+    """把 version config 的 model_family 改掉（族条件门控测试用）。"""
+    import json
+
+    cfg_path = vdir / "config.json"
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw["model_family"] = family_id
+    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
+
+
 def test_block_swap_notice_is_logged_once_not_per_candidate(
     isolated, monkeypatch: pytest.MonkeyPatch, caplog,
 ) -> None:
-    """本函数每个候选走一遍；逐次打日志就是 200 个 checkpoint 打 200 行同样的话。"""
+    """本函数每个候选走一遍；逐次打日志就是 200 个 checkpoint 打 200 行同样的话。
+
+    两族现在都支持 block swap，用未知族触发「不支持」路径（supports_capability
+    对未知族保守拒绝——build_daemon_config 对族名只透传，全链路安全）。
+    """
     import logging
 
-    eval_generation._BLOCK_SWAP_NOTICED.discard("anima")
+    eval_generation._BLOCK_SWAP_NOTICED.discard("no_such_family")
     _, _, vdir, run = _run_for(isolated)
+    _force_family(vdir, "no_such_family")
     _set_generate_settings(monkeypatch, blocks_to_swap=14)
 
     with caplog.at_level(logging.INFO, logger="studio.services.eval_generation"):
@@ -334,21 +349,35 @@ def test_block_swap_notice_is_logged_once_not_per_candidate(
 def test_block_swap_is_dropped_for_families_without_the_capability(
     isolated, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回归：全局出图设置里的 blocks_to_swap 是为 krea2 调的，anima 不支持。
+    """回归：全局出图设置的 blocks_to_swap 喂给不支持的族，必须置 0。
 
     测试出图跑的是用户在那儿选的模型，评估跑的是这个 version 训练时那个底模 ——
-    两者的族可以不同。原样透传会让 daemon fail-fast（`model_family='anima' 不支持
-    block swap`），整个出图阶段每个候选都崩，最后 8 个候选全 failed。
+    两者的族可以不同。原样透传会让 daemon fail-fast（`model_family='X' 不支持
+    block swap`），整个出图阶段每个候选都崩，最后 8 个候选全 failed。anima 已
+    支持 block swap（本 PR），这里用未知族钉住门控机制本身。
     """
     _, _, vdir, run = _run_for(isolated)
+    _force_family(vdir, "no_such_family")
     _set_generate_settings(monkeypatch, blocks_to_swap=14, vram_policy="save_vram")
 
     cfg = eval_generation.build_daemon_config(run, vdir, output_dir=vdir / "out")
 
-    assert cfg["model_family"] == "anima"
+    assert cfg["model_family"] == "no_such_family"
     assert cfg["blocks_to_swap"] == 0
     # 非族条件的旋钮照常继承
     assert cfg["vram_policy"] == "save_vram"
+
+
+def test_block_swap_survives_for_anima(
+    isolated, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """anima 支持 block swap 后，评估出图同样透传全局层数。"""
+    _, _, vdir, run = _run_for(isolated)
+    _set_generate_settings(monkeypatch, blocks_to_swap=14)
+
+    cfg = eval_generation.build_daemon_config(run, vdir, output_dir=vdir / "out")
+    assert cfg["model_family"] == "anima"
+    assert cfg["blocks_to_swap"] == 14
 
 
 def test_block_swap_survives_for_a_family_that_supports_it(

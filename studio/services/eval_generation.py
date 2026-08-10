@@ -60,9 +60,9 @@ def _generate_settings(family_id: str) -> dict[str, Any]:
 
     这些是「怎么跑」而不是「跑什么」，评估和测试出图共用一套 —— 但**族条件的能力
     必须门控**：测试出图跑的是用户在那儿选的模型，评估跑的是这个 version 训练时
-    那个底模，两者的族可以不同。`blocks_to_swap` 只有 krea2 有
-    （`FAMILY_CAPABILITIES`），把为 krea2 调的层数原样喂给 anima，daemon 会
-    fail-fast 直接崩掉整个出图阶段。
+    那个底模，两者的族可以不同。`blocks_to_swap` 按 `FAMILY_CAPABILITIES` 的
+    `block_swap` 能力位门控——把层数喂给不支持的族，daemon 会 fail-fast 直接
+    崩掉整个出图阶段。
 
     读失败给保守默认，不让评估因为设置文件坏了跑不起来。
     """
