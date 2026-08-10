@@ -1547,6 +1547,31 @@ export interface GenerateRequest {
   params_snapshot?: Record<string, unknown> | null
 }
 
+/** GET /api/generate/timeline — 出图时间线（DB 单源，tasks 表台账）。
+ *  行 = 一次图片任务；图不在（temp 会话结束 / 文件手删）→ available=false，
+ *  前端显示「已释放」，params 仍可回填。 */
+export interface GenerateTimelineImage {
+  url: string
+  thumb_url?: string
+  xi?: number
+  yi?: number
+}
+export interface GenerateTimelineEntry {
+  task_id: number
+  status: string
+  /** Unix 秒（tasks.created_at） */
+  created_at: number
+  mode: 'single' | 'xy'
+  storage: 'disk' | 'temp'
+  /** GenerateParamsSnapshot dict（老行可能 null） */
+  params: Record<string, unknown> | null
+  images: GenerateTimelineImage[]
+  available: boolean
+  xy_folder?: string
+  /** 盘上有 composite 大图时给（下载 / 外站上传入口） */
+  composite_url?: string
+}
+
 /** GET /api/generate/cache/index — 当前 session 加密磁盘 cache 索引。
  *  server 端 SessionCache 按 task_id 聚合返回；前端转成 CacheEntry。 */
 export interface CacheGenerateHistoryEntry {
@@ -2775,6 +2800,11 @@ export const api = {
    *  server 重启 / SSE 断连 30s + LRU 后 entry 消失；刷新 / 切路由都拉这里。 */
   listCacheGenerateHistory: () =>
     req<{ entries: CacheGenerateHistoryEntry[] }>('/api/generate/cache/index'),
+  /** 出图时间线（DB 单源）：所有 generate 任务行，id desc 分页。 */
+  listGenerateTimeline: (limit = 500, offset = 0) =>
+    req<{ entries: GenerateTimelineEntry[]; total: number; offset: number }>(
+      `/api/generate/timeline?limit=${limit}&offset=${offset}`,
+    ),
   /** 查询测试 task 状态。 */
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
   /** 测试出图单张 URL（task 跑中或刚完成时拉；客户端断连 30s + LRU 后 404）。 */

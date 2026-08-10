@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ...paths import REPO_ROOT
+from .. import generate_storage
 from ..runtime import xformers as _xformers_svc
 from . import disk_cache as generate_cache
 
@@ -59,7 +60,8 @@ class _ActiveTask:
     on_event: EventCallback
     # 决策 #15：task 启动时冻结 secrets.generate.save_test_images，避免中途切开关
     # 导致一 task 内一半 cache 一半 disk。enqueueGenerate 写 cfg.save_test_images_at_dispatch
-    # → submit_task 读出来存这里 → _handle_image_done 决定 SSE delivery 子字段
+    # → submit_task 读出来存这里 → _handle_image_done 交 generate_storage 处置
+    #（on=落盘+记 generate_images；off=只记 cache 台账）
     save_to_disk: bool = False
     # 前端构造的 GenerateParamsSnapshot dict；image_done 时跟 PNG bytes 一起
     # 塞进加密 cache payload header，list_index 时返回给前端历史栏回填用。
@@ -625,10 +627,10 @@ class InferenceDaemon:
         # commit 14：preview_step 含 base64 JPEG → 直接透传给 callback（不入 cache，
         #   前端 SSE 收到立刻 <img src="data:..."> 显示当前步预览；done/最终图
         #   会替换它）
-        # 决策 #14：image_done 加 `delivery: 'disk' | 'cache'` 子字段，前端按此
-        # 走 POST /api/generate/save 落盘（disk）or 直接 add CacheEntry（cache）。
-        # 仍走 cache 中转（持久模式下 cache 是落盘前的临时存放，前端落盘成功后
-        # 用户可手动删 cache 或等 LRU 自然剔）。
+        # 出图时间线 DB 单源：图先入 cache（live 显示走 sample 端点，保持现状），
+        # 处置闭环交 generate_storage —— save=on 排 executor 落盘 + 记
+        # generate_images + drop cache 中转副本；save=off 记 {"cache": fn} 台账。
+        # 前端不再参与写路径（旧 delivery 字段 / POST /api/generate/save 退役）。
         forward_msg = msg
         if kind == "image_done" and "image_b64" in msg and self._cache_images:
             filename = msg.get("filename") or ""
@@ -641,10 +643,14 @@ class InferenceDaemon:
                     mode=active.mode,
                     xy_info=xy_info,
                 )
+                generate_storage.handle_image_done(
+                    active.task_id, filename, data, active.params_snapshot,
+                    mode=active.mode, xy_info=xy_info,
+                    save_to_disk=active.save_to_disk,
+                )
             except Exception:
-                logger.exception("cache_image failed for %s", filename)
+                logger.exception("image_done handling failed for %s", filename)
             forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}
-            forward_msg["delivery"] = "disk" if active.save_to_disk else "cache"
 
         # done/error/canceled 先切状态，再回调 —— 让 callback 内查询 is_busy/state 时
         # 看到准确的 IDLE 状态（commit 13 daemon_state_changed 依赖这个顺序）

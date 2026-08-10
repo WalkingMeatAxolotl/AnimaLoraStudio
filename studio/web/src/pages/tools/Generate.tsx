@@ -29,7 +29,7 @@ import {
   transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './generate/paramsSnapshot'
-import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
+import { composeXYMatrix } from './generate/exportXY'
 import { useGenerateHistory } from './generate/useGenerateHistory'
 import {
   entryImageUrl,
@@ -380,50 +380,45 @@ export default function GeneratePage() {
     }
   }, [])
 
-  // 0.17 P-I：入库某条 generate。**每条 done 时各入各的，跟「当前显示哪张」解耦**
-  // （多任务下 currentTask 跟着 running 走，不会在每条 done 停留）。
-  // temp（默认 save_test_images=off）：server 在 image_done 已把图 + 参数写进加密 cache
-  //   → 只 refreshCache 拉新 index。
-  // disk（on）：用该 task 的定格 run（runsRef）+ samples 落盘。samplesOverride：显示
-  //   任务已有 live samples 时直接传，省一次 getMonitorState。
+  // task done 后收尾。写路径已全部在 server 端闭环（daemon image_done →
+  // generate_storage 落盘/记账），前端只剩两件事：
+  //   1. XY + save 开 → 用定格 run 现拼 composite POST 补传（决策 1：盘上仍要
+  //      有大图给外站上传；server 排 storage executor，天然等所有 cell 落完）。
+  //   2. refresh timeline 拉新行。
   const ingestGenerateTask = useCallback(async (taskId: number, samplesOverride?: typeof samples) => {
     if (ingestedRef.current.has(taskId)) return
-    const sec = await api.getSecrets().catch(() => null)
-    const saveToDisk = !!sec?.generate?.save_test_images
-    if (!saveToDisk) {
-      ingestedRef.current.add(taskId)
-      await historyRef.current.refreshCache()
-      return
-    }
-    const runSnap = runsRef.current.get(taskId)
-    const snapMode = runSnap?.snapshot.mode
-    if (snapMode !== 'single' && snapMode !== 'xy') return  // compare / 缺 run → 无法重建，不标记（留后重试）
-    let s = samplesOverride ?? []
-    if (s.length === 0) {
-      const st = await api.getMonitorState(taskId).catch(() => null)
-      s = (st?.samples as typeof samples | undefined) ?? []
-    }
-    if (s.length === 0) return
     ingestedRef.current.add(taskId)
-    const params = runSnap!.snapshot
-    const filenames = s.map((x) => x.path.split(/[\\/]/).pop() ?? '').filter(Boolean)
-    if (snapMode === 'single') {
-      await saveSingleSamples(taskId, filenames, params)
-    } else {
-      const xv = axisView(runSnap!.xDraft)
-      const yv = runSnap!.yDraft ? axisView(runSnap!.yDraft) : null
-      const xySamples = s
-        .filter((x): x is typeof x & { xy: NonNullable<typeof x.xy> } => x.xy != null)
-        .map((x) => ({ path: x.path, xy: { xi: x.xy.xi, yi: x.xy.yi } }))
-      await saveXYMatrix({
-        samples: xySamples,
-        taskId,
-        xLabels: xv.values.map((v) => axisText(xv, v)),
-        yLabels: yv ? yv.values.map((v) => axisText(yv, v)) : null,
-      }, params, {
-        x: { axis: runSnap!.xDraft.axis, values: xv.values },
-        y: yv ? { axis: runSnap!.yDraft!.axis, values: yv.values } : null,
-      })
+    try {
+      const runSnap = runsRef.current.get(taskId)
+      if (runSnap?.snapshot.mode === 'xy') {
+        const sec = await api.getSecrets().catch(() => null)
+        if (sec?.generate?.save_test_images) {
+          let s = samplesOverride ?? []
+          if (s.length === 0) {
+            const st = await api.getMonitorState(taskId).catch(() => null)
+            s = (st?.samples as typeof samples | undefined) ?? []
+          }
+          const xySamples = s
+            .filter((x): x is typeof x & { xy: NonNullable<typeof x.xy> } => x.xy != null)
+            .map((x) => ({ path: x.path, xy: { xi: x.xy.xi, yi: x.xy.yi } }))
+          if (xySamples.length > 0) {
+            const xv = axisView(runSnap.xDraft)
+            const yv = runSnap.yDraft ? axisView(runSnap.yDraft) : null
+            const blob = await composeXYMatrix({
+              samples: xySamples,
+              taskId,
+              xLabels: xv.values.map((v) => axisText(xv, v)),
+              yLabels: yv ? yv.values.map((v) => axisText(yv, v)) : null,
+            })
+            const fd = new FormData()
+            fd.append('image', blob, 'xy plot.png')
+            await fetch(`/api/generate/${taskId}/xy-composite`, { method: 'POST', body: fd })
+          }
+        }
+      }
+    } catch {
+      // composite 补传 best-effort：失败不影响时间线（cells 已由 server 落盘），
+      // 用户仍可从回看条目导出现拼下载。
     }
     await historyRef.current.refresh()
   }, [])
@@ -458,12 +453,24 @@ export default function GeneratePage() {
     void refreshLiveGenerates()
   }, [refreshBlockingTask, refreshLiveGenerates])
 
+  // generate_images_updated 去抖：XY 25 格逐格落盘会连发事件，300ms 合并成一次拉取。
+  const imagesUpdatedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // SSE：task_state_changed 触发 task refresh；monitor_state_updated 推 sample 列表。
   useEventStream((evt) => {
     if (evt.type === 'task_state_changed') {
       void refreshBlockingTask()
       // 0.17 P-I：显示态 + 排队列表 + 逐条入库统一由 refreshLiveGenerates 推进。
       void refreshLiveGenerates()
+    }
+    if (evt.type === 'generate_images_updated') {
+      // 落盘 executor 异步完成（首次 hash 大模型时可达分钟级）→ 增量刷时间线，
+      // 「已释放」占位自动变缩略图。
+      if (imagesUpdatedTimerRef.current) clearTimeout(imagesUpdatedTimerRef.current)
+      imagesUpdatedTimerRef.current = setTimeout(() => {
+        imagesUpdatedTimerRef.current = null
+        void historyRef.current.refresh()
+      }, 300)
     }
     const tid = taskIdRef.current
     if (tid == null) return
@@ -529,14 +536,16 @@ export default function GeneratePage() {
     setHistoryOverride(entry)  // 先切图（同步），sidebar 回填随 ckpts 解析异步补上
     // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；现在 async：
     // LoRA 解析按需拉对应版本 ckpts（懒级联），不依赖 mount 全量列表。老 entry
-    // 缺 params 会走 catch 兜底（snap.loras 等访问报错 → 不回填，仅切图）。
+    // 缺 params → 不回填，仅切图（entry.released 时也常见：图没了参数还在的
+    // 反例——参数也没了的老行）。
+    if (!entry.params) return
     void (async () => {
     let applied
     try {
       const projects = await catalog.loadProjects()
       const projIds = new Set(projects.map((p) => p.id))
       applied = await applySnapshot(
-        entry.params,
+        entry.params!,
         async (snap) => {
           if (snap.project_id == null || snap.version_id == null) {
             return resolveLoraFromCkpts(snap, [])
@@ -1116,11 +1125,16 @@ export default function GeneratePage() {
               {/* 进度条已上移到页面 header 下（全宽细线），不再在结果卡内。 */}
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
-                  {historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
-                    /* XY 回看 (cache / disk 共用)：per-cell 信息齐 → PreviewXYGrid
-                       cache 时 taskId 是真 task id（GridCell fallback 走 cache URL）；
-                       disk 时 server 已给 imageUrl，taskId 走 -1 sentinel（不会被用到）。
-                       disk 时多传 compositeUrl → 导出 PNG 走文件下载，不再 re-compose */
+                  {historyOverride.released || historyOverride.images.length === 0 ? (
+                    /* 已释放：图不可取（temp 会话结束 / 文件手删），参数已回填。 */
+                    <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                      {t('generate.releasedHint')}
+                    </div>
+                  ) : historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
+                    /* XY 回看：per-cell 信息齐 → PreviewXYGrid。imageUrl server
+                       已拼好（disk / temp 统一）；taskId 供 GridCell fallback
+                       （sample 端点带落盘 fallback，两边都能通）。compositeUrl
+                       盘上有 composite 时给 → 导出走文件下载，不再 re-compose */
                     <PreviewXYGrid
                       samples={historyOverride.xyMeta.samples.map((s) => ({
                         path: s.path,
@@ -1130,7 +1144,7 @@ export default function GeneratePage() {
                         },
                         imageUrl: s.imageUrl,
                       }))}
-                      taskId={historyOverride.source === 'cache' ? historyOverride.taskId : -1}
+                      taskId={historyOverride.taskId}
                       xAxis={axisView({
                         axis: historyOverride.xyMeta.xAxis as never,
                         raw: historyOverride.xyMeta.xValues.join(', '),
@@ -1143,11 +1157,10 @@ export default function GeneratePage() {
                       }) : null}
                       onCellClick={undefined /* 历史回看不允许选 cell 进 compare */}
                       selectedIndices={[]}
-                      compositeUrl={historyOverride.source === 'disk' ? historyOverride.imageUrl : undefined}
+                      compositeUrl={historyOverride.compositeUrl}
                     />
                   ) : (
-                    /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single
-                       → 单图视图（内嵌缩放平移；ZoomableImage 自带视口样式 + readout） */
+                    /* single / legacy XY（无 xyMeta）→ 单图视图 */
                     <div className="flex-1 min-h-0 w-full">
                       <ZoomableImage
                         key={historyOverride.id}
@@ -1156,13 +1169,11 @@ export default function GeneratePage() {
                       />
                     </div>
                   )}
-                  {/* 单图视图不再显示 filename footer（"single image N" 与
-                      ZoomableImage readout 重复）；XY 网格保留 folder / 任务号
-                      作批次标识。0.17 P-I：删「返回当前」——统一时间线后回到
-                      实时点右栏 running 项即可。 */}
-                  {historyOverride.source === 'disk' && historyOverride.xyMeta && (
+                  {/* XY 网格保留 folder 作批次标识；单图 filename 与
+                      ZoomableImage readout 重复，不再显示。 */}
+                  {historyOverride.xyMeta && historyOverride.xyFolder && (
                     <div className="text-xs text-fg-tertiary shrink-0">
-                      {historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, '')}
+                      {historyOverride.xyFolder}
                     </div>
                   )}
                 </div>

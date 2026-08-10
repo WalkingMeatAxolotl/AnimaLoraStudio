@@ -50,6 +50,7 @@ from ...domain.common import supports_capability
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
 from ...services import generate_history_index as history_index
+from ...services import generate_storage as storage
 from ...services.generate_history_index import (
     DATE_RE as _DATE_RE,
     SCHEMA_VERSION,
@@ -102,53 +103,16 @@ _DISK_MODES = ("single", "xy")
 _PNG_NAME_SAFE_RE = re.compile(r"^[a-zA-Z0-9 ._-]+\.png$")
 
 
-def _next_image_index(dir_: Path, mode: str) -> int:
-    """扫描 dir 下当前 mode 的 PNG 文件，返回下一个 1-based 序号。
-
-    决策 #11：无并发跑图场景，不做 O_EXCL / 锁；序号扫 max+1 + atomic 写即可。
-    决策 #6：v2 命名 1-based（"single image 1" 比 0 直观），v1 legacy `image_N`
-    若同目录混存按合并扫一组取 max+1。
-    """
-    if not dir_.is_dir():
-        return 1
-    rx_v2 = _V2_SINGLE_RE if mode == "single" else _V2_XY_RE
-    max_n = 0
-    for p in dir_.iterdir():
-        if not p.is_file():
-            continue
-        m_v2 = rx_v2.match(p.name)
-        m_v1 = _V1_NAME_RE.match(p.name)
-        if m_v2:
-            max_n = max(max_n, int(m_v2.group(1)))
-        elif m_v1:
-            # v1 legacy 0-based；映射到 v2 编号空间 +1 避免冲突
-            max_n = max(max_n, int(m_v1.group(1)) + 1)
-    return max_n + 1
-
-
-def _next_xy_folder_index(xy_dir: Path) -> int:
-    """XY 模式下一个文件夹 1-based 序号。
-
-    扫两个空间防撞：
-    - 新格式子文件夹 `xy plot N/`（_XY_FOLDER_RE）
-    - legacy 平铺文件 `xy plot N.png`（_V2_XY_RE） —— PR #245 早期落盘的，
-      虽然不会出现在 history 但残留磁盘上时不能复用编号
-
-    决策 #11：单用户无并发跑图，不做锁；扫描 + atomic mkdir 即可。
-    """
-    if not xy_dir.is_dir():
-        return 1
-    max_n = 0
-    for p in xy_dir.iterdir():
-        if p.is_dir():
-            m = _XY_FOLDER_RE.match(p.name)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-        elif p.is_file():
-            m = _V2_XY_RE.match(p.name)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-    return max_n + 1
+# 命名序号 / 原子写 / PNG 注入 / server-side enrich 已下沉 services.generate_storage
+#（出图时间线 DB 单源:server 直落闭环与 /save 端点共用同一份实现;/save 端点
+# 前端已不再调用,PR-B 退役)。alias 保持本模块内既有调用点 / 测试引用不变。
+_next_image_index = storage.next_image_index
+_next_xy_folder_index = storage.next_xy_folder_index
+_atomic_write_png = storage.atomic_write_png
+_format_a1111_parameters = storage.format_a1111_parameters
+_inject_png_metadata = storage.inject_png_metadata
+_enrich_params_server_side = storage.enrich_params_server_side
+_build_external_metadata_safe = storage._build_external_metadata_safe
 
 
 def _cleanup_xy_tmp_folders() -> None:
@@ -498,6 +462,15 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     from ...services.inference import disk_cache as generate_cache
     data = generate_cache.get_image(task_id, filename)
     if data is None:
+        # 落盘 fallback:save=on 时图落盘成功后 cache 中转副本即被 drop
+        #（generate_storage 闭环),live 显示 / composite 拼图仍按 daemon
+        # filename 走本端点 → 按台账 src 反查磁盘文件。
+        disk_path = storage.find_disk_file(task_id, filename)
+        if disk_path is not None:
+            return FileResponse(
+                disk_path, media_type="image/png",
+                headers={"Cache-Control": "no-store"},
+            )
         raise NotFoundError(
             "Image not found", code="image.not_found",
             details={"task_id": task_id, "filename": filename}, http_status=404,
@@ -517,156 +490,6 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
 # SCHEMA_VERSION 移到 services.generate_history_index（顶部 import 回来）
 
 
-def _format_a1111_parameters(
-    params: dict[str, Any], external: dict[str, Any] | None = None
-) -> str:
-    """组装 a1111 兼容的 `parameters` tEXt 块（ComfyUI / WebUI / Civitai 等通用）。
-
-    格式：
-        <prompt> [<lora:name:scale> ...]
-        Negative prompt: <neg>
-        Steps: N, Sampler: ..., Schedule type: ..., CFG scale: N, Seed: N, Size: WxH
-
-    LoRA 用 <lora:basename-without-ext:scale> 语法（a1111/ComfyUI 标准）。
-    xy_draft / dataset_pick 的 UI 上下文不入此块（a1111 没标准字段）；但实际送给
-    daemon 的合并 prompt 会从 task 私有档案写进第一行。
-    """
-    external = external or {}
-    prompts = params.get("prompts") or [""]
-    prompt = external.get("prompt")
-    if prompt is None:
-        prompt = prompts[0] if isinstance(prompts, list) else str(prompts)
-    prompt = str(prompt)
-    loras = external.get("loras") or params.get("loras") or []
-    lora_tags: list[str] = []
-    for lo in loras:
-        if not isinstance(lo, dict):
-            continue
-        name = str(lo.get("name") or "").rsplit(".", 1)[0]  # 去 .safetensors
-        if not name:
-            continue
-        scale = lo.get("scale", 1.0)
-        lora_tags.append(f"<lora:{name}:{scale}>")
-    if lora_tags:
-        prompt = f"{prompt} {' '.join(lora_tags)}".strip()
-
-    neg = params.get("negative_prompt", "")
-    width = params.get("width", 0)
-    height = params.get("height", 0)
-    parts = [
-        f"Steps: {params.get('steps', '')}",
-        f"Sampler: {params.get('sampler_name', 'er_sde')}",
-        f"Schedule type: {params.get('scheduler', 'simple')}",
-        f"CFG scale: {params.get('cfg_scale', '')}",
-        f"Seed: {params.get('seed', '')}",
-        f"Size: {width}x{height}",
-    ]
-    model_family = external.get("model_family") or params.get("model_family")
-    if model_family:
-        parts.append(f"Model family: {model_family}")
-    text_encoder = external.get("text_encoder") or params.get("text_encoder")
-    if text_encoder:
-        parts.append(f"Text encoder: {text_encoder}")
-
-    hashes: dict[str, str] = {}
-    model = external.get("model")
-    if isinstance(model, dict) and model.get("name"):
-        parts.append(f"Model: {model['name']}")
-        if model.get("hash"):
-            model_hash = str(model["hash"])
-            parts.append(f"Model hash: {model_hash}")
-            hashes["model"] = model_hash
-    vae = external.get("vae")
-    if isinstance(vae, dict) and vae.get("name"):
-        parts.append(f"VAE: {vae['name']}")
-        if vae.get("hash"):
-            vae_hash = str(vae["hash"])
-            parts.append(f"VAE hash: {vae_hash}")
-            hashes["vae"] = vae_hash
-
-    lora_hashes: list[str] = []
-    for lo in loras:
-        if not isinstance(lo, dict) or not lo.get("hash"):
-            continue
-        name = str(lo.get("name") or "").rsplit(".", 1)[0]
-        if not name:
-            continue
-        digest = str(lo["hash"])
-        lora_hashes.append(f"{name}: {digest}")
-        hashes[f"lora:{name}"] = digest
-    if lora_hashes:
-        parts.append(f'Lora hashes: "{", ".join(lora_hashes)}"')
-    if hashes:
-        parts.append(f"Hashes: {json.dumps(hashes, separators=(',', ':'))}")
-    parts.append("Software: AnimaLoraStudio")
-    return f"{prompt}\nNegative prompt: {neg}\n{', '.join(parts)}"
-
-
-def _inject_png_metadata(
-    raw: bytes,
-    params: dict[str, Any],
-    *,
-    mode: str,
-    external: dict[str, Any] | None = None,
-) -> bytes:
-    """注入 PNG tEXt 块到图：
-       - `anima_params` —— 结构化 JSON，**zTXt 压缩**（决策 #17），本程序回填用
-       - `parameters`   —— a1111 兼容文本（决策 #7：xy **不写**，矩阵图单图拖
-         进 a1111 参数语义对不上）；仅 single 模式写
-
-    失败返回原 bytes（不阻塞落盘主流程）。
-    """
-    try:
-        from PIL import Image, PngImagePlugin
-        img = Image.open(io.BytesIO(raw))
-        info = PngImagePlugin.PngInfo()
-        # zip=True → zTXt 压缩块（PIL 9+），XY cells[] 时 anima_params 可能 6KB+，
-        # 压缩后通常 1-2KB，a1111 不识别 anima_params 反正会跳过
-        info.add_text("anima_params", json.dumps(params, ensure_ascii=False), zip=True)
-        if mode == "single":
-            info.add_text("parameters", _format_a1111_parameters(params, external))
-        out = io.BytesIO()
-        img.save(out, format="PNG", pnginfo=info)
-        return out.getvalue()
-    except Exception:
-        return raw
-
-
-# PNG anima_params 读取（_read_png_anima_params 等）与 v1→v2 迁移移到
-# services.generate_history_index —— 索引服务是唯一消费方。
-
-
-def _enrich_params_server_side(
-    params: dict[str, Any], *, task_id: int | None, mode: str
-) -> dict[str, Any]:
-    """server 端补全 params 的服务端信息（避免前端伪造 / 漏字段）。
-
-    - `schema_version` 强制覆盖为当前版本
-    - `created_at` 落盘时刻（Unix 秒）
-    - `task_id` 来自 enqueue（前端不传 / 不可信任）
-    - `mode` 来自路由参数（前端不传）
-    """
-    params = dict(params)
-    params["schema_version"] = SCHEMA_VERSION
-    params["created_at"] = time.time()
-    if task_id is not None:
-        params["task_id"] = int(task_id)
-    params["mode"] = mode
-    return params
-
-
-def _atomic_write_png(target: Path, raw: bytes) -> None:
-    """原子写 PNG：写 tmp + os.replace（决策 #11 crash safety）。
-
-    server 在写到一半挂掉时不会留半截 PNG 让 disk-history 扫到（半截 PNG 无
-    PNG IEND chunk，PIL 解析失败，disk-history 会跳过这条；但用户在文件管理
-    器里看到一半文件仍是噪音）。tmp + replace 让 target 出现的瞬间内容已完整。
-    """
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_bytes(raw)
-    os.replace(tmp, target)
-
-
 def _decode_params_field(raw: str, field: str) -> dict[str, Any]:
     """`params` / per-cell manifest 元素 → dict。失败抛 HTTPException 400."""
     try:
@@ -684,28 +507,6 @@ def _decode_params_field(raw: str, field: str) -> dict[str, Any]:
             details={"field": field}, http_status=400,
         )
     return decoded
-
-
-def _build_external_metadata_safe(
-    task_id: int | None,
-    params: dict[str, Any],
-    *,
-    source_filename: str,
-) -> dict[str, Any]:
-    """资源 metadata 是 best-effort；失败时仍允许按旧格式保存 PNG。"""
-    try:
-        return build_external_metadata(
-            task_id,
-            params,
-            source_filename=source_filename,
-        )
-    except Exception:
-        logger.warning(
-            "build Civitai resource metadata failed for task %s",
-            task_id,
-            exc_info=True,
-        )
-        return {}
 
 
 @router.post("/api/generate/save")
@@ -877,6 +678,186 @@ async def save_test_image(
         "composite": str(final_dir / _XY_COMPOSITE_NAME),
         "cells": [str(final_dir / p.name) for p in cell_paths],
     }
+
+
+# ---------------------------------------------------------------------------
+# 出图时间线（DB 单源）：tasks 表是唯一台账，行=一次图片任务。
+# 蓝图 tmp/generate-timeline-db-refactor-plan.md；替代 disk 扫盘 ∪ cache index
+# 双源（旧双源端点 PR-B 退役）。
+# ---------------------------------------------------------------------------
+
+
+def _disk_image_urls(rel: str) -> Optional[tuple[str, str]]:
+    """generate_images 的 file 相对路径 → (image_url, thumb_url)。
+
+    single: `<date>/single/<fn>`（3 段）；xy cell: `<date>/xy/<folder>/<fn>`
+    （4 段）。段数对不上（台账被外部改坏）→ None 跳过该图。
+    """
+    parts = rel.split("/")
+    if len(parts) == 3:
+        d, m, fn = parts
+        enc = quote(fn, safe="")
+        return (
+            f"/api/generate/disk/image/{d}/{m}/{enc}",
+            f"/api/generate/disk/thumb/{d}/{m}/{enc}?w=128",
+        )
+    if len(parts) == 4 and parts[1] == "xy":
+        d, _, folder, fn = parts
+        enc_f = quote(folder, safe="")
+        enc = quote(fn, safe="")
+        return (
+            f"/api/generate/disk/image/{d}/xy/{enc_f}/{enc}",
+            f"/api/generate/disk/thumb/{d}/xy/{enc_f}/{enc}?w=128",
+        )
+    return None
+
+
+def _timeline_entry(task: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """task 行 → 时间线 entry。failed/canceled 且无图的行不进时间线
+    （与旧右栏行为一致：失败任务不留条目；canceled 的 XY 部分图保留）。"""
+    from ...services.inference import disk_cache as generate_cache
+
+    status = str(task.get("status") or "")
+    raw_images = task.get("generate_images")
+    try:
+        images_raw = json.loads(raw_images) if raw_images else []
+    except json.JSONDecodeError:
+        images_raw = []
+    if not isinstance(images_raw, list):
+        images_raw = []
+    if status in ("failed", "canceled") and not images_raw:
+        return None
+
+    params: Optional[dict[str, Any]] = None
+    raw_params = task.get("generate_params")
+    if raw_params:
+        try:
+            decoded = json.loads(raw_params)
+            if isinstance(decoded, dict):
+                params = decoded
+        except json.JSONDecodeError:
+            pass
+
+    task_id = int(task["id"])
+    try:
+        cache_filenames = set(generate_cache.list_filenames(task_id))
+    except RuntimeError:
+        cache_filenames = set()
+
+    images: list[dict[str, Any]] = []
+    available = False
+    first = True
+    xy_folder: Optional[str] = None
+    for it in images_raw:
+        if not isinstance(it, dict):
+            continue
+        img: dict[str, Any] = {}
+        rel = it.get("file")
+        cache_fn = it.get("cache")
+        if rel:
+            urls = _disk_image_urls(str(rel))
+            if urls is None:
+                continue
+            img["url"], img["thumb_url"] = urls
+            parts = str(rel).split("/")
+            if len(parts) == 4:
+                xy_folder = parts[2]
+            if first:
+                available = (TEST_IMAGES_DIR / str(rel)).is_file()
+        elif cache_fn:
+            img["url"] = (
+                f"/api/generate/{task_id}/sample/{quote(str(cache_fn), safe='')}"
+            )
+            if first:
+                available = str(cache_fn) in cache_filenames
+        else:
+            continue
+        if "xi" in it:
+            img["xi"] = int(it.get("xi") or 0)
+            img["yi"] = int(it.get("yi") or 0)
+        images.append(img)
+        first = False
+
+    mode = str((params or {}).get("mode") or ("xy" if xy_folder else "single"))
+    entry: dict[str, Any] = {
+        "task_id": task_id,
+        "status": status,
+        "created_at": task.get("created_at"),
+        "mode": mode,
+        "storage": "disk" if any(i.get("file") for i in images_raw
+                                 if isinstance(i, dict)) else "temp",
+        "params": params,
+        "images": images,
+        "available": available,
+    }
+    if xy_folder is not None:
+        entry["xy_folder"] = xy_folder
+        composite_rel = None
+        for it in images_raw:
+            if isinstance(it, dict) and it.get("file"):
+                composite_rel = "/".join(
+                    str(it["file"]).split("/")[:3] + [_XY_COMPOSITE_NAME]
+                )
+                break
+        if composite_rel and (TEST_IMAGES_DIR / composite_rel).is_file():
+            urls = _disk_image_urls(composite_rel)
+            if urls:
+                entry["composite_url"] = urls[0]
+    return entry
+
+
+@router.get("/api/generate/timeline")
+def generate_timeline(limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    """出图时间线：所有 generate 任务行，`id DESC` 分页。
+
+    pending/running 行天然在内（enqueue 即有行，前端不再单独拉 live 队列合并）；
+    done 行按 generate_images 拼图 URL；图不在（temp 会话结束 / 用户手删文件）
+    → `available=false`，前端显示「已释放」，参数仍可回填。
+    """
+    limit = max(1, min(int(limit), 1000))
+    offset = max(0, int(offset))
+    with db.connection_for() as conn:
+        rows = db.list_tasks_page(
+            conn, statuses=(), types=("generate",), limit=limit, offset=offset,
+        )
+        total = db.count_tasks(conn, statuses=(), types=("generate",))
+    entries = [e for e in (_timeline_entry(t) for t in rows) if e is not None]
+    return {"entries": entries, "total": total, "offset": offset}
+
+
+@router.post("/api/generate/{task_id}/xy-composite")
+async def attach_xy_composite(
+    task_id: int, image: UploadFile = File(...),
+) -> dict[str, Any]:
+    """XY composite 补传（决策 1：盘上仍要有大图，外站上传用）。
+
+    前端在 task done 后用 composeXYMatrix 现拼 POST 一张；server 写入该 task
+    的 xy 文件夹（排 storage executor，天然序在所有 cell 落盘之后）。参数注入
+    取 DB generate_params，不信前端传参。composite 不入 generate_images
+    （应用内回看用 cells 渲网格）。
+    """
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task or task.get("task_type") != "generate":
+        raise NotFoundError(
+            "Task not found", code="task.not_found",
+            details={"task_id": task_id}, http_status=404,
+        )
+    raw = await image.read()
+    if not raw:
+        raise ValidationError(
+            "The uploaded image is empty",
+            code="generate.empty_image", http_status=400,
+        )
+    try:
+        target = await asyncio.to_thread(storage.attach_xy_composite, task_id, raw)
+    except LookupError:
+        raise ConflictError(
+            "Task has no xy folder on disk",
+            code="generate.no_xy_folder",
+            details={"task_id": task_id}, http_status=409,
+        )
+    return {"path": str(target)}
 
 
 # ---------------------------------------------------------------------------

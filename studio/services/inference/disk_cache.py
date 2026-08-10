@@ -244,6 +244,16 @@ class SessionCache:
                 _safe_unlink(entry.file_path)
             return len(keys)
 
+    def drop_image(self, task_id: int, filename: str) -> bool:
+        """剔单张图(generate_storage 落盘成功后清中转副本用)。"""
+        with self._lock:
+            entry = self._index.pop((task_id, filename), None)
+            if entry is None:
+                return False
+            self._bytes_total -= entry.size
+            _safe_unlink(entry.file_path)
+            return True
+
     def total_count(self) -> int:
         with self._lock:
             return len(self._index)
@@ -382,6 +392,10 @@ def list_index() -> list[dict[str, Any]]:
 
 def drop_task(task_id: int) -> int:
     return get_session().drop_task(task_id)
+
+
+def drop_image(task_id: int, filename: str) -> bool:
+    return get_session().drop_image(task_id, filename)
 
 
 def total_count() -> int:
