@@ -516,22 +516,31 @@ def run(ctx: TrainingContext) -> None:
                 if reg is not None:
                     loss = loss + reg
 
-            # NaN 检测：forward 出 NaN 时跳过本 micro-batch
-            if not torch.isfinite(loss):
-                logger.warning(f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过")
-                ctx.optimizer.zero_grad()
-                continue
-
             # 反向传播。尾组（len % grad_accum）不满时按实际 micro-batch 数归一，
             # 且 epoch 末批不满也 step —— 修尾批丢弃 + 跨 epoch 梯度泄漏（见 _accumulation_step）。
             group_size, is_group_end = _accumulation_step(batch_idx, dl_len, args.grad_accum)
-            loss = loss / group_size
-            if ctx.scaler is not None:
-                ctx.scaler.scale(loss).backward()
+
+            # NaN 检测：forward 出 NaN 时只跳过本 micro-batch 的 backward。
+            # 不 zero_grad —— 同一累积组内其它 micro-batch 已积累的正常梯度要保留；
+            # 也不跳过组尾结算 —— 否则组尾撞上 NaN 时整组梯度作废且 global_step 冻结。
+            loss_is_finite = bool(torch.isfinite(loss))
+            if not loss_is_finite:
+                logger.warning(
+                    f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过 backward"
+                )
             else:
-                loss.backward()
+                loss = loss / group_size
+                if ctx.scaler is not None:
+                    ctx.scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
             if is_group_end:
+                # 组内所有 micro-batch 都被跳过 → 无梯度可结算：不 step、不推进
+                # global_step（无梯度的 step 会污染 Prodigy 的 k / scheduler 进度；
+                # fp16 下 GradScaler 对空梯度组 step 会直接 assert 崩）。
+                if not any(p.grad is not None for p in ctx.trainable_params):
+                    continue
                 if ctx.scaler is not None:
                     ctx.scaler.unscale_(ctx.optimizer)
                 # NaN 梯度检测：跳过本次 update，清零继续
@@ -561,120 +570,123 @@ def run(ctx: TrainingContext) -> None:
                 # 自适应采样器：刷新采样分布；baseline 是 no-op
                 ctx.timestep_sampler.maybe_refresh(ctx.global_step)
 
-                # 记录 loss 历史
-                loss_val = float(loss.item() * group_size)
-                denoise_loss_val = (
-                    float(denoise_loss_log.item())
-                    if denoise_loss_log is not None else loss_val
-                )
-                sra_align_loss_val = (
-                    float(sra_align_loss_log.item())
-                    if sra_align_loss_log is not None else None
-                )
-                sra_weighted_loss_val = (
-                    float(sra_weighted_loss_log.item())
-                    if sra_weighted_loss_log is not None else None
-                )
-                epoch_loss_sum += loss_val
-                epoch_step_count += 1
-                if args.loss_curve_steps and len(ctx.loss_history) < args.loss_curve_steps:
-                    ctx.loss_history.append(loss_val)
+                # 组尾 micro-batch 非有限时跳过本 step 的记录/监控（loss_val 是 NaN，
+                # 写进 monitor JSON / wandb 会污染曲线）；step 结算本身已完成。
+                if loss_is_finite:
+                    # 记录 loss 历史
+                    loss_val = float(loss.item() * group_size)
+                    denoise_loss_val = (
+                        float(denoise_loss_log.item())
+                        if denoise_loss_log is not None else loss_val
+                    )
+                    sra_align_loss_val = (
+                        float(sra_align_loss_log.item())
+                        if sra_align_loss_log is not None else None
+                    )
+                    sra_weighted_loss_val = (
+                        float(sra_weighted_loss_log.item())
+                        if sra_weighted_loss_log is not None else None
+                    )
+                    epoch_loss_sum += loss_val
+                    epoch_step_count += 1
+                    if args.loss_curve_steps and len(ctx.loss_history) < args.loss_curve_steps:
+                        ctx.loss_history.append(loss_val)
 
-                # 更新进度显示
-                now = time.perf_counter()
-                optimizer_metrics = get_optimizer_monitor_metrics(ctx.optimizer)
-                lr = optimizer_metrics["lr"]
+                    # 更新进度显示
+                    now = time.perf_counter()
+                    optimizer_metrics = get_optimizer_monitor_metrics(ctx.optimizer)
+                    lr = optimizer_metrics["lr"]
 
-                # 更新训练监控面板
-                if ctx.monitor_server:
-                    try:
-                        from train_monitor import update_monitor
-                        monitor_metrics = dict(optimizer_metrics)
-                        monitor_metrics["denoise_loss"] = denoise_loss_val
-                        if sra_align_loss_val is not None:
-                            monitor_metrics["sra_align_loss"] = sra_align_loss_val
-                        if sra_weighted_loss_val is not None:
-                            monitor_metrics["sra_weighted_loss"] = sra_weighted_loss_val
-                        if sra_effective_weight_log is not None:
-                            monitor_metrics["sra_effective_weight"] = float(sra_effective_weight_log)
-                        update_monitor(
-                            loss=loss_val, lr=lr, epoch=epoch + 1,
-                            total_epochs=int(args.epochs or 0),
-                            step=ctx.global_step,
-                            total_steps=ctx.total_steps_display or ctx.total_steps,
-                            speed=ctx.speed_ema or 0,
-                            optimizer_metrics=monitor_metrics,
+                    # 更新训练监控面板
+                    if ctx.monitor_server:
+                        try:
+                            from train_monitor import update_monitor
+                            monitor_metrics = dict(optimizer_metrics)
+                            monitor_metrics["denoise_loss"] = denoise_loss_val
+                            if sra_align_loss_val is not None:
+                                monitor_metrics["sra_align_loss"] = sra_align_loss_val
+                            if sra_weighted_loss_val is not None:
+                                monitor_metrics["sra_weighted_loss"] = sra_weighted_loss_val
+                            if sra_effective_weight_log is not None:
+                                monitor_metrics["sra_effective_weight"] = float(sra_effective_weight_log)
+                            update_monitor(
+                                loss=loss_val, lr=lr, epoch=epoch + 1,
+                                total_epochs=int(args.epochs or 0),
+                                step=ctx.global_step,
+                                total_steps=ctx.total_steps_display or ctx.total_steps,
+                                speed=ctx.speed_ema or 0,
+                                optimizer_metrics=monitor_metrics,
+                            )
+                        except Exception:
+                            pass
+                    dt_step = now - step_start_time
+                    steps_per_sec = (1.0 / dt_step) if dt_step > 0 else 0.0
+                    ctx.speed_ema = steps_per_sec if ctx.speed_ema is None else (0.9 * ctx.speed_ema + 0.1 * steps_per_sec)
+                    log_payload: dict[str, Any] = {
+                        "train/loss": loss_val,
+                        "train/denoise_loss": denoise_loss_val,
+                        "train/lr": float(lr),
+                        "train/speed_it_s": float(ctx.speed_ema or 0),
+                    }
+                    if sra_align_loss_val is not None:
+                        log_payload["train/sra_align_loss"] = sra_align_loss_val
+                    if sra_weighted_loss_val is not None:
+                        log_payload["train/sra_weighted_loss"] = sra_weighted_loss_val
+                    if sra_effective_weight_log is not None:
+                        log_payload["train/sra_effective_weight"] = float(sra_effective_weight_log)
+                    if "d" in optimizer_metrics:
+                        log_payload["train/optimizer_d"] = float(optimizer_metrics["d"])
+                    if "base_lr" in optimizer_metrics:
+                        log_payload["train/base_lr"] = float(optimizer_metrics["base_lr"])
+                    if "effective_lr" in optimizer_metrics:
+                        log_payload["train/effective_lr"] = float(optimizer_metrics["effective_lr"])
+                    # 自适应采样器可观测性（P1-1）：CDF 是否就绪 + 退化次数
+                    if (
+                        ctx.global_step % args.log_every == 0
+                        and ctx.timestep_sampler.status().get("kind") == "infonoise"
+                    ):
+                        status = ctx.timestep_sampler.status()
+                        log_payload["infonoise/cdf_ready"] = float(status["cdf_ready"])
+                        log_payload["infonoise/refresh_degraded_count"] = status["refresh_degraded_count"]
+                    ctx.wandb_monitor.log(log_payload, step=ctx.global_step)
+
+                    if ctx.use_rich:
+                        desc = f"epoch {epoch+1}/{args.epochs} step {ctx.global_step}/{ctx.total_steps_display or ctx.total_steps or '?'}"
+                        ctx.progress.update(
+                            ctx.task_id, advance=1, description=desc,
+                            loss=loss_val, lr=float(lr), speed=float(ctx.speed_ema or 0),
                         )
-                    except Exception:
-                        pass
-                dt_step = now - step_start_time
-                steps_per_sec = (1.0 / dt_step) if dt_step > 0 else 0.0
-                ctx.speed_ema = steps_per_sec if ctx.speed_ema is None else (0.9 * ctx.speed_ema + 0.1 * steps_per_sec)
-                log_payload: dict[str, Any] = {
-                    "train/loss": loss_val,
-                    "train/denoise_loss": denoise_loss_val,
-                    "train/lr": float(lr),
-                    "train/speed_it_s": float(ctx.speed_ema or 0),
-                }
-                if sra_align_loss_val is not None:
-                    log_payload["train/sra_align_loss"] = sra_align_loss_val
-                if sra_weighted_loss_val is not None:
-                    log_payload["train/sra_weighted_loss"] = sra_weighted_loss_val
-                if sra_effective_weight_log is not None:
-                    log_payload["train/sra_effective_weight"] = float(sra_effective_weight_log)
-                if "d" in optimizer_metrics:
-                    log_payload["train/optimizer_d"] = float(optimizer_metrics["d"])
-                if "base_lr" in optimizer_metrics:
-                    log_payload["train/base_lr"] = float(optimizer_metrics["base_lr"])
-                if "effective_lr" in optimizer_metrics:
-                    log_payload["train/effective_lr"] = float(optimizer_metrics["effective_lr"])
-                # 自适应采样器可观测性（P1-1）：CDF 是否就绪 + 退化次数
-                if (
-                    ctx.global_step % args.log_every == 0
-                    and ctx.timestep_sampler.status().get("kind") == "infonoise"
-                ):
-                    status = ctx.timestep_sampler.status()
-                    log_payload["infonoise/cdf_ready"] = float(status["cdf_ready"])
-                    log_payload["infonoise/refresh_degraded_count"] = status["refresh_degraded_count"]
-                ctx.wandb_monitor.log(log_payload, step=ctx.global_step)
-
-                if ctx.use_rich:
-                    desc = f"epoch {epoch+1}/{args.epochs} step {ctx.global_step}/{ctx.total_steps_display or ctx.total_steps or '?'}"
-                    ctx.progress.update(
-                        ctx.task_id, advance=1, description=desc,
-                        loss=loss_val, lr=float(lr), speed=float(ctx.speed_ema or 0),
-                    )
-                    if ctx.live and args.loss_curve_steps > 0 and not args.no_live_curve:
-                        panel = render_curve_panel(ctx.loss_history, width=min(60, args.loss_curve_steps), height=10)
-                        if panel is not None:
-                            from rich.console import Group
-                            ctx.live.update(Group(ctx.progress, panel))
-                elif ctx.use_plain:
-                    sra_suffix = (
-                        f" denoise={denoise_loss_val:.6f}"
-                        f" sra={sra_align_loss_val:.6f}"
-                        f" sra_w={sra_weighted_loss_val:.6f}"
-                        if sra_align_loss_val is not None and sra_weighted_loss_val is not None
-                        else f" denoise={denoise_loss_val:.6f}"
-                    )
-                    print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
-                elif args.log_every and ctx.global_step % args.log_every == 0:
-                    sra_suffix = (
-                        f" denoise={denoise_loss_val:.6f}"
-                        f" sra={sra_align_loss_val:.6f}"
-                        f" sra_w={sra_weighted_loss_val:.6f}"
-                        if sra_align_loss_val is not None and sra_weighted_loss_val is not None
-                        else f" denoise={denoise_loss_val:.6f}"
-                    )
-                    # flush 必须开：studio spawn 的 stdout 是 pipe（全缓冲
-                    # 8KB），不 flush 时 step 行滞留缓冲——短训练/中止的
-                    # task log 里一行都看不到（曾被误判为 krea2 没打日志）
-                    print(
-                        f"epoch={epoch} step={ctx.global_step} "
-                        f"loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} "
-                        f"speed={steps_per_sec:.2f} it/s",
-                        flush=True,
-                    )
+                        if ctx.live and args.loss_curve_steps > 0 and not args.no_live_curve:
+                            panel = render_curve_panel(ctx.loss_history, width=min(60, args.loss_curve_steps), height=10)
+                            if panel is not None:
+                                from rich.console import Group
+                                ctx.live.update(Group(ctx.progress, panel))
+                    elif ctx.use_plain:
+                        sra_suffix = (
+                            f" denoise={denoise_loss_val:.6f}"
+                            f" sra={sra_align_loss_val:.6f}"
+                            f" sra_w={sra_weighted_loss_val:.6f}"
+                            if sra_align_loss_val is not None and sra_weighted_loss_val is not None
+                            else f" denoise={denoise_loss_val:.6f}"
+                        )
+                        print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
+                    elif args.log_every and ctx.global_step % args.log_every == 0:
+                        sra_suffix = (
+                            f" denoise={denoise_loss_val:.6f}"
+                            f" sra={sra_align_loss_val:.6f}"
+                            f" sra_w={sra_weighted_loss_val:.6f}"
+                            if sra_align_loss_val is not None and sra_weighted_loss_val is not None
+                            else f" denoise={denoise_loss_val:.6f}"
+                        )
+                        # flush 必须开：studio spawn 的 stdout 是 pipe（全缓冲
+                        # 8KB），不 flush 时 step 行滞留缓冲——短训练/中止的
+                        # task log 里一行都看不到（曾被误判为 krea2 没打日志）
+                        print(
+                            f"epoch={epoch} step={ctx.global_step} "
+                            f"loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} "
+                            f"speed={steps_per_sec:.2f} it/s",
+                            flush=True,
+                        )
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
