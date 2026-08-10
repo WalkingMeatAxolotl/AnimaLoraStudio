@@ -19,7 +19,7 @@ class AnimaFamily:
     # ── 加载 ─────────────────────────────────────────────────────────────
     def load_dit(self, path, device, dtype, *,
                  attention_backend: str = "flash_attn", repo_root=None,
-                 purpose: str = "train"):
+                 purpose: str = "train", blocks_to_swap: int = 0):
         # purpose 是量化推理旋钮（krea2 fp8）；Anima 无量化形态，接受并忽略
         del purpose
         from training.families.anima.loader import load_anima_model
@@ -28,10 +28,29 @@ class AnimaFamily:
         model = load_anima_model(
             path, device, dtype, repo_root,
             flash_attn=(attention_backend == "flash_attn"),
+            blocks_to_swap=blocks_to_swap,
         )
         if attention_backend == "xformers":
             enable_xformers(model)
         return model
+
+    def swapped_param_ratio(self, blocks_to_swap: int, *,
+                            checkpoint_path: str | None = None) -> float:
+        """换出层占全模型参数的比例（显存预算折扣用，krea2 同款语义）。
+
+        Anima 的层数由 checkpoint 决定（2B=28 层 / 14B=36 层），不能像 krea2
+        那样按固定 config 数 meta 参数 —— 从 safetensors header 数 numel，
+        天然版本无关。未给路径 / 读失败返回 0：护栏退化为保守（按完整模型
+        预算显存，不会误放行）。
+        """
+        if blocks_to_swap <= 0 or not checkpoint_path:
+            return 0.0
+        try:
+            from training.families.anima.loader import swapped_param_ratio_from_header
+
+            return swapped_param_ratio_from_header(checkpoint_path, blocks_to_swap)
+        except Exception:  # noqa: BLE001
+            return 0.0
 
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         # 跨族共享实现（D6）；方法留在 family 上，第 3 族 VAE 不同款时零迁移

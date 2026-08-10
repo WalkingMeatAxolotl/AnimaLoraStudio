@@ -1395,7 +1395,7 @@ export function VramPolicySection({
           <SettingsInput
             type="number"
             min={0}
-            max={28}
+            max={36}
             value={draft.generate.blocks_to_swap ?? 0}
             onChange={(v) =>
               update('generate', 'blocks_to_swap', Math.max(0, Number(v) || 0))
