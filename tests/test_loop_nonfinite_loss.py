@@ -197,3 +197,33 @@ def test_all_nan_group_does_not_step(tmp_path, monkeypatch):
     assert ctx.global_step == 0
     assert float(ctx.model.w.detach()) == 1.0
     assert ctx.loss_history == []
+
+
+# ── 连续非有限 loss 的 fail-fast（NonFiniteLossStreak）──
+
+
+def test_streak_raises_at_threshold():
+    s = loop_mod.NonFiniteLossStreak(abort_streak=3)
+    s.record(False, global_step=7)
+    s.record(False, global_step=7)
+    with pytest.raises(RuntimeError, match="非有限"):
+        s.record(False, global_step=7)
+
+
+def test_streak_resets_on_finite_loss():
+    s = loop_mod.NonFiniteLossStreak(abort_streak=3)
+    s.record(False, global_step=0)
+    s.record(False, global_step=0)
+    s.record(True, global_step=0)  # 有限 loss 复位计数
+    s.record(False, global_step=0)
+    s.record(False, global_step=0)
+    assert s.streak == 2  # 未达阈值，没 raise
+
+
+def test_all_nan_training_fails_fast(tmp_path, monkeypatch):
+    # 权重坏死场景（所有 micro-batch 永远 NaN）：达到阈值 raise 终止训练，
+    # 而不是空转跑完全部 epoch 后以 exit 0 伪装完成（task 1848/1853 事故）
+    monkeypatch.setattr(loop_mod, "NONFINITE_LOSS_ABORT_STREAK", 3)
+    ctx = _make_ctx(tmp_path, [_batch(nan=True)] * 6, monkeypatch, epochs=2)
+    with pytest.raises(RuntimeError, match="非有限"):
+        loop_mod.run(ctx)

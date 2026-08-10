@@ -113,6 +113,37 @@ def _masked_mean_per_sample(per_element, spatial_mask):
     return (per_element * m).sum(dim=dims) / m.sum(dim=dims).clamp_min(1e-6)
 
 
+# 连续非有限 loss 的 micro-batch 达到该数即终止训练：NaN 一旦进了参数，之后每个
+# forward 都非有限、永不自愈，继续跑只是空转还会以 exit 0 伪装「完成」；偶发数值
+# 尖峰（病态样本 / 极端 timestep 组合）一两个 micro-batch 后就恢复，远够不到该阈值。
+NONFINITE_LOSS_ABORT_STREAK = 50
+
+
+class NonFiniteLossStreak:
+    """连续非有限 loss micro-batch 计数；达到阈值 raise 终止训练。
+
+    raise 从 loop.run() 冒泡出 main()，进程以非零码退出 → supervisor 把任务标
+    failed 并截取 stderr 尾作为 error_msg——替代旧的「空转到自然结束、标 done」。
+    """
+
+    def __init__(self, abort_streak: int = NONFINITE_LOSS_ABORT_STREAK):
+        self.abort_streak = int(abort_streak)
+        self.streak = 0
+
+    def record(self, loss_is_finite: bool, *, global_step: int) -> None:
+        if loss_is_finite:
+            self.streak = 0
+            return
+        self.streak += 1
+        if self.streak >= self.abort_streak:
+            raise RuntimeError(
+                f"连续 {self.streak} 个 micro-batch 的 loss 非有限（NaN/Inf），"
+                f"判定为权重已坏死（global_step={global_step}），终止训练。"
+                "常见诱因：学习率过高、未启用梯度裁剪（grad_clip_max_norm）"
+                "或数值不稳的训练目标组合。"
+            )
+
+
 def _accumulation_step(batch_idx, dl_len, grad_accum):
     """返回 (group_size, is_group_end)：该 micro-batch 所在梯度累积组的实际大小，
     以及它是否是该组最后一个（触发 optimizer.step / zero_grad）。
@@ -206,6 +237,9 @@ def run(ctx: TrainingContext) -> None:
             raise ValueError(
                 "timestep_shift_resolution_aware 不能与自带分辨率 shift 的 timestep sampler 同时启用"
             )
+
+    # 连续非有限 loss 的 fail-fast 兜底（阈值读模块常量，测试可 monkeypatch）
+    nonfinite_streak = NonFiniteLossStreak(NONFINITE_LOSS_ABORT_STREAK)
 
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
@@ -524,6 +558,7 @@ def run(ctx: TrainingContext) -> None:
             # 不 zero_grad —— 同一累积组内其它 micro-batch 已积累的正常梯度要保留；
             # 也不跳过组尾结算 —— 否则组尾撞上 NaN 时整组梯度作废且 global_step 冻结。
             loss_is_finite = bool(torch.isfinite(loss))
+            nonfinite_streak.record(loss_is_finite, global_step=ctx.global_step)
             if not loss_is_finite:
                 logger.warning(
                     f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过 backward"
