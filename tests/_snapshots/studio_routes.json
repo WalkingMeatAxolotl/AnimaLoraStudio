@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 208,
+  "count": 205,
   "routes": [
     {
       "path": "/",
@@ -114,14 +114,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/generate/cache/index",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_cache_index",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/generate/daemon/logs",
       "methods": [
         "GET"
@@ -143,14 +135,6 @@
         "POST"
       ],
       "name": "unload_daemon",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/generate/disk/history",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_disk_history",
       "type": "APIRoute"
     },
     {
@@ -186,30 +170,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/generate/disk/{date_str}/xy/{folder}",
-      "methods": [
-        "DELETE"
-      ],
-      "name": "delete_disk_xy_folder",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/generate/disk/{date_str}/{mode}/{filename}",
-      "methods": [
-        "DELETE"
-      ],
-      "name": "delete_disk_image",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/generate/save",
-      "methods": [
-        "POST"
-      ],
-      "name": "save_test_image",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/generate/taeflux/install",
       "methods": [
         "POST"
@@ -223,6 +183,14 @@
         "GET"
       ],
       "name": "get_taeflux_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/timeline",
+      "methods": [
+        "GET"
+      ],
+      "name": "generate_timeline",
       "type": "APIRoute"
     },
     {
@@ -247,6 +215,14 @@
         "GET"
       ],
       "name": "get_generate_sample",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/{task_id}/xy-composite",
+      "methods": [
+        "POST"
+      ],
+      "name": "attach_xy_composite",
       "type": "APIRoute"
     },
     {
