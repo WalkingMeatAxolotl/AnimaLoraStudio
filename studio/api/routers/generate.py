@@ -244,6 +244,17 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             # metadata 是附加能力，档案写入失败不能让已经校验通过的生成任务失败。
             logger.warning("write generation metadata manifest failed", exc_info=True)
 
+        # hash 预热：save 开着时后台线程先把本次资源的 SHA256 算进持久缓存。
+        # 模型加载 30-60s 期间并行完成 → 首图落盘时 file_sha256 缓存命中，
+        # generate_storage executor 不再有「新模型首图分钟级 hash」尾部场景。
+        if cfg_dict["save_test_images_at_dispatch"]:
+            from ...services.generation_metadata import prewarm_resource_hashes
+            prewarm_resource_hashes([
+                model_paths.get("transformer_path"),
+                model_paths.get("vae_path"),
+                *[lc.path for lc in body.lora_configs],
+            ])
+
         cfg_path = tempdir / "config.json"
         cfg_path.write_text(
             json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -275,176 +286,6 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
 
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
     return task or {"id": task_id}
-
-
-@router.get("/api/generate/{task_id}")
-def get_generate_task(task_id: int) -> dict[str, Any]:
-    """查询测试 task 状态。"""
-    with db.connection_for() as conn:
-        task = db.get_task(conn, task_id)
-    if not task or task.get("task_type") != "generate":
-        raise NotFoundError(
-            "Task not found", code="task.not_found",
-            details={"task_id": task_id}, http_status=404,
-        )
-    return task
-
-
-# ---------------------------------------------------------------------------
-# /api/generate/daemon — 测试 daemon 状态查询 + 手动卸载（commit 13）
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/generate/taeflux/status")
-def get_taeflux_status() -> dict[str, Any]:
-    """commit 14：查询 TAEFlux 模型是否就绪（中间步预览依赖）。"""
-    from ...services import models as _md
-    d = _md.taeflux_dir()
-    return {
-        "available": _md.taeflux_available(),
-        "dir": str(d),
-        "files": _md.TAEFLUX_FILES,
-    }
-
-
-@router.post("/api/generate/taeflux/install")
-def install_taeflux() -> dict[str, Any]:
-    """同步下载 TAEFlux（~1.6MB，秒级）。已存在直接返回 OK。"""
-    from ...services import models as _md
-    if _md.taeflux_available():
-        return {"ok": True, "noop": True}
-    ok = _md.download_taeflux()
-    if not ok:
-        raise ValidationError(
-            "Failed to download the preview model; check the server log",
-            code="generate.preview_model_download_failed", http_status=500,
-        )
-    return {"ok": True}
-
-
-_TOKENIZER_CACHE: dict[str, Any] = {}
-
-
-@router.post("/api/generate/token_count")
-def count_prompt_tokens(body: dict) -> dict[str, Any]:
-    """prompt 的真实 token 数（前端角标用；tokenizer 与训练/推理同源）。
-
-    krea2 的文本条件训练口径 512 token，超出部分模型没见过（不拦截、
-    不警告——质量后果由用户掌握，前端只给中性计数）。tokenizer 惰性
-    加载并缓存；不可用时返回 tokens=null，前端隐藏角标。
-    """
-    text = str(body.get("text") or "")
-    family = str(body.get("model_family") or "anima")
-    try:
-        from ...services.models.paths import models_root
-
-        if family == "krea2":
-            from ...services.models.families.krea2 import (
-                qwen3_vl_dir_for, selected_te_variant,
-            )
-
-            tok_dir = str(qwen3_vl_dir_for(models_root(), selected_te_variant()))
-        else:
-            from ...services.models.families.anima import qwen_dir
-
-            tok_dir = str(qwen_dir(models_root()))
-        tokenizer = _TOKENIZER_CACHE.get(tok_dir)
-        if tokenizer is None:
-            from transformers import AutoTokenizer
-
-            tokenizer = AutoTokenizer.from_pretrained(
-                tok_dir, local_files_only=True,
-            )
-            _TOKENIZER_CACHE[tok_dir] = tokenizer
-        tokens = len(tokenizer(text, add_special_tokens=False)["input_ids"])
-        return {"tokens": tokens}
-    except Exception:
-        return {"tokens": None}
-
-
-@router.get("/api/generate/daemon/status")
-def get_daemon_status() -> dict[str, Any]:
-    """查询 daemon 当前状态。前端 DaemonControls 用。"""
-    from ...services.inference.daemon import get_daemon
-    daemon = get_daemon()
-    return {
-        "state": daemon.state,
-        "model_loaded": daemon.is_model_loaded,
-        "busy": daemon.is_busy,
-        "alive": daemon.is_alive,
-    }
-
-
-@router.get("/api/generate/daemon/logs")
-def get_daemon_logs(since_seq: int = 0, limit: int = 2000) -> dict[str, Any]:
-    """读 daemon stderr ring buffer。前端日志抽屉打开时拉历史；增量靠 SSE。
-
-    since_seq>0 时只返新于该 seq 的行。
-    """
-    from ...services.inference.daemon import get_daemon
-    return get_daemon().read_logs(since_seq=since_seq, limit=limit)
-
-
-@router.post("/api/generate/daemon/unload")
-def unload_daemon() -> dict[str, Any]:
-    """手动卸载 daemon 模型（释放 VRAM）。busy 时拒绝（409）。
-
-    卸载完成后 supervisor 会推 daemon_state_changed SSE，前端按钮自动 disable。
-    下次用户点「开始生成」daemon 按需重 load。
-    """
-    from ...services.inference.daemon import get_daemon
-    daemon = get_daemon()
-    if daemon.is_busy:
-        raise ConflictError(
-            "Inference service is busy; try again after the current task finishes",
-            code="generate.daemon_busy", http_status=409,
-        )
-    if not daemon.is_model_loaded:
-        return {"ok": True, "noop": True}
-    daemon.request_unload()
-    return {"ok": True}
-
-
-@router.get("/api/generate/{task_id}/sample/{filename}")
-def get_generate_sample(task_id: int, filename: str) -> Any:
-    """读 generate task 的输出图（commit 10：从 server 内存 cache 取，无磁盘）。
-
-    daemon 出图完成后把 PNG bytes 推回 server 入 generate_cache；HTTP 这里
-    直接返回 bytes。LRU / 客户端断连清理在 commit 11 加 —— 在那之前 cache
-    跟着 supervisor finalize 释放（一 task 一组 entry，task 终止时全清）。
-    """
-    _validate_component_or_400(filename)
-    if not filename.lower().endswith(".png"):
-        raise ValidationError(
-            "Select a .png file", code="file.ext_invalid",
-            details={"types": ".png"}, http_status=400,
-        )
-    from ...services.inference import disk_cache as generate_cache
-    data = generate_cache.get_image(task_id, filename)
-    if data is None:
-        # 落盘 fallback:save=on 时图落盘成功后 cache 中转副本即被 drop
-        #（generate_storage 闭环),live 显示 / composite 拼图仍按 daemon
-        # filename 走本端点 → 按台账 src 反查磁盘文件。
-        disk_path = storage.find_disk_file(task_id, filename)
-        if disk_path is not None:
-            return FileResponse(
-                disk_path, media_type="image/png",
-                headers={"Cache-Control": "no-store"},
-            )
-        raise NotFoundError(
-            "Image not found", code="image.not_found",
-            details={"task_id": task_id, "filename": filename}, http_status=404,
-        )
-    # 用 no-store 不是 _thumb_response 那套 no-cache + ETag：
-    # generate cache 同 (task_id, filename) 内容会随重跑覆盖（用户改 prompt 重生成），
-    # 没有稳定 ETag 可发；用 no-store 让浏览器每次都重拉，永远拿到最新结果。
-    # 带宽代价小：用户在测试出图页主动看才命中本 endpoint，QPS 低。
-    # （Thumbnail / dataset 那种内容稳定的图，继续用 _thumb_response 的 ETag。）
-    return Response(
-        content=data,
-        media_type="image/png",
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +466,176 @@ async def attach_xy_composite(
             details={"task_id": task_id}, http_status=409,
         )
     return {"path": str(target)}
+
+
+@router.get("/api/generate/{task_id}")
+def get_generate_task(task_id: int) -> dict[str, Any]:
+    """查询测试 task 状态。"""
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task or task.get("task_type") != "generate":
+        raise NotFoundError(
+            "Task not found", code="task.not_found",
+            details={"task_id": task_id}, http_status=404,
+        )
+    return task
+
+
+# ---------------------------------------------------------------------------
+# /api/generate/daemon — 测试 daemon 状态查询 + 手动卸载（commit 13）
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/generate/taeflux/status")
+def get_taeflux_status() -> dict[str, Any]:
+    """commit 14：查询 TAEFlux 模型是否就绪（中间步预览依赖）。"""
+    from ...services import models as _md
+    d = _md.taeflux_dir()
+    return {
+        "available": _md.taeflux_available(),
+        "dir": str(d),
+        "files": _md.TAEFLUX_FILES,
+    }
+
+
+@router.post("/api/generate/taeflux/install")
+def install_taeflux() -> dict[str, Any]:
+    """同步下载 TAEFlux（~1.6MB，秒级）。已存在直接返回 OK。"""
+    from ...services import models as _md
+    if _md.taeflux_available():
+        return {"ok": True, "noop": True}
+    ok = _md.download_taeflux()
+    if not ok:
+        raise ValidationError(
+            "Failed to download the preview model; check the server log",
+            code="generate.preview_model_download_failed", http_status=500,
+        )
+    return {"ok": True}
+
+
+_TOKENIZER_CACHE: dict[str, Any] = {}
+
+
+@router.post("/api/generate/token_count")
+def count_prompt_tokens(body: dict) -> dict[str, Any]:
+    """prompt 的真实 token 数（前端角标用；tokenizer 与训练/推理同源）。
+
+    krea2 的文本条件训练口径 512 token，超出部分模型没见过（不拦截、
+    不警告——质量后果由用户掌握，前端只给中性计数）。tokenizer 惰性
+    加载并缓存；不可用时返回 tokens=null，前端隐藏角标。
+    """
+    text = str(body.get("text") or "")
+    family = str(body.get("model_family") or "anima")
+    try:
+        from ...services.models.paths import models_root
+
+        if family == "krea2":
+            from ...services.models.families.krea2 import (
+                qwen3_vl_dir_for, selected_te_variant,
+            )
+
+            tok_dir = str(qwen3_vl_dir_for(models_root(), selected_te_variant()))
+        else:
+            from ...services.models.families.anima import qwen_dir
+
+            tok_dir = str(qwen_dir(models_root()))
+        tokenizer = _TOKENIZER_CACHE.get(tok_dir)
+        if tokenizer is None:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                tok_dir, local_files_only=True,
+            )
+            _TOKENIZER_CACHE[tok_dir] = tokenizer
+        tokens = len(tokenizer(text, add_special_tokens=False)["input_ids"])
+        return {"tokens": tokens}
+    except Exception:
+        return {"tokens": None}
+
+
+@router.get("/api/generate/daemon/status")
+def get_daemon_status() -> dict[str, Any]:
+    """查询 daemon 当前状态。前端 DaemonControls 用。"""
+    from ...services.inference.daemon import get_daemon
+    daemon = get_daemon()
+    return {
+        "state": daemon.state,
+        "model_loaded": daemon.is_model_loaded,
+        "busy": daemon.is_busy,
+        "alive": daemon.is_alive,
+    }
+
+
+@router.get("/api/generate/daemon/logs")
+def get_daemon_logs(since_seq: int = 0, limit: int = 2000) -> dict[str, Any]:
+    """读 daemon stderr ring buffer。前端日志抽屉打开时拉历史；增量靠 SSE。
+
+    since_seq>0 时只返新于该 seq 的行。
+    """
+    from ...services.inference.daemon import get_daemon
+    return get_daemon().read_logs(since_seq=since_seq, limit=limit)
+
+
+@router.post("/api/generate/daemon/unload")
+def unload_daemon() -> dict[str, Any]:
+    """手动卸载 daemon 模型（释放 VRAM）。busy 时拒绝（409）。
+
+    卸载完成后 supervisor 会推 daemon_state_changed SSE，前端按钮自动 disable。
+    下次用户点「开始生成」daemon 按需重 load。
+    """
+    from ...services.inference.daemon import get_daemon
+    daemon = get_daemon()
+    if daemon.is_busy:
+        raise ConflictError(
+            "Inference service is busy; try again after the current task finishes",
+            code="generate.daemon_busy", http_status=409,
+        )
+    if not daemon.is_model_loaded:
+        return {"ok": True, "noop": True}
+    daemon.request_unload()
+    return {"ok": True}
+
+
+@router.get("/api/generate/{task_id}/sample/{filename}")
+def get_generate_sample(task_id: int, filename: str) -> Any:
+    """读 generate task 的输出图（commit 10：从 server 内存 cache 取，无磁盘）。
+
+    daemon 出图完成后把 PNG bytes 推回 server 入 generate_cache；HTTP 这里
+    直接返回 bytes。LRU / 客户端断连清理在 commit 11 加 —— 在那之前 cache
+    跟着 supervisor finalize 释放（一 task 一组 entry，task 终止时全清）。
+    """
+    _validate_component_or_400(filename)
+    if not filename.lower().endswith(".png"):
+        raise ValidationError(
+            "Select a .png file", code="file.ext_invalid",
+            details={"types": ".png"}, http_status=400,
+        )
+    from ...services.inference import disk_cache as generate_cache
+    data = generate_cache.get_image(task_id, filename)
+    if data is None:
+        # 落盘 fallback:save=on 时图落盘成功后 cache 中转副本即被 drop
+        #（generate_storage 闭环),live 显示 / composite 拼图仍按 daemon
+        # filename 走本端点 → 按台账 src 反查磁盘文件。
+        disk_path = storage.find_disk_file(task_id, filename)
+        if disk_path is not None:
+            return FileResponse(
+                disk_path, media_type="image/png",
+                headers={"Cache-Control": "no-store"},
+            )
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"task_id": task_id, "filename": filename}, http_status=404,
+        )
+    # 用 no-store 不是 _thumb_response 那套 no-cache + ETag：
+    # generate cache 同 (task_id, filename) 内容会随重跑覆盖（用户改 prompt 重生成），
+    # 没有稳定 ETag 可发；用 no-store 让浏览器每次都重拉，永远拿到最新结果。
+    # 带宽代价小：用户在测试出图页主动看才命中本 endpoint，QPS 低。
+    # （Thumbnail / dataset 那种内容稳定的图，继续用 _thumb_response 的 ETag。）
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------------------

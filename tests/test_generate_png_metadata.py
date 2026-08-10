@@ -219,6 +219,25 @@ def test_resource_hash_cache_reuses_and_invalidates_by_stat(
     assert second != first
 
 
+def test_prewarm_resource_hashes_fills_cache(env, tmp_path: Path, monkeypatch) -> None:
+    """enqueue 时预热 → 落盘时 file_sha256 缓存命中不再读文件。"""
+    from studio.services import generation_metadata as meta
+
+    res = tmp_path / "big-model.safetensors"
+    res.write_bytes(b"weights")
+    t = meta.prewarm_resource_hashes([str(res), None, ""])
+    assert t is not None
+    t.join(timeout=10)
+
+    def should_not_open(*args, **kwargs):
+        raise AssertionError("prewarmed hash unexpectedly reopened the resource")
+
+    monkeypatch.setattr(Path, "open", should_not_open)
+    assert meta.file_sha256(res) == hashlib.sha256(b"weights").hexdigest()
+    # 全空列表 → 不起线程
+    assert meta.prewarm_resource_hashes([None, ""]) is None
+
+
 def test_xy_cell_external_metadata_tracks_checkpoint_and_scale(env) -> None:
     from studio.services import generation_metadata as meta
 

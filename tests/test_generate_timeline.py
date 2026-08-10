@@ -128,6 +128,26 @@ def test_xy_row_folder_and_composite(env) -> None:
     assert [(i["xi"], i["yi"]) for i in e["images"]] == [(0, 0), (1, 0)]
 
 
+def test_timeline_route_not_shadowed_by_task_id_catchall(env) -> None:
+    """回归:GET /api/generate/{task_id} 是单段 catch-all,按 FastAPI 注册顺序
+    会吞掉后注册的 /api/generate/timeline("timeline" 当 task_id → 422)。
+    timeline 必须先注册;本测试走真 HTTP 路由防再犯。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from studio.api.exception_handlers import register_exception_handlers
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.include_router(gen.router)
+    tc = TestClient(app, raise_server_exceptions=False)
+    _mk_task(params={"mode": "single"}, images=[{"cache": "a.png"}])
+    r = tc.get("/api/generate/timeline?limit=500&offset=0")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["entries"][0]["mode"] == "single"
+
+
 def test_pagination_and_order(env) -> None:
     ids = [
         _mk_task(params={"mode": "single"}, images=[{"cache": f"i{n}.png"}])
