@@ -157,10 +157,12 @@ def _log_vram_watermark(stage: str, *, peak_label: str = "") -> None:
         try:
             import pynvml
 
+            from training.sysmem import nvml_handle_for_torch_device
+
             pynvml.nvmlInit()
             try:
                 info = pynvml.nvmlDeviceGetMemoryInfo(
-                    pynvml.nvmlDeviceGetHandleByIndex(0))
+                    nvml_handle_for_torch_device(pynvml))
                 line += f" 全卡={info.used / 1e9:.1f}GB"
             finally:
                 pynvml.nvmlShutdown()

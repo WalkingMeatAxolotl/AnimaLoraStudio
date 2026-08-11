@@ -120,3 +120,60 @@ def test_budget_error_uses_caller_settings_hint(tmp_path, monkeypatch):
     # 缺省 hint 保持推理侧文案
     with pytest.raises(RuntimeError, match="设置 → 显存策略"):
         sysmem.check_load_budget(True, weight_paths=[weight], stage="模型加载")
+
+
+# ── NVML 卡选择（PCI bus id 匹配，issue #491）──────────────────────────
+
+
+class _FakeNvml:
+    """按 PCI bus id / index 两条路查 handle 的假 pynvml。"""
+
+    def __init__(self, *, by_bus_id=None, fail_bus_id=False):
+        self.by_bus_id = by_bus_id or {}
+        self.fail_bus_id = fail_bus_id
+        self.bus_id_calls: list[bytes] = []
+
+    def nvmlDeviceGetHandleByPciBusId(self, bus_id):
+        self.bus_id_calls.append(bus_id)
+        if self.fail_bus_id or bus_id not in self.by_bus_id:
+            raise RuntimeError("nvml: not found")
+        return self.by_bus_id[bus_id]
+
+    def nvmlDeviceGetHandleByIndex(self, index):
+        return f"handle-index-{index}"
+
+
+def test_nvml_handle_matches_torch_device_by_pci_bus_id(monkeypatch):
+    """多卡机器：torch（FASTEST_FIRST）与 NVML（PCI 顺序）编号不同，
+    必须按 PCI bus id 找 torch 实际在用的卡，不能裸 index 0。"""
+    monkeypatch.setattr(
+        sysmem, "torch_device_pci_bus_id", lambda: "00000000:07:00.0"
+    )
+    fake = _FakeNvml(by_bus_id={b"00000000:07:00.0": "handle-3070"})
+    assert sysmem.nvml_handle_for_torch_device(fake) == "handle-3070"
+    assert fake.bus_id_calls == [b"00000000:07:00.0"]
+
+
+def test_nvml_handle_falls_back_to_index0_when_no_pci_id(monkeypatch):
+    """CPU-only / 老 torch 拿不到 PCI id → 回退 index 0（单卡等价于原行为）。"""
+    monkeypatch.setattr(sysmem, "torch_device_pci_bus_id", lambda: None)
+    fake = _FakeNvml()
+    assert sysmem.nvml_handle_for_torch_device(fake) == "handle-index-0"
+    assert fake.bus_id_calls == []
+
+
+def test_nvml_handle_falls_back_when_bus_id_lookup_fails(monkeypatch):
+    monkeypatch.setattr(
+        sysmem, "torch_device_pci_bus_id", lambda: "00000000:07:00.0"
+    )
+    fake = _FakeNvml(fail_bus_id=True)
+    assert sysmem.nvml_handle_for_torch_device(fake) == "handle-index-0"
+
+
+def test_torch_device_pci_bus_id_is_none_or_nvml_format():
+    """真机冒烟：有 CUDA 时格式是 8+2+2 位大写 hex + .0；无 CUDA 时 None。"""
+    bus_id = sysmem.torch_device_pci_bus_id()
+    if bus_id is not None:
+        import re
+
+        assert re.fullmatch(r"[0-9A-F]{8}:[0-9A-F]{2}:[0-9A-F]{2}\.0", bus_id)
