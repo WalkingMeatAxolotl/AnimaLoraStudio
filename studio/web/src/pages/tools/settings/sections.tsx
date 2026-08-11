@@ -4,6 +4,7 @@ import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
   type FlashAttnStatus,
+  type GpuStats,
   type ModelsCatalog,
   type Secrets,
   type TorchCuTag,
@@ -774,11 +775,19 @@ export function ONNXRuntimeSection() {
 export function PyTorchSection() {
   const { t } = useTranslation()
   const dialog = useDialog()
+  const { runSave } = useSettingsData()
   const [status, setStatus] = useState<TorchStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const { toast } = useToast()
+
+  // 计算显卡选择（#491）：多卡机器才渲染。存 secrets.system.gpu_index
+  // （NVML/nvidia-smi 的 PCI 序号，与下面 systemStats 列表同一套编号），
+  // 启动期由 gpu_select 注入 CUDA env——重启生效。
+  const [gpus, setGpus] = useState<GpuStats[] | null>(null)
+  const [gpuIndex, setGpuIndex] = useState<number | null>(null)
+  const [savingGpu, setSavingGpu] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -791,6 +800,26 @@ export function PyTorchSection() {
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
+
+  useEffect(() => {
+    void api.systemStats().then((s) => setGpus(s.gpu ?? null)).catch(() => { /* 显示用 */ })
+    void api.getSecrets().then((sec) => setGpuIndex(sec.system?.gpu_index ?? null)).catch(() => { /* 显示用 */ })
+  }, [])
+
+  const saveGpuIndex = async (next: number) => {
+    setSavingGpu(true)
+    const prev = gpuIndex
+    setGpuIndex(next)
+    try {
+      await runSave(() => api.updateSecrets({ system: { gpu_index: next } }))
+      toast(t('settings.gpuSelectSaved'), 'success')
+    } catch (e) {
+      setGpuIndex(prev)
+      toast(String(e), 'error')
+    } finally {
+      setSavingGpu(false)
+    }
+  }
 
   const reinstall = async (target: 'auto' | TorchCuTag) => {
     const tag = target === 'auto' ? status?.recommended_cu_tag ?? '?' : target
@@ -870,6 +899,28 @@ export function PyTorchSection() {
               )}
             </div>
           </div>
+
+          {/* 计算显卡（多卡机器才显示，#491）。未设置时预选 torch 实际在用
+              的那张（stats.active）；选择即保存，重启生效。 */}
+          {gpus && gpus.length > 1 && (
+            <SettingsField
+              label={t('settings.gpuSelectLabel')}
+              helpTooltip={<p>{t('settings.gpuSelectHelp')}</p>}
+            >
+              <select
+                value={gpuIndex ?? gpus.find((g) => g.active)?.index ?? 0}
+                onChange={(e) => void saveGpuIndex(Number(e.target.value))}
+                disabled={savingGpu}
+                className={`${textInputClass} max-w-72 disabled:opacity-60`}
+              >
+                {gpus.map((g) => (
+                  <option key={g.index} value={g.index}>
+                    {g.index}: {g.name}（{Math.round(g.vram_total_gb)}G）
+                  </option>
+                ))}
+              </select>
+            </SettingsField>
+          )}
 
           {/* 误装：CPU torch + 有 GPU */}
           {status.is_cpu_with_gpu && (

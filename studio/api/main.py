@@ -9,6 +9,17 @@ from __future__ import annotations
 
 def main() -> None:
     import argparse
+
+    # 计算显卡选择（#491）：必须在 torch/uvicorn 首次 import CUDA 相关代码
+    # 之前注入 env。launcher（cli.py）已注入过时这里是幂等 no-op；直跑
+    # `python -m studio.server` 时这里是唯一注入点。失败不挡启动。
+    try:
+        from ..services.runtime.gpu_select import apply_gpu_selection_env
+
+        apply_gpu_selection_env()
+    except Exception:  # noqa: BLE001
+        pass
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description="AnimaStudio daemon")

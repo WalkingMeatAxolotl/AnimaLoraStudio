@@ -25,6 +25,7 @@ const initialServerState = {
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
+  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   wandb: {
     enabled: false,
     current_preset: 'default',
@@ -478,6 +479,67 @@ describe('SettingsPage (PP0)', () => {
       // 只有 user_id 被改动；api_key 仍是 *** ⇒ 不应该出现在 body 里
       expect(body).toEqual({ gelbooru: { user_id: 'bob' } })
     })
+  })
+
+  it('multi-GPU: compute GPU picker preselects the active card and saves system.gpu_index', async () => {
+    // #491：NVML 序 0=2080、1=3070，torch 实际在 3070（active）
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/system/stats')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          cpu_pct: 1, ram_used_gb: 1, ram_total_gb: 2,
+          gpu: [
+            { index: 0, name: 'RTX 2080', util_pct: 0, vram_used_gb: 1, vram_total_gb: 8, temp_c: 50, active: false },
+            { index: 1, name: 'RTX 3070', util_pct: 0, vram_used_gb: 0.2, vram_total_gb: 16, temp_c: 40, active: true },
+          ],
+        }), { status: 200 }))
+      }
+      return base(url, init)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '训练' }))
+
+    const label = await screen.findByText('计算显卡')
+    const row = label.closest('.grid') as HTMLElement
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    // 未显式设置时预选 torch 实际在用的卡（active），不是盲选第一张
+    expect(select.value).toBe('1')
+
+    await user.selectOptions(select, '0')
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([u, i]) => {
+        if (i?.method !== 'PUT' || !String(u).includes('/api/secrets')) return false
+        try {
+          return JSON.parse(String(i.body)).system?.gpu_index === 0
+        } catch {
+          return false
+        }
+      })
+      expect(putCall).toBeDefined()
+      expect(JSON.parse(String(putCall![1].body))).toEqual({ system: { gpu_index: 0 } })
+    })
+  })
+
+  it('single GPU: compute GPU picker is hidden', async () => {
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/system/stats')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          cpu_pct: 1, ram_used_gb: 1, ram_total_gb: 2,
+          gpu: [
+            { index: 0, name: 'RTX 5090', util_pct: 0, vram_used_gb: 1, vram_total_gb: 32, temp_c: 40, active: true },
+          ],
+        }), { status: 200 }))
+      }
+      return base(url, init)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '训练' }))
+    // PyTorch section 已渲染（标题 + 右侧导航两处）但没有选卡行
+    await screen.findAllByText('PyTorch')
+    await waitFor(() => expect(screen.queryByText('计算显卡')).toBeNull())
   })
 
   it('changes LoRA merge precision independently from VAE precision', async () => {
