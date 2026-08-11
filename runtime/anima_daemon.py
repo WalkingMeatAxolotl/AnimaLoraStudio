@@ -637,6 +637,10 @@ class ModelCache:
         self.model = model
         self.vae = vae
         self.text_stack = text_stack
+        # 身份键与 text_stack 必须同步写：否则切到别族后旧 krea2 键残留，
+        # 切回 krea2 时会把别族 tuple 栈误判为 TE 先行栈复用（跨族污染，
+        # 采样时 'tuple' object has no attribute 'encode_text_for_batch'）
+        self._text_ready_key = (family_id, text_encoder_path)
         self.transformer_path = transformer_path
         self.vae_path = vae_path
         self.text_encoder_path = text_encoder_path
