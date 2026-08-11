@@ -19,6 +19,8 @@ export interface GpuStats {
   vram_used_gb: number
   vram_total_gb: number
   temp_c: number | null
+  /** torch 实际在用的卡（多卡机器显示这张）；后端解析不出时全 false。 */
+  active?: boolean
 }
 
 export interface SystemStats {
