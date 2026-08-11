@@ -25,7 +25,6 @@ const initialServerState = {
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
-  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   wandb: {
     enabled: false,
     current_preset: 'default',
@@ -149,7 +148,7 @@ const initialServerState = {
     vae_precision: 'bf16',
     lora_merge_precision: 'fp32',
   },
-  system: { update_channel: 'stable', show_dev_channel: false },
+  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   proxy: { enabled: false, http_proxy: '', https_proxy: '', no_proxy: '' },
 }
 
