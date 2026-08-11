@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type MonitorState } from '../../../api/client'
-import FullscreenViewer from './FullscreenViewer'
+import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import { axisLabel, formatAxisValue, type XYAxisDraft } from './xy'
 
 type Sample = NonNullable<MonitorState['samples']>[number]
@@ -18,7 +18,7 @@ function labelOf(s: Sample, xDraft: XYAxisDraft, yDraft: XYAxisDraft | null): st
 /** XY mode 内部 sub-view：选 2 张 cell 并排对比。
  *
  * - 顶部「← 返回网格」清掉 selectedIndices，回到 grid view
- * - 双击单张图全屏看大图（FullscreenViewer，ESC 关闭）
+ * - 双击单张图全屏看大图（ImagePreviewModal，ESC 关闭）
  */
 export default function PreviewCompare({
   samples, taskId, selectedIndices, xDraft, yDraft, onBack,
@@ -96,7 +96,7 @@ export default function PreviewCompare({
         ))}
       </div>
       {fullscreenSide && (
-        <FullscreenViewer
+        <ImagePreviewModal
           src={fullscreenSide === 'A' ? urlA : urlB}
           caption={fullscreenSide === 'A' ? captionA : captionB}
           onClose={() => setFullscreenSide(null)}

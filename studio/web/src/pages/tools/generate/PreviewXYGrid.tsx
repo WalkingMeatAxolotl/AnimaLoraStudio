@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../../api/client'
+import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import { exportXYMatrix } from './exportXY'
-import FullscreenViewer from './FullscreenViewer'
 import { axisText, axisTitle, type XYAxisView } from './xy'
 
 /** PreviewXYGrid 本地 sample 类型。
@@ -10,7 +10,7 @@ import { axisText, axisTitle, type XYAxisView } from './xy'
  *  `MonitorState['samples']` 结构性可赋值过来（active task 路径，`xy` optional —
  *  非 XY 模式 sample 也复用同一 streaming buffer）；
  *  历史 disk 回看路径补 `imageUrl`（server 已 URL encode 好的 cell URL），
- *  GridCell + FullscreenViewer 都优先 `imageUrl`，否则回退
+ *  GridCell + 全屏 ImagePreviewModal 都优先 `imageUrl`，否则回退
  *  `api.generateSampleUrl(taskId, filename)`。 */
 export interface XYSample {
   path: string
@@ -313,7 +313,7 @@ export default function PreviewXYGrid({
           }
         }
         return (
-          <FullscreenViewer
+          <ImagePreviewModal
             src={s.imageUrl ?? api.generateSampleUrl(taskId, fn)}
             alt={fn}
             caption={captionParts.join(' · ')}
@@ -336,8 +336,6 @@ export default function PreviewXYGrid({
             onDown={() => {
               if (fullscreenNeighbors?.down != null) setFullscreenIdx(fullscreenNeighbors.down)
             }}
-            // shortcutHint 不传 → FullscreenViewer 按 hasX 动态拼接（单行 /
-            // 单列 / 角落格上不显示无效方向）
           />
         )
       })()}
