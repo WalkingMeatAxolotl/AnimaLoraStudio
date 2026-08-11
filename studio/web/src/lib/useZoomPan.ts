@@ -2,7 +2,7 @@
  * useZoomPan — 图片 / 画布查看视口：滚轮指针中心缩放 + 拖拽平移 + fit/100%。
  *
  * 从涂抹页 InpaintCanvas 的视图层抽出（PR-B 系列），供全部单图查看场景复用：
- * FullscreenViewer / ImagePreviewModal / TagEdit 内嵌单图 / InpaintCanvas。
+ * ImagePreviewModal / TagEdit 内嵌单图 / InpaintCanvas。
  *
  * 用法（查看器，左键拖拽 = pan）：
  *   const zp = useZoomPan({ contentW, contentH, primaryButtonPans: true })
@@ -46,9 +46,16 @@ export interface UseZoomPanOptions {
   applyMode?: 'transform' | 'size'
   /** fit 时的留边系数，默认 0.98。 */
   fitPadding?: number
+  /** fit 的 scale 上限（如 1 = 小图 fit 不放大超过 100%）。默认不封顶。 */
+  fitMaxScale?: number
   /** 缩放上下限（scale 值）。 */
   minScale?: number
   maxScale?: number
+  /** 视口内点击（pan 手势按下但未拖动即松开）回调；hitContent=false 表示
+   *  点在内容（contentRef 元素）之外的空白处 —— 查看器 modal 拿它做
+   *  「点空白关闭」。pointer capture 会把 up 事件 retarget 到容器，
+   *  所以命中判定记录在 pointerdown 时。 */
+  onTap?: (hitContent: boolean) => void
 }
 
 export function useZoomPan({
@@ -57,8 +64,10 @@ export function useZoomPan({
   primaryButtonPans = false,
   applyMode = 'transform',
   fitPadding = 0.98,
+  fitMaxScale,
   minScale = 0.02,
   maxScale = 32,
+  onTap,
 }: UseZoomPanOptions) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const contentRef = useRef<HTMLElement | null>(null)
@@ -68,6 +77,8 @@ export function useZoomPan({
   const panRef = useRef<{ x: number; y: number } | null>(null)
   // pan 手势发生过拖动（区分「点击遮罩关闭」与「拖完松手」——查看器 modal 用）
   const draggedRef = useRef(false)
+  // pointerdown 时的真实 target（capture 后 up 事件被 retarget，命中判定只能在 down 记）
+  const downTargetRef = useRef<EventTarget | null>(null)
   const [zoomPct, setZoomPct] = useState(100)
 
   const applyToDom = useCallback(() => {
@@ -93,7 +104,10 @@ export function useZoomPan({
     if (!wrap || contentW <= 0 || contentH <= 0) return
     const rect = wrap.getBoundingClientRect()
     if (rect.width < 10 || rect.height < 10) return
-    const scale = Math.min(rect.width / contentW, rect.height / contentH) * fitPadding
+    const scale = Math.min(
+      Math.min(rect.width / contentW, rect.height / contentH) * fitPadding,
+      fitMaxScale ?? Infinity,
+    )
     viewRef.current = {
       scale,
       tx: (rect.width - contentW * scale) / 2,
@@ -101,7 +115,7 @@ export function useZoomPan({
     }
     interactedRef.current = false
     applyView()
-  }, [contentW, contentH, fitPadding, applyView])
+  }, [contentW, contentH, fitPadding, fitMaxScale, applyView])
 
   /** 以视口中心为锚点回 100%。 */
   const reset100 = useCallback(() => {
@@ -206,6 +220,7 @@ export function useZoomPan({
     if (!isPan) return false
     panRef.current = { x: e.clientX, y: e.clientY }
     draggedRef.current = false
+    downTargetRef.current = e.target
     return true
   }, [primaryButtonPans])
 
@@ -243,7 +258,13 @@ export function useZoomPan({
       panPointerMove(e)
     },
     onPointerUp: () => {
-      endPan()
+      // 只有真的进入过 pan 手势（左键 / 中键 / 空格）才算 tap 候选——
+      // 右键等未接管的 up 不触发 onTap
+      const wasPan = panRef.current != null
+      const dragged = endPan()
+      if (wasPan && !dragged && onTap) {
+        onTap(downTargetRef.current === contentRef.current)
+      }
     },
     onPointerCancel: () => {
       endPan()
