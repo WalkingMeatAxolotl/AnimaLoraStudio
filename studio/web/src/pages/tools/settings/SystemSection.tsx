@@ -5,6 +5,7 @@ import {
   api,
   type DevCommit,
   type DevCommitsResult,
+  type EnvSummary,
   type GpuStats,
   type ModelsRootInfo,
   type PreflightResult,
@@ -69,10 +70,6 @@ export function SystemSection() {
     <>
       <VersionSection />
       <GpuSection />
-      <PyTorchSection />
-      <FlashAttentionSection />
-      <XformersSection />
-      <ONNXRuntimeSection />
       <StorageSection />
       <ServiceSection />
     </>
@@ -94,10 +91,12 @@ export function GpuSection() {
   const [gpus, setGpus] = useState<GpuStats[] | null>(null)
   const [gpuIndex, setGpuIndex] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [env, setEnv] = useState<EnvSummary | null>(null)
 
   useEffect(() => {
     void api.systemStats().then((s) => setGpus(s.gpu ?? null)).catch(() => { /* 显示用 */ })
     void api.getSecrets().then((sec) => setGpuIndex(sec.system?.gpu_index ?? null)).catch(() => { /* 显示用 */ })
+    void api.getEnvSummary().then(setEnv).catch(() => { /* 显示用 */ })
   }, [])
 
   const save = async (next: number) => {
@@ -119,12 +118,43 @@ export function GpuSection() {
 
   return (
     <SettingsSection id="gpu" title={t('settings.gpuSection')}>
-      <SettingsField
-        label={t('settings.gpuSelectLabel')}
-        helpTooltip={<p>{t('settings.gpuSelectHelp')}</p>}
-      >
-        {gpus && gpus.length > 1 ? (
-          // 未显式设置时预选 torch 实际在用的那张(stats.active);选择即保存
+      {/* 机器级环境概览(只读裸行,无背景):驱动/CUDA/平台/Python。依赖行
+          内不再重复这些机器事实——包相关信息(torch build、EP、wheel 匹配
+          tag)留在各自行内。 */}
+      {env && (
+        <div className="flex gap-4 flex-wrap text-xs">
+          {/* CUDA 条目 = 环境**真实在用**的版本(torch 自带 runtime);驱动
+              的 CUDA 能力上限只是驱动条目的附注,不能混为一谈。 */}
+          <span className="text-fg-tertiary">
+            {t('settings.driverLabel')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
+            {env.driver_cuda_version && (
+              <>（{t('settings.driverCudaSupport', { ver: env.driver_cuda_version })}）</>
+            )}
+          </span>
+          <span className="text-fg-tertiary">
+            CUDA:{' '}
+            <code className="text-fg-secondary font-mono">{env.cuda_version ?? t('settings.cudaNotInUse')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            {t('settings.platform')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.platform ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            Python: <code className="text-fg-secondary font-mono">{env.python_version}</code>
+          </span>
+        </div>
+      )}
+
+      {/* 显卡行:自定义 flex(非 240px grid 的 SettingsField)——label 与
+          下拉同行垂直居中,并与上下行左缘对齐。 */}
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-fg-secondary font-mono">{t('settings.gpuSelectLabel')}</label>
+        <InfoButton><p>{t('settings.gpuSelectHelp')}</p></InfoButton>
+        {gpus && gpus.length > 0 ? (
+          // 单卡也渲染下拉(只有一个选项,onChange 天然不会触发),不做只读
+          // 文本的退化分支。未显式设置时预选 torch 实际在用的那张
+          // (stats.active);选择即保存。
           <select
             value={gpuIndex ?? gpus.find((g) => g.active)?.index ?? 0}
             onChange={(e) => void save(Number(e.target.value))}
@@ -136,11 +166,18 @@ export function GpuSection() {
             ))}
           </select>
         ) : (
-          <span className="text-xs text-fg-secondary font-mono leading-7">
-            {gpus?.[0] ? fmt(gpus[0]) : t('settings.gpuNoneDetected')}
-          </span>
+          <span className="text-xs text-fg-secondary font-mono">{t('settings.gpuNoneDetected')}</span>
         )}
-      </SettingsField>
+      </div>
+
+      {/* 依赖(计算栈四件套):手风琴行平铺,行间细分隔线,无外框——包名
+          本身即行标题。行外壳见 DepSection。 */}
+      <div className="divide-y divide-subtle border-t border-subtle">
+        <PyTorchSection />
+        <FlashAttentionSection />
+        <XformersSection />
+        <ONNXRuntimeSection />
+      </div>
     </SettingsSection>
   )
 }

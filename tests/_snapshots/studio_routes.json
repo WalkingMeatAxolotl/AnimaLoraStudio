@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 205,
+  "count": 206,
   "routes": [
     {
       "path": "/",
@@ -79,6 +79,14 @@
         "GET"
       ],
       "name": "get_dataset_thumbnail",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/env/summary",
+      "methods": [
+        "GET"
+      ],
+      "name": "env_summary",
       "type": "APIRoute"
     },
     {

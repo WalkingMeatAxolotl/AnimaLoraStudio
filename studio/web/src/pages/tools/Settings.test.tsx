@@ -372,6 +372,13 @@ beforeEach(() => {
     if (typeof url === 'string' && url.includes('/api/announcements')) {
       return Promise.resolve(new Response(JSON.stringify({ posts: [] }), { status: 200 }))
     }
+    if (typeof url === 'string' && url.includes('/api/env/summary')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        python_version: '3.13.2', platform: 'win_amd64',
+        driver_version: '581.42', driver_cuda_version: '13.0',
+        cuda_version: '12.8',
+      }), { status: 200 }))
+    }
     if (typeof url === 'string' && url.includes('/api/models/catalog')) {
       return Promise.resolve(
         new Response(JSON.stringify(emptyModelsCatalog), { status: 200 })
@@ -526,7 +533,7 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('single GPU: shows the current card read-only instead of a picker', async () => {
+  it('single GPU: still renders the dropdown with a single option', async () => {
     const base = fetchMock.getMockImplementation()!
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (typeof url === 'string' && url.includes('/api/system/stats')) {
@@ -543,10 +550,21 @@ describe('SettingsPage (PP0)', () => {
     renderPage()
     await user.click(await screen.findByRole('button', { name: '系统' }))
     const label = await screen.findByText('显卡', { selector: 'label' })
-    const row = label.closest('.grid') as HTMLElement
-    // 单卡：只读显示当前在用的卡，没有下拉
-    await within(row).findByText('0: RTX 5090（32G）')
-    expect(within(row).queryByRole('combobox')).toBeNull()
+    const row = label.parentElement as HTMLElement
+    // 单卡也是下拉（一个选项），不退化成只读文本
+    const select = await within(row).findByRole('combobox') as HTMLSelectElement
+    expect(select.options.length).toBe(1)
+    expect(select.value).toBe('0')
+    expect(select.options[0].textContent).toBe('0: RTX 5090（32G）')
+    // 环境概览行（只读机器事实）——scope 到环境 section 容器内;驱动 CUDA
+    // 能力跟驱动版本合并成一句(「支持 CUDA ≤ N」),不再裸放数字
+    const envSection = document.getElementById('gpu') as HTMLElement
+    await within(envSection).findByText('581.42')
+    expect(within(envSection).getByText(/支持 CUDA ≤ 13\.0/)).toBeInTheDocument()
+    // CUDA 条目 = 真实在用的 torch runtime 版本,不是驱动能力 13.0
+    expect(within(envSection).getByText('12.8')).toBeInTheDocument()
+    expect(within(envSection).getByText('win_amd64')).toBeInTheDocument()
+    expect(within(envSection).getByText('3.13.2')).toBeInTheDocument()
   })
 
   it('changes LoRA merge precision independently from VAE precision', async () => {

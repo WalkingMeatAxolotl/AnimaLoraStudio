@@ -427,6 +427,17 @@ export interface CLTaggerConfig {
   batch_size: number
 }
 
+/** 系统 tab「环境」section 的只读概览。 */
+export interface EnvSummary {
+  python_version: string
+  platform: string | null
+  driver_version: string | null
+  /** 驱动支持的 CUDA 版本上限（NVML 直读，回退 nvidia-smi 解析）。 */
+  driver_cuda_version: string | null
+  /** 环境真实在用的 CUDA（torch 自带的 runtime 版本）；CPU build/未装 torch 为 null。 */
+  cuda_version: string | null
+}
+
 /** PR-S2 — PyTorch 安装状态 + 驱动检测 + 推荐 cu tag。 */
 export type TorchCuTag = 'cu128' | 'cu126' | 'cu124' | 'cu118' | 'cpu'
 export interface TorchStatus {
@@ -3032,6 +3043,8 @@ export const api = {
 
   // PR-S2 — PyTorch 运行时 / 一键重装 ---------------------------------------
   /** 当前 torch 状态：版本 / CUDA build / cuda.is_available / 驱动检测 / 推荐 cu tag。 */
+  /** 机器级环境事实（系统 tab「环境」section 只读概览）；拿不到的字段为 null。 */
+  getEnvSummary: () => req<EnvSummary>('/api/env/summary'),
   getTorchStatus: () => req<TorchStatus>('/api/torch/status'),
   /** 卸装重装 torch + torchvision；同步 pip，可能 5-30 分钟，UI 必须带 loading。
    *  装完必须重启 Studio（C extension 不能热替换）。 */
