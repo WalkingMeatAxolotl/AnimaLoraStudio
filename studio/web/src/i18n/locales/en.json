@@ -1105,6 +1105,8 @@
     "autoSyncPathsOff": "Off · fork respects preset values",
     "gpuSection": "Environment",
     "gpuNoneDetected": "No NVIDIA GPU detected",
+    "envDriver": "NVIDIA driver",
+    "envDriverCudaMax": "CUDA (max)",
     "gpuSelectLabel": "GPU",
     "gpuSelectHelp": "The GPU used for training, generation and tagging. Defaults to the card CUDA picks automatically (usually the fastest one); changes take effect after restarting Studio.",
     "gpuSelectSaved": "Saved — takes effect after restarting Studio",

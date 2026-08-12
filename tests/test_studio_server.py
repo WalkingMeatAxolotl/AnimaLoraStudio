@@ -102,6 +102,32 @@ def test_generate_sample_response_is_not_browser_cached(client: TestClient) -> N
 # /api/state
 # ---------------------------------------------------------------------------
 
+def test_env_summary_aggregates_machine_facts(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /api/env/summary 聚合机器级事实：驱动/驱动 CUDA 上限/平台/Python。"""
+    from studio.services.runtime import (
+        flash_attention as flash_setup,
+        onnxruntime as onnx_setup,
+    )
+    monkeypatch.setattr(flash_setup, "detect_env", lambda: {
+        "python_tag": "cp313", "cuda_tag": "cu128", "cuda_ver": "12.8",
+        "driver_cuda_ver": "13.0", "torch_tag": "torch2.11",
+        "torch_ver": "2.11.0", "torch_cuda_build": "cu128", "platform": "win_amd64",
+    })
+    monkeypatch.setattr(onnx_setup, "detect_cuda", lambda: {
+        "available": True, "driver_version": "581.42", "gpu_name": "RTX 5090",
+    })
+    resp = client.get("/api/env/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["platform"] == "win_amd64"
+    assert body["driver_version"] == "581.42"
+    assert body["driver_cuda_version"] == "13.0"
+    # python_version 来自真实解释器，只验格式
+    assert body["python_version"].count(".") == 2
+
+
 def test_torch_status_proxies_service(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

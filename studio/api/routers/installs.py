@@ -87,6 +87,30 @@ def wd14_install(body: WD14InstallRequest) -> dict[str, Any]:
     }
 
 
+# 环境概览（系统 tab「环境」section）---------------------------------------
+
+
+@router.get("/api/env/summary")
+def env_summary() -> dict[str, Any]:
+    """机器级环境事实（不随 pip 包变）：驱动 / 驱动 CUDA 上限 / 平台 / Python。
+
+    PyTorch / FlashAttention / ONNX Runtime 各卡片里重复展示的机器信息统一
+    上提到「环境」section，这里聚合现成探测：``flash_attention.detect_env``
+    （platform / driver_cuda_ver）+ ``onnxruntime.detect_cuda``
+    （driver_version）。字段拿不到时为 None，前端显示「未检测到」。
+    """
+    import platform as platform_mod  # noqa: PLC0415
+
+    env = flash_attention_setup.detect_env()
+    cuda = onnxruntime_setup.detect_cuda()
+    return {
+        "python_version": platform_mod.python_version(),
+        "platform": env.get("platform"),
+        "driver_version": cuda.get("driver_version"),
+        "driver_cuda_version": env.get("driver_cuda_ver"),
+    }
+
+
 # PyTorch 运行时 / 重装（PR-S2）-------------------------------------------
 
 

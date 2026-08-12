@@ -5,6 +5,7 @@ import {
   api,
   type DevCommit,
   type DevCommitsResult,
+  type EnvSummary,
   type GpuStats,
   type ModelsRootInfo,
   type PreflightResult,
@@ -94,10 +95,12 @@ export function GpuSection() {
   const [gpus, setGpus] = useState<GpuStats[] | null>(null)
   const [gpuIndex, setGpuIndex] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [env, setEnv] = useState<EnvSummary | null>(null)
 
   useEffect(() => {
     void api.systemStats().then((s) => setGpus(s.gpu ?? null)).catch(() => { /* 显示用 */ })
     void api.getSecrets().then((sec) => setGpuIndex(sec.system?.gpu_index ?? null)).catch(() => { /* 显示用 */ })
+    void api.getEnvSummary().then(setEnv).catch(() => { /* 显示用 */ })
   }, [])
 
   const save = async (next: number) => {
@@ -141,6 +144,29 @@ export function GpuSection() {
           </span>
         )}
       </SettingsField>
+
+      {/* 机器级环境概览(只读):驱动/驱动 CUDA 上限/平台/Python。各安装
+          修复卡里不再重复这些机器事实——包相关信息(torch build、EP、
+          wheel 匹配 tag)留在各自卡内。 */}
+      {env && (
+        <div className="rounded-sm border border-subtle bg-sunken p-2 flex gap-4 flex-wrap text-xs">
+          <span className="text-fg-tertiary">
+            {t('settings.envDriver')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            {t('settings.envDriverCudaMax')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.driver_cuda_version ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            {t('settings.platform')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.platform ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            Python: <code className="text-fg-secondary font-mono">{env.python_version}</code>
+          </span>
+        </div>
+      )}
     </SettingsSection>
   )
 }

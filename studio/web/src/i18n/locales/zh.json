@@ -1105,6 +1105,8 @@
     "autoSyncPathsOff": "已关闭 · fork 尊重预设值",
     "gpuSection": "环境",
     "gpuNoneDetected": "未检测到 NVIDIA 显卡",
+    "envDriver": "NVIDIA 驱动",
+    "envDriverCudaMax": "CUDA 上限",
     "gpuSelectLabel": "显卡",
     "gpuSelectHelp": "训练、出图、打标使用的显卡。默认为 CUDA 自动选择的卡（通常是最快的一张）；更改后重启 Studio 生效。",
     "gpuSelectSaved": "已保存，重启 Studio 后生效",

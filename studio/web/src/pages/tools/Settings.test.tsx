@@ -372,6 +372,12 @@ beforeEach(() => {
     if (typeof url === 'string' && url.includes('/api/announcements')) {
       return Promise.resolve(new Response(JSON.stringify({ posts: [] }), { status: 200 }))
     }
+    if (typeof url === 'string' && url.includes('/api/env/summary')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        python_version: '3.13.2', platform: 'win_amd64',
+        driver_version: '581.42', driver_cuda_version: '13.0',
+      }), { status: 200 }))
+    }
     if (typeof url === 'string' && url.includes('/api/models/catalog')) {
       return Promise.resolve(
         new Response(JSON.stringify(emptyModelsCatalog), { status: 200 })
@@ -547,6 +553,12 @@ describe('SettingsPage (PP0)', () => {
     // 单卡：只读显示当前在用的卡，没有下拉
     await within(row).findByText('0: RTX 5090（32G）')
     expect(within(row).queryByRole('combobox')).toBeNull()
+    // 环境概览卡（只读机器事实）——scope 到环境 section 容器内
+    const envSection = document.getElementById('gpu') as HTMLElement
+    await within(envSection).findByText('581.42')
+    expect(within(envSection).getByText('13.0')).toBeInTheDocument()
+    expect(within(envSection).getByText('win_amd64')).toBeInTheDocument()
+    expect(within(envSection).getByText('3.13.2')).toBeInTheDocument()
   })
 
   it('changes LoRA merge precision independently from VAE precision', async () => {
