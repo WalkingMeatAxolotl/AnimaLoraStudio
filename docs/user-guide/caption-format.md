@@ -1,8 +1,8 @@
 # JSON Caption 格式规范
 
 > **适用范围**：分类 JSON caption（fixed / character / series / artist + 分类 shuffle）服务
-> Anima 的 booru tag 生态。Krea 2 用自然语言长 caption（LLM 打标器输出，训练侧截断 512
-> token），一般直接用 TXT / 扁平文本即可，不需要本格式的分类结构。
+> Anima 的 booru tag 生态。Krea 2 用自然语言长 caption（LLM 打标器输出，长度不设上限），
+> 一般直接用 TXT / 扁平文本即可，不需要本格式的分类结构。
 
 AnimaLoraStudio 支持结构化的 JSON 标签文件，相比传统 TXT 文件有以下优势：
 

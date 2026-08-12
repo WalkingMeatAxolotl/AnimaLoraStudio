@@ -293,7 +293,9 @@ Krea 2 走 Qwen3-VL 自然语言 caption，不是 booru tag 生态：
 
 - 打标推荐用 **LLM 打标器**（长自然语言描述）；WD14 tag 链路机制上可用但非推荐
 - 触发词照常有效（自动注入 caption；采样 prompt 需自己写进去）
-- 训练侧 caption 截断到 **512 token**（官方训练口径）；测试出图的在线编码不截断
+- caption 长度不设上限，训练与出图都不截断。超过 512 token 的部分照常参与训练，
+  代价是文本缓存和显存跟着涨（缓存约 31MB / 512 token；DiT 的注意力序列 =
+  caption token 数 + 图像 token 数，1024×1024 图的图像侧是 4096）
 
 ### Block 交换（换出到内存的层数）
 

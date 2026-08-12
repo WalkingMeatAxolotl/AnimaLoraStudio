@@ -104,28 +104,34 @@ class AnimaFamily:
         )
 
         qwen_model, qwen_tok, t5_tok = text
-        max_len = self.spec.text.max_seq_len
+        # pad 下限，不是 caption 长度上限——两条 tokenize 路径都不截断
+        # （ComfyUI Qwen3Tokenizer/T5XXLTokenizer 是 max_length=99999999）
+        pad_floor = self.spec.text.max_seq_len
         with torch.no_grad():
             if comfy_encoding:
                 qwen_texts = [str(c) for c in captions]
                 qwen_emb, _ = encode_qwen(qwen_model, qwen_tok, qwen_texts, device)
-                t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(t5_tok, captions, max_length=max_len)
+                t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(t5_tok, captions)
             else:
                 qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
                 qwen_emb, _ = encode_qwen(qwen_model, qwen_tok, qwen_texts, device)
-                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(t5_tok, captions, max_length=max_len)
+                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(t5_tok, captions)
             t5_ids = t5_ids.to(device)
             t5_attn = t5_attn.to(device)
             t5_w = t5_w.to(device, dtype=torch.float32)
             # t5_w 在 preprocess_text_embeds 内乘到 LLMAdapter 输出上（ComfyUI 对齐）
             cross = dit.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
-            if cross.shape[1] < max_len:
-                cross = F.pad(cross, (0, 0, 0, max_len - cross.shape[1]))
+            # 只补不足（ComfyUI comfy/ldm/anima/model.py:204-205 同款 floor pad）；
+            # 超过 pad_floor 的 caption 原样保留
+            if cross.shape[1] < pad_floor:
+                cross = F.pad(cross, (0, 0, 0, pad_floor - cross.shape[1]))
             if kv_trim:
-                # KV trim：padding 截到最近有效 token bucket（64/128/256/512）
+                # KV trim：padding 截到最近有效 token bucket（64/128/256/512）。
+                # 上限是 cross 实际宽度而非 pad_floor——超长 caption 下用
+                # pad_floor 兜底会把尾巴又砍掉一次。
                 _actual = int(t5_attn.sum(dim=-1).max().item())
-                _bucket = max_len
-                for _b in (64, 128, 256, max_len):
+                _bucket = cross.shape[1]
+                for _b in (64, 128, 256, pad_floor):
                     if _b >= _actual:
                         _bucket = _b
                         break

@@ -37,7 +37,7 @@ def _stub_text_encoding(monkeypatch, attn: "torch.Tensor") -> None:
     monkeypatch.setattr(
         te,
         "tokenize_t5_comfy_literal",
-        lambda tok, captions, max_length: (
+        lambda tok, captions: (
             torch.zeros(B, L, dtype=torch.long),
             attn,
             torch.ones(B, L),
@@ -67,6 +67,35 @@ def test_encode_text_for_batch_returns_t5_attn_for_navit(monkeypatch) -> None:
     cross, t5_attn = result
     assert cross.shape[1] == max_len
     torch.testing.assert_close(t5_attn, attn)
+
+
+def test_encode_text_for_batch_pads_short_cross_to_floor(monkeypatch) -> None:
+    """512 是 pad 下限（ComfyUI model.py:204-205）——短 caption 照旧补齐。"""
+    family = AnimaFamily()
+    pad_floor = family.spec.text.max_seq_len
+    _stub_text_encoding(monkeypatch, torch.ones(1, 8, dtype=torch.long))
+
+    cross = family.encode_text_for_batch(
+        (None, None, None), _stub_dit(8), ["a"], "cpu", torch.float32,
+    )
+    assert cross.shape[1] == pad_floor
+
+
+def test_kv_trim_does_not_re_truncate_long_captions(monkeypatch) -> None:
+    """kv_trim 的 bucket 上限是 cross 实际宽度，不是 pad 下限。
+
+    旧实现 bucket 兜底取 512：超长 caption 走完 64/128/256/512 都不命中，
+    就被 cross[:, :512] 又砍掉一次尾巴。
+    """
+    family = AnimaFamily()
+    long_len = family.spec.text.max_seq_len + 128
+    _stub_text_encoding(monkeypatch, torch.ones(1, long_len, dtype=torch.long))
+
+    cross = family.encode_text_for_batch(
+        (None, None, None), _stub_dit(long_len), ["x"], "cpu", torch.float32,
+        kv_trim=True,
+    )
+    assert cross.shape[1] == long_len
 
 
 def test_encode_text_for_batch_default_stays_bare_cross(monkeypatch) -> None:

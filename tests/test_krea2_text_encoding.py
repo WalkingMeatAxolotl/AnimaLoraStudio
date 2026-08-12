@@ -177,7 +177,46 @@ def test_cached_mode_precaches_reuses_and_releases_model(tmp_path):
     )
 
     assert not second.is_model_loaded
-    assert condition.attention_mask.sum(dim=1).tolist() == [6, 7, 8]
+    # "sample"（34+6=40 token）超过定长 37：不再被砍到 37，6 个 caption token
+    # 全部保留 + 5 个 suffix = 11（旧截断口径是 3+5=8）
+    assert condition.attention_mask.sum(dim=1).tolist() == [6, 7, 11]
+
+
+def test_cached_mode_keeps_padding_floor_for_short_captions(tmp_path):
+    """短 caption 仍 pad 到定长 → suffix 位置不变 → 已有文本缓存继续有效。"""
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=True)
+    entry = TextCacheEntry.for_image(tmp_path / "image.png", "ab")
+
+    stack.prepare_text_cache(["ab"], [], cache_entries=[entry], cache_root=tmp_path)
+    context = stack.store.read_caption(entry)["context"]
+
+    # 定长 = max_length(8) + prefix(34) - suffix(5) = 37：caption 占 34/35，
+    # 36 是 interior pad（被 mask 掉），suffix 落在 37..41。跳过 136 正是定长
+    # padding 的指纹——改成「只 pad 到批内最长」会变成连续的 134..140，已有
+    # sidecar 就会全量失效。
+    assert context.shape == (7, 2, 4)
+    assert context[:, 0, 0].tolist() == [
+        134.0, 135.0, 137.0, 138.0, 139.0, 140.0, 141.0,
+    ]
+
+
+def test_cached_mode_no_longer_truncates_long_captions(tmp_path):
+    """超过定长的 caption 完整进模型（旧口径砍到 max_length）。"""
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=True)
+    long_caption = "x" * 20  # 34 + 20 = 54 token，远超定长 37
+    entry = TextCacheEntry.for_image(tmp_path / "long.png", long_caption)
+
+    stack.prepare_text_cache(
+        [long_caption], [], cache_entries=[entry], cache_root=tmp_path,
+    )
+    context = stack.store.read_caption(entry)["context"]
+
+    # 20 个 caption token + 5 个 suffix；宽度已超定长 → 无 interior pad，
+    # 位置连续（在线模式同款口径）
+    assert context.shape == (25, 2, 4)
+    assert context[:, 0, 0].tolist() == [float(134 + index) for index in range(25)]
 
 
 def test_invalid_sidecar_is_reencoded_and_released(tmp_path):
