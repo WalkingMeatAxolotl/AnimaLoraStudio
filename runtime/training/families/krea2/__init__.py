@@ -109,6 +109,8 @@ KREA2_SPEC = ModelSpec(
     latent=WAN21_F8C16,
     text=TextSpec(
         strategy="cached_varlen",
+        # caption padding 的定长下限，不是长度上限——训练与在线两条路径都不
+        # 截断（KREA2_MAX_LENGTH 注释）。K2 无消费者，仅作声明。
         max_seq_len=512,
         fingerprint=KREA2_TEXT_FINGERPRINT,
     ),
