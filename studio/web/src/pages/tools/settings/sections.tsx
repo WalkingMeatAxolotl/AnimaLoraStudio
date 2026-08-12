@@ -736,7 +736,7 @@ export function ONNXRuntimeSection() {
       onRefresh={() => void refresh()}
       busy={busy !== null}
       advanced={rt ? {
-        label: t('settings.forceReinstallAdvanced'),
+        label: t('settings.manualVariantToggle'),
         open: reinstallOpen,
         onToggle: () => setReinstallOpen(!reinstallOpen),
         children: (
@@ -916,7 +916,7 @@ export function PyTorchSection() {
       onRefresh={() => void refresh()}
       busy={busy}
       advanced={status ? {
-        label: t('settings.advancedManualCuda'),
+        label: t('settings.manualVariantToggle'),
         open: advancedOpen,
         onToggle: () => setAdvancedOpen(!advancedOpen),
         children: (
@@ -1061,7 +1061,7 @@ export function FlashAttentionSection() {
       onRefresh={() => void refresh()}
       busy={busy}
       advanced={status && env ? {
-        label: t('settings.candidateWheels', { n: usable.length }),
+        label: t('settings.manualVariantToggle'),
         open: candidatesOpen,
         onToggle: () => setCandidatesOpen(!candidatesOpen),
         children: (

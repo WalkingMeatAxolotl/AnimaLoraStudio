@@ -1179,7 +1179,6 @@
     "onnxNotInstalledHintCpu": "未安装。点下面「自动检测 + 装合适的包」会装 CPU 版本（未检测到 NVIDIA GPU）。",
     "cudaEpFailedCpu": "CUDA EP 加载失败，已降级到 CPU。",
     "refreshStatus": "刷新状态",
-    "forceReinstallAdvanced": "强制重装指定包",
     "directmlWinOnlyHint": "仅 Windows 可用（PyPI wheel 不覆盖 Linux/macOS）",
     "cudaPackageHint": "NVIDIA GPU 用；Linux 最优。Windows 上若静默降 CPU 改用 DirectML。",
     "directmlPackageHint": "走 DX12，绕开 CUDA/cuDNN 兼容性问题，跨厂商（NVIDIA/AMD/Intel）。",
@@ -1199,7 +1198,6 @@
     "installing": "安装中...",
     "reinstallCudaBuild": "重装为 CUDA 版（{{tag}}）",
     "reinstallAuto": "重装（自动 {{tag}}）",
-    "advancedManualCuda": "手动选 CUDA 版本",
     "manualCudaHint": "按你的驱动 / 偏好选；通常用 auto 即可。选错版本会在 import 时报错，需重新选。",
     "installCpuBuildHint": "装 CPU 版（极慢，仅诊断 / 无 GPU 用）",
     "installCudaBuildHint": "装 {{tag}} 版（PyTorch index: /whl/{{tag}}）",
@@ -1214,7 +1212,6 @@
     "noWheelForPython": "未找到 {{python}} 的预编译 wheel（当前 Python 版本可能尚无支持）。请在下方候选列表手动选择其他版本，或从 GitHub Releases 粘贴 URL。",
     "flashAttnNeedsCudaTorch": "PyTorch 当前是 CPU 版（torch+cpu），无法安装 flash_attn。请先去上方「PyTorch」一栏一键重装为 CUDA 版（cu128 / cu130 等），重启 Studio 后再回来装 flash_attn。",
     "noWheelManual": "无可用 wheel，请手动选择",
-    "candidateWheels": "候选 wheel（{{n}} 可用）",
     "wheelQueryFailed": "查询失败或无匹配（检查网络连接）",
     "installWheel": "安装此 wheel",
     "wheelAbiIncompatible": "Python ABI 不兼容，强制安装可能失败",
@@ -1447,7 +1444,8 @@
     "wheelMatchTags": "匹配环境",
     "cuBuildDesc": "CUDA {{ver}} 构建",
     "cpuBuildDesc": "无 NVIDIA GPU 的机器用",
-    "variantCurrent": "当前"
+    "variantCurrent": "当前",
+    "manualVariantToggle": "手动选择指定版本"
   },
   "monitor": {
     "taskLabel": "任务",

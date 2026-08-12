@@ -1179,7 +1179,6 @@
     "onnxNotInstalledHintCpu": "Not installed. Click “Auto-detect + install” below to install the CPU package (no NVIDIA GPU detected).",
     "cudaEpFailedCpu": "CUDA EP failed to load and fell back to CPU.",
     "refreshStatus": "Refresh status",
-    "forceReinstallAdvanced": "Force reinstall a specific package",
     "directmlWinOnlyHint": "Windows only (no PyPI wheel for Linux/macOS)",
     "cudaPackageHint": "NVIDIA GPU; best on Linux. On Windows, switch to DirectML if it silently falls back to CPU.",
     "directmlPackageHint": "DX12 backend, bypasses CUDA/cuDNN compatibility issues, vendor-agnostic (NVIDIA/AMD/Intel).",
@@ -1199,7 +1198,6 @@
     "installing": "Installing...",
     "reinstallCudaBuild": "Reinstall as CUDA build ({{tag}})",
     "reinstallAuto": "Reinstall (auto {{tag}})",
-    "advancedManualCuda": "Pick CUDA build manually",
     "manualCudaHint": "Choose based on your driver / preference; auto is usually fine. The wrong version may fail on import and require choosing again.",
     "installCpuBuildHint": "Install CPU build (very slow; diagnostics / no GPU only)",
     "installCudaBuildHint": "Install {{tag}} build (PyTorch index: /whl/{{tag}})",
@@ -1214,7 +1212,6 @@
     "noWheelForPython": "No prebuilt wheel was found for {{python}} (the current Python version may not be supported yet). Select another candidate below manually, or paste a URL from GitHub Releases.",
     "flashAttnNeedsCudaTorch": "PyTorch is currently a CPU build (torch+cpu) and flash_attn cannot be installed on it. flash_attn is a CUDA C extension — go to the PyTorch section above to reinstall a CUDA build (cu128 / cu130), restart Studio, then come back here.",
     "noWheelManual": "No usable wheel; select manually",
-    "candidateWheels": "Candidate wheels ({{n}} usable)",
     "wheelQueryFailed": "Query failed or no match (check network connection)",
     "installWheel": "Install this wheel",
     "wheelAbiIncompatible": "Python ABI is incompatible; force install may fail",
@@ -1447,7 +1444,8 @@
     "wheelMatchTags": "Match keys",
     "cuBuildDesc": "CUDA {{ver}} build",
     "cpuBuildDesc": "For machines without an NVIDIA GPU",
-    "variantCurrent": "current"
+    "variantCurrent": "current",
+    "manualVariantToggle": "Pick a specific version"
   },
   "monitor": {
     "taskLabel": "Task",

@@ -90,24 +90,49 @@ def wd14_install(body: WD14InstallRequest) -> dict[str, Any]:
 # 环境概览（系统 tab「环境」section）---------------------------------------
 
 
+def _nvml_driver_info() -> tuple[Optional[str], Optional[str]]:
+    """NVML 直读 (驱动版本, 驱动 CUDA 上限)；失败 (None, None)。
+
+    这个 CUDA 值是选 torch cu 包 / flash wheel 的判断依据，NVML API
+    （``nvmlSystemGetCudaDriverVersion_v2`` 返回如 13020 的整数）比跑
+    nvidia-smi 再正则解析文本稳——不受 locale / 输出格式变化影响。
+    """
+    try:
+        import pynvml  # type: ignore[import-untyped]  # noqa: PLC0415
+
+        pynvml.nvmlInit()
+        try:
+            drv = pynvml.nvmlSystemGetDriverVersion()
+            if isinstance(drv, bytes):
+                drv = drv.decode(errors="replace")
+            cuda_int = int(pynvml.nvmlSystemGetCudaDriverVersion_v2())
+            return str(drv), f"{cuda_int // 1000}.{(cuda_int % 1000) // 10}"
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 @router.get("/api/env/summary")
 def env_summary() -> dict[str, Any]:
     """机器级环境事实（不随 pip 包变）：驱动 / 驱动 CUDA 上限 / 平台 / Python。
 
     PyTorch / FlashAttention / ONNX Runtime 各卡片里重复展示的机器信息统一
-    上提到「环境」section，这里聚合现成探测：``flash_attention.detect_env``
+    上提到「环境」section。驱动信息优先 NVML 直读（见 ``_nvml_driver_info``），
+    回退现成的 nvidia-smi 文本探测：``flash_attention.detect_env``
     （platform / driver_cuda_ver）+ ``onnxruntime.detect_cuda``
     （driver_version）。字段拿不到时为 None，前端显示「未检测到」。
     """
     import platform as platform_mod  # noqa: PLC0415
 
+    nvml_driver, nvml_cuda = _nvml_driver_info()
     env = flash_attention_setup.detect_env()
     cuda = onnxruntime_setup.detect_cuda()
     return {
         "python_version": platform_mod.python_version(),
         "platform": env.get("platform"),
-        "driver_version": cuda.get("driver_version"),
-        "driver_cuda_version": env.get("driver_cuda_ver"),
+        "driver_version": nvml_driver or cuda.get("driver_version"),
+        "driver_cuda_version": nvml_cuda or env.get("driver_cuda_ver"),
     }
 
 

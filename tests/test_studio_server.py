@@ -102,10 +102,7 @@ def test_generate_sample_response_is_not_browser_cached(client: TestClient) -> N
 # /api/state
 # ---------------------------------------------------------------------------
 
-def test_env_summary_aggregates_machine_facts(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """GET /api/env/summary 聚合机器级事实：驱动/驱动 CUDA 上限/平台/Python。"""
+def _mock_env_probes(monkeypatch: pytest.MonkeyPatch) -> None:
     from studio.services.runtime import (
         flash_attention as flash_setup,
         onnxruntime as onnx_setup,
@@ -118,10 +115,31 @@ def test_env_summary_aggregates_machine_facts(
     monkeypatch.setattr(onnx_setup, "detect_cuda", lambda: {
         "available": True, "driver_version": "581.42", "gpu_name": "RTX 5090",
     })
-    resp = client.get("/api/env/summary")
-    assert resp.status_code == 200
-    body = resp.json()
+
+
+def test_env_summary_prefers_nvml(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /api/env/summary 驱动信息优先 NVML 直读（比解析 nvidia-smi 文本稳）。"""
+    from studio.api.routers import installs
+
+    _mock_env_probes(monkeypatch)
+    monkeypatch.setattr(installs, "_nvml_driver_info", lambda: ("596.49", "13.2"))
+    body = client.get("/api/env/summary").json()
+    assert body["driver_version"] == "596.49"
+    assert body["driver_cuda_version"] == "13.2"
     assert body["platform"] == "win_amd64"
+
+
+def test_env_summary_falls_back_to_smi_probes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NVML 不可用（驱动缺失/库缺失）→ 回退 nvidia-smi 文本探测。"""
+    from studio.api.routers import installs
+
+    _mock_env_probes(monkeypatch)
+    monkeypatch.setattr(installs, "_nvml_driver_info", lambda: (None, None))
+    body = client.get("/api/env/summary").json()
     assert body["driver_version"] == "581.42"
     assert body["driver_cuda_version"] == "13.0"
     # python_version 来自真实解释器，只验格式
