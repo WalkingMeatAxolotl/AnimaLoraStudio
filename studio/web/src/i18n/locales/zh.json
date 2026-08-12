@@ -1445,7 +1445,8 @@
     "cuBuildDesc": "CUDA {{ver}} 构建",
     "cpuBuildDesc": "无 NVIDIA GPU 的机器用",
     "variantCurrent": "当前",
-    "manualVariantToggle": "手动选择指定版本"
+    "manualVariantToggle": "手动选择指定版本",
+    "driverCudaSupport": "支持 CUDA ≤ {{ver}}"
   },
   "monitor": {
     "taskLabel": "任务",

@@ -553,10 +553,11 @@ describe('SettingsPage (PP0)', () => {
     // 单卡：只读显示当前在用的卡，没有下拉
     await within(row).findByText('0: RTX 5090（32G）')
     expect(within(row).queryByRole('combobox')).toBeNull()
-    // 环境概览卡（只读机器事实）——scope 到环境 section 容器内
+    // 环境概览行（只读机器事实）——scope 到环境 section 容器内;驱动 CUDA
+    // 能力跟驱动版本合并成一句(「支持 CUDA ≤ N」),不再裸放数字
     const envSection = document.getElementById('gpu') as HTMLElement
     await within(envSection).findByText('581.42')
-    expect(within(envSection).getByText('13.0')).toBeInTheDocument()
+    expect(within(envSection).getByText(/支持 CUDA ≤ 13\.0/)).toBeInTheDocument()
     expect(within(envSection).getByText('win_amd64')).toBeInTheDocument()
     expect(within(envSection).getByText('3.13.2')).toBeInTheDocument()
   })
