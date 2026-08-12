@@ -129,6 +129,8 @@ def test_env_summary_prefers_nvml(
     assert body["driver_version"] == "596.49"
     assert body["driver_cuda_version"] == "13.2"
     assert body["platform"] == "win_amd64"
+    # 真实在用的 CUDA = torch runtime 版本(12.8),不是驱动能力(13.2)
+    assert body["cuda_version"] == "12.8"
 
 
 def test_env_summary_falls_back_to_smi_probes(
@@ -144,6 +146,24 @@ def test_env_summary_falls_back_to_smi_probes(
     assert body["driver_cuda_version"] == "13.0"
     # python_version 来自真实解释器，只验格式
     assert body["python_version"].count(".") == 2
+
+
+def test_env_summary_cpu_torch_reports_no_cuda_in_use(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CPU build torch → cuda_version=None:环境没在用 CUDA,不拿驱动能力值冒充。"""
+    from studio.api.routers import installs
+    from studio.services.runtime import flash_attention as flash_setup
+
+    _mock_env_probes(monkeypatch)
+    monkeypatch.setattr(installs, "_nvml_driver_info", lambda: ("596.49", "13.2"))
+    monkeypatch.setattr(flash_setup, "detect_env", lambda: {
+        "python_tag": "cp313", "cuda_tag": "cu130", "cuda_ver": "13.0",
+        "driver_cuda_ver": "13.0", "torch_tag": "torch2.11",
+        "torch_ver": "2.11.0", "torch_cuda_build": "cpu", "platform": "win_amd64",
+    })
+    body = client.get("/api/env/summary").json()
+    assert body["cuda_version"] is None
 
 
 def test_torch_status_proxies_service(

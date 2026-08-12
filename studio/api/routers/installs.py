@@ -128,11 +128,17 @@ def env_summary() -> dict[str, Any]:
     nvml_driver, nvml_cuda = _nvml_driver_info()
     env = flash_attention_setup.detect_env()
     cuda = onnxruntime_setup.detect_cuda()
+    # 「真实在用的 CUDA」= torch 自带的 CUDA runtime 版本(cuda_ver 在 torch
+    # 为 CUDA build 时来自 torch.version.cuda)。CPU build / 未装 torch 时为
+    # None——此时环境没在用 CUDA,不能拿 nvidia-smi 的驱动能力值冒充。
+    torch_build = env.get("torch_cuda_build")
+    cuda_in_use = env.get("cuda_ver") if torch_build and torch_build != "cpu" else None
     return {
         "python_version": platform_mod.python_version(),
         "platform": env.get("platform"),
         "driver_version": nvml_driver or cuda.get("driver_version"),
         "driver_cuda_version": nvml_cuda or env.get("driver_cuda_ver"),
+        "cuda_version": cuda_in_use,
     }
 
 

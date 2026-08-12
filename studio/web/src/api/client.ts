@@ -427,13 +427,15 @@ export interface CLTaggerConfig {
   batch_size: number
 }
 
-/** 机器级环境事实（不随 pip 包变）：系统 tab「环境」section 的只读概览。 */
+/** 系统 tab「环境」section 的只读概览。 */
 export interface EnvSummary {
   python_version: string
   platform: string | null
   driver_version: string | null
-  /** 驱动支持的 CUDA 版本上限（nvidia-smi 报的 "CUDA Version"）。 */
+  /** 驱动支持的 CUDA 版本上限（NVML 直读，回退 nvidia-smi 解析）。 */
   driver_cuda_version: string | null
+  /** 环境真实在用的 CUDA（torch 自带的 runtime 版本）；CPU build/未装 torch 为 null。 */
+  cuda_version: string | null
 }
 
 /** PR-S2 — PyTorch 安装状态 + 驱动检测 + 推荐 cu tag。 */

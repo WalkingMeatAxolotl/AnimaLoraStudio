@@ -376,6 +376,7 @@ beforeEach(() => {
       return Promise.resolve(new Response(JSON.stringify({
         python_version: '3.13.2', platform: 'win_amd64',
         driver_version: '581.42', driver_cuda_version: '13.0',
+        cuda_version: '12.8',
       }), { status: 200 }))
     }
     if (typeof url === 'string' && url.includes('/api/models/catalog')) {
@@ -558,6 +559,8 @@ describe('SettingsPage (PP0)', () => {
     const envSection = document.getElementById('gpu') as HTMLElement
     await within(envSection).findByText('581.42')
     expect(within(envSection).getByText(/支持 CUDA ≤ 13\.0/)).toBeInTheDocument()
+    // CUDA 条目 = 真实在用的 torch runtime 版本,不是驱动能力 13.0
+    expect(within(envSection).getByText('12.8')).toBeInTheDocument()
     expect(within(envSection).getByText('win_amd64')).toBeInTheDocument()
     expect(within(envSection).getByText('3.13.2')).toBeInTheDocument()
   })

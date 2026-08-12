@@ -1446,7 +1446,8 @@
     "cpuBuildDesc": "For machines without an NVIDIA GPU",
     "variantCurrent": "current",
     "manualVariantToggle": "Pick a specific version",
-    "driverCudaSupport": "supports CUDA ≤ {{ver}}"
+    "driverCudaSupport": "supports CUDA ≤ {{ver}}",
+    "cudaNotInUse": "not in use"
   },
   "monitor": {
     "taskLabel": "Task",

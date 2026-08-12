@@ -123,15 +123,18 @@ export function GpuSection() {
           tag)留在各自行内。 */}
       {env && (
         <div className="flex gap-4 flex-wrap text-xs">
-          {/* 驱动 CUDA 能力跟驱动版本绑在一起读:「支持 CUDA ≤ 13.2」。裸放
-              「CUDA: 13.2」会被拿去跟 torch 的 cu128 对号(那是软件栈在用的
-              版本,显示在依赖区 PyTorch 行),两回事。 */}
+          {/* CUDA 条目 = 环境**真实在用**的版本(torch 自带 runtime);驱动
+              的 CUDA 能力上限只是驱动条目的附注,不能混为一谈。 */}
           <span className="text-fg-tertiary">
             {t('settings.driverLabel')}:{' '}
             <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
             {env.driver_cuda_version && (
               <>（{t('settings.driverCudaSupport', { ver: env.driver_cuda_version })}）</>
             )}
+          </span>
+          <span className="text-fg-tertiary">
+            CUDA:{' '}
+            <code className="text-fg-secondary font-mono">{env.cuda_version ?? t('settings.cudaNotInUse')}</code>
           </span>
           <span className="text-fg-tertiary">
             {t('settings.platform')}:{' '}
