@@ -707,8 +707,8 @@ export function ONNXRuntimeSection() {
       loading={!error && !rt}
       infoCard={rt && (<>
         <DepVersionRow
-          name="runtime"
-          value={`${rt.installed ?? t('settings.notInstalledParen')}${rt.version ? `==${rt.version}` : ''}`}
+          name={rt.installed ?? 'onnxruntime'}
+          value={rt.installed ? rt.version ?? '?' : t('settings.notInstalledParen')}
           badge={{
             text: rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU only',
             ok: gpuAccel,
@@ -847,8 +847,8 @@ export function PyTorchSection() {
           : !status.cuda_available && status.cuda_build !== 'cpu'
             ? t('settings.cudaUnavailableDriver')
             : status.cuda_available
-              ? `CUDA ✓ ${status.cuda_build}`
-              : `CPU ${status.cuda_build}`
+              ? `CUDA · ${status.cuda_build}`
+              : 'CPU'
 
   const notices: DepNotice[] = []
   if (status?.is_cpu_with_gpu) {
@@ -897,15 +897,19 @@ export function PyTorchSection() {
       )}
       notices={notices}
       primary={status ? {
-        label: busy ? t('settings.installing') : status.is_cpu_with_gpu
-          ? t('settings.reinstallCudaBuild', { tag: status.recommended_cu_tag })
-          : t('settings.reinstallAuto', { tag: status.recommended_cu_tag }),
+        label: busy
+          ? t('settings.installing')
+          : !status.installed
+            ? t('settings.installAutoMatchPlain')
+            : status.is_cpu_with_gpu
+              ? t('settings.reinstallCudaBuild', { tag: status.recommended_cu_tag })
+              : t('settings.reinstallAuto', { tag: status.recommended_cu_tag }),
         onClick: () => void reinstall('auto'),
         disabled: busy || !status.cuda_detect.available,
         title: status.cuda_detect.available
           ? t('settings.autoSelect', { tag: status.recommended_cu_tag })
           : t('settings.noNvidiaDriverCannotCuda'),
-        emphasized: status.is_cpu_with_gpu,
+        emphasized: !status.installed || status.is_cpu_with_gpu,
       } : undefined}
       onRefresh={() => void refresh()}
       busy={busy}
@@ -1007,7 +1011,7 @@ export function FlashAttentionSection() {
     : !status
       ? t('settings.loadingStatus')
       : status.installed
-        ? t('settings.installedVersion', { version: status.version ?? '?' })
+        ? `v${status.version ?? '?'}`
         : t('settings.notInstalledShort')
 
   const notices: DepNotice[] = []
@@ -1041,8 +1045,7 @@ export function FlashAttentionSection() {
       infoCard={status && (
         <DepVersionRow
           name="flash_attn"
-          value={status.installed ? `v${status.version ?? '?'}` : t('settings.notInstalledParen')}
-          badge={status.installed ? { text: t('settings.installed'), ok: true } : undefined}
+          value={status.installed ? status.version ?? '?' : t('settings.notInstalledParen')}
         />
       )}
       notices={notices}
@@ -1173,7 +1176,7 @@ export function XformersSection() {
     : !status
       ? t('settings.loadingStatus')
       : status.installed
-        ? t('settings.installedVersion', { version: status.version ?? '?' })
+        ? `v${status.version ?? '?'}`
         : t('settings.notInstalledShort')
 
   return (
@@ -1194,8 +1197,7 @@ export function XformersSection() {
       infoCard={status && (
         <DepVersionRow
           name="xformers"
-          value={status.installed ? `v${status.version ?? '?'}` : t('settings.notInstalledParen')}
-          badge={status.installed ? { text: t('settings.installed'), ok: true } : undefined}
+          value={status.installed ? status.version ?? '?' : t('settings.notInstalledParen')}
         />
       )}
       primary={status ? {
