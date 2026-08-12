@@ -36,6 +36,12 @@ import {
 import i18n from '../../../i18n'
 import { textInputClass } from './constants'
 import { SettingsField, SettingsSection } from './fields'
+import {
+  FlashAttentionSection,
+  ONNXRuntimeSection,
+  PyTorchSection,
+  XformersSection,
+} from './sections'
 
 // 版本面板「更新内容」概览：展示前 N 条要点；kind → vs-pill 配色 + i18n label（与历史
 // release notes 概览同一套着色，数据源改为从公告 post 正文解析）。
@@ -63,6 +69,10 @@ export function SystemSection() {
     <>
       <VersionSection />
       <GpuSection />
+      <PyTorchSection />
+      <FlashAttentionSection />
+      <XformersSection />
+      <ONNXRuntimeSection />
       <StorageSection />
       <ServiceSection />
     </>
@@ -70,12 +80,13 @@ export function SystemSection() {
 }
 
 
-// ── 显卡 Section（#491）──────────────────────────────────────────────────
+// ── 环境 Section（#491）──────────────────────────────────────────────────
 //
-// 计算显卡是**全局**行为：训练 / 出图 / 打标全部跟随,所以住系统 tab 而不是
-// 某个功能 tab。存 secrets.system.gpu_index(NVML/nvidia-smi 的 PCI 序号,
-// 与下面 systemStats 列表同一套编号),启动期由 runtime/gpu_select 注入
-// CUDA env——重启生效。多卡才渲染下拉;单卡显示当前在用的卡(只读)。
+// 计算显卡是**全局**行为：训练 / 出图 / 打标全部跟随,所以和 PyTorch /
+// FlashAttention / xformers / ONNX Runtime 这些计算环境依赖一起住系统 tab,
+// 不塞进某个功能 tab。存 secrets.system.gpu_index(NVML/nvidia-smi 的 PCI
+// 序号,与下面 systemStats 列表同一套编号),启动期由 runtime/gpu_select
+// 注入 CUDA env——重启生效。多卡才渲染下拉;单卡显示当前在用的卡(只读)。
 export function GpuSection() {
   const { t } = useTranslation()
   const { toast } = useToast()

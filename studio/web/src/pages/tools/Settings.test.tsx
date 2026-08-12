@@ -505,7 +505,7 @@ describe('SettingsPage (PP0)', () => {
     renderPage()
     await user.click(await screen.findByRole('button', { name: '系统' }))
 
-    const label = await screen.findByText('计算显卡')
+    const label = await screen.findByText('显卡', { selector: 'label' })
     const row = label.closest('.grid') as HTMLElement
     const select = within(row).getByRole('combobox') as HTMLSelectElement
     // 未显式设置时预选 torch 实际在用的卡（active），不是盲选第一张
@@ -542,7 +542,7 @@ describe('SettingsPage (PP0)', () => {
     const user = userEvent.setup()
     renderPage()
     await user.click(await screen.findByRole('button', { name: '系统' }))
-    const label = await screen.findByText('计算显卡')
+    const label = await screen.findByText('显卡', { selector: 'label' })
     const row = label.closest('.grid') as HTMLElement
     // 单卡：只读显示当前在用的卡，没有下拉
     await within(row).findByText('0: RTX 5090（32G）')
