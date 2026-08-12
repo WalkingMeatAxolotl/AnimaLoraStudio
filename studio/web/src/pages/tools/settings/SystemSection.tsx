@@ -5,6 +5,7 @@ import {
   api,
   type DevCommit,
   type DevCommitsResult,
+  type GpuStats,
   type ModelsRootInfo,
   type PreflightResult,
   type StudioDataInfo,
@@ -24,6 +25,7 @@ import PathPicker from '../../../components/PathPicker'
 import StudioDataMigrateModal from '../../../components/StudioDataMigrateModal'
 import ModelsRootMigrateModal from '../../../components/ModelsRootMigrateModal'
 import { useToast } from '../../../components/Toast'
+import { useSettingsData } from '../../../lib/SettingsData'
 import {
   formatMasterStateText,
   formatDevStateText,
@@ -34,6 +36,12 @@ import {
 import i18n from '../../../i18n'
 import { textInputClass } from './constants'
 import { SettingsField, SettingsSection } from './fields'
+import {
+  FlashAttentionSection,
+  ONNXRuntimeSection,
+  PyTorchSection,
+  XformersSection,
+} from './sections'
 
 // 版本面板「更新内容」概览：展示前 N 条要点；kind → vs-pill 配色 + i18n label（与历史
 // release notes 概览同一套着色，数据源改为从公告 post 正文解析）。
@@ -60,9 +68,80 @@ export function SystemSection() {
   return (
     <>
       <VersionSection />
+      <GpuSection />
+      <PyTorchSection />
+      <FlashAttentionSection />
+      <XformersSection />
+      <ONNXRuntimeSection />
       <StorageSection />
       <ServiceSection />
     </>
+  )
+}
+
+
+// ── 环境 Section（#491）──────────────────────────────────────────────────
+//
+// 计算显卡是**全局**行为：训练 / 出图 / 打标全部跟随,所以和 PyTorch /
+// FlashAttention / xformers / ONNX Runtime 这些计算环境依赖一起住系统 tab,
+// 不塞进某个功能 tab。存 secrets.system.gpu_index(NVML/nvidia-smi 的 PCI
+// 序号,与下面 systemStats 列表同一套编号),启动期由 runtime/gpu_select
+// 注入 CUDA env——重启生效。多卡才渲染下拉;单卡显示当前在用的卡(只读)。
+export function GpuSection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const { runSave } = useSettingsData()
+  const [gpus, setGpus] = useState<GpuStats[] | null>(null)
+  const [gpuIndex, setGpuIndex] = useState<number | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    void api.systemStats().then((s) => setGpus(s.gpu ?? null)).catch(() => { /* 显示用 */ })
+    void api.getSecrets().then((sec) => setGpuIndex(sec.system?.gpu_index ?? null)).catch(() => { /* 显示用 */ })
+  }, [])
+
+  const save = async (next: number) => {
+    setSaving(true)
+    const prev = gpuIndex
+    setGpuIndex(next)
+    try {
+      await runSave(() => api.updateSecrets({ system: { gpu_index: next } }))
+      toast(t('settings.gpuSelectSaved'), 'success')
+    } catch (e) {
+      setGpuIndex(prev)
+      toast(String(e), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const fmt = (g: GpuStats) => `${g.index}: ${g.name}（${Math.round(g.vram_total_gb)}G）`
+
+  return (
+    <SettingsSection id="gpu" title={t('settings.gpuSection')}>
+      <SettingsField
+        label={t('settings.gpuSelectLabel')}
+        helpTooltip={<p>{t('settings.gpuSelectHelp')}</p>}
+      >
+        {gpus && gpus.length > 1 ? (
+          // 未显式设置时预选 torch 实际在用的那张(stats.active);选择即保存
+          <select
+            value={gpuIndex ?? gpus.find((g) => g.active)?.index ?? 0}
+            onChange={(e) => void save(Number(e.target.value))}
+            disabled={saving}
+            className={`${textInputClass} max-w-72 disabled:opacity-60`}
+          >
+            {gpus.map((g) => (
+              <option key={g.index} value={g.index}>{fmt(g)}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-xs text-fg-secondary font-mono leading-7">
+            {gpus?.[0] ? fmt(gpus[0]) : t('settings.gpuNoneDetected')}
+          </span>
+        )}
+      </SettingsField>
+    </SettingsSection>
   )
 }
 

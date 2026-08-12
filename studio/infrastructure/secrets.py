@@ -641,6 +641,11 @@ class SystemConfig(BaseModel):
     update_channel: str = "stable"  # "stable" / "dev"
     show_dev_channel: bool = False  # deprecated, 仅作迁移源
     enable_automagic_v2: bool = False  # 实验性：文件级开关，UI 不暴露
+    #: 计算显卡（多卡机器，#491）。None = 从未设置：不注入任何 env，CUDA 自选
+    #: （FASTEST_FIRST，快卡优先）——单卡用户永远停在这。设过 = NVML/nvidia-smi
+    #: 的 PCI 序号，启动期由 runtime.gpu_select 注入 CUDA_DEVICE_ORDER=PCI_BUS_ID
+    #: + CUDA_VISIBLE_DEVICES 使训练/出图/打标全走这张卡；重启生效。
+    gpu_index: Optional[int] = None
     # v0.23.1 「ram_guard 默认改关」一次性迁移哨兵（_migrate_legacy_schema
     # 第 10 步）。判据是**盘上键缺失**（只有 v0.23.1 之前写的旧盘没有此键）
     # → 丢弃盘上的 generate/training ram_guard 旧值让新默认（关）生效；

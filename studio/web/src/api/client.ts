@@ -19,6 +19,8 @@ export interface GpuStats {
   vram_used_gb: number
   vram_total_gb: number
   temp_c: number | null
+  /** torch 实际在用的卡（多卡机器显示这张）；后端解析不出时全 false。 */
+  active?: boolean
 }
 
 export interface SystemStats {
@@ -624,6 +626,9 @@ export interface SystemPrefsConfig {
   update_channel: 'stable' | 'dev'
   /** @deprecated use update_channel */
   show_dev_channel: boolean
+  /** 计算显卡（多卡机器，#491）：NVML/nvidia-smi 的 PCI 序号；null = 未设置
+   *  （CUDA 自选，快卡优先）。启动期注入 CUDA env，重启生效。 */
+  gpu_index?: number | null
 }
 
 export interface ProxyConfig {

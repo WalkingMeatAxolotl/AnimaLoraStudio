@@ -109,6 +109,8 @@ def test_nvml_one_fake_gpu(monkeypatch: pytest.MonkeyPatch):
     assert g.vram_used_gb == 4.0
     assert g.vram_total_gb == 24.0
     assert g.temp_c == 50
+    # 单卡短路：不查 env / torch，active 恒真
+    assert g.active is True
 
 
 def test_sampler_emits_payloads(monkeypatch: pytest.MonkeyPatch):
@@ -192,3 +194,81 @@ def test_nvml_temp_failure_keeps_other_fields(monkeypatch: pytest.MonkeyPatch):
     assert result is not None and len(result) == 1
     assert result[0].temp_c is None
     assert result[0].util_pct == 10
+
+
+# ── active GPU 标记（多卡，#491）─────────────────────────────────────
+
+
+def _fake_two_gpus(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+    """两张 mock 卡：NVML 序 0=2080(bus 01), 1=3070(bus 07)。"""
+    monkeypatch.setattr(
+        system_stats, "_nvml_state", {"inited": True, "ok": True},
+    )
+
+    class FakeMem:
+        used = 1 * 1024 ** 3
+        total = 8 * 1024 ** 3
+
+    class FakeUtil:
+        gpu = 5
+
+    class FakePci:
+        def __init__(self, bus_id: str):
+            self.busId = bus_id.encode()
+
+    pci = {"h0": FakePci("00000000:01:00.0"), "h1": FakePci("00000000:07:00.0")}
+    fake = types.ModuleType("pynvml")
+    fake.NVML_TEMPERATURE_GPU = 0  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetCount = lambda: 2  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetHandleByIndex = lambda i: f"h{i}"  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetName = lambda h: f"Mock {h}"  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetMemoryInfo = lambda h: FakeMem()  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetUtilizationRates = lambda h: FakeUtil()  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetTemperature = lambda h, t: 40  # type: ignore[attr-defined]
+    fake.nvmlDeviceGetPciInfo = lambda h: pci[h]  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pynvml", fake)
+    # 隔离宿主机 env：默认无选卡注入
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    return fake
+
+
+def test_multi_gpu_active_follows_torch_pci_bus_id(monkeypatch: pytest.MonkeyPatch):
+    """多卡：active 标在 torch PCI bus id 匹配的那张，不是盲选 gpu[0]。"""
+    _fake_two_gpus(monkeypatch)
+    monkeypatch.setattr(
+        system_stats, "_torch_pci_bus_id", lambda: "00000000:07:00.0",
+    )
+    result = system_stats._collect_gpu()
+    assert result is not None and [g.active for g in result] == [False, True]
+
+
+def test_multi_gpu_active_from_selection_env(monkeypatch: pytest.MonkeyPatch):
+    """选卡 env 已注入（PCI_BUS_ID 序）→ 直接映射 NVML index，不碰 torch。"""
+    _fake_two_gpus(monkeypatch)
+    monkeypatch.setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+
+    def torch_boom() -> None:
+        raise AssertionError("env 路径不应触发 torch 查询")
+
+    monkeypatch.setattr(system_stats, "_torch_pci_bus_id", torch_boom)
+    result = system_stats._collect_gpu()
+    assert result is not None and [g.active for g in result] == [False, True]
+
+
+def test_multi_gpu_active_none_when_unresolvable(monkeypatch: pytest.MonkeyPatch):
+    """解析不出（CPU-only torch 等）→ 全 False，前端回退 gpu[0]。"""
+    _fake_two_gpus(monkeypatch)
+    monkeypatch.setattr(system_stats, "_torch_pci_bus_id", lambda: None)
+    result = system_stats._collect_gpu()
+    assert result is not None and [g.active for g in result] == [False, False]
+
+
+def test_multi_gpu_env_index_out_of_range_unmarked(monkeypatch: pytest.MonkeyPatch):
+    """env 指到不存在的卡（eGPU 拔了）→ 不标，而不是标错/崩。"""
+    _fake_two_gpus(monkeypatch)
+    monkeypatch.setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    result = system_stats._collect_gpu()
+    assert result is not None and [g.active for g in result] == [False, False]

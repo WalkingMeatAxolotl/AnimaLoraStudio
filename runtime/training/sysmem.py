@@ -233,19 +233,57 @@ def log_vram(stage: str, device=None) -> None:
     )
 
 
+def torch_device_pci_bus_id() -> str | None:
+    """torch 当前 CUDA 设备的 PCI bus id（NVML 格式 ``00000000:07:00.0``）。
+
+    多卡机器上 torch（默认 FASTEST_FIRST，快卡在前）与 NVML/nvidia-smi
+    （PCI 插槽顺序）是**两套编号**——拿着一边的 index 去另一边查会读错卡
+    （issue #491：训练在 3070 上，护栏却读 2080 的空闲显存）。PCI bus id
+    是全机唯一的硬件地址，跨两套编号定位同一张卡。
+    查询失败（CPU-only / 老 torch 无 pci 字段）返回 None。
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        props = torch.cuda.get_device_properties(torch.cuda.current_device())
+        domain = getattr(props, "pci_domain_id", None)
+        bus = getattr(props, "pci_bus_id", None)
+        device = getattr(props, "pci_device_id", None)
+        if domain is None or bus is None or device is None:
+            return None
+        return f"{domain:08X}:{bus:02X}:{device:02X}.0"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def nvml_handle_for_torch_device(pynvml):
+    """torch 正在用的那张卡的 NVML handle；匹配不上回退 index 0（单卡等价）。"""
+    bus_id = torch_device_pci_bus_id()
+    if bus_id is not None:
+        try:
+            return pynvml.nvmlDeviceGetHandleByPciBusId(bus_id.encode())
+        except Exception:  # noqa: BLE001
+            pass
+    return pynvml.nvmlDeviceGetHandleByIndex(0)
+
+
 def gpu_free_bytes_global() -> int | None:
     """全卡真实空闲显存；查询失败返回 None。
 
     必须走 NVML：WDDM 下 ``cudaMemGetInfo`` 是**每进程虚拟化视角**，
     看不到其他进程的占用（真机实测：他进程持有 20GB 时它仍报全量
     free）——用它做跨进程护栏形同虚设。NVML 是全卡视角。
+    卡的选择走 PCI bus id 匹配（``nvml_handle_for_torch_device``），
+    多卡机器上读的才是 torch 实际在用的那张。
     """
     try:
         import pynvml
 
         pynvml.nvmlInit()
         try:
-            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            handle = nvml_handle_for_torch_device(pynvml)
             return int(pynvml.nvmlDeviceGetMemoryInfo(handle).free)
         finally:
             pynvml.nvmlShutdown()

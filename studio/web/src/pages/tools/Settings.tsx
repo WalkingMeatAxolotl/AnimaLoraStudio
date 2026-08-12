@@ -36,11 +36,8 @@ import { Bool, SectionIndex, SensitiveInput, SettingsField, SettingsInput, Setti
 import { HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
 import {
   DisplaySection,
-  FlashAttentionSection,
   IdleTimeoutSection,
   ModelsSection,
-  ONNXRuntimeSection,
-  PyTorchSection,
   SaveTestImagesSection,
   TaeFluxSection,
   TagDictionarySection,
@@ -48,7 +45,6 @@ import {
   UpscalerSection,
   VaePrecisionSection,
   VramPolicySection,
-  XformersSection,
 } from './settings/sections'
 import { SystemSection } from './settings/SystemSection'
 import WandBWorkspace from './settings/WandBWorkspace'
@@ -632,7 +628,6 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <ONNXRuntimeSection />
       <TagDictionarySection />
       </>)}
 
@@ -647,12 +642,6 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <TrainingParamsSection />
-
-      <PyTorchSection />
-
-      <FlashAttentionSection />
-
-      <XformersSection />
 
       <ModelsSection
         catalog={catalog}

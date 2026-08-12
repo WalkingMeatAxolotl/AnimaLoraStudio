@@ -75,7 +75,11 @@ export default function SystemStats() {
 
   if (!stats) return null
 
-  const gpu0 = stats.gpu && stats.gpu.length > 0 ? stats.gpu[0] : null
+  // 多卡机器显示 torch 实际在用的卡（后端按 PCI bus id 解析，#491）；
+  // 后端解析不出时回退第一张（单卡两者等价）。
+  const gpu0 = stats.gpu && stats.gpu.length > 0
+    ? (stats.gpu.find((g) => g.active) ?? stats.gpu[0])
+    : null
   const ramPct = stats.ram_total_gb > 0 ? (stats.ram_used_gb / stats.ram_total_gb) * 100 : 0
   const vramPct = gpu0 && gpu0.vram_total_gb > 0 ? (gpu0.vram_used_gb / gpu0.vram_total_gb) * 100 : 0
 
