@@ -117,6 +117,7 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   ],
   system: [
     { id: 'version', labelKey: 'settings.version' },
+    { id: 'gpu', labelKey: 'settings.gpuSection' },
     { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
   ],

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { DialogProvider } from '../../components/Dialog'
 import { ToastProvider } from '../../components/Toast'
+import { AnnouncementsProvider } from '../../lib/Announcements'
 import { SettingsDataProvider } from '../../lib/SettingsData'
 import { SettingsDrawerProvider } from '../../lib/SettingsDrawer'
 import SettingsPage from './Settings'
@@ -368,6 +369,9 @@ beforeEach(() => {
         new Response(JSON.stringify(merged), { status: 200 })
       )
     }
+    if (typeof url === 'string' && url.includes('/api/announcements')) {
+      return Promise.resolve(new Response(JSON.stringify({ posts: [] }), { status: 200 }))
+    }
     if (typeof url === 'string' && url.includes('/api/models/catalog')) {
       return Promise.resolve(
         new Response(JSON.stringify(emptyModelsCatalog), { status: 200 })
@@ -433,11 +437,13 @@ function renderPage() {
     <MemoryRouter>
       <ToastProvider>
         <DialogProvider>
-          <SettingsDataProvider>
-            <SettingsDrawerProvider>
-              <SettingsPage />
-            </SettingsDrawerProvider>
-          </SettingsDataProvider>
+          <AnnouncementsProvider>
+            <SettingsDataProvider>
+              <SettingsDrawerProvider>
+                <SettingsPage />
+              </SettingsDrawerProvider>
+            </SettingsDataProvider>
+          </AnnouncementsProvider>
         </DialogProvider>
       </ToastProvider>
     </MemoryRouter>
@@ -497,7 +503,7 @@ describe('SettingsPage (PP0)', () => {
     })
     const user = userEvent.setup()
     renderPage()
-    await user.click(await screen.findByRole('button', { name: '训练' }))
+    await user.click(await screen.findByRole('button', { name: '系统' }))
 
     const label = await screen.findByText('计算显卡')
     const row = label.closest('.grid') as HTMLElement
@@ -520,7 +526,7 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('single GPU: compute GPU picker is hidden', async () => {
+  it('single GPU: shows the current card read-only instead of a picker', async () => {
     const base = fetchMock.getMockImplementation()!
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (typeof url === 'string' && url.includes('/api/system/stats')) {
@@ -535,10 +541,12 @@ describe('SettingsPage (PP0)', () => {
     })
     const user = userEvent.setup()
     renderPage()
-    await user.click(await screen.findByRole('button', { name: '训练' }))
-    // PyTorch section 已渲染（标题 + 右侧导航两处）但没有选卡行
-    await screen.findAllByText('PyTorch')
-    await waitFor(() => expect(screen.queryByText('计算显卡')).toBeNull())
+    await user.click(await screen.findByRole('button', { name: '系统' }))
+    const label = await screen.findByText('计算显卡')
+    const row = label.closest('.grid') as HTMLElement
+    // 单卡：只读显示当前在用的卡，没有下拉
+    await within(row).findByText('0: RTX 5090（32G）')
+    expect(within(row).queryByRole('combobox')).toBeNull()
   })
 
   it('changes LoRA merge precision independently from VAE precision', async () => {
