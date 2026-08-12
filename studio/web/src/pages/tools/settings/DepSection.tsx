@@ -1,16 +1,19 @@
-// 统一的「依赖安装 / 修复」卡片外壳 —— 系统 tab 环境区四件套共用
+// 统一的「依赖安装 / 修复」手风琴行 —— 「环境」section 依赖区四件套共用
 // （PyTorch / Flash Attention / xformers / ONNX Runtime）。
 //
 // 统一约定（此前四个组件各手抄一份，措辞/配色/⚠ 使用各不相同）：
-// - summary 行：▸ + 标题 + ⓘ 用途说明 + 右侧状态词
+// - 行头：▸ + 标题 + 副标题 + ⓘ 用途说明 + 右侧状态词
 // - 状态词颜色语义：ok=绿（正常）、warn=黄（可改善/未装）、err=红（坏了要修）、
 //   loading=灰；warn/err 由壳统一加 ⚠ 前缀，包组件不要自己拼
 // - 展开内容：状态卡（**包事实**：版本/build/EP）→ 警告条 → 动作行
-//   （主按钮 + ↻ 刷新 + 右侧高级 toggle）→ 高级区
-// - **机器事实**（驱动/平台/Python）一律不进卡片——见「环境」section 概览
+//   （主按钮 + ↻ 刷新 + 右侧高级 toggle）→ 高级区（DepVariantList 变体安装表）
+// - **机器事实**（驱动/平台/Python）一律不进行内——见「环境」section 概览
+// - 外层容器（边框/圆角/行间分隔线）由「环境」section 提供，本组件只渲染行
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InfoButton } from '../../../components/InfoButton'
+import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { StatusLabel } from './modelCards'
 
 export type DepLevel = 'ok' | 'warn' | 'err' | 'loading'
@@ -67,18 +70,29 @@ export function DepSection({
   advanced?: { label: string; open: boolean; onToggle: () => void; children: ReactNode }
 }) {
   const { t } = useTranslation()
+  const drawer = useSettingsDrawer()
+  const sectionReq = drawer.sectionRequest
+  // 深链（如打标页「修 GPU 加速」→ section: 'onnxruntime'）落到收起的行没有
+  // 意义 —— 请求命中自己时展开。details 的 open 是 uncontrolled（用户点击改
+  // DOM），这里直接操作 DOM 而不是 state，避免和用户手动开合打架。
+  useEffect(() => {
+    if (sectionReq?.section !== id) return
+    const el = document.getElementById(id) as HTMLDetailsElement | null
+    if (el) el.open = true
+  }, [sectionReq, id])
+
   const decorated = level === 'warn' || level === 'err' ? `⚠ ${statusText}` : statusText
   return (
-    <details id={id} open={forceOpen} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
-      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
+    <details id={id} open={forceOpen} className="bg-surface group scroll-mt-24">
+      <summary className="cursor-pointer px-3 py-2.5 list-none flex items-center gap-2">
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
-        <h2 className="text-sm font-semibold text-fg-primary m-0">{title}</h2>
+        <h3 className="text-sm font-semibold text-fg-primary m-0">{title}</h3>
         {subtitle && <span className="text-xs text-fg-tertiary">{subtitle}</span>}
         {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
         <span className={`ml-auto text-xs font-mono ${LEVEL_CLASS[level]}`}>{decorated}</span>
       </summary>
 
-      <div className="px-4 pb-4 flex flex-col gap-3">
+      <div className="pl-8 pr-3 pb-3 flex flex-col gap-3">
         {loadError && <div className="text-err text-xs font-mono">{loadError}</div>}
         {!loadError && loading && <div className="text-xs text-fg-tertiary">{t('settings.loadingStatus')}</div>}
         {!loadError && !loading && (
@@ -126,6 +140,69 @@ export function DepSection({
         )}
       </div>
     </details>
+  )
+}
+
+export interface DepVariant {
+  key: string
+  /** 变体标识（cu tag / 包名 / wheel 文件名），等宽字体。 */
+  label: string
+  /** 事实注记（构建版本/适用平台/ABI 警示）——不写推荐，选型判断交给主按钮的自动匹配。 */
+  note?: ReactNode
+  /** 当前已装的变体（标 ✓）。 */
+  current?: boolean
+  /** false = 判定不兼容：行灰显、按钮变「强制安装」。默认 true。 */
+  usable?: boolean
+  /** 彻底不可装（如非 Windows 装 DirectML）：按钮禁用。 */
+  disabled?: boolean
+  onInstall: () => void
+  installTitle?: string
+}
+
+/** 高级区统一的「变体安装表」：从 N 个变体里手动挑一个装。
+ *  三个包的高级区（PyTorch 选 cu 版本 / ONNX 强装指定包 / Flash 候选 wheel）
+ *  语义同构，行结构统一为「标识 + 注记 + 当前✓ + 安装」。 */
+export function DepVariantList({ variants, busy, hint, footer }: {
+  variants: DepVariant[]
+  busy?: boolean
+  /** 表顶说明行（灰字）。 */
+  hint?: ReactNode
+  /** 表底插槽（Flash 的手动 URL 输入等）。 */
+  footer?: ReactNode
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex flex-col gap-2">
+      {hint && <p className="text-xs text-fg-tertiary m-0">{hint}</p>}
+      <ul className="list-none m-0 p-0 flex flex-col gap-1">
+        {variants.map((v) => {
+          const usable = v.usable !== false
+          return (
+            <li
+              key={v.key}
+              className={`flex items-center gap-2.5 text-xs px-2 py-1.5 rounded-sm border ${
+                usable ? 'border-subtle bg-sunken' : 'border-transparent bg-transparent opacity-50'
+              }`}
+            >
+              <code className="font-mono text-fg-primary text-[11px] break-all min-w-0">{v.label}</code>
+              <div className="flex flex-col gap-0.5 flex-1 min-w-0 text-[11px] text-fg-tertiary">
+                {v.note}
+              </div>
+              {v.current && <span className="text-ok text-[11px] shrink-0">{t('settings.variantCurrent')} ✓</span>}
+              <button
+                onClick={v.onInstall}
+                disabled={busy || v.disabled}
+                title={v.installTitle}
+                className="btn btn-secondary btn-sm shrink-0"
+              >
+                {usable ? t('settings.installAction') : t('settings.forceInstall')}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      {footer}
+    </div>
   )
 }
 

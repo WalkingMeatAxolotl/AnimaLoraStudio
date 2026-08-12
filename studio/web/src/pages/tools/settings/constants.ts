@@ -116,10 +116,6 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   system: [
     { id: 'version', labelKey: 'settings.version' },
     { id: 'gpu', labelKey: 'settings.gpuSection' },
-    { id: 'pytorch', labelKey: 'settings.torch' },
-    { id: 'flash-attn', labelKey: 'settings.flashAttn' },
-    { id: 'xformers', labelKey: 'settings.xformers' },
-    { id: 'onnxruntime', labelKey: 'settings.onnxRuntime' },
     { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
   ],

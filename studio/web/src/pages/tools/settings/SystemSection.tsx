@@ -70,10 +70,6 @@ export function SystemSection() {
     <>
       <VersionSection />
       <GpuSection />
-      <PyTorchSection />
-      <FlashAttentionSection />
-      <XformersSection />
-      <ONNXRuntimeSection />
       <StorageSection />
       <ServiceSection />
     </>
@@ -122,6 +118,29 @@ export function GpuSection() {
 
   return (
     <SettingsSection id="gpu" title={t('settings.gpuSection')}>
+      {/* 机器级环境概览(只读):驱动/驱动 CUDA 上限/平台/Python。依赖行内
+          不再重复这些机器事实——包相关信息(torch build、EP、wheel 匹配
+          tag)留在各自行内。 */}
+      {env && (
+        <div className="rounded-sm border border-subtle bg-sunken p-2 flex gap-4 flex-wrap text-xs">
+          <span className="text-fg-tertiary">
+            {t('settings.driverLabel')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            {t('settings.envDriverCudaMax')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.driver_cuda_version ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            {t('settings.platform')}:{' '}
+            <code className="text-fg-secondary font-mono">{env.platform ?? t('settings.notDetected')}</code>
+          </span>
+          <span className="text-fg-tertiary">
+            Python: <code className="text-fg-secondary font-mono">{env.python_version}</code>
+          </span>
+        </div>
+      )}
+
       <SettingsField
         label={t('settings.gpuSelectLabel')}
         helpTooltip={<p>{t('settings.gpuSelectHelp')}</p>}
@@ -145,28 +164,16 @@ export function GpuSection() {
         )}
       </SettingsField>
 
-      {/* 机器级环境概览(只读):驱动/驱动 CUDA 上限/平台/Python。各安装
-          修复卡里不再重复这些机器事实——包相关信息(torch build、EP、
-          wheel 匹配 tag)留在各自卡内。 */}
-      {env && (
-        <div className="rounded-sm border border-subtle bg-sunken p-2 flex gap-4 flex-wrap text-xs">
-          <span className="text-fg-tertiary">
-            {t('settings.driverLabel')}:{' '}
-            <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
-          </span>
-          <span className="text-fg-tertiary">
-            {t('settings.envDriverCudaMax')}:{' '}
-            <code className="text-fg-secondary font-mono">{env.driver_cuda_version ?? t('settings.notDetected')}</code>
-          </span>
-          <span className="text-fg-tertiary">
-            {t('settings.platform')}:{' '}
-            <code className="text-fg-secondary font-mono">{env.platform ?? t('settings.notDetected')}</code>
-          </span>
-          <span className="text-fg-tertiary">
-            Python: <code className="text-fg-secondary font-mono">{env.python_version}</code>
-          </span>
+      {/* 依赖(计算栈四件套):同一张卡内的手风琴行,行外壳见 DepSection。 */}
+      <div>
+        <p className="text-2xs uppercase tracking-wider text-fg-tertiary m-0 mb-1.5">{t('settings.depsGroupTitle')}</p>
+        <div className="rounded-sm border border-subtle divide-y divide-subtle overflow-hidden">
+          <PyTorchSection />
+          <FlashAttentionSection />
+          <XformersSection />
+          <ONNXRuntimeSection />
         </div>
-      )}
+      </div>
     </SettingsSection>
   )
 }

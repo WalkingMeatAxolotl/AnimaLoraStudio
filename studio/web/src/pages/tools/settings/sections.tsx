@@ -20,7 +20,7 @@ import { useSettingsData } from '../../../lib/SettingsData'
 import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDensity, setStoredTheme, type Density, type Theme } from '../../../lib/theme'
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
-import { DepSection, DepVersionRow, type DepLevel, type DepNotice } from './DepSection'
+import { DepSection, DepVariantList, DepVersionRow, type DepLevel, type DepNotice } from './DepSection'
 import { Bool, PillRadioGroup, SettingsField, SettingsInput, SettingsSection } from './fields'
 import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, SourceSelect } from './modelCards'
 
@@ -739,35 +739,37 @@ export function ONNXRuntimeSection() {
         label: t('settings.forceReinstallAdvanced'),
         open: reinstallOpen,
         onToggle: () => setReinstallOpen(!reinstallOpen),
-        children: (<>
-          <div className="flex gap-1.5 items-center flex-wrap">
-            <button
-              onClick={() => install('directml')}
-              disabled={busy !== null || !isWindows}
-              title={isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint')}
-              className="btn btn-secondary btn-sm"
-            >
-              {busy === 'directml' ? t('settings.installing') : t('settings.reinstallDirectml')}
-            </button>
-            <button
-              onClick={() => install('gpu')}
-              disabled={busy !== null}
-              title={t('settings.cudaPackageHint')}
-              className="btn btn-secondary btn-sm"
-            >
-              {busy === 'gpu' ? t('settings.installing') : t('settings.reinstallGpu')}
-            </button>
-            <button
-              onClick={() => install('cpu')}
-              disabled={busy !== null}
-              title={t('settings.cpuPackageHint')}
-              className="btn btn-secondary btn-sm"
-            >
-              {busy === 'cpu' ? t('settings.installing') : t('settings.reinstallCpu')}
-            </button>
-          </div>
-          <span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>
-        </>),
+        children: (
+          <DepVariantList
+            busy={busy !== null}
+            variants={[
+              {
+                key: 'gpu',
+                label: 'onnxruntime-gpu',
+                note: t('settings.cudaPackageHint'),
+                current: rt.installed === 'onnxruntime-gpu',
+                onInstall: () => void install('gpu'),
+              },
+              {
+                key: 'directml',
+                label: 'onnxruntime-directml',
+                note: isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint'),
+                current: rt.installed === 'onnxruntime-directml',
+                usable: isWindows,
+                disabled: !isWindows,
+                onInstall: () => void install('directml'),
+              },
+              {
+                key: 'cpu',
+                label: 'onnxruntime',
+                note: t('settings.cpuPackageHint'),
+                current: rt.installed === 'onnxruntime',
+                onInstall: () => void install('cpu'),
+              },
+            ]}
+            footer={<span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>}
+          />
+        ),
       } : undefined}
     />
   )
@@ -918,28 +920,22 @@ export function PyTorchSection() {
         open: advancedOpen,
         onToggle: () => setAdvancedOpen(!advancedOpen),
         children: (
-          <div className="flex flex-col gap-1.5 text-xs">
-            <p className="text-fg-tertiary m-0">{t('settings.manualCudaHint')}</p>
-            <div className="flex gap-1.5 flex-wrap">
-              {(['cu128', 'cu126', 'cu124', 'cu118', 'cpu'] as const).map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() => void reinstall(tag)}
-                  disabled={busy}
-                  className={`btn btn-secondary btn-sm ${
-                    status.cuda_build === tag ? 'border-accent' : ''
-                  }`}
-                  title={
-                    tag === 'cpu'
-                      ? t('settings.installCpuBuildHint')
-                      : t('settings.installCudaBuildHint', { tag })
-                  }
-                >
-                  {tag}{status.cuda_build === tag ? ' ✓' : ''}
-                </button>
-              ))}
-            </div>
-          </div>
+          <DepVariantList
+            hint={t('settings.manualCudaHint')}
+            busy={busy}
+            variants={(['cu128', 'cu126', 'cu124', 'cu118', 'cpu'] as const).map((tag) => ({
+              key: tag,
+              label: tag,
+              note: tag === 'cpu'
+                ? t('settings.cpuBuildDesc')
+                : t('settings.cuBuildDesc', { ver: `${tag.slice(2, -1)}.${tag.slice(-1)}` }),
+              current: status.cuda_build === tag,
+              onInstall: () => void reinstall(tag),
+              installTitle: tag === 'cpu'
+                ? t('settings.installCpuBuildHint')
+                : t('settings.installCudaBuildHint', { tag }),
+            }))}
+          />
         ),
       } : undefined}
     />
@@ -1067,59 +1063,48 @@ export function FlashAttentionSection() {
         open: candidatesOpen,
         onToggle: () => setCandidatesOpen(!candidatesOpen),
         children: (
-          <div className="flex flex-col gap-2">
-            {/* wheel 匹配键(包间依赖事实,判断「为什么这个 wheel 灰了」的钥匙)。
-                机器事实(驱动/平台)在「环境」section 概览,这里只列匹配用 tag。 */}
-            <p className="text-xs text-fg-tertiary m-0">
+          <DepVariantList
+            // wheel 匹配键(包间依赖事实,判断「为什么这个 wheel 灰了」的钥匙)。
+            // 机器事实(驱动/平台)在「环境」section 概览,这里只列匹配用 tag。
+            hint={(<>
               {t('settings.wheelMatchTags')}: <code className="font-mono">
                 {[env.python_tag, env.torch_tag, env.cuda_tag, env.platform].filter(Boolean).join(' / ') || t('settings.notDetected')}
               </code>
-            </p>
-            {candidates.length === 0 ? (
+            </>)}
+            busy={busy}
+            variants={candidates.map((c) => ({
+              key: c.url,
+              label: c.name,
+              note: c.notes.length
+                ? (<>{c.notes.map((n, i) => <span key={i} className="text-warn">{n}</span>)}</>)
+                : undefined,
+              usable: c.usable,
+              onInstall: () => void install(c.url),
+              installTitle: c.usable ? t('settings.installWheel') : t('settings.wheelAbiIncompatible'),
+            }))}
+            footer={(<>
+              {candidates.length === 0 && (
                 <p className="text-xs text-fg-tertiary m-0">{t('settings.wheelQueryFailed')}</p>
-              ) : (
-                <ul className="list-none m-0 p-0 flex flex-col gap-1">
-                  {candidates.map((c) => (
-                    <li key={c.url} className={`flex items-start gap-2 text-xs px-2 py-1.5 rounded-sm border ${
-                      c.usable ? 'border-subtle bg-sunken' : 'border-transparent bg-transparent opacity-50'
-                    }`}>
-                      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                        <code className="font-mono text-fg-primary text-[11px] break-all">{c.name}</code>
-                        {c.notes.map((n, i) => (
-                          <span key={i} className="text-warn text-[10px]">{n}</span>
-                        ))}
-                      </div>
-                      <button
-                        onClick={() => void install(c.url)}
-                        disabled={busy}
-                        className={c.usable ? 'btn btn-primary btn-sm shrink-0' : 'btn btn-secondary btn-sm shrink-0'}
-                        title={c.usable ? t('settings.installWheel') : t('settings.wheelAbiIncompatible')}
-                      >
-                        {c.usable ? t('settings.installAction') : t('settings.forceInstall')}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
               )}
-
-            <div className="flex flex-col gap-1 pt-1 border-t border-subtle">
-              <p className="text-xs text-fg-tertiary m-0">{t('settings.manualUrl')}</p>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  value={manualUrl}
-                  onChange={(e) => setManualUrl(e.target.value)}
-                  placeholder="https://github.com/.../flash_attn-...whl"
-                  className={`${textInputClass} flex-1`}
-                />
-                <button
-                  onClick={() => { if (manualUrl.trim()) void install(manualUrl.trim()) }}
-                  disabled={busy || !manualUrl.trim()}
-                  className="btn btn-secondary btn-sm shrink-0"
-                >{t('settings.install')}</button>
+              <div className="flex flex-col gap-1 pt-1 border-t border-subtle">
+                <p className="text-xs text-fg-tertiary m-0">{t('settings.manualUrl')}</p>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={manualUrl}
+                    onChange={(e) => setManualUrl(e.target.value)}
+                    placeholder="https://github.com/.../flash_attn-...whl"
+                    className={`${textInputClass} flex-1`}
+                  />
+                  <button
+                    onClick={() => { if (manualUrl.trim()) void install(manualUrl.trim()) }}
+                    disabled={busy || !manualUrl.trim()}
+                    className="btn btn-secondary btn-sm shrink-0"
+                  >{t('settings.install')}</button>
+                </div>
               </div>
-            </div>
-          </div>
+            </>)}
+          />
         ),
       } : undefined}
     />

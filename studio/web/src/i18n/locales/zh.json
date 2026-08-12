@@ -1181,9 +1181,6 @@
     "cudaEpFailedCpu": "CUDA EP 加载失败，已降级到 CPU。",
     "refreshStatus": "刷新状态",
     "forceReinstallAdvanced": "强制重装指定包",
-    "reinstallGpu": "装 CUDA 版",
-    "reinstallCpu": "装 CPU 版",
-    "reinstallDirectml": "装 DirectML 版",
     "directmlWinOnlyHint": "仅 Windows 可用（PyPI wheel 不覆盖 Linux/macOS）",
     "cudaPackageHint": "NVIDIA GPU 用；Linux 最优。Windows 上若静默降 CPU 改用 DirectML。",
     "directmlPackageHint": "走 DX12，绕开 CUDA/cuDNN 兼容性问题，跨厂商（NVIDIA/AMD/Intel）。",
@@ -1222,7 +1219,7 @@
     "wheelQueryFailed": "查询失败或无匹配（检查网络连接）",
     "installWheel": "安装此 wheel",
     "wheelAbiIncompatible": "Python ABI 不兼容，强制安装可能失败",
-    "installAction": "⤓ 安装",
+    "installAction": "安装",
     "forceInstall": "强制安装",
     "manualUrl": "手动粘贴 URL：",
     "install": "安装",
@@ -1448,7 +1445,11 @@
     "torchHelpBrief": "PyTorch 是训练与出图的计算引擎；CUDA 版才能用 GPU，CPU 版会慢数十倍。",
     "flashAttnHelpBrief": "更快的 attention 实现，训练与出图均可选用；需要与 Python / PyTorch / CUDA 精确匹配的预编译 wheel。",
     "onnxHelpBrief": "WD14 / CLTagger 打标使用的推理引擎；CUDA 或 DirectML 包可启用 GPU 加速。",
-    "wheelMatchTags": "匹配环境"
+    "wheelMatchTags": "匹配环境",
+    "depsGroupTitle": "依赖",
+    "cuBuildDesc": "CUDA {{ver}} 构建",
+    "cpuBuildDesc": "无 NVIDIA GPU 的机器用",
+    "variantCurrent": "当前"
   },
   "monitor": {
     "taskLabel": "任务",
