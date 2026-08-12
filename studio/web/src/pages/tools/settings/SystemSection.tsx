@@ -151,8 +151,10 @@ export function GpuSection() {
       <div className="flex items-center gap-2">
         <label className="text-xs text-fg-secondary font-mono">{t('settings.gpuSelectLabel')}</label>
         <InfoButton><p>{t('settings.gpuSelectHelp')}</p></InfoButton>
-        {gpus && gpus.length > 1 ? (
-          // 未显式设置时预选 torch 实际在用的那张(stats.active);选择即保存
+        {gpus && gpus.length > 0 ? (
+          // 单卡也渲染下拉(只有一个选项,onChange 天然不会触发),不做只读
+          // 文本的退化分支。未显式设置时预选 torch 实际在用的那张
+          // (stats.active);选择即保存。
           <select
             value={gpuIndex ?? gpus.find((g) => g.active)?.index ?? 0}
             onChange={(e) => void save(Number(e.target.value))}
@@ -164,9 +166,7 @@ export function GpuSection() {
             ))}
           </select>
         ) : (
-          <span className="text-xs text-fg-secondary font-mono">
-            {gpus?.[0] ? fmt(gpus[0]) : t('settings.gpuNoneDetected')}
-          </span>
+          <span className="text-xs text-fg-secondary font-mono">{t('settings.gpuNoneDetected')}</span>
         )}
       </div>
 

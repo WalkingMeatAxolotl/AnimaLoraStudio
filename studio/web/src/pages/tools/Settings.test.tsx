@@ -533,7 +533,7 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('single GPU: shows the current card read-only instead of a picker', async () => {
+  it('single GPU: still renders the dropdown with a single option', async () => {
     const base = fetchMock.getMockImplementation()!
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (typeof url === 'string' && url.includes('/api/system/stats')) {
@@ -550,10 +550,12 @@ describe('SettingsPage (PP0)', () => {
     renderPage()
     await user.click(await screen.findByRole('button', { name: '系统' }))
     const label = await screen.findByText('显卡', { selector: 'label' })
-    const row = label.closest('.grid') as HTMLElement
-    // 单卡：只读显示当前在用的卡，没有下拉
-    await within(row).findByText('0: RTX 5090（32G）')
-    expect(within(row).queryByRole('combobox')).toBeNull()
+    const row = label.parentElement as HTMLElement
+    // 单卡也是下拉（一个选项），不退化成只读文本
+    const select = await within(row).findByRole('combobox') as HTMLSelectElement
+    expect(select.options.length).toBe(1)
+    expect(select.value).toBe('0')
+    expect(select.options[0].textContent).toBe('0: RTX 5090（32G）')
     // 环境概览行（只读机器事实）——scope 到环境 section 容器内;驱动 CUDA
     // 能力跟驱动版本合并成一句(「支持 CUDA ≤ N」),不再裸放数字
     const envSection = document.getElementById('gpu') as HTMLElement
