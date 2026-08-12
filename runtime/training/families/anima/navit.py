@@ -26,11 +26,12 @@ def pack_cross_embeddings(
     """把 per-image text embedding 拼成一条序列，供 block-diagonal cross-attn。
 
     Args:
-        cross: ``[G, L, D]`` — per-image text embedding（L=512 padded）。
+        cross: ``[G, L, D]`` — per-image text embedding（L=max(512, 最长 caption)，
+            512 是 pad 下限而非上限）。
         t5_attn: ``[G, L]`` — per-image attention mask（1=有效 token）。
             仅 ``navit_text_trim_padding=True`` 时使用。
         navit_text_trim_padding: True 时按每图有效 token 数截断 padding（cross-attn
-            提速、不注意 padding 位）；False 时每图带完整 512-pad（与标准路径行为一致）。
+            提速、不注意 padding 位）；False 时每图带完整 L-pad（与标准路径行为一致）。
 
     Returns:
         (cross_packed ``[1, ΣL, D]``, text_seqlens ``[G]``)

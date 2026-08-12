@@ -315,7 +315,6 @@ def sample_image(
             qwen_text, t5_ids, t5_attn, t5_w = build_comfy_anima_conditioning_inputs(
                 t5_tokenizer,
                 prompt_text,
-                max_length=512,
             )
             qwen_embeds, qwen_attn = encode_qwen(
                 qwen_model,
@@ -330,6 +329,8 @@ def sample_image(
             t5_attn = t5_attn.to(device)
             t5_w = t5_w.to(device, dtype=dtype)
             cross = model.preprocess_text_embeds(qwen_embeds, t5_ids, t5xxl_weights=t5_w)
+            # 只补不足（ComfyUI comfy/ldm/anima/model.py:204-205）；超过 512 的
+            # prompt 原样保留——上游 tokenizer 同样无长度上限
             if cross.shape[1] < 512:
                 cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
             return cross

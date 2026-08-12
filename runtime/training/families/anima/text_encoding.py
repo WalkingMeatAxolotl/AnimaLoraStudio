@@ -24,8 +24,8 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def encode_qwen(model, tokenizer, texts, device, max_length=512, preserve_empty_text: bool = False):
-    """Qwen 文本编码。"""
+def encode_qwen(model, tokenizer, texts, device, preserve_empty_text: bool = False):
+    """Qwen 文本编码（不截断）。"""
     # Qwen3 tokenizer 对空字符串可能返回 0 tokens（会导致模型内部 reshape 失败）
     # ComfyUI 的 AnimaTokenizer 设置了 min_length=1，这里做同等兜底。
     if isinstance(texts, str):
@@ -35,12 +35,13 @@ def encode_qwen(model, tokenizer, texts, device, max_length=512, preserve_empty_
     else:
         texts = [(" " if (t is None or str(t).strip() == "") else str(t)) for t in texts]
 
+    # 不设长度上限：ComfyUI 的 Qwen3Tokenizer 是 max_length=99999999 +
+    # pad_to_max_length=False（comfy/text_encoders/anima.py），512 在上游是
+    # cross embedding 的 pad 下限而非 token 上限。
     inputs = tokenizer(
         texts,
         return_tensors="pt",
         padding=True,
-        truncation=True,
-        max_length=max_length,
         add_special_tokens=False,
     )
     uses_comfy_masking = bool(getattr(model, "uses_comfy_clip_masking", False))
@@ -230,12 +231,17 @@ def _tokenizer_input_ids_without_eos(tokenizer, text: str, eos_id: int) -> list[
     return out
 
 
-def build_comfy_anima_conditioning_inputs(t5_tokenizer, prompt: str, max_length=512):
+def build_comfy_anima_conditioning_inputs(t5_tokenizer, prompt: str):
     """Build generate-time Anima text inputs using Comfy-compatible tokenization.
 
     Comfy's Anima tokenizer keeps Qwen text raw while using SDTokenizer-style
     weighted parsing for T5. This helper intentionally does not replace the
     legacy training tokenization helpers.
+
+    No length cap: Comfy's T5XXLTokenizer runs at ``max_length=99999999`` with
+    ``pad_to_max_length=False``, and the 512 in ``comfy/ldm/anima/model.py``
+    (``preprocess_text_embeds``) is a pad floor applied after the adapter, not
+    a token ceiling.
     """
     qwen_text = "" if prompt is None else str(prompt)
 
@@ -252,21 +258,14 @@ def build_comfy_anima_conditioning_inputs(t5_tokenizer, prompt: str, max_length=
     ids.append(int(eos_id))
     weights.append(1.0)
 
-    if max_length and len(ids) > int(max_length):
-        keep = max(1, int(max_length))
-        ids = ids[:keep]
-        weights = weights[:keep]
-        ids[-1] = int(eos_id)
-        weights[-1] = 1.0
-
     t5_ids = torch.tensor([ids], dtype=torch.long)
     t5_weights = torch.tensor([weights], dtype=torch.float32)
     t5_attn = torch.ones_like(t5_ids, dtype=torch.long)
     return qwen_text, t5_ids, t5_attn, t5_weights
 
 
-def tokenize_t5_comfy_literal(tokenizer, texts, max_length=512):
-    """Comfy-style 字面 T5 tokenization（训练 caption 用，批量版）。
+def tokenize_t5_comfy_literal(tokenizer, texts):
+    """Comfy-style 字面 T5 tokenization（训练 caption 用，批量版，不截断）。
 
     与 build_comfy_anima_conditioning_inputs 的差异：caption 是数据不是 prompt，
     整段按字面文本分词——不做权重语法解析、不清洗。booru tag 的括号
@@ -287,9 +286,6 @@ def tokenize_t5_comfy_literal(tokenizer, texts, max_length=512):
     for text in texts:
         ids = _tokenizer_input_ids_without_eos(tokenizer, str(text), int(eos_id))
         ids.append(int(eos_id))
-        if max_length and len(ids) > int(max_length):
-            ids = ids[: int(max_length)]
-            ids[-1] = int(eos_id)
         seqs.append(ids)
 
     max_len = max((len(s) for s in seqs), default=1)
@@ -329,9 +325,10 @@ def apply_t5_token_weights(cross: torch.Tensor, token_weights: torch.Tensor | No
     return cross * weights.unsqueeze(-1)
 
 
-def tokenize_t5_weighted(tokenizer, texts, max_length=512):
+def tokenize_t5_weighted(tokenizer, texts):
     """
     参考 ComfyUI 的 anima-kai：按逗号切分 tag，逐 tag 分词，并为每个 token 附带权重。
+    不截断（ComfyUI tokenizer 无长度上限）。
     返回：input_ids, attention_mask(1=有效), token_weights
     """
     if isinstance(texts, str):
@@ -358,11 +355,6 @@ def tokenize_t5_weighted(tokenizer, texts, max_length=512):
         # 末尾补一个 eos（ComfyUI 也是最后加一个终止 token）
         ids.append(int(eos_id))
         ws.append(1.0)
-
-        # 截断到 max_length（保留最后一个 eos）
-        if max_length and len(ids) > max_length:
-            ids = ids[: max_length - 1] + [int(eos_id)]
-            ws = ws[: max_length - 1] + [1.0]
 
         all_ids.append(torch.tensor(ids, dtype=torch.long))
         all_w.append(torch.tensor(ws, dtype=torch.float32))
