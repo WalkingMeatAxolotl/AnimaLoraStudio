@@ -151,7 +151,7 @@ export function GpuSection() {
       {env && (
         <div className="rounded-sm border border-subtle bg-sunken p-2 flex gap-4 flex-wrap text-xs">
           <span className="text-fg-tertiary">
-            {t('settings.envDriver')}:{' '}
+            {t('settings.driverLabel')}:{' '}
             <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
           </span>
           <span className="text-fg-tertiary">
