@@ -1105,7 +1105,6 @@
     "autoSyncPathsOff": "Off · fork respects preset values",
     "gpuSection": "Environment",
     "gpuNoneDetected": "No NVIDIA GPU detected",
-    "envDriverCudaMax": "CUDA (max)",
     "gpuSelectLabel": "GPU",
     "gpuSelectHelp": "The GPU used for training, generation and tagging. Defaults to the card CUDA picks automatically (usually the fastest one); changes take effect after restarting Studio.",
     "gpuSelectSaved": "Saved — takes effect after restarting Studio",
@@ -1446,7 +1445,6 @@
     "flashAttnHelpBrief": "A faster attention implementation, usable for both training and generation; requires a prebuilt wheel exactly matching Python / PyTorch / CUDA.",
     "onnxHelpBrief": "Inference engine used by WD14 / CLTagger tagging; the CUDA or DirectML package enables GPU acceleration.",
     "wheelMatchTags": "Match keys",
-    "depsGroupTitle": "Dependencies",
     "cuBuildDesc": "CUDA {{ver}} build",
     "cpuBuildDesc": "For machines without an NVIDIA GPU",
     "variantCurrent": "current"

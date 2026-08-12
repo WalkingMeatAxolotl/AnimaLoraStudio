@@ -118,17 +118,17 @@ export function GpuSection() {
 
   return (
     <SettingsSection id="gpu" title={t('settings.gpuSection')}>
-      {/* 机器级环境概览(只读):驱动/驱动 CUDA 上限/平台/Python。依赖行内
-          不再重复这些机器事实——包相关信息(torch build、EP、wheel 匹配
+      {/* 机器级环境概览(只读裸行,无背景):驱动/CUDA/平台/Python。依赖行
+          内不再重复这些机器事实——包相关信息(torch build、EP、wheel 匹配
           tag)留在各自行内。 */}
       {env && (
-        <div className="rounded-sm border border-subtle bg-sunken p-2 flex gap-4 flex-wrap text-xs">
+        <div className="flex gap-4 flex-wrap text-xs">
           <span className="text-fg-tertiary">
             {t('settings.driverLabel')}:{' '}
             <code className="text-fg-secondary font-mono">{env.driver_version ?? t('settings.notDetected')}</code>
           </span>
           <span className="text-fg-tertiary">
-            {t('settings.envDriverCudaMax')}:{' '}
+            CUDA:{' '}
             <code className="text-fg-secondary font-mono">{env.driver_cuda_version ?? t('settings.notDetected')}</code>
           </span>
           <span className="text-fg-tertiary">
@@ -141,10 +141,11 @@ export function GpuSection() {
         </div>
       )}
 
-      <SettingsField
-        label={t('settings.gpuSelectLabel')}
-        helpTooltip={<p>{t('settings.gpuSelectHelp')}</p>}
-      >
+      {/* 显卡行:自定义 flex(非 240px grid 的 SettingsField)——label 与
+          下拉同行垂直居中,并与上下行左缘对齐。 */}
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-fg-secondary font-mono">{t('settings.gpuSelectLabel')}</label>
+        <InfoButton><p>{t('settings.gpuSelectHelp')}</p></InfoButton>
         {gpus && gpus.length > 1 ? (
           // 未显式设置时预选 torch 实际在用的那张(stats.active);选择即保存
           <select
@@ -158,21 +159,19 @@ export function GpuSection() {
             ))}
           </select>
         ) : (
-          <span className="text-xs text-fg-secondary font-mono leading-7">
+          <span className="text-xs text-fg-secondary font-mono">
             {gpus?.[0] ? fmt(gpus[0]) : t('settings.gpuNoneDetected')}
           </span>
         )}
-      </SettingsField>
+      </div>
 
-      {/* 依赖(计算栈四件套):同一张卡内的手风琴行,行外壳见 DepSection。 */}
-      <div>
-        <p className="text-2xs uppercase tracking-wider text-fg-tertiary m-0 mb-1.5">{t('settings.depsGroupTitle')}</p>
-        <div className="rounded-sm border border-subtle divide-y divide-subtle overflow-hidden">
-          <PyTorchSection />
-          <FlashAttentionSection />
-          <XformersSection />
-          <ONNXRuntimeSection />
-        </div>
+      {/* 依赖(计算栈四件套):手风琴行平铺,行间细分隔线,无外框——包名
+          本身即行标题。行外壳见 DepSection。 */}
+      <div className="divide-y divide-subtle border-t border-subtle">
+        <PyTorchSection />
+        <FlashAttentionSection />
+        <XformersSection />
+        <ONNXRuntimeSection />
       </div>
     </SettingsSection>
   )

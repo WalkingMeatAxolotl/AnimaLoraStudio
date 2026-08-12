@@ -83,8 +83,8 @@ export function DepSection({
 
   const decorated = level === 'warn' || level === 'err' ? `⚠ ${statusText}` : statusText
   return (
-    <details id={id} open={forceOpen} className="bg-surface group scroll-mt-24">
-      <summary className="cursor-pointer px-3 py-2.5 list-none flex items-center gap-2">
+    <details id={id} open={forceOpen} className="group scroll-mt-24">
+      <summary className="cursor-pointer py-2.5 list-none flex items-center gap-2">
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
         <h3 className="text-sm font-semibold text-fg-primary m-0">{title}</h3>
         {subtitle && <span className="text-xs text-fg-tertiary">{subtitle}</span>}
@@ -92,7 +92,7 @@ export function DepSection({
         <span className={`ml-auto text-xs font-mono ${LEVEL_CLASS[level]}`}>{decorated}</span>
       </summary>
 
-      <div className="pl-8 pr-3 pb-3 flex flex-col gap-3">
+      <div className="pl-5 pb-3 flex flex-col gap-3">
         {loadError && <div className="text-err text-xs font-mono">{loadError}</div>}
         {!loadError && loading && <div className="text-xs text-fg-tertiary">{t('settings.loadingStatus')}</div>}
         {!loadError && !loading && (

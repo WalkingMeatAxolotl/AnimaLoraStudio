@@ -1002,12 +1002,14 @@ export function FlashAttentionSection() {
   const canAutoInstall = !isCpuTorch && !!env?.torch_tag && !!env?.platform && usable.length > 0
 
   const level: DepLevel = error ? 'err' : !status ? 'loading' : status.installed ? 'ok' : 'warn'
+  // 状态词只取主版本(flash_attn 版本串带 +cu128torch2.11 local tag,太长);
+  // 完整版本在展开区的版本行里
   const statusText = error
     ? t('settings.loadFailedShort')
     : !status
       ? t('settings.loadingStatus')
       : status.installed
-        ? `v${status.version ?? '?'}`
+        ? `v${(status.version ?? '?').split('+')[0]}`
         : t('settings.notInstalledShort')
 
   const notices: DepNotice[] = []

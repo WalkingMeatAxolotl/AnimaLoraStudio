@@ -1105,7 +1105,6 @@
     "autoSyncPathsOff": "已关闭 · fork 尊重预设值",
     "gpuSection": "环境",
     "gpuNoneDetected": "未检测到 NVIDIA 显卡",
-    "envDriverCudaMax": "CUDA 上限",
     "gpuSelectLabel": "显卡",
     "gpuSelectHelp": "训练、出图、打标使用的显卡。默认为 CUDA 自动选择的卡（通常是最快的一张）；更改后重启 Studio 生效。",
     "gpuSelectSaved": "已保存，重启 Studio 后生效",
@@ -1446,7 +1445,6 @@
     "flashAttnHelpBrief": "更快的 attention 实现，训练与出图均可选用；需要与 Python / PyTorch / CUDA 精确匹配的预编译 wheel。",
     "onnxHelpBrief": "WD14 / CLTagger 打标使用的推理引擎；CUDA 或 DirectML 包可启用 GPU 加速。",
     "wheelMatchTags": "匹配环境",
-    "depsGroupTitle": "依赖",
     "cuBuildDesc": "CUDA {{ver}} 构建",
     "cpuBuildDesc": "无 NVIDIA GPU 的机器用",
     "variantCurrent": "当前"
