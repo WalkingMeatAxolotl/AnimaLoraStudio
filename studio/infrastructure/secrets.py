@@ -593,9 +593,9 @@ class GenerateConfig(BaseModel):
       `'fp32'`（默认）对齐 ComfyUI；`'bf16'` 降低 delta 计算量、通常更快，
       但总体峰值未必下降，结果也可能与 ComfyUI 有轻微数值差异。只影响
       加载/切换 LoRA，不影响采样精度。
-    - `save_test_images`：开关测试出图自动落盘。默认关；开后每次出完图前端
-      会调 /api/generate/save 把成图存到 studio_data/test/<date>/{single,xy}/
-      image_N.png（N 按当前文件夹已有最大编号+1）。compare 模式不落盘。
+    - `save_test_images`：开关测试出图自动落盘。默认关；开后每张出图由
+      server 直落 studio_data/test/<date>/{single,xy}/（generate_storage，
+      dispatch 时冻结开关），关时图只进会话级加密 cache、会话结束释放。
     - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
       显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
@@ -641,6 +641,11 @@ class SystemConfig(BaseModel):
     update_channel: str = "stable"  # "stable" / "dev"
     show_dev_channel: bool = False  # deprecated, 仅作迁移源
     enable_automagic_v2: bool = False  # 实验性：文件级开关，UI 不暴露
+    #: 计算显卡（多卡机器，#491）。None = 从未设置：不注入任何 env，CUDA 自选
+    #: （FASTEST_FIRST，快卡优先）——单卡用户永远停在这。设过 = NVML/nvidia-smi
+    #: 的 PCI 序号，启动期由 runtime.gpu_select 注入 CUDA_DEVICE_ORDER=PCI_BUS_ID
+    #: + CUDA_VISIBLE_DEVICES 使训练/出图/打标全走这张卡；重启生效。
+    gpu_index: Optional[int] = None
     # v0.23.1 「ram_guard 默认改关」一次性迁移哨兵（_migrate_legacy_schema
     # 第 10 步）。判据是**盘上键缺失**（只有 v0.23.1 之前写的旧盘没有此键）
     # → 丢弃盘上的 generate/training ram_guard 旧值让新默认（关）生效；

@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.23.1-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.24.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 **End-to-end pipeline**: Booru scraping → curation → tagging → regularization set → training → image-gen testing, all in one browser panel. Trains LoRAs for two model families: [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-specialized, lightweight) and [Krea 2](https://huggingface.co/krea/Krea-2-Raw) (12.9B single-stream MMDiT; train on Raw, test fast on Turbo).
 
@@ -17,7 +17,7 @@
 - **Multi-task queue**: training, generation and data jobs in one unified ledger; enqueue, scheduled start, pause (resume from the last epoch boundary), resume, and queue-level hold.
 - **Built-in image-gen testing**: single-image / XY-grid eval + a resident inference daemon; fp8 base-model inference and LoRA merge are bit-for-bit aligned with ComfyUI; community LoRAs in PEFT / comfy key format (the civitai ecosystem) load directly; output `lora_unet_*` drops straight into ComfyUI, no conversion.
 - **LoRA evaluation**: batch-generate validation images for each training checkpoint and score them (CLIP / DINO / CCIP / WD14 tag recall, with a base-model baseline), plus a sample grid for eyeballing; one evaluation = one queue job, resumable after interruption.
-- **fp8 & VRAM orchestration**: official fp8 weights work as both training base models (fp8_base — Krea 2 training reaches down to 24 GB-class GPUs) and inference base models (weight VRAM roughly halved); block swap keeps later blocks in system RAM and moves them onto the GPU only when it is their turn, bringing Krea 2 training and generation down to 16 GB; per-task prompt pre-encoding with text-encoder release, a three-level VRAM policy, and a RAM guard for large-weight loading.
+- **fp8 & VRAM orchestration**: official fp8 weights work as both training base models (fp8_base — Krea 2 training reaches down to 24 GB-class GPUs) and inference base models (weight VRAM roughly halved); block swap keeps later blocks in system RAM and moves them onto the GPU only when it is their turn, bringing Krea 2 training and generation down to 16 GB and Anima training down to 6 GB-class GPUs; per-task prompt pre-encoding with text-encoder release, a three-level VRAM policy, and a RAM guard for large-weight loading.
 - **Rich training algorithms**: multiple loss / timestep sampling / optimizers (AdamW · Lion · Prodigy · SOAP, etc.) / LoRA · LyCORIS adapters — see [Training algorithm options](docs/user-guide/training-tips.md#训练算法选项).
 - **Self-healing setup + in-app self-update**: GPU-aware torch on first install, dependency hash checks, git pull / restart / rollback.
 - **Bilingual**: pick a language on first launch, switchable in Settings.
@@ -42,9 +42,9 @@ First run automatically creates `venv/` → installs GPU-matched CUDA torch → 
 ## Hardware requirements
 
 - **GPU**: NVIDIA (AMD / Apple Silicon not supported), per family:
-  - **Anima**: **16 GB+ VRAM recommended** (RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090, etc.); **8 GB barely works** (turn off sample output + reduce batch / resolution; noticeably slower).
+  - **Anima**: **16 GB+ VRAM recommended** (RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090, etc.); 8 GB works without block swap (turn off sample output + reduce batch / resolution). With **block swap** (all 28 blocks swapped out), **training** reaches **6 GB-class GPUs** at 1024² with samples on (training-step peak about 1.9 GB of allocations plus the resident text encoder; about 11% slower), and **generation**'s DiT residency drops to about 0.6 GB.
   - **Krea 2** (12.9B): **training** runs on 24 GB-class GPUs with the official fp8 base model, or 32 GB for bf16; **generation** with an fp8 base runs from 16 GB (on the "save VRAM" policy), bf16 bases want 32 GB. With **block swap** (all blocks swapped out on an fp8 base), **training** reaches **12 GB** (about 10 GB total GPU usage; 16 GB is roomier) and **generation** reaches **8 GB** (about 6.3 GB total at 1024²), at the cost of about 4% speed plus the matching RAM.
-- **RAM**: 16 GB+; 32 GB+ recommended for Krea 2 (loading a 26.3 GB single-file checkpoint peaks at roughly file size in RAM); block swap holds the swapped-out blocks resident (about 11 GB with all blocks on an fp8 base)
+- **RAM**: 16 GB+; 32 GB+ recommended for Krea 2 (loading a 26.3 GB single-file checkpoint peaks at roughly file size in RAM); block swap holds the swapped-out blocks resident (about 11 GB with all blocks on an fp8 Krea 2 base, about 3.6 GB for Anima)
 - **Storage**: SSD strongly recommended (frequent latent-cache + sample IO); budget disk space for Krea 2 weights (Raw / Turbo bf16 26.3 GB each, official fp8 13.1 GB each, text encoder 5.2–8.9 GB)
 
 ## Documentation

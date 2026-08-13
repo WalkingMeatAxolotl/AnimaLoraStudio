@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { DialogProvider } from '../../components/Dialog'
 import { ToastProvider } from '../../components/Toast'
+import { AnnouncementsProvider } from '../../lib/Announcements'
 import { SettingsDataProvider } from '../../lib/SettingsData'
 import { SettingsDrawerProvider } from '../../lib/SettingsDrawer'
 import SettingsPage from './Settings'
@@ -148,7 +149,7 @@ const initialServerState = {
     vae_precision: 'bf16',
     lora_merge_precision: 'fp32',
   },
-  system: { update_channel: 'stable', show_dev_channel: false },
+  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   proxy: { enabled: false, http_proxy: '', https_proxy: '', no_proxy: '' },
 }
 
@@ -368,6 +369,16 @@ beforeEach(() => {
         new Response(JSON.stringify(merged), { status: 200 })
       )
     }
+    if (typeof url === 'string' && url.includes('/api/announcements')) {
+      return Promise.resolve(new Response(JSON.stringify({ posts: [] }), { status: 200 }))
+    }
+    if (typeof url === 'string' && url.includes('/api/env/summary')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        python_version: '3.13.2', platform: 'win_amd64',
+        driver_version: '581.42', driver_cuda_version: '13.0',
+        cuda_version: '12.8',
+      }), { status: 200 }))
+    }
     if (typeof url === 'string' && url.includes('/api/models/catalog')) {
       return Promise.resolve(
         new Response(JSON.stringify(emptyModelsCatalog), { status: 200 })
@@ -433,11 +444,13 @@ function renderPage() {
     <MemoryRouter>
       <ToastProvider>
         <DialogProvider>
-          <SettingsDataProvider>
-            <SettingsDrawerProvider>
-              <SettingsPage />
-            </SettingsDrawerProvider>
-          </SettingsDataProvider>
+          <AnnouncementsProvider>
+            <SettingsDataProvider>
+              <SettingsDrawerProvider>
+                <SettingsPage />
+              </SettingsDrawerProvider>
+            </SettingsDataProvider>
+          </AnnouncementsProvider>
         </DialogProvider>
       </ToastProvider>
     </MemoryRouter>
@@ -478,6 +491,80 @@ describe('SettingsPage (PP0)', () => {
       // 只有 user_id 被改动；api_key 仍是 *** ⇒ 不应该出现在 body 里
       expect(body).toEqual({ gelbooru: { user_id: 'bob' } })
     })
+  })
+
+  it('multi-GPU: compute GPU picker preselects the active card and saves system.gpu_index', async () => {
+    // #491：NVML 序 0=2080、1=3070，torch 实际在 3070（active）
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/system/stats')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          cpu_pct: 1, ram_used_gb: 1, ram_total_gb: 2,
+          gpu: [
+            { index: 0, name: 'RTX 2080', util_pct: 0, vram_used_gb: 1, vram_total_gb: 8, temp_c: 50, active: false },
+            { index: 1, name: 'RTX 3070', util_pct: 0, vram_used_gb: 0.2, vram_total_gb: 16, temp_c: 40, active: true },
+          ],
+        }), { status: 200 }))
+      }
+      return base(url, init)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '系统' }))
+
+    const label = await screen.findByText('显卡', { selector: 'label' })
+    const row = label.closest('.grid') as HTMLElement
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    // 未显式设置时预选 torch 实际在用的卡（active），不是盲选第一张
+    expect(select.value).toBe('1')
+
+    await user.selectOptions(select, '0')
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([u, i]) => {
+        if (i?.method !== 'PUT' || !String(u).includes('/api/secrets')) return false
+        try {
+          return JSON.parse(String(i.body)).system?.gpu_index === 0
+        } catch {
+          return false
+        }
+      })
+      expect(putCall).toBeDefined()
+      expect(JSON.parse(String(putCall![1].body))).toEqual({ system: { gpu_index: 0 } })
+    })
+  })
+
+  it('single GPU: still renders the dropdown with a single option', async () => {
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/system/stats')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          cpu_pct: 1, ram_used_gb: 1, ram_total_gb: 2,
+          gpu: [
+            { index: 0, name: 'RTX 5090', util_pct: 0, vram_used_gb: 1, vram_total_gb: 32, temp_c: 40, active: true },
+          ],
+        }), { status: 200 }))
+      }
+      return base(url, init)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '系统' }))
+    const label = await screen.findByText('显卡', { selector: 'label' })
+    const row = label.parentElement as HTMLElement
+    // 单卡也是下拉（一个选项），不退化成只读文本
+    const select = await within(row).findByRole('combobox') as HTMLSelectElement
+    expect(select.options.length).toBe(1)
+    expect(select.value).toBe('0')
+    expect(select.options[0].textContent).toBe('0: RTX 5090（32G）')
+    // 环境概览行（只读机器事实）——scope 到环境 section 容器内;驱动 CUDA
+    // 能力跟驱动版本合并成一句(「支持 CUDA ≤ N」),不再裸放数字
+    const envSection = document.getElementById('gpu') as HTMLElement
+    await within(envSection).findByText('581.42')
+    expect(within(envSection).getByText(/支持 CUDA ≤ 13\.0/)).toBeInTheDocument()
+    // CUDA 条目 = 真实在用的 torch runtime 版本,不是驱动能力 13.0
+    expect(within(envSection).getByText('12.8')).toBeInTheDocument()
+    expect(within(envSection).getByText('win_amd64')).toBeInTheDocument()
+    expect(within(envSection).getByText('3.13.2')).toBeInTheDocument()
   })
 
   it('changes LoRA merge precision independently from VAE precision', async () => {

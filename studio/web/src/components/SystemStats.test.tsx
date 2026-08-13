@@ -73,6 +73,33 @@ describe('SystemStats', () => {
     expect(el.className).toContain('text-err')
   })
 
+  it('multi-GPU: shows the active card, not blindly gpu[0]', async () => {
+    // #491：NVML 序 0=2080(8G)、1=3070(16G)，torch 实际在 3070 上
+    vi.spyOn(api, 'systemStats').mockResolvedValue(makeStats({
+      gpu: [
+        { index: 0, name: 'RTX 2080', util_pct: 1, vram_used_gb: 1.1, vram_total_gb: 8.0, temp_c: 57, active: false },
+        { index: 1, name: 'RTX 3070', util_pct: 80, vram_used_gb: 12.0, vram_total_gb: 16.0, temp_c: 43, active: true },
+      ],
+    }))
+    render(<SystemStats />)
+    await waitFor(() => expect(screen.getByText('GPU')).toBeInTheDocument())
+    expect(screen.getByText('80%')).toBeInTheDocument()
+    expect(screen.getByText('12.0/16G')).toBeInTheDocument()
+    expect(screen.queryByText('1.1/8G')).toBeNull()
+  })
+
+  it('multi-GPU: falls back to gpu[0] when no card is marked active', async () => {
+    vi.spyOn(api, 'systemStats').mockResolvedValue(makeStats({
+      gpu: [
+        { index: 0, name: 'RTX 2080', util_pct: 1, vram_used_gb: 1.1, vram_total_gb: 8.0, temp_c: 57 },
+        { index: 1, name: 'RTX 3070', util_pct: 80, vram_used_gb: 12.0, vram_total_gb: 16.0, temp_c: 43 },
+      ],
+    }))
+    render(<SystemStats />)
+    await waitFor(() => expect(screen.getByText('GPU')).toBeInTheDocument())
+    expect(screen.getByText('1.1/8G')).toBeInTheDocument()
+  })
+
   it('only fetches once on mount (SSE 化后无轮询)', async () => {
     const spy = vi.spyOn(api, 'systemStats').mockResolvedValue(makeStats())
     render(<SystemStats />)

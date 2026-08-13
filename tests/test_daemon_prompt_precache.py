@@ -368,3 +368,84 @@ def test_unload_keep_text_preserves_stack(monkeypatch):
     cache.unload()  # 完整卸载清 text 栈
     assert cache.text_stack is None
     assert cache._text_ready_key is None
+
+
+# ---------------------------------------------------------------------------
+# 跨族切换：_load 必须与 text_stack 同步维护身份键
+# ---------------------------------------------------------------------------
+
+
+class _LoadFamily:
+    """_load 依赖面 fake：load_dit/load_vae 占位，load_text 计数。"""
+
+    def __init__(self, text_stack_factory):
+        self.spec = SimpleNamespace(capabilities=set())
+        self._factory = text_stack_factory
+        self.load_text_calls = 0
+
+    def load_dit(self, *args, **kwargs):
+        return SimpleNamespace()
+
+    def load_vae(self, *args, **kwargs):
+        return SimpleNamespace()
+
+    def load_text(self, *args, **kwargs):
+        self.load_text_calls += 1
+        return self._factory()
+
+
+def _load_kwargs(family_id, te_path):
+    return dict(
+        family_id=family_id,
+        transformer_path="G:/models/dit.safetensors",
+        vae_path="G:/models/vae.safetensors",
+        text_encoder_path=te_path,
+        t5_tokenizer_path="",
+        backend="none",
+        precision="bf16",
+        vae_precision="bf16",
+        text_encoder_backend="hf",
+        t5_tokenizer_backend="slow",
+    )
+
+
+def test_cross_family_switch_rebuilds_krea2_text_stack(monkeypatch):
+    """krea2 → anima → krea2：anima 的 tuple 栈不得被当成 TE 先行栈复用。
+
+    修复前 _load 不维护 _text_ready_key：anima 全载后旧 krea2 键残留，
+    切回 krea2 时 ensure_text_ready 早退 + _load 复用 anima tuple——
+    采样报 'tuple' object has no attribute 'encode_text_for_batch'。
+    """
+    import training.sysmem as sysmem
+
+    monkeypatch.setattr(sysmem, "trim_working_set", lambda: None)
+    monkeypatch.setattr(anima_daemon.torch.cuda, "is_available", lambda: False)
+    krea = _LoadFamily(_Stack)
+    anima = _LoadFamily(lambda: ("qwen", "qwen_tok", "t5_tok"))
+    monkeypatch.setattr(
+        anima_daemon._T, "get_family",
+        lambda fid: {"krea2": krea, "anima": anima}[fid],
+    )
+    monkeypatch.setattr(
+        anima_daemon._T, "resolve_path_best_effort", lambda p, bases: str(p),
+    )
+
+    cache = anima_daemon.ModelCache()
+    # 任务 1：krea2（TE 先行 → 全载复用先行栈，不重复加载）
+    cache.ensure_text_ready(_te_cfg(path="G:/models/qwen3vl"))
+    cache._load(**_load_kwargs("krea2", "G:/models/qwen3vl"))
+    assert krea.load_text_calls == 1
+    assert cache._text_ready_key == ("krea2", "G:/models/qwen3vl")
+
+    # 任务 2：anima 全载（ensure_loaded 重载对 text 栈是 keep_text=True
+    # 不动，直接连续 _load 等价）——身份键必须跟着 text_stack 换
+    cache._load(**_load_kwargs("anima", "G:/models/qwen25"))
+    assert isinstance(cache.text_stack, tuple)
+    assert cache._text_ready_key == ("anima", "G:/models/qwen25")
+
+    # 任务 3：切回 krea2——TE 先行与全载都必须重建，不得复用 anima tuple
+    cache.ensure_text_ready(_te_cfg(path="G:/models/qwen3vl"))
+    assert isinstance(cache.text_stack, _Stack)
+    cache._load(**_load_kwargs("krea2", "G:/models/qwen3vl"))
+    assert isinstance(cache.text_stack, _Stack)
+    assert krea.load_text_calls == 2

@@ -665,7 +665,7 @@ def test_tokenize_t5_comfy_literal_keeps_parentheses_literal_weight_one() -> Non
     from training.families.anima.text_encoding import tokenize_t5_comfy_literal
 
     caption = "ganyu (genshin impact), 1girl"
-    ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption], max_length=512)
+    ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption])
 
     valid = attn[0].bool()
     valid_ids = ids[0][valid].tolist()
@@ -681,7 +681,7 @@ def test_tokenize_t5_comfy_literal_differs_from_prompt_weight_parsing() -> None:
     from training.families.anima.text_encoding import tokenize_t5_comfy_literal
 
     caption = "ganyu (genshin impact)"
-    ids, attn, _w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption], max_length=512)
+    ids, attn, _w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption])
     valid_ids = ids[0][attn[0].bool()].tolist()
 
     # prompt 权重解析会吃掉括号并给 1.1 倍权重——caption 路径必须不同
@@ -691,10 +691,36 @@ def test_tokenize_t5_comfy_literal_differs_from_prompt_weight_parsing() -> None:
     assert valid_ids != parsed_ids
 
 
+def test_tokenize_t5_comfy_literal_does_not_truncate_beyond_512() -> None:
+    """ComfyUI 的 T5XXLTokenizer 是 max_length=99999999——caption 不设上限。"""
+    from training.families.anima.text_encoding import tokenize_t5_comfy_literal
+
+    caption = "a" * 700
+    ids, attn, _w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption])
+
+    # 700 个字符 token + 1 个 eos，全部有效（旧口径砍到 512）
+    assert ids.shape[1] == 701
+    assert int(attn[0].sum()) == 701
+    assert ids[0][-1].item() == FakeTokenizer.eos_token_id
+
+
+def test_comfy_conditioning_inputs_do_not_truncate_beyond_512() -> None:
+    """出图路径同理：512 是 cross 的 pad 下限，不是 prompt token 上限。"""
+    prompt = "b" * 700
+    _qwen_text, t5_ids, t5_attn, t5_weights = build_comfy_anima_conditioning_inputs(
+        FakeTokenizer(), prompt,
+    )
+
+    assert t5_ids.shape[1] == 701
+    assert int(t5_attn[0].sum()) == 701
+    assert t5_weights.shape[1] == 701
+    assert t5_ids[0][-1].item() == FakeTokenizer.eos_token_id
+
+
 def test_tokenize_t5_comfy_literal_batch_padding_conventions() -> None:
     from training.families.anima.text_encoding import tokenize_t5_comfy_literal
 
-    ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), ["1girl", "a"], max_length=512)
+    ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), ["1girl", "a"])
 
     assert ids.shape == attn.shape == w.shape
     assert ids.shape[0] == 2

@@ -56,6 +56,8 @@ export const SECTION_TO_TAB: Record<string, Tab> = {
   'eval-metrics': 'monitor',
   'version': 'system',
   'service': 'system',
+  // 打标页「修 GPU 加速」按钮深链;环境类 section 全在系统 tab
+  'onnxruntime': 'system',
 }
 
 export const TAB_LIST: { id: Tab; labelKey: string }[] = [
@@ -85,15 +87,11 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'llm-tagger', labelKey: 'settings.llmTagger' },
     { id: 'wd14', labelKey: 'settings.wd14' },
     { id: 'cltagger', labelKey: 'settings.clTagger' },
-    { id: 'onnxruntime', labelKey: 'settings.onnxRuntime' },
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'training-params', labelKey: 'settings.trainingParams' },
-    { id: 'pytorch', labelKey: 'settings.torch' },
-    { id: 'flash-attn', labelKey: 'settings.flashAttn' },
-    { id: 'xformers', labelKey: 'settings.xformers' },
     { id: 'models', labelKey: 'settings.animaModels' },
     { id: 'krea2-models', labelKey: 'settings.krea2Models' },
   ],
@@ -117,6 +115,7 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   ],
   system: [
     { id: 'version', labelKey: 'settings.version' },
+    { id: 'gpu', labelKey: 'settings.gpuSection' },
     { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
   ],
@@ -243,7 +242,7 @@ export const EMPTY: Secrets = {
   queue: { light_tasks_during_train: true },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', lora_merge_precision: 'fp32', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: false, blocks_to_swap: 0, task_timeout_minutes: 0 },
   training: { ram_guard: false },
-  system: { update_channel: 'stable', show_dev_channel: false },
+  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   proxy: {
     enabled: false,
     http_proxy: '',

@@ -179,19 +179,24 @@ def _move_module_to_device(module: Any, device: str) -> None:
     module.to(device)
 
 
-def _swap_discount_ratio(family_id: str, blocks_to_swap: int) -> float:
+def _swap_discount_ratio(
+    family_id: str, blocks_to_swap: int, transformer_path: str = "",
+) -> float:
     """block swap 下不会进显存的权重比例（显存预算折扣）。
 
     比例而非字节：fp8 与 bf16 的文件大小差一倍，按字节折扣会在 fp8 场景把护栏
     折扣穿（训练侧同款，见 training/sysmem.check_load_budget）。
     族不支持 / 查询失败返回 0，护栏退化成保守。
+    transformer_path：anima 靠它区分 28/36 层版本；krea2 结构唯一、忽略。
     """
     if blocks_to_swap <= 0:
         return 0.0
     try:
         family = _T.get_family(family_id)
         ratio_fn = getattr(family, "swapped_param_ratio", None)
-        return float(ratio_fn(blocks_to_swap)) if ratio_fn else 0.0
+        if ratio_fn is None:
+            return 0.0
+        return float(ratio_fn(blocks_to_swap, checkpoint_path=transformer_path))
     except Exception:  # noqa: BLE001
         return 0.0
 
@@ -514,7 +519,7 @@ class ModelCache:
                 weight_paths=[transformer_path, vae_path],
                 stage="模型加载",
                 vram_discount_ratio=_swap_discount_ratio(
-                    family_id, blocks_to_swap,
+                    family_id, blocks_to_swap, transformer_path,
                 ),
             )
             # keep_text：TE 先行栈刚编码完（LRU 已填充），重载不清它
@@ -620,7 +625,11 @@ class ModelCache:
         if blocks_to_swap > 0:
             from training.block_swap import PinnedBlockSwap
 
-            self.block_swap = PinnedBlockSwap(model.blocks, blocks_to_swap, device)
+            # clamp 到总层数：全局设置值跨族/跨版本共享（krea2 28 层、anima
+            # 28/36 层），超界按全量换出处理而非 fail（训练侧同口径）
+            self.block_swap = PinnedBlockSwap(
+                model.blocks, min(blocks_to_swap, len(model.blocks)), device,
+            )
             self.block_swap.attach()
 
         self.family_id = family_id
@@ -628,6 +637,10 @@ class ModelCache:
         self.model = model
         self.vae = vae
         self.text_stack = text_stack
+        # 身份键与 text_stack 必须同步写：否则切到别族后旧 krea2 键残留，
+        # 切回 krea2 时会把别族 tuple 栈误判为 TE 先行栈复用（跨族污染，
+        # 采样时 'tuple' object has no attribute 'encode_text_for_batch'）
+        self._text_ready_key = (family_id, text_encoder_path)
         self.transformer_path = transformer_path
         self.vae_path = vae_path
         self.text_encoder_path = text_encoder_path

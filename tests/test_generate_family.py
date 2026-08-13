@@ -65,7 +65,9 @@ def test_supports_capability_matches_the_family_table():
     from studio.domain.common import FAMILY_CAPABILITIES, supports_capability
 
     assert supports_capability("krea2", "block_swap") is True
-    assert supports_capability("anima", "block_swap") is False
+    assert supports_capability("anima", "block_swap") is True
+    # 反例：anima 不支持 text_cache（online 族），机制必须能说「不」
+    assert supports_capability("anima", "text_cache") is False
     # 未知族保守拒绝，不放行族条件旋钮
     assert supports_capability("no_such_family", "block_swap") is False
     # 与表本身同源（防有人再抄一份镜像）
@@ -90,10 +92,13 @@ def test_eval_and_generate_gate_block_swap_the_same_way(monkeypatch: pytest.Monk
         generate = _Gen()
 
     monkeypatch.setattr("studio.secrets.load", lambda: _Secrets())
-    eval_generation._BLOCK_SWAP_NOTICED.discard("anima")
+    eval_generation._BLOCK_SWAP_NOTICED.discard("no_such_family")
 
-    assert eval_generation._generate_settings("anima")["blocks_to_swap"] == 0
+    # 两族现在都支持 block swap，全局层数原样透传
+    assert eval_generation._generate_settings("anima")["blocks_to_swap"] == 14
     assert eval_generation._generate_settings("krea2")["blocks_to_swap"] == 14
+    # 过滤机制本身仍要能说「不」：未知族保守置 0
+    assert eval_generation._generate_settings("no_such_family")["blocks_to_swap"] == 0
     # generate 路由用的是同一个判据
-    assert supports_capability("anima", "block_swap") is False
+    assert supports_capability("anima", "block_swap") is True
     assert supports_capability("krea2", "block_swap") is True

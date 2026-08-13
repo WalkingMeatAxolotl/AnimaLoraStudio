@@ -79,6 +79,19 @@ def _module_device(module) -> torch.device | None:
     return param.device
 
 
+def _decode_offload_targets(model, qwen_model) -> tuple:
+    """VAE decode 期允许 offload 的模块。
+
+    block swap 生效时 DiT 必须跳过：恢复用的一刀切 ``.to(device)`` 会把换出层
+    的 CPU pinned 主副本整个搬上卡——swap 白做、瞬时占用=完整模型（小卡直接
+    OOM）；且换出后 DiT 常驻只剩零头，offload 它本就无意义。标记由
+    loader.place_model_for_block_swap 落在 model 上。
+    """
+    if int(getattr(model, "blocks_to_swap", 0) or 0) > 0:
+        return (qwen_model,)
+    return (model, qwen_model)
+
+
 def _offload_modules_for_vae_decode(*modules) -> list[tuple[object, torch.device]]:
     """Move large, inactive modules off GPU while fp32 VAE decode runs."""
     offloaded: list[tuple[object, torch.device]] = []
@@ -302,7 +315,6 @@ def sample_image(
             qwen_text, t5_ids, t5_attn, t5_w = build_comfy_anima_conditioning_inputs(
                 t5_tokenizer,
                 prompt_text,
-                max_length=512,
             )
             qwen_embeds, qwen_attn = encode_qwen(
                 qwen_model,
@@ -317,6 +329,8 @@ def sample_image(
             t5_attn = t5_attn.to(device)
             t5_w = t5_w.to(device, dtype=dtype)
             cross = model.preprocess_text_embeds(qwen_embeds, t5_ids, t5xxl_weights=t5_w)
+            # 只补不足（ComfyUI comfy/ldm/anima/model.py:204-205）；超过 512 的
+            # prompt 原样保留——上游 tokenizer 同样无长度上限
             if cross.shape[1] < 512:
                 cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
             return cross
@@ -454,7 +468,9 @@ def sample_image(
         _should_offload = getattr(vae, "should_offload_for_whole_decode", None)
         if device_type == "cuda" and callable(_should_offload) and _should_offload(latents):
             logger.info("[Debug] VAE decode: 显存紧张且峰值在崖下，offload 非活跃模块以整图 decode")
-            offloaded_modules = _offload_modules_for_vae_decode(model, qwen_model)
+            offloaded_modules = _offload_modules_for_vae_decode(
+                *_decode_offload_targets(model, qwen_model)
+            )
         images = _decode_vae(vae, latents)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2

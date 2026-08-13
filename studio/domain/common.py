@@ -21,7 +21,7 @@ def _meta(group: str, control: str = "auto", **extra: Any) -> dict[str, Any]:
 FAMILY_CAPABILITIES: dict[str, frozenset] = {
     "anima": frozenset({
         "navit", "sra", "leap", "compile_blocks",
-        "caption_tag_ops", "online_text", "masked_loss",
+        "caption_tag_ops", "online_text", "masked_loss", "block_swap",
     }),
     "krea2": frozenset({"masked_loss", "text_cache", "block_swap"}),
 }

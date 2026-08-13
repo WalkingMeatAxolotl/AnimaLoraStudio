@@ -12,7 +12,6 @@ import {
   type XformersStatus,
 } from '../../../api/client'
 import { useDialog } from '../../../components/Dialog'
-import { InfoButton } from '../../../components/InfoButton'
 import { useTagAutocompleteEnabled } from '../../../tagDict/autocompleteToggle'
 import { useShowTagTranslation } from '../../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../../tagDict/store'
@@ -21,8 +20,9 @@ import { useSettingsData } from '../../../lib/SettingsData'
 import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDensity, setStoredTheme, type Density, type Theme } from '../../../lib/theme'
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
+import { DepSection, DepVariantList, DepVersionRow, type DepLevel, type DepNotice } from './DepSection'
 import { Bool, PillRadioGroup, SettingsField, SettingsInput, SettingsSection } from './fields'
-import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
+import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, SourceSelect } from './modelCards'
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
 //
@@ -641,123 +641,137 @@ export function ONNXRuntimeSection() {
   const epShort = !rt
     ? '?'
     : rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU'
-  const statusLabel = error
-    ? `⚠ ${t('settings.statusLoadFailed')}`
+  const level: DepLevel = error
+    ? 'err'
+    : !rt
+      ? 'loading'
+      : notInstalled
+        ? 'warn'
+        : rt.cuda_load_error
+          ? 'err'
+          : rt.restart_required || mismatched
+            ? 'warn'
+            : 'ok'
+  const statusText = error
+    ? t('settings.loadFailedShort')
     : !rt
       ? t('settings.loadingStatus')
       : notInstalled
-        ? `⚠ ${t('settings.notInstalledShort')}`
+        ? t('settings.notInstalledShort')
         : rt.cuda_load_error
-          ? `⚠ ${t('settings.cudaLoadFailed')}`
+          ? t('settings.cudaLoadFailed')
           : rt.restart_required
-            ? `⚠ ${t('settings.restartStudioRequired')}`
+            ? t('settings.restartStudioRequired')
             : mismatched
-              ? `⚠ ${t('settings.gpuRunningCpuEp')}`
+              ? t('settings.gpuRunningCpuEp')
               : `${epShort} · ${rt.installed ?? '?'}`
-  const statusOk = rt && !hasIssue
+
+  const notices: DepNotice[] = []
+  if (rt?.restart_required) {
+    notices.push({
+      key: 'restart', tone: 'err',
+      content: <Trans i18nKey="settings.onnxRestartRequired" components={{ strong: <strong /> }} />,
+    })
+  }
+  if (rt && !rt.restart_required && notInstalled) {
+    notices.push({
+      key: 'not-installed', tone: 'info',
+      content: cuda.available ? t('settings.onnxNotInstalledHintGpu') : t('settings.onnxNotInstalledHintCpu'),
+    })
+  }
+  if (rt && !rt.restart_required && mismatched) {
+    notices.push({ key: 'cpu-ep', tone: 'info', content: t('settings.onnxCpuEpWarning') })
+  }
+  if (rt?.cuda_load_error) {
+    notices.push({
+      key: 'cuda-load-error', tone: 'err',
+      content: (<>
+        <div>{t('settings.cudaEpFailedCpu')}</div>
+        <code className="block font-mono text-xs break-all whitespace-pre-wrap mt-1">
+          {rt.cuda_load_error}
+        </code>
+      </>),
+    })
+  }
 
   return (
-    <details id="onnxruntime" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
-      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
-        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
-        <h2 className="text-sm font-semibold text-fg-primary m-0">ONNX Runtime</h2>
-        <span className="text-xs text-fg-tertiary">{t('settings.sharedByWd14ClTagger')}</span>
-        <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : 'text-warn'}`}>{statusLabel}</span>
-      </summary>
-
-      <div className="px-4 pb-4 flex flex-col gap-3">
-        {error && <div className="text-err text-xs font-mono">{error}</div>}
-        {!error && !rt && <div className="text-xs text-fg-tertiary">{t('settings.loadingRuntimeStatus')}</div>}
-        {rt && (
-          <>
-            <div className="rounded-sm border border-subtle bg-sunken p-2 flex flex-col gap-1 text-xs">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-fg-tertiary shrink-0">runtime:</span>
-                <code className="font-mono text-fg-primary">{rt.installed ?? t('settings.notInstalledParen')}{rt.version ? `==${rt.version}` : ''}</code>
-                <StatusLabel bg={gpuAccel ? 'bg-ok-soft' : 'bg-warn-soft'} fg={gpuAccel ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU only'} />
-              </div>
-              <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
-              <div className="text-fg-tertiary">{t('settings.gpuDetect')}: <span className="text-fg-secondary">{cuda.available ? `${cuda.gpu_name ?? '?'} (driver ${cuda.driver_version ?? '?'})` : t('settings.noNvidiaGpu')}</span></div>
-              {rt.torch_cuda_major != null && (
-                <div className="text-fg-tertiary">
-                  {t('settings.torchCudaMajor')}: <span className="text-fg-secondary font-mono">{rt.torch_cuda_major}</span>
-                  {rt.ort_cuda_major_mismatch && (
-                    <span className="text-warn ml-2">⚠ {t('settings.ortCudaMismatch')}</span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {rt.restart_required && (
-              <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
-                <Trans i18nKey="settings.onnxRestartRequired" components={{ strong: <strong /> }} />
-              </div>
+    <DepSection
+      id="onnxruntime"
+      title="ONNX Runtime"
+      subtitle={t('settings.sharedByWd14ClTagger')}
+      helpTooltip={<p>{t('settings.onnxHelpBrief')}</p>}
+      level={level}
+      statusText={statusText}
+      forceOpen={!!hasIssue}
+      loadError={error}
+      loading={!error && !rt}
+      infoCard={rt && (<>
+        <DepVersionRow
+          name={rt.installed ?? 'onnxruntime'}
+          value={rt.installed ? rt.version ?? '?' : t('settings.notInstalledParen')}
+          badge={{
+            text: rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU only',
+            ok: gpuAccel,
+          }}
+        />
+        <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
+        {rt.torch_cuda_major != null && (
+          <div className="text-fg-tertiary">
+            {t('settings.torchCudaMajor')}: <span className="text-fg-secondary font-mono">{rt.torch_cuda_major}</span>
+            {rt.ort_cuda_major_mismatch && (
+              <span className="text-warn ml-2">⚠ {t('settings.ortCudaMismatch')}</span>
             )}
-            {!rt.restart_required && notInstalled && (
-              <div className="rounded-sm border border-info bg-info-soft px-2 py-1.5 text-info text-xs">
-                {cuda.available ? t('settings.onnxNotInstalledHintGpu') : t('settings.onnxNotInstalledHintCpu')}
-              </div>
-            )}
-            {!rt.restart_required && mismatched && (
-              <div className="rounded-sm border border-info bg-info-soft px-2 py-1.5 text-info text-xs">
-                {t('settings.onnxCpuEpWarning')}
-              </div>
-            )}
-            {rt.cuda_load_error && (
-              <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-xs text-err">
-                <div>{t('settings.cudaEpFailedCpu')}</div>
-                <code className="block font-mono text-xs text-err break-all whitespace-pre-wrap mt-1">
-                  {rt.cuda_load_error}
-                </code>
-              </div>
-            )}
-
-            <div className="flex gap-1.5 items-center flex-wrap">
-              <button onClick={() => install('auto')} disabled={busy !== null} className="btn btn-primary btn-sm">
-                {busy === 'auto' ? t('settings.installingPackage') : t('settings.autoDetectInstall')}
-              </button>
-              <button onClick={() => void refresh()} disabled={busy !== null} title={t('settings.refreshStatus')}
-                className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm">↻</button>
-              <button type="button" onClick={() => setReinstallOpen(!reinstallOpen)}
-                className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
-                {reinstallOpen ? '▾' : '▸'} {t('settings.forceReinstallAdvanced')}
-              </button>
-            </div>
-            {reinstallOpen && (
-              <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
-                <div className="flex gap-1.5 items-center flex-wrap">
-                  <button
-                    onClick={() => install('directml')}
-                    disabled={busy !== null || !isWindows}
-                    title={isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint')}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    {busy === 'directml' ? t('settings.installingPackage') : t('settings.reinstallDirectml')}
-                  </button>
-                  <button
-                    onClick={() => install('gpu')}
-                    disabled={busy !== null}
-                    title={t('settings.cudaPackageHint')}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    {busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}
-                  </button>
-                  <button
-                    onClick={() => install('cpu')}
-                    disabled={busy !== null}
-                    title={t('settings.cpuPackageHint')}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    {busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}
-                  </button>
-                </div>
-                <span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>
-              </div>
-            )}
-          </>
+          </div>
         )}
-      </div>
-    </details>
+      </>)}
+      notices={notices}
+      primary={rt ? {
+        label: busy === 'auto'
+          ? t('settings.installing')
+          : notInstalled ? t('settings.installAutoMatchPlain') : t('settings.reinstallAutoMatchPlain'),
+        onClick: () => void install('auto'),
+        disabled: busy !== null,
+        emphasized: notInstalled || mismatched || !!rt.cuda_load_error,
+      } : undefined}
+      onRefresh={() => void refresh()}
+      busy={busy !== null}
+      advanced={rt ? {
+        label: t('settings.manualVariantToggle'),
+        open: reinstallOpen,
+        onToggle: () => setReinstallOpen(!reinstallOpen),
+        children: (
+          <DepVariantList
+            busy={busy !== null}
+            variants={[
+              {
+                key: 'gpu',
+                label: 'onnxruntime-gpu',
+                note: t('settings.cudaPackageHint'),
+                current: rt.installed === 'onnxruntime-gpu',
+                onInstall: () => void install('gpu'),
+              },
+              {
+                key: 'directml',
+                label: 'onnxruntime-directml',
+                note: isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint'),
+                current: rt.installed === 'onnxruntime-directml',
+                usable: isWindows,
+                disabled: !isWindows,
+                onInstall: () => void install('directml'),
+              },
+              {
+                key: 'cpu',
+                label: 'onnxruntime',
+                note: t('settings.cpuPackageHint'),
+                current: rt.installed === 'onnxruntime',
+                onInstall: () => void install('cpu'),
+              },
+            ]}
+            footer={<span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>}
+          />
+        ),
+      } : undefined}
+    />
   )
 }
 
@@ -813,8 +827,18 @@ export function PyTorchSection() {
   }
 
   const hasIssue = !!error || (status && (status.is_cpu_with_gpu || status.is_cuda_build_unavailable || !status.installed))
-  const statusOk = status?.cuda_available && !error
-  const statusLabel = error
+  const level: DepLevel = error
+    ? 'err'
+    : !status
+      ? 'loading'
+      : !status.installed
+        ? 'warn'
+        : status.is_cpu_with_gpu
+          ? 'err'
+          : !status.cuda_available && status.cuda_build !== 'cpu'
+            ? 'warn'
+            : status.cuda_available ? 'ok' : 'warn'
+  const statusText = error
     ? t('settings.loadFailedShort')
     : !status
       ? t('settings.loadingStatus')
@@ -825,125 +849,96 @@ export function PyTorchSection() {
           : !status.cuda_available && status.cuda_build !== 'cpu'
             ? t('settings.cudaUnavailableDriver')
             : status.cuda_available
-              ? `CUDA ✓ ${status.cuda_build}`
-              : `CPU ${status.cuda_build}`
+              ? `CUDA · ${status.cuda_build}`
+              : 'CPU'
+
+  const notices: DepNotice[] = []
+  if (status?.is_cpu_with_gpu) {
+    notices.push({
+      key: 'cpu-with-gpu', tone: 'err',
+      content: (
+        <Trans
+          i18nKey="settings.torchCpuWithGpuWarning"
+          values={{ tag: status.recommended_cu_tag }}
+          components={{ code: <code className="font-mono" /> }}
+        />
+      ),
+    })
+  }
+  if (status?.is_cuda_build_unavailable) {
+    notices.push({
+      key: 'cuda-unavailable', tone: 'warn',
+      content: (
+        <Trans
+          i18nKey="settings.torchCudaUnavailableWarning"
+          components={{ code: <code className="font-mono" /> }}
+        />
+      ),
+    })
+  }
 
   return (
-    <details id="pytorch" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
-      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
-        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
-        <h2 className="text-sm font-semibold text-fg-primary m-0">PyTorch</h2>
-        <span className="text-xs text-fg-tertiary">{t('settings.trainingCoreDependency')}</span>
-        <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : status?.is_cpu_with_gpu ? 'text-err' : 'text-warn'}`}>
-          {statusLabel}
-        </span>
-      </summary>
-
-      <div className="px-4 pb-4 flex flex-col gap-3">
-        {error && <div className="text-err text-xs font-mono">{error}</div>}
-        {!error && !status && <div className="text-xs text-fg-tertiary">{t('settings.loadingStatus')}</div>}
-
-        {status && (<>
-          {/* 当前状态卡 */}
-          <div className="rounded-sm border border-subtle bg-sunken p-2 flex flex-col gap-1 text-xs">
-            <div className="flex gap-4 flex-wrap">
-              <span className="text-fg-tertiary">torch: <code className="text-fg-secondary font-mono">{status.version ?? t('settings.notInstalledParen')}</code></span>
-              {status.cuda_build && (
-                <span className="text-fg-tertiary">build: <code className="text-fg-secondary font-mono">{status.cuda_build}</code></span>
-              )}
-              {status.cuda_available && status.device_name && (
-                <span className="text-fg-tertiary">GPU: <code className="text-fg-secondary font-mono">{status.device_name}</code></span>
-              )}
-            </div>
-            <div className="flex gap-4 flex-wrap">
-              <span className="text-fg-tertiary">
-                {t('settings.driverLabel')}:{' '}
-                <code className="text-fg-secondary font-mono">
-                  {status.cuda_detect.driver_version ?? t('settings.notDetected')}
-                </code>
-              </span>
-              {status.cuda_detect.gpu_name && !status.cuda_available && (
-                <span className="text-fg-tertiary">
-                  {t('settings.systemGpu')}:{' '}
-                  <code className="text-fg-secondary font-mono">{status.cuda_detect.gpu_name}</code>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* 误装：CPU torch + 有 GPU */}
-          {status.is_cpu_with_gpu && (
-            <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
-              <Trans
-                i18nKey="settings.torchCpuWithGpuWarning"
-                values={{ tag: status.recommended_cu_tag }}
-                components={{ code: <code className="font-mono" /> }}
-              />
-            </div>
-          )}
-
-          {/* CUDA build 但运行时不可用：驱动 / WSL 问题 */}
-          {status.is_cuda_build_unavailable && (
-            <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
-              <Trans
-                i18nKey="settings.torchCudaUnavailableWarning"
-                components={{ code: <code className="font-mono" /> }}
-              />
-            </div>
-          )}
-
-          {/* 操作按钮 */}
-          <div className="flex gap-1.5 items-center flex-wrap">
-            <button
-              onClick={() => void reinstall('auto')}
-              disabled={busy || !status.cuda_detect.available}
-              className={status.is_cpu_with_gpu ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
-              title={status.cuda_detect.available
-                ? t('settings.autoSelect', { tag: status.recommended_cu_tag })
-                : t('settings.noNvidiaDriverCannotCuda')}
-            >
-              {busy ? t('settings.installing') : status.is_cpu_with_gpu
-                ? t('settings.reinstallCudaBuild', { tag: status.recommended_cu_tag })
-                : t('settings.reinstallAuto', { tag: status.recommended_cu_tag })}
-            </button>
-            <button onClick={() => void refresh()} disabled={busy}
-              className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm">↻</button>
-            <button type="button" onClick={() => setAdvancedOpen(!advancedOpen)}
-              className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
-              {advancedOpen ? '▾' : '▸'} {t('settings.advancedManualCuda')}
-            </button>
-          </div>
-
-          {/* 手动选版本 */}
-          {advancedOpen && (
-            <div className="flex flex-col gap-1.5 pt-2 border-t border-subtle text-xs">
-              <p className="text-fg-tertiary m-0">
-                {t('settings.manualCudaHint')}
-              </p>
-              <div className="flex gap-1.5 flex-wrap">
-                {(['cu128', 'cu126', 'cu124', 'cu118', 'cpu'] as const).map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => void reinstall(tag)}
-                    disabled={busy}
-                    className={`btn btn-secondary btn-sm ${
-                      status.cuda_build === tag ? 'border-accent' : ''
-                    }`}
-                    title={
-                      tag === 'cpu'
-                        ? t('settings.installCpuBuildHint')
-                        : t('settings.installCudaBuildHint', { tag })
-                    }
-                  >
-                    {tag}{status.cuda_build === tag ? ' ✓' : ''}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </>)}
-      </div>
-    </details>
+    <DepSection
+      id="pytorch"
+      title="PyTorch"
+      subtitle={t('settings.trainingCoreDependency')}
+      helpTooltip={<p>{t('settings.torchHelpBrief')}</p>}
+      level={level}
+      statusText={statusText}
+      forceOpen={!!hasIssue}
+      loadError={error}
+      loading={!error && !status}
+      infoCard={status && (
+        <DepVersionRow
+          name="torch"
+          value={status.version ?? t('settings.notInstalledParen')}
+          badge={status.cuda_build
+            ? { text: status.cuda_build, ok: !!status.cuda_available }
+            : undefined}
+        />
+      )}
+      notices={notices}
+      primary={status ? {
+        label: busy
+          ? t('settings.installing')
+          : !status.installed
+            ? t('settings.installAutoMatchPlain')
+            : status.is_cpu_with_gpu
+              ? t('settings.reinstallCudaBuild', { tag: status.recommended_cu_tag })
+              : t('settings.reinstallAuto', { tag: status.recommended_cu_tag }),
+        onClick: () => void reinstall('auto'),
+        disabled: busy || !status.cuda_detect.available,
+        title: status.cuda_detect.available
+          ? t('settings.autoSelect', { tag: status.recommended_cu_tag })
+          : t('settings.noNvidiaDriverCannotCuda'),
+        emphasized: !status.installed || status.is_cpu_with_gpu,
+      } : undefined}
+      onRefresh={() => void refresh()}
+      busy={busy}
+      advanced={status ? {
+        label: t('settings.manualVariantToggle'),
+        open: advancedOpen,
+        onToggle: () => setAdvancedOpen(!advancedOpen),
+        children: (
+          <DepVariantList
+            hint={t('settings.manualCudaHint')}
+            busy={busy}
+            variants={(['cu128', 'cu126', 'cu124', 'cu118', 'cpu'] as const).map((tag) => ({
+              key: tag,
+              label: tag,
+              note: tag === 'cpu'
+                ? t('settings.cpuBuildDesc')
+                : t('settings.cuBuildDesc', { ver: `${tag.slice(2, -1)}.${tag.slice(-1)}` }),
+              current: status.cuda_build === tag,
+              onInstall: () => void reinstall(tag),
+              installTitle: tag === 'cpu'
+                ? t('settings.installCpuBuildHint')
+                : t('settings.installCudaBuildHint', { tag }),
+            }))}
+          />
+        ),
+      } : undefined}
+    />
   )
 }
 
@@ -986,7 +981,7 @@ export function FlashAttentionSection() {
     setBusy(true)
     try {
       const result = await api.installFlashAttn(url)
-      toast(t('settings.flashAttnInstalled', { version: result.version ?? '?' }), 'success')
+      toast(t('settings.packageInstalledRestart', { pkg: 'flash_attn', version: result.version ?? '?' }), 'success')
       await refresh()
     } catch (e) {
       toast(t('settings.installFailed', { error: String(e) }), 'error')
@@ -1006,118 +1001,93 @@ export function FlashAttentionSection() {
   const hasIssue = !!error || (status && !status.installed)
   const canAutoInstall = !isCpuTorch && !!env?.torch_tag && !!env?.platform && usable.length > 0
 
-  const statusLabel = error
+  const level: DepLevel = error ? 'err' : !status ? 'loading' : status.installed ? 'ok' : 'warn'
+  // 状态词只取主版本(flash_attn 版本串带 +cu128torch2.11 local tag,太长);
+  // 完整版本在展开区的版本行里
+  const statusText = error
     ? t('settings.loadFailedShort')
     : !status
       ? t('settings.loadingStatus')
       : status.installed
-        ? t('settings.installedVersion', { version: status.version ?? '?' })
+        ? `v${(status.version ?? '?').split('+')[0]}`
         : t('settings.notInstalledShort')
-  const statusOk = status?.installed && !error
+
+  const notices: DepNotice[] = []
+  if (env) {
+    if (isCpuTorch) {
+      notices.push({ key: 'cpu-torch', tone: 'warn', content: t('settings.flashAttnNeedsCudaTorch') })
+    } else if (fetchError) {
+      notices.push({
+        key: 'fetch-error', tone: 'err',
+        content: (<>
+          {t('settings.githubApiFailed')}
+          <code className="block mt-0.5 break-all">{fetchError}</code>
+        </>),
+      })
+    } else if (!canAutoInstall && env.platform && env.torch_tag) {
+      notices.push({ key: 'no-wheel', tone: 'warn', content: t('settings.noWheelForPython', { python: env.python_tag }) })
+    }
+  }
 
   return (
-    <details id="flash-attn" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
-      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
-        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
-        <h2 className="text-sm font-semibold text-fg-primary m-0">Flash Attention</h2>
-        <span className="text-xs text-fg-tertiary">{t('settings.trainingAccelerationOptional')}</span>
-        <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : 'text-warn'}`}>{statusLabel}</span>
-      </summary>
-
-      <div className="px-4 pb-4 flex flex-col gap-3">
-        {error && <div className="text-err text-xs font-mono">{error}</div>}
-        {!error && !status && <div className="text-xs text-fg-tertiary">{t('settings.loadingStatus')}</div>}
-
-        {status && env && (<>
-          {/* 环境信息 */}
-          <div className="rounded-sm border border-subtle bg-sunken p-2 flex flex-col gap-1 text-xs">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-fg-tertiary shrink-0">flash_attn:</span>
-              <code className="font-mono text-fg-primary">
-                {status.installed ? `v${status.version ?? '?'}` : t('settings.notInstalledParen')}
+    <DepSection
+      id="flash-attn"
+      title="Flash Attention"
+      subtitle={t('settings.trainingAccelerationOptional')}
+      helpTooltip={<p>{t('settings.flashAttnHelpBrief')}</p>}
+      level={level}
+      statusText={statusText}
+      forceOpen={!!hasIssue}
+      loadError={error}
+      loading={!error && !status}
+      infoCard={status && (
+        <DepVersionRow
+          name="flash_attn"
+          value={status.installed ? status.version ?? '?' : t('settings.notInstalledParen')}
+        />
+      )}
+      notices={notices}
+      primary={status && env ? {
+        label: busy
+          ? t('settings.installing')
+          : status.installed ? t('settings.reinstallAutoMatchPlain') : t('settings.installAutoMatchPlain'),
+        onClick: () => void install(null),
+        disabled: busy || !canAutoInstall,
+        title: canAutoInstall
+          ? t('settings.autoSelect', { tag: bestCandidate?.name ?? '' })
+          : t('settings.noWheelManual'),
+        emphasized: !status.installed && canAutoInstall,
+      } : undefined}
+      onRefresh={() => void refresh()}
+      busy={busy}
+      advanced={status && env ? {
+        label: t('settings.manualVariantToggle'),
+        open: candidatesOpen,
+        onToggle: () => setCandidatesOpen(!candidatesOpen),
+        children: (
+          <DepVariantList
+            // wheel 匹配键(包间依赖事实,判断「为什么这个 wheel 灰了」的钥匙)。
+            // 机器事实(驱动/平台)在「环境」section 概览,这里只列匹配用 tag。
+            hint={(<>
+              {t('settings.wheelMatchTags')}: <code className="font-mono">
+                {[env.python_tag, env.torch_tag, env.cuda_tag, env.platform].filter(Boolean).join(' / ') || t('settings.notDetected')}
               </code>
-              {status.installed && <StatusLabel bg="bg-ok-soft" fg="text-ok" text={t('settings.installed')} />}
-            </div>
-            <div className="flex gap-4 flex-wrap">
-              <span className="text-fg-tertiary">Python: <code className="text-fg-secondary font-mono">{env.python_tag}</code></span>
-              <span className="text-fg-tertiary">CUDA: <code className="text-fg-secondary font-mono">{env.cuda_tag ?? t('settings.notDetected')}</code></span>
-              <span className="text-fg-tertiary">PyTorch: <code className="text-fg-secondary font-mono">{env.torch_tag ?? t('settings.notDetected')}</code></span>
-              <span className="text-fg-tertiary">{t('settings.platform')}: <code className="text-fg-secondary font-mono">{env.platform ?? t('settings.unsupported')}</code></span>
-            </div>
-          </div>
-
-          {/* CPU 版 torch：根本装不了 flash_attn，优先显示这条 */}
-          {isCpuTorch && (
-            <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
-              {t('settings.flashAttnNeedsCudaTorch')}
-            </div>
-          )}
-
-          {/* GitHub API 失败 */}
-          {!isCpuTorch && fetchError && (
-            <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
-              {t('settings.githubApiFailed')}
-              <code className="block mt-0.5 break-all">{fetchError}</code>
-            </div>
-          )}
-
-          {/* 没匹配 wheel */}
-          {!isCpuTorch && !canAutoInstall && !fetchError && env.platform && env.torch_tag && (
-            <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
-              {t('settings.noWheelForPython', { python: env.python_tag })}
-            </div>
-          )}
-
-          {/* 操作按钮 */}
-          <div className="flex gap-1.5 items-center flex-wrap">
-            <button
-              onClick={() => void install(null)}
-              disabled={busy || !canAutoInstall}
-              className="btn btn-primary btn-sm"
-              title={canAutoInstall
-                ? t('settings.autoSelect', { tag: bestCandidate?.name ?? '' })
-                : t('settings.noWheelManual')}
-            >
-              {busy ? t('settings.installing') : status.installed ? t('settings.reinstallAutoMatch') : t('settings.autoMatchInstall')}
-            </button>
-            <button onClick={() => void refresh()} disabled={busy}
-              className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm">↻</button>
-            <button type="button" onClick={() => setCandidatesOpen(!candidatesOpen)}
-              className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
-              {candidatesOpen ? '▾' : '▸'} {t('settings.candidateWheels', { n: usable.length })}
-            </button>
-          </div>
-
-          {/* 候选列表 + 手动 URL */}
-          {candidatesOpen && (
-            <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
-              {candidates.length === 0 ? (
+            </>)}
+            busy={busy}
+            variants={candidates.map((c) => ({
+              key: c.url,
+              label: c.name,
+              note: c.notes.length
+                ? (<>{c.notes.map((n, i) => <span key={i} className="text-warn">{n}</span>)}</>)
+                : undefined,
+              usable: c.usable,
+              onInstall: () => void install(c.url),
+              installTitle: c.usable ? t('settings.installWheel') : t('settings.wheelAbiIncompatible'),
+            }))}
+            footer={(<>
+              {candidates.length === 0 && (
                 <p className="text-xs text-fg-tertiary m-0">{t('settings.wheelQueryFailed')}</p>
-              ) : (
-                <ul className="list-none m-0 p-0 flex flex-col gap-1">
-                  {candidates.map((c) => (
-                    <li key={c.url} className={`flex items-start gap-2 text-xs px-2 py-1.5 rounded-sm border ${
-                      c.usable ? 'border-subtle bg-sunken' : 'border-transparent bg-transparent opacity-50'
-                    }`}>
-                      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                        <code className="font-mono text-fg-primary text-[11px] break-all">{c.name}</code>
-                        {c.notes.map((n, i) => (
-                          <span key={i} className="text-warn text-[10px]">{n}</span>
-                        ))}
-                      </div>
-                      <button
-                        onClick={() => void install(c.url)}
-                        disabled={busy}
-                        className={c.usable ? 'btn btn-primary btn-sm shrink-0' : 'btn btn-secondary btn-sm shrink-0'}
-                        title={c.usable ? t('settings.installWheel') : t('settings.wheelAbiIncompatible')}
-                      >
-                        {c.usable ? t('settings.installAction') : t('settings.forceInstall')}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
               )}
-
               <div className="flex flex-col gap-1 pt-1 border-t border-subtle">
                 <p className="text-xs text-fg-tertiary m-0">{t('settings.manualUrl')}</p>
                 <div className="flex gap-1.5">
@@ -1135,11 +1105,11 @@ export function FlashAttentionSection() {
                   >{t('settings.install')}</button>
                 </div>
               </div>
-            </div>
-          )}
-        </>)}
-      </div>
-    </details>
+            </>)}
+          />
+        ),
+      } : undefined}
+    />
   )
 }
 
@@ -1178,7 +1148,7 @@ export function XformersSection() {
     setBusy(true)
     try {
       const r = await api.installXformers()
-      toast(t('settings.xformersInstalled', { version: r.version ?? '?' }), 'success')
+      toast(t('settings.packageInstalledRestart', { pkg: 'xformers', version: r.version ?? '?' }), 'success')
       await refresh()
     } catch (e) {
       toast(t('settings.installFailed', { error: String(e) }), 'error')
@@ -1187,65 +1157,47 @@ export function XformersSection() {
     }
   }
 
-  const statusLabel = error
+  const level: DepLevel = error ? 'err' : !status ? 'loading' : status.installed ? 'ok' : 'warn'
+  const statusText = error
     ? t('settings.loadFailedShort')
     : !status
       ? t('settings.loadingStatus')
       : status.installed
-        ? t('settings.installedVersion', { version: status.version ?? '?' })
+        ? `v${status.version ?? '?'}`
         : t('settings.notInstalledShort')
-  const statusOk = status?.installed && !error
-  const hasIssue = !!error
 
   return (
-    <details id="xformers" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
-      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
-        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
-        <h2 className="text-sm font-semibold text-fg-primary m-0">xformers</h2>
-        <span className="text-xs text-fg-tertiary">{t('settings.xformersSubtitle')}</span>
-        <InfoButton>
-          <p><Trans i18nKey="settings.xformersHelp1" components={{ strong: <strong />, code: <code /> }} /></p>
-          <p>{t('settings.xformersHelp2')}</p>
-          <p>{t('settings.xformersHelp3')}</p>
-        </InfoButton>
-        <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : 'text-warn'}`}>{statusLabel}</span>
-      </summary>
-
-      <div className="px-4 pb-4 flex flex-col gap-3">
-        {error && <div className="text-err text-xs font-mono">{error}</div>}
-        {!error && !status && <div className="text-xs text-fg-tertiary">{t('settings.loadingStatus')}</div>}
-
-        {status && (<>
-          <div className="rounded-sm border border-subtle bg-sunken p-2 flex items-center gap-2 text-xs">
-            <span className="text-fg-tertiary shrink-0">xformers:</span>
-            <code className="font-mono text-fg-primary">
-              {status.installed ? `v${status.version ?? '?'}` : t('settings.notInstalledParen')}
-            </code>
-            {status.installed && <StatusLabel bg="bg-ok-soft" fg="text-ok" text={t('settings.installed')} />}
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={() => void install()}
-              disabled={busy}
-              className="btn btn-primary btn-sm"
-            >
-              {busy
-                ? t('settings.installing')
-                : status.installed
-                  ? t('settings.reinstallAutoMatchPlain')
-                  : t('settings.installAutoMatchPlain')}
-            </button>
-            <button
-              onClick={() => void refresh()}
-              disabled={busy}
-              className="btn btn-ghost btn-sm"
-              title={t('settings.refreshStatus')}
-            >↻</button>
-          </div>
-        </>)}
-      </div>
-    </details>
+    <DepSection
+      id="xformers"
+      title="xformers"
+      subtitle={t('settings.xformersSubtitle')}
+      helpTooltip={(<>
+        <p><Trans i18nKey="settings.xformersHelp1" components={{ strong: <strong />, code: <code /> }} /></p>
+        <p>{t('settings.xformersHelp2')}</p>
+        <p>{t('settings.xformersHelp3')}</p>
+      </>)}
+      level={level}
+      statusText={statusText}
+      forceOpen={!!error}
+      loadError={error}
+      loading={!error && !status}
+      infoCard={status && (
+        <DepVersionRow
+          name="xformers"
+          value={status.installed ? status.version ?? '?' : t('settings.notInstalledParen')}
+        />
+      )}
+      primary={status ? {
+        label: busy
+          ? t('settings.installing')
+          : status.installed ? t('settings.reinstallAutoMatchPlain') : t('settings.installAutoMatchPlain'),
+        onClick: () => void install(),
+        disabled: busy,
+        emphasized: !status.installed,
+      } : undefined}
+      onRefresh={() => void refresh()}
+      busy={busy}
+    />
   )
 }
 
@@ -1395,7 +1347,7 @@ export function VramPolicySection({
           <SettingsInput
             type="number"
             min={0}
-            max={28}
+            max={36}
             value={draft.generate.blocks_to_swap ?? 0}
             onChange={(v) =>
               update('generate', 'blocks_to_swap', Math.max(0, Number(v) || 0))

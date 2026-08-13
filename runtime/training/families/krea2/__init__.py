@@ -109,6 +109,8 @@ KREA2_SPEC = ModelSpec(
     latent=WAN21_F8C16,
     text=TextSpec(
         strategy="cached_varlen",
+        # caption padding 的定长下限，不是长度上限——训练与在线两条路径都不
+        # 截断（KREA2_MAX_LENGTH 注释）。K2 无消费者，仅作声明。
         max_seq_len=512,
         fingerprint=KREA2_TEXT_FINGERPRINT,
     ),
@@ -151,12 +153,17 @@ class Krea2Family:
             path, device, dtype, purpose=purpose, blocks_to_swap=blocks_to_swap,
         )
 
-    def swapped_param_ratio(self, blocks_to_swap: int) -> float:
+    def swapped_param_ratio(self, blocks_to_swap: int, *,
+                            checkpoint_path: str | None = None) -> float:
         """换出层占全模型参数的比例（显存预算折扣用；见 loader 同名函数）。
 
         刻意是比例不是字节数 —— fp8 与 bf16 的文件大小差一倍，按字节折扣会在
         fp8 场景把护栏折扣穿。
+
+        ``checkpoint_path`` 是跨族协议参数（anima 靠它区分 28/36 层版本）；
+        krea2 结构唯一（KREA2_CONFIG），不需要。
         """
+        del checkpoint_path
         from training.families.krea2.loader import swapped_param_ratio
 
         return swapped_param_ratio(blocks_to_swap)

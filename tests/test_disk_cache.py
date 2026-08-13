@@ -3,7 +3,6 @@
 覆盖：
   - put/get 加解密 roundtrip
   - put 多次 → 每张图都有独立 nonce（同样 PNG 内容生成不同密文）
-  - list_index 按 task_id 聚合 + xy mode 带 samples
   - drop_task / clear_all
   - startup_clean 扫清所有 session-*
   - LRU by count / by bytes / configure shrink
@@ -49,7 +48,7 @@ def cache(cache_root: Path):
 
 def test_put_get_roundtrip(cache: disk_cache.SessionCache) -> None:
     png = _png_bytes(b"abc")
-    cache.put(1, "a.png", png, {"mode": "single", "prompts": ["test"]}, mode="single")
+    cache.put(1, "a.png", png, {"mode": "single", "prompts": ["test"]})
     assert cache.get_image(1, "a.png") == png
 
 
@@ -64,9 +63,9 @@ def test_put_writes_different_ciphertext_each_time(cache: disk_cache.SessionCach
     保持 crypto hygiene）。
     """
     png = _png_bytes(b"same")
-    cache.put(1, "x.png", png, {}, mode="single")
+    cache.put(1, "x.png", png, {})
     blob1 = next(iter(cache._index.values())).file_path.read_bytes()
-    cache.put(1, "x.png", png, {}, mode="single")
+    cache.put(1, "x.png", png, {})
     blob2 = next(iter(cache._index.values())).file_path.read_bytes()
     assert blob1 != blob2
 
@@ -77,9 +76,9 @@ def test_put_recreates_session_dir_if_deleted(cache: disk_cache.SessionCache) ->
     2026-07-28 丢图 root cause 回归：没有自愈时目录一旦消失，每张
     cache_image 都 FileNotFoundError 丢弃，直到 clear_all / 重启。
     """
-    cache.put(1, "a.png", _png_bytes(b"a"), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(b"a"), {})
     shutil.rmtree(cache.session_dir)
-    cache.put(1, "b.png", _png_bytes(b"b"), {}, mode="single")
+    cache.put(1, "b.png", _png_bytes(b"b"), {})
     assert cache.get_image(1, "b.png") == _png_bytes(b"b")
     # 旧 entry 文件已随目录消失：get 返 None 并剔出 index（既有语义不变）
     assert cache.get_image(1, "a.png") is None
@@ -87,9 +86,9 @@ def test_put_recreates_session_dir_if_deleted(cache: disk_cache.SessionCache) ->
 
 
 def test_overwrite_same_key_deletes_old_file(cache: disk_cache.SessionCache) -> None:
-    cache.put(1, "a.png", _png_bytes(b"v1"), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(b"v1"), {})
     old_path = next(iter(cache._index.values())).file_path
-    cache.put(1, "a.png", _png_bytes(b"v2"), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(b"v2"), {})
     assert not old_path.exists()
     assert cache.total_count() == 1
     assert cache.get_image(1, "a.png") == _png_bytes(b"v2")
@@ -100,7 +99,7 @@ def test_overwrite_same_key_deletes_old_file(cache: disk_cache.SessionCache) -> 
 
 def test_on_disk_blob_has_no_png_magic(cache: disk_cache.SessionCache) -> None:
     """加密后的文件首字节不能匹配 PNG header `89 50 4E 47`。"""
-    cache.put(1, "a.png", _png_bytes(b"secret-payload" * 100), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(b"secret-payload" * 100), {})
     file_path = next(iter(cache._index.values())).file_path
     blob = file_path.read_bytes()
     assert not blob.startswith(b"\x89PNG"), "leaked PNG magic bytes"
@@ -110,7 +109,7 @@ def test_on_disk_blob_has_no_png_magic(cache: disk_cache.SessionCache) -> None:
 def test_on_disk_blob_is_high_entropy(cache: disk_cache.SessionCache) -> None:
     """密文应接近均匀分布。粗略卡方：256 个 byte 桶里 single dominant 桶
     占比应远低于纯 PNG（PNG header / zlib stream 会让前几字节固定）。"""
-    cache.put(1, "a.png", _png_bytes(b"\x00" * 4096), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(b"\x00" * 4096), {})
     file_path = next(iter(cache._index.values())).file_path
     blob = file_path.read_bytes()
     # PNG bytes b"\x00" 全零会让明文 entropy 极低；密文反过来应均匀。
@@ -123,66 +122,20 @@ def test_on_disk_blob_is_high_entropy(cache: disk_cache.SessionCache) -> None:
 
 
 def test_filename_has_no_extension_hint(cache: disk_cache.SessionCache) -> None:
-    cache.put(1, "a.png", _png_bytes(), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(), {})
     file_path = next(iter(cache._index.values())).file_path
     assert file_path.suffix == ".bin", f"unexpected extension {file_path.suffix}"
     # 不能含原 .png filename
     assert "a.png" not in file_path.name
 
 
-# ---------------------------------------------------------------- list_index
-
-
-def test_list_index_single_groups_by_task(cache: disk_cache.SessionCache) -> None:
-    cache.put(1, "a.png", _png_bytes(b"a"), {"mode": "single"}, mode="single")
-    cache.put(1, "b.png", _png_bytes(b"b"), {"mode": "single"}, mode="single")
-    cache.put(2, "c.png", _png_bytes(b"c"), {"mode": "single"}, mode="single")
-    idx = cache.list_index()
-    assert len(idx) == 2
-    by_task = {e["taskId"]: e for e in idx}
-    assert by_task[1]["filenames"] == ["a.png", "b.png"]
-    assert by_task[2]["filenames"] == ["c.png"]
-    assert all("samples" not in e for e in idx)  # single 模式不应带 samples
-
-
-def test_list_index_xy_includes_samples(cache: disk_cache.SessionCache) -> None:
-    snap = {"mode": "xy", "xy_draft": {"x": {"axis": "cfg", "raw": "3,5"}, "y": None}}
-    cache.put(
-        7, "xy_x00_y00.png", _png_bytes(b"00"), snap,
-        mode="xy", xy_info={"xi": 0, "yi": 0, "xv": "3", "yv": None},
-    )
-    cache.put(
-        7, "xy_x01_y00.png", _png_bytes(b"01"), snap,
-        mode="xy", xy_info={"xi": 1, "yi": 0, "xv": "5", "yv": None},
-    )
-    idx = cache.list_index()
-    assert len(idx) == 1
-    e = idx[0]
-    assert e["mode"] == "xy"
-    assert e["taskId"] == 7
-    assert len(e["samples"]) == 2
-    assert e["samples"][0]["xy"]["xi"] == 0
-    assert e["samples"][1]["xy"]["xi"] == 1
-
-
-def test_list_index_sorted_desc_by_created_at(cache: disk_cache.SessionCache, monkeypatch) -> None:
-    # 通过 monkeypatch 控制 time.time 顺序
-    times = iter([1000.0, 2000.0, 3000.0])
-    monkeypatch.setattr("studio.services.inference.disk_cache.time.time", lambda: next(times))
-    cache.put(1, "a.png", _png_bytes(), {}, mode="single")
-    cache.put(2, "b.png", _png_bytes(), {}, mode="single")
-    cache.put(3, "c.png", _png_bytes(), {}, mode="single")
-    idx = cache.list_index()
-    assert [e["taskId"] for e in idx] == [3, 2, 1]
-
-
 # ---------------------------------------------------------------- drop / clear
 
 
 def test_drop_task_removes_files_and_index(cache: disk_cache.SessionCache) -> None:
-    cache.put(1, "a.png", _png_bytes(), {}, mode="single")
-    cache.put(1, "b.png", _png_bytes(), {}, mode="single")
-    cache.put(2, "c.png", _png_bytes(), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(), {})
+    cache.put(1, "b.png", _png_bytes(), {})
+    cache.put(2, "c.png", _png_bytes(), {})
     files_before = list(cache.session_dir.iterdir())
     assert len(files_before) == 3
     n = cache.drop_task(1)
@@ -194,8 +147,8 @@ def test_drop_task_removes_files_and_index(cache: disk_cache.SessionCache) -> No
 
 
 def test_clear_all_empties_session_dir(cache: disk_cache.SessionCache) -> None:
-    cache.put(1, "a.png", _png_bytes(), {}, mode="single")
-    cache.put(1, "b.png", _png_bytes(), {}, mode="single")
+    cache.put(1, "a.png", _png_bytes(), {})
+    cache.put(1, "b.png", _png_bytes(), {})
     cache.clear_all()
     assert cache.total_count() == 0
     assert cache.total_bytes() == 0
@@ -235,7 +188,7 @@ def test_lru_evicts_by_count(cache_root: Path) -> None:
     sc = disk_cache.SessionCache(root=cache_root, max_count=3, max_bytes=10**9)
     sc.ensure_dir()
     for i in range(5):
-        sc.put(1, f"img{i}.png", _png_bytes(bytes([i])), {}, mode="single")
+        sc.put(1, f"img{i}.png", _png_bytes(bytes([i])), {})
     assert sc.total_count() == 3
     assert sc.get_image(1, "img0.png") is None
     assert sc.get_image(1, "img1.png") is None
@@ -250,11 +203,11 @@ def test_lru_evicts_by_bytes(cache_root: Path) -> None:
     # snap={}=b"{}" 是 2 bytes；png = b"hello"（5 bytes） → 文件 27 bytes
     sc = disk_cache.SessionCache(root=cache_root, max_count=10**6, max_bytes=80)
     sc.ensure_dir()
-    sc.put(1, "a.png", b"hello", {}, mode="single")
-    sc.put(1, "b.png", b"hello", {}, mode="single")
-    sc.put(1, "c.png", b"hello", {}, mode="single")
+    sc.put(1, "a.png", b"hello", {})
+    sc.put(1, "b.png", b"hello", {})
+    sc.put(1, "c.png", b"hello", {})
     # 第 4 张触发 LRU（80 / 27 ≈ 容 2.96 张）
-    sc.put(1, "d.png", b"hello", {}, mode="single")
+    sc.put(1, "d.png", b"hello", {})
     assert sc.get_image(1, "a.png") is None
     assert sc.get_image(1, "d.png") == b"hello"
     sc.clear_all()
@@ -263,12 +216,12 @@ def test_lru_evicts_by_bytes(cache_root: Path) -> None:
 def test_lru_get_marks_recent(cache_root: Path) -> None:
     sc = disk_cache.SessionCache(root=cache_root, max_count=3, max_bytes=10**9)
     sc.ensure_dir()
-    sc.put(1, "a.png", _png_bytes(b"a"), {}, mode="single")
-    sc.put(1, "b.png", _png_bytes(b"b"), {}, mode="single")
-    sc.put(1, "c.png", _png_bytes(b"c"), {}, mode="single")
+    sc.put(1, "a.png", _png_bytes(b"a"), {})
+    sc.put(1, "b.png", _png_bytes(b"b"), {})
+    sc.put(1, "c.png", _png_bytes(b"c"), {})
     # 访问 a 让它变最新
     assert sc.get_image(1, "a.png") == _png_bytes(b"a")
-    sc.put(1, "d.png", _png_bytes(b"d"), {}, mode="single")
+    sc.put(1, "d.png", _png_bytes(b"d"), {})
     # 现在最旧应该是 b（不是 a）
     assert sc.get_image(1, "b.png") is None
     assert sc.get_image(1, "a.png") == _png_bytes(b"a")
@@ -279,7 +232,7 @@ def test_configure_shrink_evicts(cache_root: Path) -> None:
     sc = disk_cache.SessionCache(root=cache_root, max_count=10, max_bytes=10**9)
     sc.ensure_dir()
     for i in range(5):
-        sc.put(1, f"i{i}.png", _png_bytes(bytes([i])), {}, mode="single")
+        sc.put(1, f"i{i}.png", _png_bytes(bytes([i])), {})
     assert sc.total_count() == 5
     sc.configure(max_count=2)
     assert sc.total_count() == 2
@@ -299,7 +252,7 @@ def test_different_session_cannot_decrypt(cache_root: Path) -> None:
     """
     sc1 = disk_cache.SessionCache(root=cache_root, max_count=10, max_bytes=10**9)
     sc1.ensure_dir()
-    sc1.put(1, "secret.png", _png_bytes(b"sensitive"), {}, mode="single")
+    sc1.put(1, "secret.png", _png_bytes(b"sensitive"), {})
     file_path = next(iter(sc1._index.values())).file_path
     blob = file_path.read_bytes()
     sc2 = disk_cache.SessionCache(root=cache_root, max_count=10, max_bytes=10**9)

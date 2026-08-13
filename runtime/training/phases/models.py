@@ -63,7 +63,11 @@ def _swap_vram_discount(ctx: TrainingContext) -> float:
     if ratio_fn is None:
         return 0.0
     try:
-        return float(ratio_fn(blocks_to_swap))
+        # checkpoint_path：anima 靠它区分 28/36 层版本；krea2 结构唯一、忽略
+        return float(ratio_fn(
+            blocks_to_swap,
+            checkpoint_path=str(getattr(ctx.args, "transformer_path", "") or ""),
+        ))
     except Exception:  # noqa: BLE001
         return 0.0
 
@@ -145,17 +149,20 @@ def _setup_block_swap(ctx: TrainingContext) -> None:
     此时换出层的权重是 loader 落下的 CPU pinned 张量（shape/dtype 完好，只是不在
     显存），注入正常；反过来若先 attach 再注入也可行，但没有理由把顺序搞复杂。
 
-    挂载走 forward hook（``attach()``），不改模型 forward 循环 —— krea2 的循环在
-    parity 敏感的 ``modeling/`` 内。开 gradient checkpointing 后反向的重算会再次
-    触发 hook，逆序换入自动成立（已由 tests/test_block_swap.py 钉死）。
+    挂载走 hook（``attach()``），不改模型 forward 循环 —— krea2 的循环在
+    parity 敏感的 ``modeling/`` 内，anima 的手工展开循环也不必动。前向 +
+    反向四个钩子缺一不可（反向必须自己取回权重，重算不触发 forward_hook，
+    见 doc §9.10 与 tests/test_block_swap_grad_fidelity.py）。
     """
     blocks_to_swap = int(getattr(ctx.args, "blocks_to_swap", 0) or 0)
     if blocks_to_swap <= 0:
         return
     from training.block_swap import PinnedBlockSwap
 
+    # clamp 到总层数：blocks_to_swap 是跨族/跨版本共享的设置值（krea2 28 层、
+    # anima 28/36 层），超界按全量换出处理而非 fail（loader 侧同口径）
     ctx.block_swap = PinnedBlockSwap(
-        ctx.model.blocks, blocks_to_swap, ctx.device,
+        ctx.model.blocks, min(blocks_to_swap, len(ctx.model.blocks)), ctx.device,
     )
     ctx.block_swap.attach()
     log_vram("block swap 挂载后", ctx.device)

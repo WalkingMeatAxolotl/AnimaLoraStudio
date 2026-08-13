@@ -31,6 +31,8 @@ from ...text_cache import TextCacheEntry, TextCacheStore
 logger = logging.getLogger(__name__)
 
 KREA2_TEXT_FINGERPRINT = "qwen3-vl-4b-instruct-krea2-12x2560-v1"
+#: 训练 caption 的 padding 定长下限——不是长度上限（两条路径都不截断）。
+#: 保留这个定长是文本缓存兼容性依据，见 Krea2TextStack._pad_to_floor。
 KREA2_MAX_LENGTH = 512
 KREA2_SELECTED_LAYERS = (2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35)
 KREA2_TEXT_WIDTH = 2560
@@ -463,6 +465,30 @@ class Krea2TextStack:
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _pad_to_floor(self, encoded: Mapping[str, Tensor]) -> dict[str, Tensor]:
+        """把 caption 段右 pad 到 max_length 定长下限（不足才补，超出原样）。
+
+        等价于旧的 ``padding="max_length"``——定长以内逐位一致，是文本缓存
+        跨版本兼容的依据。批内出现超长样本时 ``padding="longest"`` 已把同批
+        短样本 pad 到那个更长的宽度，短样本的 suffix 位置随之后移：同一
+        caption 换一种分批组合会编出略有差异的嵌入。缓存只写一次，训练中不
+        会自相矛盾；cache_batch_size=1（现状）下该分支根本不触发。
+        """
+        input_ids = encoded["input_ids"]
+        floor = self.max_length + _PREFIX_TOKENS - _SUFFIX_TOKENS
+        deficit = floor - input_ids.shape[1]
+        if deficit <= 0:
+            return {"input_ids": input_ids, "attention_mask": encoded["attention_mask"]}
+        pad_id = getattr(self.tokenizer, "pad_token_id", None)
+        return {
+            "input_ids": torch.nn.functional.pad(
+                input_ids, (0, deficit), value=int(pad_id) if pad_id is not None else 0,
+            ),
+            "attention_mask": torch.nn.functional.pad(
+                encoded["attention_mask"], (0, deficit), value=0,
+            ),
+        }
+
     def _tokenize(self, captions: Sequence[str]) -> tuple[Tensor, Tensor]:
         text = [_PROMPT_PREFIX + str(caption) for caption in captions]
         suffix = [_PROMPT_SUFFIX] * len(text)
@@ -480,16 +506,25 @@ class Krea2TextStack:
                 return_tensors="pt",
             )
         else:
-            # 训练 cached 模式维持官方训练口径 512 定长（缓存指纹语义不变）
+            # 训练 cached 模式同样不截断（与在线模式口径一致）：DiT 侧文本
+            # 位置编码恒为零（krea2_modeling text_pos），文本长度对 DiT 无
+            # 结构约束；TE 是 Qwen3-VL，512 远在其上下文之内。代价是显存与
+            # 缓存体积随长度线性涨（一条 512 token ≈31MB），由用户掌握。
+            #
+            # 短 caption 仍 pad 到 max_length 定长是缓存兼容性要求：这是
+            # interior padding（pad 在 caption 与 suffix 之间），suffix 的
+            # RoPE 绝对位置因此恒定在定长之后。改成「只 pad 到批内最长」会
+            # 让 ≤max_length 的 caption 嵌入数值改变，已有 sidecar 全量失效。
+            # 保留定长下限 → 定长以内逐位不变 → 指纹无需变更。
             encoded = self.tokenizer(
                 text,
-                truncation=True,
+                truncation=False,
                 return_length=False,
                 return_overflowing_tokens=False,
-                padding="max_length",
-                max_length=self.max_length + _PREFIX_TOKENS - _SUFFIX_TOKENS,
+                padding="longest",
                 return_tensors="pt",
             )
+            encoded = self._pad_to_floor(encoded)
         suffix_encoded = self.tokenizer(suffix, return_tensors="pt")
         input_ids = torch.cat(
             [encoded["input_ids"], suffix_encoded["input_ids"]], dim=1,

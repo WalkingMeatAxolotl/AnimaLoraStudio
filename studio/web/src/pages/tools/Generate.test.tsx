@@ -393,32 +393,31 @@ describe('GeneratePage 端到端 smoke', () => {
       },
       dataset_pick: null,
     }
-    const diskEntry = {
-      id: 'disk:abc123',
-      date: '2026-06-09',
-      mode: 'xy',
-      folder: 'xy plot 1',
-      path: '/tmp/test/2026-06-09/xy/xy plot 1',
-      image_url: '/api/generate/disk/image/2026-06-09/xy/xy%20plot%201/xy%20plot.png',
-      thumb_url: '/api/generate/disk/thumb/2026-06-09/xy/xy%20plot%201/xy%20plot.png?w=128',
+    const timelineEntry = {
+      task_id: 91,
+      status: 'done',
       created_at: 1717900000,
-      schema_version: 2,
+      mode: 'xy',
+      storage: 'disk',
       params: xySnapshotParams,
-      xy_meta: {
-        x_axis: 'lora_ckpt',
-        y_axis: null,
-        x_values: ['epoch40.safetensors', 'epoch38.safetensors', 'epoch24.safetensors'],
-        y_values: [null],
-        samples: [],
-      },
+      images: [
+        {
+          url: '/api/generate/disk/image/2026-06-09/xy/xy%20plot%201/cell%20x0%20y0.png',
+          thumb_url: '/api/generate/disk/thumb/2026-06-09/xy/xy%20plot%201/cell%20x0%20y0.png?w=128',
+          xi: 0, yi: 0,
+        },
+      ],
+      available: true,
+      xy_folder: 'xy plot 1',
     }
     const previousImpl = fetchMock.getMockImplementation()
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/generate/disk/history') && (init?.method ?? 'GET') === 'GET') {
+      if (url.includes('/api/generate/timeline') && (init?.method ?? 'GET') === 'GET') {
+        const body = { entries: [timelineEntry], total: 1, offset: 0 }
         return Promise.resolve({
           ok: true, status: 200,
-          json: async () => ({ entries: [diskEntry] }),
-          text: async () => JSON.stringify({ entries: [diskEntry] }),
+          json: async () => body,
+          text: async () => JSON.stringify(body),
           headers: new Headers({ 'content-type': 'application/json' }),
         } as Response)
       }
@@ -509,25 +508,31 @@ describe('GeneratePage 端到端 smoke', () => {
       xy_draft: { x: { axis: 'steps', raw: '20, 25, 30', loraIndex: null }, y: null },
       dataset_pick: null,
     }
-    const diskEntry = {
-      id: 'disk:xy1', date: '2026-06-09', mode: 'xy', folder: 'xy plot 1',
-      path: '/tmp/test/2026-06-09/xy/xy plot 1',
-      image_url: '/api/generate/disk/image/2026-06-09/xy/xy%20plot%201/xy%20plot.png',
-      thumb_url: '/api/generate/disk/thumb/2026-06-09/xy/xy%20plot%201/xy%20plot.png?w=128',
-      created_at: 1717900000, schema_version: 2,
+    const timelineEntry = {
+      task_id: 92,
+      status: 'done',
+      created_at: 1717900000,
+      mode: 'xy',
+      storage: 'disk',
       params: xySnapshotParams,
-      xy_meta: {
-        x_axis: 'steps', y_axis: null,
-        x_values: ['20', '25', '30'], y_values: [null], samples: [],
-      },
+      images: [
+        {
+          url: '/api/generate/disk/image/2026-06-09/xy/xy%20plot%201/cell%20x0%20y0.png',
+          thumb_url: '/api/generate/disk/thumb/2026-06-09/xy/xy%20plot%201/cell%20x0%20y0.png?w=128',
+          xi: 0, yi: 0,
+        },
+      ],
+      available: true,
+      xy_folder: 'xy plot 1',
     }
     const previousImpl = fetchMock.getMockImplementation()
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/generate/disk/history') && (init?.method ?? 'GET') === 'GET') {
+      if (url.includes('/api/generate/timeline') && (init?.method ?? 'GET') === 'GET') {
+        const body = { entries: [timelineEntry], total: 1, offset: 0 }
         return Promise.resolve({
           ok: true, status: 200,
-          json: async () => ({ entries: [diskEntry] }),
-          text: async () => JSON.stringify({ entries: [diskEntry] }),
+          json: async () => body,
+          text: async () => JSON.stringify(body),
           headers: new Headers({ 'content-type': 'application/json' }),
         } as Response)
       }

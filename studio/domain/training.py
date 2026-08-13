@@ -167,11 +167,9 @@ class TrainingConfig(BaseModel):
     # 换出多少层对产出的 LoRA 逐位无影响（纯资源旋钮，同 vae_tiling / cache_latents）
     blocks_to_swap: int = Field(
         0, ge=0,
-        description="Block 交换：换出到内存的 DiT 层数（0=关闭）。被换出的层权重常驻"
-                    "内存，算到该层才搬进显存，用时间换显存，不影响训练结果。"
-                    "每层约省 0.4GB（fp8 底模）/ 0.8GB（bf16 底模）显存；"
-                    "1024 分辨率下换出全部 28 层，fp8 实测约慢 4%。"
-                    "需要等量的可用内存，且这部分内存会被锁定、其他程序无法使用",
+        description="Block 交换：换出到内存的 DiT 层数（0=关闭；Anima 接受 0-28，每层约 0.13GB；"
+                    "Krea 2 接受 0-28，每层约 0.4GB fp8 底模 / 0.8GB bf16 底模）。"
+                    "数值越大，显存占用越少、内存占用越大",
         json_schema_extra=_meta(
             "system",
             show_when=cap_gate("block_swap"),

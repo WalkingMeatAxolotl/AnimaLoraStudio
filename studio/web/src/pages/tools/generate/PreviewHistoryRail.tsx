@@ -128,7 +128,11 @@ export default function PreviewHistoryRail({
 }
 
 function HistoryItem({ entry, onSelect }: { entry: HistoryEntry; onSelect: () => void }) {
+  const { t } = useTranslation()
   const badge = entryBadge(entry)
+  const thumb = entryThumbUrl(entry)
+  // 已释放：图不可取（temp 会话结束 / 文件手删）。占位仍可点击 —— 参数回填。
+  const released = entry.released || !thumb
   return (
     <div
       className="relative rounded-sm border border-subtle hover:border-strong cursor-pointer overflow-hidden"
@@ -136,12 +140,21 @@ function HistoryItem({ entry, onSelect }: { entry: HistoryEntry; onSelect: () =>
       onClick={onSelect}
       title={`${entryDisplayLabel(entry)} · ${new Date(entry.createdAt).toLocaleString()}`}
     >
-      <img
-        src={entryThumbUrl(entry)}
-        alt=""
-        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-        loading="lazy"
-      />
+      {released ? (
+        <div
+          className="w-full h-full grid place-items-center text-fg-tertiary text-2xs text-center px-1"
+          style={{ background: 'var(--bg-sunken)' }}
+        >
+          {t('generate.released')}
+        </div>
+      ) : (
+        <img
+          src={thumb}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          loading="lazy"
+        />
+      )}
       {badge && (
         <span className="absolute bottom-0 right-0 bg-canvas/80 text-fg-primary text-[10px] px-1 rounded-tl">
           {badge}

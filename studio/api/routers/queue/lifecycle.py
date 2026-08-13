@@ -462,6 +462,68 @@ def retry_task(task_id: int) -> dict[str, Any]:
     return new_task or {"id": new_id}
 
 
+def _delete_generate_outputs(task: dict[str, Any]) -> None:
+    """出图时间线删除语义(拍板决策 2):删 generate 行 = 行+档案+产出图一起删。
+
+    - 落盘图:single 逐文件 unlink;xy 整文件夹 rmtree(文件夹专属该 task,
+      含 composite)。路径必须 resolve 在 test/ 之下(台账被外部改坏时不越界)。
+    - temp 图:drop 该 task 的 session cache 条目。
+    全程 best-effort:行已删,文件清理失败只 log。
+    """
+    import json as _json
+    import logging
+    import shutil
+
+    from ....services.generate_storage import TEST_IMAGES_DIR
+
+    logger = logging.getLogger(__name__)
+    raw = task.get("generate_images")
+    try:
+        images = _json.loads(raw) if raw else []
+    except _json.JSONDecodeError:
+        images = []
+    if not isinstance(images, list):
+        images = []
+
+    base = TEST_IMAGES_DIR.resolve()
+    files: list[Path] = []
+    folders: set[Path] = set()
+    has_cache = False
+    for it in images:
+        if not isinstance(it, dict):
+            continue
+        if it.get("cache"):
+            has_cache = True
+            continue
+        rel = it.get("file")
+        if not rel:
+            continue
+        try:
+            p = (TEST_IMAGES_DIR / str(rel)).resolve()
+        except OSError:
+            continue
+        if not str(p).startswith(str(base)):
+            continue
+        if "/xy/" in str(rel).replace("\\", "/"):
+            folders.add(p.parent)
+        else:
+            files.append(p)
+    for p in files:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("delete generate image failed: %s", p, exc_info=True)
+    for d in folders:
+        if d != base and str(d).startswith(str(base)):
+            shutil.rmtree(d, ignore_errors=True)
+    if has_cache:
+        try:
+            from ....services.inference import disk_cache as generate_cache
+            generate_cache.drop_task(int(task["id"]))
+        except Exception:
+            pass  # cache 未 init / 已清:temp 图本就随 session 走
+
+
 @router.delete("/api/queue/{task_id}")
 def delete_queue_item(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
@@ -474,6 +536,8 @@ def delete_queue_item(task_id: int) -> dict[str, Any]:
                 code="task.not_deletable", http_status=400,
             )
         db.delete_task(conn, task_id)
+    if task.get("task_type") == "generate":
+        _delete_generate_outputs(task)
     # task-scoped 档案（snapshot/config.yaml / monitor/state.json / samples/ /
     # run.log）跟 task DB 行同生命周期 —— 删 task 一并清。老 task 散在
     # studio_data/logs/<id>.log / studio_data/monitors/task_<id>/ 的不动

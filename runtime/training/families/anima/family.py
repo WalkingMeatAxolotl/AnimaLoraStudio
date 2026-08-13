@@ -19,7 +19,7 @@ class AnimaFamily:
     # ── 加载 ─────────────────────────────────────────────────────────────
     def load_dit(self, path, device, dtype, *,
                  attention_backend: str = "flash_attn", repo_root=None,
-                 purpose: str = "train"):
+                 purpose: str = "train", blocks_to_swap: int = 0):
         # purpose 是量化推理旋钮（krea2 fp8）；Anima 无量化形态，接受并忽略
         del purpose
         from training.families.anima.loader import load_anima_model
@@ -28,10 +28,29 @@ class AnimaFamily:
         model = load_anima_model(
             path, device, dtype, repo_root,
             flash_attn=(attention_backend == "flash_attn"),
+            blocks_to_swap=blocks_to_swap,
         )
         if attention_backend == "xformers":
             enable_xformers(model)
         return model
+
+    def swapped_param_ratio(self, blocks_to_swap: int, *,
+                            checkpoint_path: str | None = None) -> float:
+        """换出层占全模型参数的比例（显存预算折扣用，krea2 同款语义）。
+
+        Anima 的层数由 checkpoint 决定（2B=28 层 / 14B=36 层），不能像 krea2
+        那样按固定 config 数 meta 参数 —— 从 safetensors header 数 numel，
+        天然版本无关。未给路径 / 读失败返回 0：护栏退化为保守（按完整模型
+        预算显存，不会误放行）。
+        """
+        if blocks_to_swap <= 0 or not checkpoint_path:
+            return 0.0
+        try:
+            from training.families.anima.loader import swapped_param_ratio_from_header
+
+            return swapped_param_ratio_from_header(checkpoint_path, blocks_to_swap)
+        except Exception:  # noqa: BLE001
+            return 0.0
 
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         # 跨族共享实现（D6）；方法留在 family 上，第 3 族 VAE 不同款时零迁移
@@ -85,28 +104,34 @@ class AnimaFamily:
         )
 
         qwen_model, qwen_tok, t5_tok = text
-        max_len = self.spec.text.max_seq_len
+        # pad 下限，不是 caption 长度上限——两条 tokenize 路径都不截断
+        # （ComfyUI Qwen3Tokenizer/T5XXLTokenizer 是 max_length=99999999）
+        pad_floor = self.spec.text.max_seq_len
         with torch.no_grad():
             if comfy_encoding:
                 qwen_texts = [str(c) for c in captions]
                 qwen_emb, _ = encode_qwen(qwen_model, qwen_tok, qwen_texts, device)
-                t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(t5_tok, captions, max_length=max_len)
+                t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(t5_tok, captions)
             else:
                 qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
                 qwen_emb, _ = encode_qwen(qwen_model, qwen_tok, qwen_texts, device)
-                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(t5_tok, captions, max_length=max_len)
+                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(t5_tok, captions)
             t5_ids = t5_ids.to(device)
             t5_attn = t5_attn.to(device)
             t5_w = t5_w.to(device, dtype=torch.float32)
             # t5_w 在 preprocess_text_embeds 内乘到 LLMAdapter 输出上（ComfyUI 对齐）
             cross = dit.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
-            if cross.shape[1] < max_len:
-                cross = F.pad(cross, (0, 0, 0, max_len - cross.shape[1]))
+            # 只补不足（ComfyUI comfy/ldm/anima/model.py:204-205 同款 floor pad）；
+            # 超过 pad_floor 的 caption 原样保留
+            if cross.shape[1] < pad_floor:
+                cross = F.pad(cross, (0, 0, 0, pad_floor - cross.shape[1]))
             if kv_trim:
-                # KV trim：padding 截到最近有效 token bucket（64/128/256/512）
+                # KV trim：padding 截到最近有效 token bucket（64/128/256/512）。
+                # 上限是 cross 实际宽度而非 pad_floor——超长 caption 下用
+                # pad_floor 兜底会把尾巴又砍掉一次。
                 _actual = int(t5_attn.sum(dim=-1).max().item())
-                _bucket = max_len
-                for _b in (64, 128, 256, max_len):
+                _bucket = cross.shape[1]
+                for _b in (64, 128, 256, pad_floor):
                     if _b >= _actual:
                         _bucket = _b
                         break
