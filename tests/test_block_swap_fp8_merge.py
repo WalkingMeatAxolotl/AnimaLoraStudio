@@ -121,11 +121,16 @@ def test_keep_backup_false_skips_the_second_full_copy():
     a_kept = merge_loras_into_fp8_model(kept, [(lora, 1.0, "t")], keep_backup=True)
     assert a_kept._backup, "默认应留备份"
     assert a_kept.detach() is True, "有备份 → 能就地还原"
+    assert a_kept._model is None, "还原完成后句柄不应再钉着模型"
 
     lean = _build_fp8_blocks(device)
     a_lean = merge_loras_into_fp8_model(lean, [(lora, 1.0, "t")], keep_backup=False)
     assert not a_lean._backup, "关掉后不应有任何备份张量"
     assert a_lean.detach() is False, "无备份 → 必须返回 False 触发重载兜底"
+    # 兜底=调用方卸载重载整个模型,此时句柄还被 _run_generate/_run_xy 的
+    # 局部 adapters 持着——不丢模型引用,重载期间旧模型整份钉在显存里
+    # (XY 逐格换 LoRA 时最多三份模型同驻,实测 32GB 卡第 3 格 OOM)
+    assert a_lean._model is None, "detach 失败路径必须丢模型引用"
 
 
 def test_keep_backup_false_still_merges_identically():

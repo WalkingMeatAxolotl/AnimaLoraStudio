@@ -105,3 +105,43 @@ def test_release_helper_is_silent_when_api_missing(monkeypatch):
 
     monkeypatch.setattr(torch._C, "_host_emptyCache", _boom, raising=False)
     d._release_pinned_host_cache()  # 不应抛出
+
+
+def test_unload_reclaims_leftovers_even_when_model_absent(monkeypatch):
+    """**回归**：模型未加载 ≠ 显存干净。加载中途 OOM 后 model 仍是 None，
+    但异常 traceback 的循环引用钉着半上卡的 state_dict（refcount 收不掉）——
+    手动「释放缓存」落到早退分支时必须无条件清扫，否则按钮空转
+    （真机实测 20GB 纹丝不动，daemon 却汇报「已卸载」）。"""
+    d = _daemon()
+    calls = []
+    monkeypatch.setattr(d, "_reclaim_cuda_leftovers", lambda: calls.append(1))
+
+    cache = d.ModelCache()
+    assert not cache.loaded
+    cache.unload()
+
+    assert calls, "早退分支必须清扫（gc + empty_cache + pinned 归还）"
+
+
+def test_generate_worker_reclaims_leftovers_on_failure(monkeypatch):
+    """任务失败后 worker 必须清扫一次 —— OOM 残骸不该留到下次成功 load。
+    清扫必须发生在 except 块结束（异常对象被隐式 del）之后，traceback
+    钉住的 frame locals 才收得掉；这里只测接线（有没有调 + 失败才调）。"""
+    from pathlib import Path as _P
+
+    d = _daemon()
+    calls = []
+    monkeypatch.setattr(d, "_reclaim_cuda_leftovers", lambda: calls.append(1))
+    monkeypatch.setattr(d, "_emit_for", lambda *a, **k: None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(d, "_run_generate", _boom)
+    d._run_generate_worker("req-x", 1, {}, _P("."), __import__("threading").Event())
+    assert calls, "失败路径必须清扫"
+
+    calls.clear()
+    monkeypatch.setattr(d, "_run_generate", lambda *a, **k: None)
+    d._run_generate_worker("req-y", 2, {}, _P("."), __import__("threading").Event())
+    assert not calls, "成功路径不清扫（别把有用的 allocator cache 也倒掉）"
