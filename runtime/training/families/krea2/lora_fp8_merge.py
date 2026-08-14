@@ -302,7 +302,11 @@ class Fp8LoraMergeAdapter:
 
     def detach(self) -> bool:
         if not self._can_restore:
-            # 没留备份：告诉调用方「还不了」，由它重载模型保证干净状态
+            # 没留备份：告诉调用方「还不了」，由它重载模型保证干净状态。
+            # 模型引用必须一并丢掉——这个句柄还被 _run_generate/_run_xy 的
+            # 局部 adapters 变量持着，不置空则重载兜底期间旧模型整份钉在
+            # 显存里（XY 逐格换 LoRA 时最多三份模型同驻，直接 OOM）
+            self._model = None
             return False
         if not self._backup:
             return True
@@ -313,6 +317,7 @@ class Fp8LoraMergeAdapter:
             if scale_cpu is not None:
                 module.weight_scale.copy_(scale_cpu.to(module.weight_scale.device))
         self._backup = {}
+        self._model = None
         return True
 
 
@@ -436,8 +441,9 @@ def merge_loras_into_fp8_model(
             torch.cuda.empty_cache()
 
     logger.info(
-        "Krea2 fp8 merge：%d 份 LoRA 烘进 %d 个 Linear（delta=%s；chunk_rows=%s；含备份，可 detach 还原）",
+        "Krea2 fp8 merge：%d 份 LoRA 烘进 %d 个 Linear（delta=%s；chunk_rows=%s；%s）",
         len(sources), len(per_layer), str(compute_dtype).removeprefix("torch."),
         normalized_chunk_rows or "off",
+        "含备份，可 detach 还原" if keep_backup else "无备份，换 LoRA 走重载兜底",
     )
     return Fp8LoraMergeAdapter(model, backup, can_restore=keep_backup)

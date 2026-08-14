@@ -825,19 +825,15 @@ class ModelCache:
     def unload(self, *, keep_text: bool = False) -> None:
         """卸载模型栈。``keep_text``：保留 TE 先行栈（含预编码 LRU）——
         ensure_loaded 的重载路径用，避免刚编码完的结果被清掉。"""
-        had_text = self.text_stack is not None
         if not keep_text:
             self.text_stack = None
             self._text_ready_key = None
         if not self.loaded:
-            if had_text and not keep_text:
-                try:
-                    import gc
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            # 模型未加载 ≠ 显存干净：加载中途 OOM 后 self.model 仍是 None，
+            # 但异常 traceback 的循环引用钉着半上卡的 state_dict（refcount
+            # 收不掉）——手动「释放缓存」落到这个分支时必须无条件清扫，
+            # 否则按钮空转（实测 20GB 纹丝不动）。
+            _reclaim_cuda_leftovers()
             return
         logger.info("unloading model")
         # 埋点必须在**丢引用之前**取基线，否则丢引用那一步的回收量测不到
@@ -920,6 +916,29 @@ def _release_pinned_host_cache() -> None:
     from training.block_swap import release_pinned_host_cache
 
     release_pinned_host_cache()
+
+
+def _reclaim_cuda_leftovers() -> None:
+    """回收不再被业务引用持有、但还占着显存/pinned 内存的残骸。
+
+    异常（尤其加载/采样中途的 OOM）traceback 与 frame 互相引用，钉住
+    frame locals 里的大张量，必须 gc 才收得掉；empty_cache 再把空闲
+    block 还给驱动。pinned host cache 同理显式归还（无 cache 时 no-op）。
+    模型本体不受影响——只清「已无主」的部分。"""
+    try:
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            try:
+                # cuBLAS workspace 会钉住所在 segment（见 unload 内注释），
+                # 先清再 empty_cache 才能整段归还
+                torch._C._cuda_clearCublasWorkspaces()
+            except Exception:
+                pass
+            torch.cuda.empty_cache()
+        _release_pinned_host_cache()
+    except Exception:
+        logger.exception("CUDA leftovers reclaim failed")
 
 
 CACHE = ModelCache()
@@ -1664,6 +1683,7 @@ def _run_generate_worker(
     output_dir: Path,
     cancel_event: threading.Event,
 ) -> None:
+    failed = False
     try:
         _run_generate(req_id, task_id, cfg, output_dir, cancel_event)
         _emit_for(req_id, "done", task_id=task_id)
@@ -1673,7 +1693,12 @@ def _run_generate_worker(
     except Exception as e:
         logger.exception("generate failed")
         _emit_for(req_id, "error", task_id=task_id, message=str(e))
+        failed = True
     finally:
+        if failed:
+            # 必须在 except 块结束（异常对象被隐式 del）之后清扫，traceback
+            # 钉住的 frame locals（如 OOM 时半上卡的 state_dict）才收得掉
+            _reclaim_cuda_leftovers()
         _pop_cancel(req_id)
         with _ACTIVE_WORKER_LOCK:
             global _ACTIVE_WORKER
