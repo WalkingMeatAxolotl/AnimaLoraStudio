@@ -12,6 +12,7 @@ from typing import Any, Optional
 from .... import secrets
 from ..paths import models_root, safe_dir_name
 from ..paths import qwen_image_vae_target
+from .custom_paths import registered_main_paths
 
 KREA2_VARIANTS: dict[str, dict[str, Any]] = {
     "raw": {
@@ -234,7 +235,7 @@ def _file_status(path: Path) -> dict[str, Any]:
         return {"exists": False, "size": 0, "mtime": 0.0}
 
 
-def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
+def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dict[str, Any]:
     variants = []
     for name, info in KREA2_VARIANTS.items():
         target = krea2_main_target(root, name)
@@ -249,10 +250,10 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
         })
 
     custom_models = []
-    for registered_path in models_cfg.custom.get("krea2", []):
-        target = Path(str(registered_path)).expanduser()
+    # 本地注册 + 下载型第三方候选落盘（两条通道统一，见 custom_paths）
+    for target in registered_main_paths(root, models_cfg, "krea2", source_cfg):
         custom_models.append({
-            "path": registered_path,
+            "path": str(target),
             "name": target.name,
             **_file_status(target),
         })
@@ -306,7 +307,7 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
     }
 
 
-def path_choices(root: Path, models_cfg: Any) -> dict[str, list[dict[str, Any]]]:
+def path_choices(root: Path, models_cfg: Any, source_cfg: Any = None) -> dict[str, list[dict[str, Any]]]:
     """Train 页 4 个模型路径字段的 dropdown 候选（Krea 2 族）。
 
     口径同 Anima：只列磁盘上已就绪的，label 取 basename。文本编码器有 bf16 /
@@ -323,13 +324,14 @@ def path_choices(root: Path, models_cfg: Any) -> dict[str, list[dict[str, Any]]]
                 "group": "official",
                 "note": "latest" if name == LATEST_KREA2 else "",
             })
-    for registered in models_cfg.custom.get("krea2", []):
-        target = Path(str(registered)).expanduser()
-        if target.exists():
-            transformer.append({
-                "label": target.name, "path": str(target),
-                "group": "custom", "note": "",
-            })
+    variant_paths = {str(krea2_main_target(root, name)) for name in KREA2_VARIANTS}
+    for target in registered_main_paths(root, models_cfg, "krea2", source_cfg):
+        if str(target) in variant_paths or not target.exists():
+            continue
+        transformer.append({
+            "label": target.name, "path": str(target),
+            "group": "custom", "note": "",
+        })
 
     text_encoder: list[dict[str, Any]] = []
     for variant, d, files in (

@@ -24,6 +24,7 @@ from ...infrastructure.event_bus import bus
 from .families.anima import (
     ANIMA_REPO,
     ANIMA_VAE_PATH,
+    ANIMA_VARIANT_BY_KEY,
     ANIMA_VARIANTS,
     LATEST_ANIMA,
     QWEN_FILES,
@@ -31,6 +32,7 @@ from .families.anima import (
     T5_FILES,
     T5_REPO,
     anima_main_target,
+    anima_variant_repo,
     qwen_dir,
     selected_anima_variant,
     t5_tokenizer_dir,
@@ -282,13 +284,18 @@ def download_anima_main(
         return False
     target = anima_main_target(root, variant)
     subpath = ANIMA_VARIANTS[variant]
+    repo = anima_variant_repo(variant)
     on_log(msg(
         "download.anima_base", variant=variant,
-        size=_size_gb(ANIMA_VARIANTS[variant], default=4.0), target=target,
+        size=_size_gb(
+            {"size_estimate": ANIMA_VARIANT_BY_KEY[variant].size_estimate}, default=4.0,
+        ),
+        target=target,
     ))
-    if _sources._source_for("training") == "modelscope":
-        return _sources.download_flat_ms(ANIMA_REPO, subpath, target, on_log=on_log)
-    return _sources.download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
+    # ModelScope 镜像只有 circlestone-labs 官方 repo（同步发布）；第三方条目走 HF
+    if repo == ANIMA_REPO and _sources._source_for("training") == "modelscope":
+        return _sources.download_flat_ms(repo, subpath, target, on_log=on_log)
+    return _sources.download_flat(repo, subpath, target, on_log=on_log)
 
 
 def download_anima_vae(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:

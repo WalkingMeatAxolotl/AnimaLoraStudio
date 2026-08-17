@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { type LoraCkpt } from '../../../api/client'
+import { loraCompatLevel, useBaseNumBlocks } from './baseArchContext'
 import type { LoraCatalog } from './useLoraCatalog'
 
 function basenameOf(path: string): string {
@@ -85,6 +87,9 @@ type Props = SingleModeProps | MultiModeProps
  */
 export default function InlineLoraPicker(props: Props) {
   const { catalog, onClose, onPickExternal } = props
+  const { t } = useTranslation()
+  // 当前底模层数（Generate 页 Provide；别处用 picker 时为 null → 不标兼容性）
+  const baseNumBlocks = useBaseNumBlocks()
   // 解构出稳定的 loader（useCallback）+ 响应式数据，effect deps 用纯标识符。
   const { projects, ensureProjects, ensureVersions, versionsOf, fetchCkpts } = catalog
   const isSingle = props.mode === 'single'
@@ -475,6 +480,18 @@ export default function InlineLoraPicker(props: Props) {
           const isExisting = existingPaths.has(c.path)
           const isPicked = isSingle ? c.path === selectedPath : picked.has(c.path)
           const marker = isExisting ? '✓' : (isPicked ? '✓' : '+')
+          // 训练底模层数标记（lora_compat 契约）+ 与当前底模的预检结论。
+          // 只是展示：真正的拒绝 / 告警在后端 apply 时按同一规则执行。
+          const layers = c.base_num_blocks ?? null
+          const compat = loraCompatLevel(c, baseNumBlocks)
+          const layersTitle = compat === 'reject'
+            ? t('lora.baseLayersMismatch', { lora: layers, base: baseNumBlocks })
+            : compat === 'warn'
+              ? t('lora.baseLayersMaybe', { lora: layers, base: baseNumBlocks })
+              : t('lora.baseLayers', { n: layers })
+          const layersColor = compat === 'reject'
+            ? 'var(--err)'
+            : compat === 'warn' ? 'var(--warn)' : 'var(--fg-tertiary)'
           return (
             <button
               key={c.path}
@@ -497,10 +514,21 @@ export default function InlineLoraPicker(props: Props) {
                   : (isPicked ? 'var(--accent)' : 'var(--fg-secondary)'),
                 cursor: isExisting ? 'not-allowed' : 'pointer',
               }}
-              title={c.path}
+              title={layers != null ? `${c.path}
+${layersTitle}` : c.path}
             >
               <span className="shrink-0">{marker}</span>
               <span className="truncate flex-1 text-left">{c.label}</span>
+              {layers != null && (
+                <span
+                  className="shrink-0"
+                  style={{ fontSize: 10, color: layersColor }}
+                  data-testid="lora-base-layers"
+                  data-compat={compat}
+                >
+                  {compat === 'reject' ? '⚠ ' : ''}{t('baseModel.layers', { n: layers })}
+                </span>
+              )}
             </button>
           )
         })}
