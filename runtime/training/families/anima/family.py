@@ -38,8 +38,9 @@ class AnimaFamily:
                             checkpoint_path: str | None = None) -> float:
         """换出层占全模型参数的比例（显存预算折扣用，krea2 同款语义）。
 
-        Anima 的层数由 checkpoint 决定（2B=28 层 / 14B=36 层），不能像 krea2
-        那样按固定 config 数 meta 参数 —— 从 safetensors header 数 numel，
+        Anima 的层数由 checkpoint 决定（官方 2B=28 层 / 14B=36 层 / 第三方
+        插层扩展版更多），不能像 krea2 那样按固定 config 数 meta 参数 —— 从
+        safetensors header 数 numel（studio.services.inference.checkpoint_arch），
         天然版本无关。未给路径 / 读失败返回 0：护栏退化为保守（按完整模型
         预算显存，不会误放行）。
         """

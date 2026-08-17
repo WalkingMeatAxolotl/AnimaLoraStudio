@@ -187,7 +187,7 @@ def _swap_discount_ratio(
     比例而非字节：fp8 与 bf16 的文件大小差一倍，按字节折扣会在 fp8 场景把护栏
     折扣穿（训练侧同款，见 training/sysmem.check_load_budget）。
     族不支持 / 查询失败返回 0，护栏退化成保守。
-    transformer_path：anima 靠它区分 28/36 层版本；krea2 结构唯一、忽略。
+    transformer_path：anima 层数由文件决定（28/36/40…）靠它数；krea2 结构唯一、忽略。
     """
     if blocks_to_swap <= 0:
         return 0.0
@@ -626,7 +626,7 @@ class ModelCache:
             from training.block_swap import PinnedBlockSwap
 
             # clamp 到总层数：全局设置值跨族/跨版本共享（krea2 28 层、anima
-            # 28/36 层），超界按全量换出处理而非 fail（训练侧同口径）
+            # 层数由 checkpoint 决定），超界按全量换出处理而非 fail（训练侧同口径）
             self.block_swap = PinnedBlockSwap(
                 model.blocks, min(blocks_to_swap, len(model.blocks)), device,
             )

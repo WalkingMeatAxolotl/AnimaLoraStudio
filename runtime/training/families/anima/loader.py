@@ -11,6 +11,10 @@ import logging
 import re
 from pathlib import Path
 
+from studio.services.inference.checkpoint_arch import (
+    AnimaCheckpointArch,
+    inspect_anima_checkpoint,
+)
 from training.model_loading import (
     _load_safetensors_state_dict,
     _load_weights_best_effort,
@@ -18,40 +22,59 @@ from training.model_loading import (
 
 logger = logging.getLogger(__name__)
 
-#: checkpoint 键里的 block 归属（键可能带 model./module. 等前缀，
-#: _load_weights_best_effort 加载时才剥——这里按子串匹配，前缀无关）
-_BLOCK_KEY_RE = re.compile(r"(?:^|\.)blocks\.(\d+)\.")
+#: checkpoint 里随模型一起存下来的 RoPE 派生缓冲（第三方训练器会把
+#: ``pos_embedder.seq / dim_spatial_range / dim_temporal_range`` 存进文件）。
+#: 它们不是权重，形状与值都由本地建模配置决定（seq 长度 = max_img_h // patch），
+#: 与写文件那边的配置无关；留在 state dict 里会因形状不同让 load_state_dict
+#: 直接 raise（strict=False 只管缺/多 key，不管 shape）。加载前一律剥掉。
+_DERIVED_BUFFER_RE = re.compile(r"(?:^|\.)pos_embedder\.")
 
 
 def swapped_param_ratio_from_header(checkpoint_path, blocks_to_swap: int) -> float:
     """换出层占全模型参数的比例，从 safetensors header 数 numel（不读 payload）。
 
     krea2 用固定 config 数 meta 模型参数；Anima 的层数由 checkpoint 决定
-    （2B=28 层 / 14B=36 层），header 才是版本真相，且数参数天然 dtype 无关
-    （显存折扣必须按比例乘文件实际大小，见 krea2 loader 同名函数的说明）。
+    （官方 2B=28 层 / 14B=36 层 / 第三方插层扩展版更多），header 才是版本真相，
+    且数参数天然 dtype 无关（显存折扣必须按比例乘文件实际大小，见 krea2 loader
+    同名函数的说明）。
     """
-    from safetensors import safe_open
-
     if blocks_to_swap <= 0:
         return 0.0
-    per_block: dict[int, int] = {}
-    total = 0
-    with safe_open(str(checkpoint_path), framework="pt", device="cpu") as f:
-        for key in f.keys():
-            numel = 1
-            for dim in f.get_slice(key).get_shape():
-                numel *= dim
-            total += numel
-            m = _BLOCK_KEY_RE.search(key)
-            if m:
-                idx = int(m.group(1))
-                per_block[idx] = per_block.get(idx, 0) + numel
-    if not per_block or total <= 0:
-        return 0.0
-    num_blocks = max(per_block) + 1
-    first = max(num_blocks - blocks_to_swap, 0)
-    swapped = sum(n for i, n in per_block.items() if i >= first)
-    return swapped / total
+    return inspect_anima_checkpoint(checkpoint_path).swapped_param_ratio(blocks_to_swap)
+
+
+def arch_to_config(arch: AnimaCheckpointArch) -> dict:
+    """底模架构 → ``Anima(**config)`` 构造参数（纯函数，可单测）。
+
+    层数 / 通道数 / 输入通道来自 header；其余是 Anima 族固定的建模常量。
+    """
+    if arch.num_heads is None:
+        raise RuntimeError(f"未知的 model_channels={arch.model_channels}")
+    return dict(
+        max_img_h=1024, max_img_w=1024, max_frames=128,
+        in_channels=arch.in_channels, out_channels=16,
+        patch_spatial=2, patch_temporal=1,
+        concat_padding_mask=True,
+        model_channels=arch.model_channels,
+        num_blocks=arch.num_blocks, num_heads=arch.num_heads,
+        crossattn_emb_channels=1024,
+        pos_emb_cls="rope3d", pos_emb_learnable=True,
+        pos_emb_interpolation="crop",
+        use_adaln_lora=True, adaln_lora_dim=256,
+        rope_h_extrapolation_ratio=4.0 if arch.in_channels == 16 else 3.0,
+        rope_w_extrapolation_ratio=4.0 if arch.in_channels == 16 else 3.0,
+        rope_t_extrapolation_ratio=1.0,
+    )
+
+
+def drop_derived_buffers(sd: dict) -> dict:
+    """剥掉 checkpoint 里的 RoPE 派生缓冲（见 ``_DERIVED_BUFFER_RE``）。返回新 dict。"""
+    dropped = [k for k in sd if _DERIVED_BUFFER_RE.search(k)]
+    if not dropped:
+        return sd
+    logger.info("忽略 checkpoint 里的 %d 个 RoPE 派生缓冲（本地按配置重算）: %s",
+                len(dropped), ", ".join(dropped[:4]))
+    return {k: v for k, v in sd.items() if k not in set(dropped)}
 
 
 def place_model_for_block_swap(model, device, dtype, blocks_to_swap: int) -> int:
@@ -63,7 +86,7 @@ def place_model_for_block_swap(model, device, dtype, blocks_to_swap: int) -> int
     只 pin、不重复拷贝）。
 
     返回实际换出层数（clamp 到总层数——blocks_to_swap 是全局设置，用户可能
-    按 36 层版调的值喂给 28 层版，超界按全量换出处理）。
+    按层数更多的版本调的值喂给层数少的版本，超界按全量换出处理）。
     """
     import torch
 
@@ -109,8 +132,6 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
     时由 caller 传入），让 caller 完全决定 attention 实现 —— PR #17 那版默认
     fn(True) 强制开 flash_attn 不让用户关，与 cfg.attention_backend 解耦不彻底。
     """
-    from safetensors import safe_open
-
     # repo_root 参数保留但已不使用（sister 契约签名「可加不可减不可改」）：模型
     # 代码随仓库发布，走正常 import —— 单一模块身份，exec-load 已退役（多模型
     # PR-2a），attention backend 开关不再需要跨模块别名广播。
@@ -143,43 +164,12 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
         logger.info("flash_attn 关闭（attention_backend=%s 或包未安装）",
                     "flash_attn" if flash_attn else "non-flash")
 
-    # 从 checkpoint 推断配置
-    with safe_open(transformer_path, framework="pt", device="cpu") as f:
-        for k in f.keys():
-            if k.endswith("x_embedder.proj.1.weight"):
-                w = f.get_tensor(k)
-                break
-
-    in_channels = (w.shape[1] // 4) - 1  # concat_padding_mask=True
-    model_channels = w.shape[0]
-
-    if model_channels == 2048:
-        num_blocks, num_heads = 28, 16
-    elif model_channels == 5120:
-        num_blocks, num_heads = 36, 40
-    else:
-        raise RuntimeError(f"未知的 model_channels={model_channels}")
-
-    config = dict(
-        max_img_h=1024, max_img_w=1024, max_frames=128,
-        in_channels=in_channels, out_channels=16,
-        patch_spatial=2, patch_temporal=1,
-        concat_padding_mask=True,
-        model_channels=model_channels,
-        num_blocks=num_blocks, num_heads=num_heads,
-        crossattn_emb_channels=1024,
-        pos_emb_cls="rope3d", pos_emb_learnable=True,
-        pos_emb_interpolation="crop",
-        use_adaln_lora=True, adaln_lora_dim=256,
-        rope_h_extrapolation_ratio=4.0 if in_channels == 16 else 3.0,
-        rope_w_extrapolation_ratio=4.0 if in_channels == 16 else 3.0,
-        rope_t_extrapolation_ratio=1.0,
-    )
-
-    model = Anima(**config)
+    # 从 checkpoint header 推断架构（层数由文件决定，不查表）
+    arch = inspect_anima_checkpoint(transformer_path)
+    model = Anima(**arch_to_config(arch))
 
     # 加载权重
-    sd = _load_safetensors_state_dict(Path(transformer_path))
+    sd = drop_derived_buffers(_load_safetensors_state_dict(Path(transformer_path)))
     info = _load_weights_best_effort(model, sd, label="Transformer")
 
     # 如果 checkpoint 中完全没有 llm_adapter 权重，随机初始化会把 cross-attn 条件搞乱，直接禁用更安全
@@ -196,7 +186,9 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
         model = model.to(device=device, dtype=dtype)
     model.requires_grad_(False)
 
-    logger.info(f"Anima 模型加载完成: {model_channels}ch, {num_blocks} blocks")
+    # 公开架构事实：LoRA 元数据 / 出图侧兼容判定按它取层数，不再各自数一遍
+    model.checkpoint_arch = arch
+    logger.info(f"Anima 模型加载完成: {arch.model_channels}ch, {arch.num_blocks} blocks")
     return model
 
 

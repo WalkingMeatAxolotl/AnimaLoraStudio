@@ -160,7 +160,7 @@ class Krea2Family:
         刻意是比例不是字节数 —— fp8 与 bf16 的文件大小差一倍，按字节折扣会在
         fp8 场景把护栏折扣穿。
 
-        ``checkpoint_path`` 是跨族协议参数（anima 靠它区分 28/36 层版本）；
+        ``checkpoint_path`` 是跨族协议参数（anima 层数由 checkpoint 决定，靠它数）；
         krea2 结构唯一（KREA2_CONFIG），不需要。
         """
         del checkpoint_path

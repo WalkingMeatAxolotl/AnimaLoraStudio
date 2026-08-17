@@ -63,7 +63,7 @@ def _swap_vram_discount(ctx: TrainingContext) -> float:
     if ratio_fn is None:
         return 0.0
     try:
-        # checkpoint_path：anima 靠它区分 28/36 层版本；krea2 结构唯一、忽略
+        # checkpoint_path：anima 层数由文件决定（28/36/40…）靠它数；krea2 结构唯一、忽略
         return float(ratio_fn(
             blocks_to_swap,
             checkpoint_path=str(getattr(ctx.args, "transformer_path", "") or ""),
@@ -160,7 +160,7 @@ def _setup_block_swap(ctx: TrainingContext) -> None:
     from training.block_swap import PinnedBlockSwap
 
     # clamp 到总层数：blocks_to_swap 是跨族/跨版本共享的设置值（krea2 28 层、
-    # anima 28/36 层），超界按全量换出处理而非 fail（loader 侧同口径）
+    # anima 层数由 checkpoint 决定），超界按全量换出处理而非 fail（loader 侧同口径）
     ctx.block_swap = PinnedBlockSwap(
         ctx.model.blocks, min(blocks_to_swap, len(ctx.model.blocks)), ctx.device,
     )
