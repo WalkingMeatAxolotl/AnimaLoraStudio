@@ -12,6 +12,7 @@ from ... import secrets
 from .. import eval_registry
 from .downloader import get_status_snapshot
 from .families import FAMILY_ASSETS
+from .families.custom_paths import arch_summary
 from .paths import (
     CLTAGGER_VERSIONS,
     DEFAULT_UPSCALER,
@@ -75,12 +76,14 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
 
     # 模型族区块经 FAMILY_ASSETS registry 遍历（多模型 PR-4）；单族时输出与
     # 旧实现逐字节一致，前端零改动
-    models_cfg = secrets.load().models
+    _secrets = secrets.load()
+    models_cfg = _secrets.models
     family_sections: dict[str, Any] = {}
     for _assets in FAMILY_ASSETS.values():
-        family_sections.update(_assets.catalog_sections(r, models_cfg))
+        family_sections.update(
+            _assets.catalog_sections(r, models_cfg, _secrets.model_sources),
+        )
 
-    _secrets = secrets.load()
     cl_cfg = _secrets.cltagger
     wd14_cfg = _secrets.wd14
     eval_cfg = _secrets.eval_metrics
@@ -186,9 +189,12 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
         description: str = "",
         removable: Optional[bool] = None,
         candidate: Optional[dict[str, Any]] = None,
+        arch: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         variant = download_variant or value
         return {
+            # 主模型行：底模架构（层数 / 通道 / 参数量，header 探测）；其他域 None
+            "arch": arch,
             # 用户候选的原始存储记录（DELETE /api/model-sources 的身份键）；
             # preset / scanned 行无。
             "candidate": candidate,
@@ -469,12 +475,21 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             models_cfg.selected.get(family_id) or main.get("latest") or "")
         fam_rows: list[dict[str, Any]] = []
         for v in main["variants"]:
+            # extra.group：official / community（第三方续训 / 扩展版）；
+            # extra.arch：header 探测的层数 / 参数量（文件存在才有）
             fam_rows.append(_source_row(
                 kind="preset", value=v["variant"],
+                label=str(v.get("label") or v["variant"]),
                 download_id=f"{family_id}_main",
                 exists=bool(v.get("exists")), size=int(v.get("size") or 0),
                 is_current=v["variant"] == selected_val,
-                extra={"purpose": str(v.get("purpose") or "")},
+                description=str(v.get("repo") or "") if v.get("group") == "community" else "",
+                extra={
+                    "purpose": str(v.get("purpose") or ""),
+                    "group": str(v.get("group") or "official"),
+                    "author": str(v.get("author") or ""),
+                },
+                arch=v.get("arch"),
             ))
         for c in source_cfg.get(family_id, []):
             if c.kind == "download":
@@ -488,6 +503,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                     is_current=str(target) == selected_val,
                     description=c.repo,
                     candidate=c.model_dump(),
+                    arch=arch_summary(target),
                 ))
             else:
                 p = Path(c.path)
@@ -497,6 +513,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                     exists=st["exists"], size=st["size"],
                     is_current=c.path == selected_val,
                     candidate=c.model_dump(),
+                    arch=arch_summary(p),
                 ))
         model_source_rows[family_id] = fam_rows
 

@@ -714,23 +714,39 @@ export interface ModelFileStatus {
 }
 
 /** 族主模型的官方 variant（多模型 P4-5 统一形状；anima 无 purpose/repo 细分）。 */
+/** 底模架构摘要（header 探测；文件存在且是 Anima 结构才有，krea2 为 null）。
+ *  层数决定 LoRA 能否互换 —— 同族不同层数（Anima 28 层 vs 第三方 40 层）的 LoRA 不通用。 */
+export interface BaseModelArch {
+  num_blocks: number
+  model_channels: number
+  param_count: number
+}
+
 export interface FamilyMainVariantInfo extends ModelFileStatus {
   variant: string
+  /** 显示名（anima 第三方条目如 "Anima-2.9B preview-v1"）；缺省 = variant。 */
+  label?: string
+  /** official（官方）| community（第三方续训 / 扩展版）。 */
+  group?: 'official' | 'community'
+  /** 第三方条目的作者（拼描述用）。 */
+  author?: string
   is_latest: boolean
   target_path: string
-  /** variant 级 repo（krea2：Raw/Turbo 各自的 HF 仓库）；anima 用 section repo。 */
+  /** variant 级 repo（krea2：Raw/Turbo 各自的 HF 仓库；anima 第三方条目各自的 repo）。 */
   repo?: string
   /** 用途声明（krea2：raw=training / turbo=inference）。 */
   purpose?: 'training' | 'inference'
   size_estimate?: number
+  arch?: BaseModelArch | null
 }
 
-/** 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。 */
+/** 用户注册的 custom 主模型（PathPicker 本地路径 / 下载型第三方候选落盘）。 */
 export interface CustomModelInfo extends ModelFileStatus {
   /** 注册的绝对路径（也是选中时写入 selected_anima 的值）。 */
   path: string
   /** 文件名，列表展示用。 */
   name: string
+  arch?: BaseModelArch | null
 }
 
 /** 族主模型 catalog 区块的统一形状（anima_main / krea2_main 同构，P4-5）。 */
@@ -864,7 +880,10 @@ export interface ModelSourceRow {
   removable: boolean
   /** local 候选永不从 UI 删除磁盘文件。 */
   deletable: boolean
+  /** 域相关附加位（字符串）：主模型行有 purpose / group（official|community）/ author。 */
   extra: Record<string, string>
+  /** 主模型行：底模架构（层数等，header 探测；文件存在且是 Anima 结构才有）。 */
+  arch?: BaseModelArch | null
 }
 
 /** POST/DELETE /api/model-sources/{domain} 的候选描述。 */
@@ -919,8 +938,10 @@ export interface FamilySwitchResponse {
 export interface ModelPathChoice {
   label: string
   path: string
-  group: 'official' | 'custom'
+  group: 'official' | 'community' | 'custom'
   note: string
+  /** 底模架构（层数等，header 探测）；非主模型字段 / 非 Anima 结构为空。 */
+  arch?: BaseModelArch | null
 }
 
 export interface ModelsCatalog {

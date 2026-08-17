@@ -5,24 +5,73 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 from .... import secrets
 from ..paths import models_root, qwen_image_vae_target
+from .custom_paths import arch_summary, registered_main_paths
 
 ANIMA_REPO = "circlestone-labs/Anima"
-# 顺序：最新在前。`find_anima_main` 的 fallback 查找按本 dict 序遍历，
-# `build_catalog` 给 UI 的 variants 列表也直接复用本顺序——所以新版本
-# 加在最前，老版本往下排。
-ANIMA_VARIANTS: dict[str, str] = {
-    "1.0":           "split_files/diffusion_models/anima-base-v1.0.safetensors",
-    "preview3-base": "split_files/diffusion_models/anima-preview3-base.safetensors",
-    "preview2":      "split_files/diffusion_models/anima-preview2.safetensors",
-    "preview":       "split_files/diffusion_models/anima-preview.safetensors",
-}
+
+
+@dataclass(frozen=True)
+class AnimaVariant:
+    """内置下载目录里的一个 Anima 底模条目。
+
+    只承载「去哪下载、怎么称呼」；**不承载任何加载信息**——层数等架构一律
+    从文件 header 探测（studio.services.inference.checkpoint_arch），内置条目
+    与用户手动放进来的文件走完全同一条路。
+    """
+
+    key: str
+    subpath: str
+    repo: str = ANIMA_REPO
+    #: official（circlestone-labs 官方）| community（第三方续训 / 扩展版）
+    group: str = "official"
+    #: 显示名；空 → key
+    label: str = ""
+    #: 第三方条目的作者（前端拼描述用；官方为空）
+    author: str = ""
+
+    @property
+    def filename(self) -> str:
+        return Path(self.subpath).name
+
+
+# 顺序：官方最新在前，第三方在官方之后。`find_anima_main` 的 fallback 查找按
+# 本表序遍历（LATEST 优先），`build_catalog` 给 UI 的 variants 列表也复用本
+# 顺序——所以官方新版本加在最前，老版本往下排，第三方条目放官方后面。
+ANIMA_VARIANT_TABLE: tuple[AnimaVariant, ...] = (
+    AnimaVariant("1.0", "split_files/diffusion_models/anima-base-v1.0.safetensors"),
+    AnimaVariant("preview3-base", "split_files/diffusion_models/anima-preview3-base.safetensors"),
+    AnimaVariant("preview2", "split_files/diffusion_models/anima-preview2.safetensors"),
+    AnimaVariant("preview", "split_files/diffusion_models/anima-preview.safetensors"),
+    # 第三方：Anima v1.0 的 28 层 DiT 插层扩到 40 层并续训（LLaMA Pro 式），
+    # TE / VAE / key 布局全同；许可同 Anima（非商用，derivative）。作者仍在
+    # 出新版：跟版本 = 改这一行的 filename。
+    AnimaVariant(
+        "2.9b-preview-v1", "Anima-2.9B-preview-v1.safetensors",
+        repo="Gazingstars123/Anima-2.9B", group="community",
+        label="Anima-2.9B preview-v1", author="Gazingstars123",
+    ),
+)
+ANIMA_VARIANT_BY_KEY: dict[str, AnimaVariant] = {v.key: v for v in ANIMA_VARIANT_TABLE}
+#: 兼容读面：variant key → repo 内子路径（downloader / CLI / 测试沿用）
+ANIMA_VARIANTS: dict[str, str] = {v.key: v.subpath for v in ANIMA_VARIANT_TABLE}
 LATEST_ANIMA = "1.0"
 ANIMA_VAE_PATH = "split_files/vae/qwen_image_vae.safetensors"
+
+
+def anima_variant_repo(variant: str) -> str:
+    """variant 的下载 repo（官方 circlestone-labs/Anima；第三方各自的 repo）。"""
+    if variant == "latest":
+        variant = LATEST_ANIMA
+    v = ANIMA_VARIANT_BY_KEY.get(variant)
+    if v is None:
+        raise ValueError(f"unknown variant {variant!r}")
+    return v.repo
 
 QWEN_REPO = "Qwen/Qwen3-0.6B-Base"
 # 注：Qwen3 把 special tokens 直接塞进 tokenizer.json，所以 repo 里没有
@@ -157,25 +206,34 @@ def _file_status(p: Path) -> dict[str, Any]:
         return {"exists": False, "size": 0, "mtime": 0.0}
 
 
-def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
-    """/api/models/catalog 的 Anima 族区块（anima_main / anima_vae / qwen3 / t5_tokenizer）。"""
+def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dict[str, Any]:
+    """/api/models/catalog 的 Anima 族区块（anima_main / anima_vae / qwen3 / t5_tokenizer）。
+
+    variants / custom 行带 ``arch``（层数 / 通道 / 参数量，文件存在才有，header
+    探测）——底模下拉与设置卡据此显示「N 层」，不写死任何层数。
+    """
     anima_variants = []
-    for vname, _subpath in ANIMA_VARIANTS.items():
-        target = anima_main_target(root, vname)
+    for v in ANIMA_VARIANT_TABLE:
+        target = anima_main_target(root, v.key)
         anima_variants.append({
-            "variant": vname,
-            "is_latest": vname == LATEST_ANIMA,
+            "variant": v.key,
+            "label": v.label or v.key,
+            "group": v.group,
+            "repo": v.repo,
+            "author": v.author,
+            "is_latest": v.key == LATEST_ANIMA,
             "target_path": str(target),
             **_file_status(target),
+            "arch": arch_summary(target),
         })
 
     custom_anima = []
-    for p in models_cfg.custom_anima_paths:
-        target = Path(str(p)).expanduser()
+    for target in registered_main_paths(root, models_cfg, "anima", source_cfg):
         custom_anima.append({
-            "path": p,
+            "path": str(target),
             "name": target.name,
             **_file_status(target),
+            "arch": arch_summary(target),
         })
 
     vae_target = qwen_image_vae_target(root)
@@ -185,7 +243,7 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
         "anima_main": {
             "id": "anima_main",
             "name": "Anima 主模型",
-            "description": "Cosmos transformer (~4 GB)",
+            "description": "Cosmos transformer",
             "repo": ANIMA_REPO,
             "variants": anima_variants,
             "custom": custom_anima,
@@ -223,30 +281,35 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
     }
 
 
-def path_choices(root: Path, models_cfg: Any) -> dict[str, list[dict[str, Any]]]:
+def path_choices(root: Path, models_cfg: Any, source_cfg: Any = None) -> dict[str, list[dict[str, Any]]]:
     """Train 页 4 个模型路径字段的 dropdown 候选（Anima 族）。
 
     **只列磁盘上已就绪的**：没下载的选了也训不起来，下载是 Settings 页的职责。
     label 一律取 basename（文件名 / 目录名），与用户在 Settings 看到的一致；
-    `group` / `note` 是给前端翻译的 id，不是显示文案。
+    `group`（official / community / custom）/ `note` 是给前端翻译的 id，不是
+    显示文案；``arch`` 是 header 探测的层数 / 参数量（前端标「N 层」）。
     """
     transformer: list[dict[str, Any]] = []
-    for vname in ANIMA_VARIANTS:
-        target = anima_main_target(root, vname)
+    for v in ANIMA_VARIANT_TABLE:
+        target = anima_main_target(root, v.key)
         if target.exists():
             transformer.append({
                 "label": target.name,
                 "path": str(target),
-                "group": "official",
-                "note": "latest" if vname == LATEST_ANIMA else "",
+                "group": v.group,
+                "note": "latest" if v.key == LATEST_ANIMA else "",
+                "arch": arch_summary(target),
             })
-    for registered in models_cfg.custom_anima_paths:
-        target = Path(str(registered)).expanduser()
-        if target.exists():
-            transformer.append({
-                "label": target.name, "path": str(target),
-                "group": "custom", "note": "",
-            })
+    variant_paths = {str(anima_main_target(root, v.key)) for v in ANIMA_VARIANT_TABLE}
+    for target in registered_main_paths(root, models_cfg, "anima", source_cfg):
+        # 用户又把内置条目的落盘文件注册了一遍 → 不重复列
+        if str(target) in variant_paths or not target.exists():
+            continue
+        transformer.append({
+            "label": target.name, "path": str(target),
+            "group": "custom", "note": "",
+            "arch": arch_summary(target),
+        })
 
     def _ready_dir(d: Path, files: list[str]) -> list[dict[str, Any]]:
         """目录型资产：必需文件齐全才算就绪（与 catalog 的「已下载」同口径）。"""

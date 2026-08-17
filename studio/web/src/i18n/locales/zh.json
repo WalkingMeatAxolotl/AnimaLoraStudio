@@ -284,6 +284,7 @@
     "empty": "模型设置里还没有已下载的可选模型 —— 去设置页下载，或在输入框手填路径",
     "group": {
       "official": "官方",
+      "community": "第三方",
       "custom": "自定义"
     },
     "note": {
@@ -1088,6 +1089,7 @@
     "removeCandidateShort": "移除",
     "localBadge": "本地",
     "candidateAdded": "已添加 {{name}}",
+    "communityVariantDesc": "第三方续训 / 扩展版（{{author}}，{{repo}}）· 同 Anima 许可（非商用）",
     "candidateRemoved": "已从列表移除（文件保留）",
     "selectSourceCandidate": "选作当前模型",
     "clTaggerVersionTitle": "{{name}}（版本）",
@@ -1253,7 +1255,7 @@
       "blocksToSwapLabel": "Block 交换",
       "blocksToSwapSuffix": "层",
       "blocksToSwapOffHint": "关闭",
-      "blocksToSwapHelp": "把 DiT 靠后的若干层权重常驻内存，算到该层才搬进显存，算完立即让出。与「显存策略」分工不同：显存策略管多个模型之间谁让位，本项管单个模型内部——当单个模型自己就装不下显存时，这是唯一的办法。代价是每一步出图都要把换出的层搬一遍，步数越多累计耗时越长。需要等量的可用内存（Krea 2 每层约 0.4GB fp8 底模 / 0.8GB bf16 底模，Anima 每层约 0.13GB），且这部分内存会被锁定、其他程序无法使用。Krea 2 与 Anima 共 28 层，超过总层数按全部换出处理（0 = 关闭）；显存不够时从 14 开始试。"
+      "blocksToSwapHelp": "把 DiT 靠后的若干层权重常驻内存，算到该层才搬进显存，算完立即让出。与「显存策略」分工不同：显存策略管多个模型之间谁让位，本项管单个模型内部——当单个模型自己就装不下显存时，这是唯一的办法。代价是每一步出图都要把换出的层搬一遍，步数越多累计耗时越长。需要等量的可用内存（Krea 2 每层约 0.4GB fp8 底模 / 0.8GB bf16 底模，Anima 每层约 0.13GB），且这部分内存会被锁定、其他程序无法使用。层数由底模文件决定（底模列表里标有「N 层」），超过总层数按全部换出处理（0 = 关闭）；显存不够时从 14 开始试。"
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL 文本编码器",
     "deleteAsset": "删除",
@@ -2858,7 +2860,13 @@
     "purpose": {
       "training": "训练",
       "inference": "推理"
-    }
+    },
+    "layers": "{{n}} 层"
+  },
+  "lora": {
+    "baseLayers": "训练底模 {{n}} 层",
+    "baseLayersMismatch": "此 LoRA 训练自 {{lora}} 层底模，当前底模 {{base}} 层：层与层对不上，会被拒绝挂载",
+    "baseLayersMaybe": "此 LoRA 只覆盖前 {{lora}} 层（无底模层数元数据），当前底模 {{base}} 层：若它训练自层数更少的底模，挂上去会错位"
   },
   "llmPreset": {
     "title": "编辑 LLM 预设",

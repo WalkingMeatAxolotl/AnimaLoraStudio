@@ -48,6 +48,7 @@ python -m studio test         # pytest + vitest
 | 项 | 来源 | 路径 | 大小 |
 |---|---|---|---|
 | Anima 主模型（latest = 1.0）| [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
+| Anima-2.9B preview-v1（第三方 40 层扩展版，可选；LoRA 与 28 层官方版不互通）| [Gazingstars123/Anima-2.9B](https://huggingface.co/Gazingstars123/Anima-2.9B) | `models/diffusion_models/` | ~5.8 GB |
 | Qwen-Image VAE（Anima / Krea 2 共享） | 同上 | `models/vae/` | ~250 MB |
 | Qwen3-0.6B-Base 文本编码器 | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer（仅 3 文件，不下权重）| [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |
