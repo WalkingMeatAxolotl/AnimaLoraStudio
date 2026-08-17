@@ -278,11 +278,30 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 addLocal={{}}
                 selectRequiresExists
                 renderRowMeta={(row) => (
-                  row.extra.purpose ? (
-                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
-                      {t(`baseModel.purpose.${row.extra.purpose}`)}
-                    </span>
-                  ) : null
+                  <>
+                    {row.extra.purpose ? (
+                      <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                        {t(`baseModel.purpose.${row.extra.purpose}`)}
+                      </span>
+                    ) : null}
+                    {row.extra.group === 'community' ? (
+                      <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                        {t('modelPicker.group.community')}
+                      </span>
+                    ) : null}
+                    {/* 层数：header 探测（文件在盘上才有）。同族不同层数的 LoRA 不通用，
+                        所以是主模型行最该看到的一个数 */}
+                    {row.arch?.num_blocks ? (
+                      <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                        {t('baseModel.layers', { n: row.arch.num_blocks })}
+                      </span>
+                    ) : null}
+                  </>
+                )}
+                describeRow={(row) => (
+                  row.kind === 'preset' && row.extra.group === 'community'
+                    ? t('settings.communityVariantDesc', { author: row.extra.author, repo: row.description })
+                    : row.description
                 )}
                 t={t}
               />
@@ -1347,7 +1366,6 @@ export function VramPolicySection({
           <SettingsInput
             type="number"
             min={0}
-            max={36}
             value={draft.generate.blocks_to_swap ?? 0}
             onChange={(v) =>
               update('generate', 'blocks_to_swap', Math.max(0, Number(v) || 0))

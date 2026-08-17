@@ -48,6 +48,7 @@ After launch, go to the model download center under **Settings → Training**. D
 | Item | Source | Path | Size |
 |---|---|---|---|
 | Anima base model (latest = 1.0) | [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
+| Anima-2.9B preview-v1 (community 40-layer expansion, optional; its LoRAs are not interchangeable with the 28-layer official base) | [Gazingstars123/Anima-2.9B](https://huggingface.co/Gazingstars123/Anima-2.9B) | `models/diffusion_models/` | ~5.8 GB |
 | Qwen-Image VAE (shared by Anima / Krea 2) | Same | `models/vae/` | ~250 MB |
 | Qwen3-0.6B-Base text encoder | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer (3 files only, no weights) | [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |

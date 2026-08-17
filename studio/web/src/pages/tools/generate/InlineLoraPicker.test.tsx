@@ -509,3 +509,40 @@ describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
     expect(projectSelect().value).toBe('2')
   })
 })
+
+describe('InlineLoraPicker — 训练底模层数标记（lora_compat 契约预检）', () => {
+  it('chip shows layer badge; compat level follows the same rule as backend', async () => {
+    const { BaseNumBlocksContext } = await import('./baseArchContext')
+    const ckpts: LoraCkpt[] = [
+      { kind: 'final', value: 0, label: 'meta40', path: '/l/meta40.safetensors', mtime: 3, base_num_blocks: 40, base_arch_source: 'metadata' },
+      { kind: 'step', value: 2, label: 'meta28', path: '/l/meta28.safetensors', mtime: 2, base_num_blocks: 28, base_arch_source: 'metadata' },
+      { kind: 'step', value: 1, label: 'keys28', path: '/l/keys28.safetensors', mtime: 1, base_num_blocks: 28, base_arch_source: 'keys' },
+      { kind: 'other', value: 0, label: 'unknown', path: '/l/unknown.safetensors', mtime: 0, base_num_blocks: null, base_arch_source: 'unknown' },
+    ]
+    const catalog = catalogFrom(sample, ckpts)
+    render(
+      <BaseNumBlocksContext.Provider value={40}>
+        <InlineLoraPicker catalog={catalog} onPick={() => {}} onClose={() => {}} />
+      </BaseNumBlocksContext.Provider>,
+    )
+    await screen.findByText('meta40')
+    const badges = screen.getAllByTestId('lora-base-layers')
+    // unknown 无标记；其余三条各一个
+    expect(badges).toHaveLength(3)
+    const byText = Object.fromEntries(badges.map((b) => [b.getAttribute('data-compat'), b.textContent]))
+    expect(byText.ok).toBe('40 层')            // 元数据 40 = 底模 40
+    expect(byText.reject).toBe('⚠ 28 层')       // 元数据 28 ≠ 40 → 拒绝
+    expect(byText.warn).toBe('28 层')          // 键扫描 28 < 40 → 可能不匹配
+  })
+
+  it('without base context: badge only, no compat marker', async () => {
+    const ckpts: LoraCkpt[] = [
+      { kind: 'final', value: 0, label: 'meta28', path: '/l/meta28.safetensors', mtime: 3, base_num_blocks: 28, base_arch_source: 'metadata' },
+    ]
+    render(<InlineLoraPicker catalog={catalogFrom(sample, ckpts)} onPick={() => {}} onClose={() => {}} />)
+    await screen.findByText('meta28')
+    const badge = screen.getByTestId('lora-base-layers')
+    expect(badge.getAttribute('data-compat')).toBe('unknown')
+    expect(badge.textContent).toBe('28 层')
+  })
+})

@@ -57,4 +57,5 @@ def path_choices(*, family: str = "anima") -> dict[str, list[dict[str, Any]]]:
     from ..paths import models_root
     from .... import secrets
 
-    return get_assets(family).path_choices(models_root(), secrets.load().models)
+    cfg = secrets.load()
+    return get_assets(family).path_choices(models_root(), cfg.models, cfg.model_sources)

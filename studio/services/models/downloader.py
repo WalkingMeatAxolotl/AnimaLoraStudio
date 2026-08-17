@@ -26,6 +26,7 @@ from .families.anima import (
     T5_FILES,
     T5_REPO,
     anima_main_target,
+    anima_variant_repo,
     qwen_dir,
     selected_anima_variant,
     t5_tokenizer_dir,
@@ -97,10 +98,12 @@ def download_anima_main(
         return False
     target = anima_main_target(root, variant)
     subpath = ANIMA_VARIANTS[variant]
-    on_log(f"\n📥 Anima 主模型 [{variant}] (~4 GB)")
-    if _sources._source_for("training") == "modelscope":
-        return _sources.download_flat_ms(ANIMA_REPO, subpath, target, on_log=on_log)
-    return _sources.download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
+    repo = anima_variant_repo(variant)
+    on_log(f"\n📥 Anima 主模型 [{variant}]")
+    # ModelScope 镜像只有 circlestone-labs 官方 repo（同步发布）；第三方条目走 HF
+    if repo == ANIMA_REPO and _sources._source_for("training") == "modelscope":
+        return _sources.download_flat_ms(repo, subpath, target, on_log=on_log)
+    return _sources.download_flat(repo, subpath, target, on_log=on_log)
 
 
 def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:

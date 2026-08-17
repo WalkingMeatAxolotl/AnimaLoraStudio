@@ -87,6 +87,7 @@ export default function ModelPathPicker({
                 key={it.path}
                 label={it.label}
                 note={it.note ? t(`modelPicker.note.${it.note}`, { defaultValue: it.note }) : ''}
+                arch={it.arch?.num_blocks ? t('baseModel.layers', { n: it.arch.num_blocks }) : ''}
                 selected={it.path === value}
                 onPick={() => { onChange(it.path); onClose() }}
               />
@@ -99,10 +100,12 @@ export default function ModelPathPicker({
 }
 
 function PickRow({
-  label, note, selected, onPick,
+  label, note, arch, selected, onPick,
 }: {
   label: string
   note: string
+  /** 底模架构标记（如「40 层」）；非主模型 / 未知为空串。 */
+  arch?: string
   selected: boolean
   onPick: () => void
 }) {
@@ -119,6 +122,7 @@ function PickRow({
     >
       <span className={'w-3 inline-block ' + (selected ? '' : 'opacity-0')}>✓</span>
       <span>{label}</span>
+      {arch && <span className="text-fg-tertiary text-[10px]">{arch}</span>}
       {note && <span className="text-fg-tertiary text-[10px] uppercase">{note}</span>}
     </button>
   )

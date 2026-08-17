@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type ModelsCatalog } from '../api/client'
+import { api, type BaseModelArch, type ModelsCatalog } from '../api/client'
+
+/** 底模下拉的分组：官方 variant / 第三方内置条目 / 用户注册（本地或下载）。 */
+export type BaseModelGroup = 'official' | 'community' | 'custom'
 
 /** 底模下拉的一个选项：value = 官方 variant key 或本地 custom 绝对路径。 */
 export interface BaseModelOption {
   value: string
   label: string
+  group: BaseModelGroup
   /** 官方 variant 的用途声明（krea2：raw=training / turbo=inference）；
    *  custom 权重无此元数据。页面可据此应用蒸馏推理默认参数。 */
   purpose?: 'training' | 'inference'
+  /** 底模架构（层数等，后端 header 探测）；未知为 null。层数决定 LoRA 能否互换。 */
+  arch: BaseModelArch | null
 }
 
 /** 支持底模选择的模型族。catalog section 键 = `${family}_main`。 */
@@ -17,12 +23,20 @@ export type BaseModelFamily = 'anima' | 'krea2'
 interface FamilyMainSection {
   variants: Array<{
     variant: string
+    label?: string
+    group?: 'official' | 'community'
     exists: boolean
     /** krea2 起 variant 带用途声明（raw=training / turbo=inference）。 */
     purpose?: 'training' | 'inference'
+    arch?: BaseModelArch | null
   }>
-  custom: Array<{ path: string; name: string; exists: boolean }>
+  custom: Array<{ path: string; name: string; exists: boolean; arch?: BaseModelArch | null }>
   selected: string
+}
+
+/** 「N 层」后缀（arch 未知不显示）。层数是 LoRA 互换性的判据，所以进 label 而非 tooltip。 */
+export function archSuffix(arch: BaseModelArch | null | undefined, t: (k: string, o?: Record<string, unknown>) => string): string {
+  return arch?.num_blocks ? ` · ${t('baseModel.layers', { n: arch.num_blocks })}` : ''
 }
 
 function mainSection(
@@ -62,12 +76,19 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
         : ''
       out.push({
         value: v.variant,
-        label: `${v.variant}${badge}`,
+        label: `${v.label ?? v.variant}${badge}${archSuffix(v.arch, t)}`,
+        group: v.group ?? 'official',
         purpose: v.purpose,
+        arch: v.arch ?? null,
       })
     }
     for (const c of section.custom) {
-      if (c.exists) out.push({ value: c.path, label: c.name })
+      if (c.exists) {
+        out.push({
+          value: c.path, label: `${c.name}${archSuffix(c.arch, t)}`,
+          group: 'custom', arch: c.arch ?? null,
+        })
+      }
     }
     return out
   }, [catalog, family, t])
@@ -124,12 +145,20 @@ export default function BaseModelSelect({
   style?: React.CSSProperties
   ariaLabel?: string
 }) {
+  const { t } = useTranslation()
   const { options, defaultValue } = useBaseModelOptions(family)
   // 有效值：显式覆盖优先，否则跟随设置页默认。
   const effective = value ?? defaultValue ?? ''
   // effective 不在 options 里（例如设置页选的 variant 还没下载）时补一项，
   // 避免 select 落到列表首项造成「显示的不是实际生效的」。
   const missing = effective !== '' && !options.some((o) => o.value === effective)
+  // 分组：官方 / 第三方 / 自定义；只有一组时不渲染 optgroup（保持既有单列观感）
+  const groups = (['official', 'community', 'custom'] as const)
+    .map((g) => ({ key: g, items: options.filter((o) => o.group === g) }))
+    .filter((g) => g.items.length > 0)
+  const renderOptions = (items: BaseModelOption[]) => items.map((o) => (
+    <option key={o.value} value={o.value}>{o.label}</option>
+  ))
   return (
     <select
       className={className}
@@ -139,9 +168,13 @@ export default function BaseModelSelect({
       aria-label={ariaLabel}
     >
       {missing && <option value={effective}>{basename(effective)}</option>}
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
+      {groups.length <= 1
+        ? renderOptions(options)
+        : groups.map((g) => (
+          <optgroup key={g.key} label={t(`modelPicker.group.${g.key}`)}>
+            {renderOptions(g.items)}
+          </optgroup>
+        ))}
     </select>
   )
 }

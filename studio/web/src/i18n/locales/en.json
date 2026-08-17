@@ -284,6 +284,7 @@
     "empty": "No downloaded models available — download one in Settings, or type a path directly",
     "group": {
       "official": "Official",
+      "community": "Community",
       "custom": "Custom"
     },
     "note": {
@@ -1088,6 +1089,7 @@
     "removeCandidateShort": "Remove",
     "localBadge": "local",
     "candidateAdded": "Added {{name}}",
+    "communityVariantDesc": "Community fine-tune / expansion ({{author}}, {{repo}}) · same non-commercial Anima license",
     "candidateRemoved": "Removed from list (files kept)",
     "selectSourceCandidate": "Use as current model",
     "clTaggerVersionTitle": "{{name}} (versions)",
@@ -1253,7 +1255,7 @@
       "blocksToSwapLabel": "Block swap",
       "blocksToSwapSuffix": "layers",
       "blocksToSwapOffHint": "off",
-      "blocksToSwapHelp": "Keeps the weights of the last N DiT layers in system RAM, moving each one onto the GPU only when it is that layer's turn and releasing it right after. This is a different job from VRAM policy: that one decides which model yields to which, this one works inside a single model — when one model alone does not fit in VRAM, this is the only way. The cost is that every sampling step has to move all swapped layers again, so more steps means more total time. Needs an equal amount of free RAM (Krea 2: about 0.4GB per layer for an fp8 base model, 0.8GB for bf16; Anima: about 0.13GB per layer), and that RAM is locked so other programs cannot use it. Krea 2 and Anima have 28 layers; values above the layer count swap out everything (0 = off). Start around 14 if you are short on VRAM."
+      "blocksToSwapHelp": "Keeps the weights of the last N DiT layers in system RAM, moving each one onto the GPU only when it is that layer's turn and releasing it right after. This is a different job from VRAM policy: that one decides which model yields to which, this one works inside a single model — when one model alone does not fit in VRAM, this is the only way. The cost is that every sampling step has to move all swapped layers again, so more steps means more total time. Needs an equal amount of free RAM (Krea 2: about 0.4GB per layer for an fp8 base model, 0.8GB for bf16; Anima: about 0.13GB per layer), and that RAM is locked so other programs cannot use it. The layer count comes from the base model file (shown as \"N layers\" in the base model list); values above the layer count swap out everything (0 = off). Start around 14 if you are short on VRAM."
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
     "deleteAsset": "Delete",
@@ -2858,7 +2860,13 @@
     "purpose": {
       "training": "training",
       "inference": "inference"
-    }
+    },
+    "layers": "{{n}} layers"
+  },
+  "lora": {
+    "baseLayers": "Trained on a {{n}}-layer base",
+    "baseLayersMismatch": "This LoRA was trained on a {{lora}}-layer base; the current base has {{base}} layers — layers won't line up and loading will be refused",
+    "baseLayersMaybe": "This LoRA only covers the first {{lora}} layers (no base-layer metadata); the current base has {{base}} layers — if it was trained on a smaller base, layers won't line up"
   },
   "llmPreset": {
     "title": "Edit LLM preset",
