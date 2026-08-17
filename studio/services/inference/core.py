@@ -27,7 +27,14 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
+
+from .lora_compat import (
+    LoraBaseArch,
+    check_lora_compat,
+    lora_base_arch,
+    model_num_blocks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +171,9 @@ class LoRAMeta:
     #: musubi / comfy 系）不带我们的标记——grandfather 值只用于展示，
     #: 跨族硬拒绝只对显式标记生效，无标记靠注入/merge 的键匹配兜底。
     family_explicit: bool = False
+    #: 训练底模的架构（层数等）：元数据优先、键扫描兜底（lora_compat 契约）。
+    #: 同族不同层数（Anima 28 层 vs 第三方 40 层）靠它分辨——族标记分不出。
+    base_arch: LoraBaseArch = field(default_factory=lambda: LoraBaseArch(None, "unknown"))
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
@@ -181,6 +191,7 @@ def read_lora_meta(path: str) -> LoRAMeta:
     try:
         with safe_open(str(path), framework="pt", device="cpu") as f:
             meta = f.metadata() or {}
+            keys = list(f.keys())
     except Exception as e:
         logger.warning(
             "read LoRA metadata failed: path=%s err=%s; using default parameters",
@@ -247,6 +258,7 @@ def read_lora_meta(path: str) -> LoRAMeta:
         lora_reg_dims=lora_reg_dims,
         model_family=str(ss_args.get("model_family") or "anima"),
         family_explicit=bool(ss_args.get("model_family")),
+        base_arch=lora_base_arch(ss_args, keys),
     )
 
 
@@ -316,6 +328,32 @@ def _normalize_peft_lora_sd(
     return normalized, max_rank, reg_dims
 
 
+def _warn(on_warning: Optional[Callable[[str], None]], message: str) -> None:
+    logger.warning(message)
+    if on_warning is not None:
+        try:
+            on_warning(message)
+        except Exception:  # noqa: BLE001 — 通知失败不能影响出图
+            logger.exception("on_warning callback failed")
+
+
+def _check_lora_compat_or_raise(
+    meta: LoRAMeta,
+    model: Any,
+    lora_name: str,
+    on_warning: Optional[Callable[[str], None]] = None,
+) -> None:
+    """lora_compat 契约的出图侧消费：reject → ValueError；warn → 回调 + 日志。
+
+    daemon 热换权重路径（同拓扑 LoRA 换文件、不经 apply_loras）也调它。
+    """
+    verdict = check_lora_compat(meta.base_arch, model_num_blocks(model), lora_name=lora_name)
+    if verdict.level == "reject":
+        raise ValueError(f"LoRA 与当前底模层数不匹配：{verdict.reason}。请换用在同一底模上训练的 LoRA，或切换底模。")
+    if verdict.level == "warn":
+        _warn(on_warning, verdict.reason)
+
+
 def apply_loras(
     model: Any,
     specs: Sequence[LoRASpec],
@@ -325,6 +363,7 @@ def apply_loras(
     lora_merge_precision: str = "fp32",
     lora_merge_chunk_rows: int = 1024,
     keep_merge_backup: bool = True,
+    on_warning: Optional[Callable[[str], None]] = None,
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
@@ -332,6 +371,10 @@ def apply_loras(
     权重 merge；其 delta 临时精度由 lora_merge_precision 控制（fp32/bf16）。
     普通 Linear LoRA 默认按 1024 输出行分块，避免物化整层 dense delta；
     LoHa/LoKr 暂时保留原算法。
+
+    on_warning：LoRA 与底模「可能不匹配」（lora_compat warn 档）时的回调，
+    调用方把它接到 UI（daemon 发 warning 事件）；None 时只进日志。reject 档
+    直接 raise ValueError（与跨族拒绝同级）。
 
     multiplier 字段控制每份 LoRA 贡献权重（用户传的 scale）：
       - LycorisNetwork.multiplier 是 forward 内取的全局倍率
@@ -384,6 +427,10 @@ def apply_loras(
                 f"'{meta.model_family}'，当前底模族为 '{family_id}'。"
                 f"请换用同族 LoRA 或切换底模。"
             )
+        # 同族不同层数（Anima 28 层 vs 第三方 40 层）：族标记分不出，按
+        # lora_compat 契约判——元数据确证 / 键必然越界 → 拒绝；键扫描只是
+        # 下界的存量文件 → 警告放行（可能是老 LoRA，也可能只挂部分层）。
+        _check_lora_compat_or_raise(meta, model, Path(path).name, on_warning)
         sd_raw: dict = {}
         with safe_open(str(path), framework="pt", device="cpu") as f:
             for k in f.keys():
@@ -448,6 +495,13 @@ def apply_loras(
             raise ValueError(
                 f"LoRA 与当前底模不匹配：{Path(path).name} 的键全部无法对应"
                 f"（可能属于其他模型族，或是本路径尚不支持的键格式）。"
+            )
+        if unexpected:
+            # 部分键没被吃掉：与 fp8 merge 路径（lora_fp8_merge）同口径升为 warning，
+            # 不再只是一行 info（此前 28 层 LoRA 挂 40 层底模就是这样静默过去的）
+            _warn(
+                on_warning,
+                f"{Path(path).name} 有 {unexpected}/{len(sd)} 个权重键在当前底模上找不到对应层，已忽略",
             )
         logger.info(
             "loaded LoRA: name=%s algo=%s rank=%s alpha=%s scale=%s "
