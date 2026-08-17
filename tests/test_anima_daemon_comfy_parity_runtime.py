@@ -124,7 +124,7 @@ def test_daemon_worker_reports_error_when_all_images_fail(monkeypatch, tmp_path)
         def ensure_text_ready(self, _cfg):
             return None
 
-        def apply_loras(self, _lora_configs):
+        def apply_loras(self, _lora_configs, on_warning=None):
             return []
 
     events: list[dict] = []
@@ -177,7 +177,7 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
         def ensure_text_ready(self, _cfg):
             events.append("ensure_text_ready")
 
-        def apply_loras(self, _lora_configs):
+        def apply_loras(self, _lora_configs, on_warning=None):
             events.append("apply_loras")
             return []
 

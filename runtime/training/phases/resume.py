@@ -11,6 +11,7 @@ import signal
 import time
 from pathlib import Path
 
+from studio.services.inference.lora_compat import model_num_blocks
 from training.bootstrap import init_progress
 from training.context import TrainingContext
 from training.observability import render_curve_panel
@@ -66,6 +67,7 @@ def run(ctx: TrainingContext) -> None:
             sra_aligner=ctx.sra_aligner,
             scaler=ctx.scaler,
             expected_family=ctx.family.spec.family_id,
+            expected_num_blocks=model_num_blocks(ctx.model),
         )
         ctx.emit(f"从断点恢复训练: epoch={ctx.start_epoch}, step={ctx.global_step}")
 

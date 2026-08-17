@@ -29,7 +29,7 @@ import random
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import torch
 
@@ -49,6 +49,7 @@ from studio.services.inference.core import (  # noqa: E402
     DeferredVAE,
     LoRAMeta,
     LoRASpec,
+    _check_lora_compat_or_raise,
     apply_loras,
     read_lora_meta,
     release_vae_after_decode,
@@ -132,6 +133,15 @@ def _emit_evt(kind: str, **extra: Any) -> None:
 
 def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
     _emit({"id": req_id, "kind": kind, **extra})
+
+
+def _warning_emitter(req_id: str) -> Callable[[str], None]:
+    """task 级 warning 事件（非致命提示，如 LoRA 与底模可能不匹配）→ supervisor
+    转 SSE generate_warning → 前端 toast。日志由调用方（core._warn）另打。"""
+    def _emit_warning(message: str) -> None:
+        _emit_for(req_id, "warning", message=str(message))
+
+    return _emit_warning
 
 
 # ---------------------------------------------------------------------------
@@ -664,8 +674,16 @@ class ModelCache:
 
         trim_working_set()
 
-    def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
-        """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
+    def apply_loras(
+        self,
+        lora_configs: list[dict[str, Any]],
+        on_warning: Callable[[str], None] | None = None,
+    ) -> list[Any]:
+        """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。
+
+        on_warning：LoRA 与底模「可能不匹配」（lora_compat warn 档）时回调，
+        _run_generate / _run_xy 接成 warning 事件推给前端；确定不匹配直接 raise。
+        """
         self._move_runtime_to_device()
         if self.block_swap is not None:
             # 关键顺序（doc §9.6）：fp8 底模的 LoRA 走**权重 merge**，而跑过前向后
@@ -717,6 +735,10 @@ class ModelCache:
             and all(getattr(a, "supports_hot_reload", True) for a in self.adapters)
         )
         if can_hot_reload:
+            # 热换不经 core.apply_loras：兼容判定（同族不同层数）必须在这里补上，
+            # 否则同拓扑的 28 层 LoRA 换 40 层 LoRA 会绕过检查静默错位。
+            for spec, meta in zip(specs, current_metas):
+                _check_lora_compat_or_raise(meta, self.model, Path(spec.path).name, on_warning)
             try:
                 for adapter, spec in zip(self.adapters, specs):
                     _reload_adapter_weights(adapter, spec, self.device, self.lora_dtype)
@@ -781,6 +803,7 @@ class ModelCache:
             # 开了 block swap = 用户内存本就紧张：不留那份与整个模型等大的 CPU
             # 备份（krea2 fp8 实测 12.23GB），换 LoRA 改走「重载模型」兜底
             keep_merge_backup=self.block_swap is None,
+            on_warning=on_warning,
         )
         self.last_lora_specs = specs
         self.last_lora_metas = current_metas
@@ -1414,7 +1437,9 @@ def _run_generate(
     )
     _finish_initial_te_peak_calibration(initial_te_measurement)
     CACHE.ensure_loaded(cfg)
-    adapters = CACHE.apply_loras(cfg.get("lora_configs", []))
+    adapters = CACHE.apply_loras(
+        cfg.get("lora_configs", []), on_warning=_warning_emitter(req_id),
+    )
 
     # 进度推送：永远建 callback 推 preview_step（含 step/total）；
     # preview_every_n_steps>0 时附 image_b64 中间预览图（commit 14）。
@@ -1580,7 +1605,7 @@ def _run_xy(
                 fp8_scale_axes=fp8_model,
             )
             if lora_configs is not None:
-                adapters = CACHE.apply_loras(lora_configs)
+                adapters = CACHE.apply_loras(lora_configs, on_warning=_warning_emitter(req_id))
 
             for i, s in enumerate(base_scales):
                 if i < len(adapters):

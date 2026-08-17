@@ -1620,6 +1620,10 @@ export interface LoraCkpt {
   path: string
   /** 文件 mtime 时间戳 */
   mtime: number
+  /** 训练底模的 DiT 层数（lora_compat 契约）：元数据 / 键扫描下界 / 未知(null)。
+   *  同族不同层数（Anima 28 层 vs 第三方 40 层）的 LoRA 靠它分辨。 */
+  base_num_blocks?: number | null
+  base_arch_source?: 'metadata' | 'keys' | 'unknown'
 }
 
 /** Phase 2 commit 14 — TAEFlux 模型状态（GET /api/generate/taeflux/status）。 */

@@ -9,6 +9,7 @@ high-lr 这种语义名），同 project 内唯一，且不可改（路径锚点
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import shutil
@@ -19,6 +20,13 @@ from typing import Any, Optional
 
 from . import projects
 from ...services.dataset.scan import IMAGE_EXTS
+from ...services.inference.lora_compat import LoraBaseArch, read_lora_base_arch
+
+
+@functools.lru_cache(maxsize=4096)
+def _lora_base_arch_cached(path: str, size: int, mtime: float) -> LoraBaseArch:
+    """LoRA header 只读一次（按 path+size+mtime 失效）；训练中 ckpt 列表会反复拉。"""
+    return read_lora_base_arch(path)
 
 # ADR-0007 §11.3-B：versions 状态机用 status + phase 两个正交字段。
 # 老 stage 已在 PR-5 移除（PR-5 commit 2 删 VALID_STAGES / advance_stage）。
@@ -239,12 +247,20 @@ def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
                 kind = "final"
                 label = "final"
         try:
-            mtime = f.stat().st_mtime
+            st = f.stat()
+            mtime = st.st_mtime
+            size = st.st_size
         except OSError:
             mtime = 0.0
+            size = -1
+        arch = _lora_base_arch_cached(str(f), size, mtime)
         items.append({
             "kind": kind, "value": value, "label": label,
             "path": str(f), "mtime": mtime,
+            # lora_compat 契约：训练底模层数（元数据 / 键扫描下界 / 未知），前端
+            # 据此标记「28 层 / 40 层」并与当前底模比对
+            "base_num_blocks": arch.num_blocks,
+            "base_arch_source": arch.source,
         })
 
     # 排序：final 顶部；step/epoch 按 value 降序；other 按 label 自然序升序

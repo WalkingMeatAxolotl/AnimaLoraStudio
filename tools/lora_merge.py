@@ -42,6 +42,35 @@ sys.path.insert(0, str(REPO_ROOT))
 import torch  # noqa: E402
 
 from studio.services.inference.core import LoRAMeta, read_lora_meta  # noqa: E402
+from studio.services.inference.lora_compat import (  # noqa: E402
+    base_arch_network_args,
+    build_lora_metadata,
+)
+
+
+def _inherit_base_arch(sources: list[tuple[Path, float]], metas: list[LoRAMeta]) -> dict:
+    """merge 产物的族 / 底模架构键：各源一致才继承，冲突拒绝。
+
+    族：显式标记的源之间必须一致（无标记源 grandfather 为 anima，不参与比对）。
+    层数：元数据确证的源之间必须一致；只有键扫描（下界）的源不写层数。
+    """
+    families = {m.model_family for m in metas if m.family_explicit}
+    if len(families) > 1:
+        raise SystemExit(f"源 LoRA 分属不同模型族 {sorted(families)}，不能 merge")
+    out: dict = {}
+    if families:
+        out["model_family"] = families.pop()
+    explicit = [(p, m.base_arch) for (p, _), m in zip(sources, metas) if m.base_arch.explicit]
+    blocks = {a.num_blocks for _, a in explicit}
+    if len(blocks) > 1:
+        detail = ", ".join(f"{p.name}={a.num_blocks} 层" for p, a in explicit)
+        raise SystemExit(f"源 LoRA 训练自不同层数的底模（{detail}），层与层对不上，不能 merge")
+    if explicit:
+        _, arch = explicit[0]
+        out.update(base_arch_network_args(
+            num_blocks=arch.num_blocks, model_channels=arch.model_channels,
+        ))
+    return out
 
 
 def _load_layers(path: Path) -> dict[str, dict[str, torch.Tensor]]:
@@ -183,14 +212,14 @@ def merge(
     }
     if reg_dims:
         network_args["lora_reg_dims"] = reg_dims
+    # 族 + 底模架构（lora_compat 契约）从源继承：各源一致才写；不一致直接拒绝
+    # ——不同层数底模上训的 LoRA 层与层对不上，merge 出来也是错的。
+    network_args.update(_inherit_base_arch(sources, metas))
     provenance = [{"file": p.name, "weight": w} for p, w in sources]
-    metadata = {
-        "ss_network_dim": str(max_rank),
-        "ss_network_alpha": str(float(max_rank)),
-        "ss_network_module": "lycoris.kohya",
-        "ss_network_args": json.dumps(network_args),
-        "anima_merge_sources": json.dumps(provenance, ensure_ascii=False),
-    }
+    metadata = build_lora_metadata(
+        rank=max_rank, alpha=float(max_rank), network_args=network_args,
+        extra={"anima_merge_sources": json.dumps(provenance, ensure_ascii=False)},
+    )
     from safetensors.torch import save_file
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

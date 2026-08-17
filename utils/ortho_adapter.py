@@ -24,7 +24,6 @@ Provenance:
 """
 from __future__ import annotations
 
-import json
 import logging
 from fnmatch import fnmatch
 from pathlib import Path
@@ -37,6 +36,7 @@ import torch.nn.functional as F
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from studio.services.inference.lora_compat import build_lora_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -377,12 +377,7 @@ class OrthoLoRAAdapter:
             "rs_lora": False,
         }
         ss_args.update(getattr(self, "metadata_extra", None) or {})
-        meta = {
-            "ss_network_dim": str(self.rank),
-            "ss_network_alpha": str(self.alpha),
-            "ss_network_module": "lycoris.kohya",
-            "ss_network_args": json.dumps(ss_args),
-        }
+        meta = build_lora_metadata(rank=self.rank, alpha=self.alpha, network_args=ss_args)
         save_file(sd, str(path), metadata=meta)
         logger.info("OrthoLoRA 保存到: %s (baked as plain LoRA)", path)
 
