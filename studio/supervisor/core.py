@@ -1072,6 +1072,14 @@ class Supervisor:
                 "name": event.get("name"),
             })
             return
+        if kind == "warning":
+            # 非致命提示（如 LoRA 与底模层数可能不匹配）→ 前端 toast；任务继续跑
+            self._on_event({
+                "type": "generate_warning",
+                "task_id": tid,
+                "message": str(event.get("message") or ""),
+            })
+            return
         if kind == "preview_step":
             # commit 14：中间步进度 + 可选预览。step/total 永远有，image_b64
             # 取决于 settings.preview_every_n_steps + TAEFlux 是否可用

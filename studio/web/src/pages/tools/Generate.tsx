@@ -472,6 +472,11 @@ export default function GeneratePage() {
         void historyRef.current.refresh()
       }, 300)
     }
+    if (evt.type === 'generate_warning' && typeof evt.message === 'string' && evt.message) {
+      // daemon 侧非致命提示（如 LoRA 与底模层数可能不匹配）：不管当前显示哪个任务都提示，
+      // 因为它是用户刚提交的那次出图的事，图照出但可能不对
+      toast(evt.message, 'warning')
+    }
     const tid = taskIdRef.current
     if (tid == null) return
     if (evt.type === 'task_state_changed' && evt.task_id === tid) {

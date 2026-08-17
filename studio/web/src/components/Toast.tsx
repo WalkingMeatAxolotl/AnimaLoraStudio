@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 
-type Kind = 'info' | 'success' | 'error'
+type Kind = 'info' | 'success' | 'warning' | 'error'
 
 interface ToastItem {
   id: number
@@ -29,7 +29,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setItems((arr) => [...arr, { id, kind, message }])
     window.setTimeout(() => {
       setItems((arr) => arr.filter((t) => t.id !== id))
-    }, kind === 'error' ? 6000 : 3000)
+    }, kind === 'error' || kind === 'warning' ? 6000 : 3000)
   }, [])
 
   return (
@@ -43,6 +43,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               'px-4 py-2 rounded-lg shadow-lg text-sm border ' +
               (t.kind === 'error'
                 ? 'bg-err-soft border-err text-err'
+                : t.kind === 'warning'
+                ? 'bg-warn-soft border-warn text-warn'
                 : t.kind === 'success'
                 ? 'bg-ok-soft border-ok text-ok'
                 : 'bg-elevated border-subtle text-fg-primary')

@@ -12,7 +12,6 @@ Copyright (c) 2026 Seunghyun Ji，见 THIRD_PARTY_NOTICES.md）；mask 注入机
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
 import re
@@ -26,6 +25,7 @@ import torch.nn as nn
 from safetensors.torch import save_file
 from safetensors import safe_open
 
+from studio.services.inference.lora_compat import build_lora_metadata
 from utils.lycoris_patch import apply_lokr_device_patch
 
 logger = logging.getLogger(__name__)
@@ -467,15 +467,10 @@ class LycorisAdapter:
         }
         if self.lora_reg_dims:
             ss_args["lora_reg_dims"] = self.lora_reg_dims
-        # 多模型 D13：族标记（phases/models 注入 family.lora_metadata()）；
-        # 无标记的存量产物读取侧 grandfather 为 anima
+        # 多模型 D13：族标记 + 底模架构（phases/models 注入 family.lora_metadata()
+        # 与 lora_compat 契约键）；无标记的存量产物读取侧 grandfather 为 anima
         ss_args.update(getattr(self, "metadata_extra", None) or {})
-        meta = {
-            "ss_network_dim": str(self.rank),
-            "ss_network_alpha": str(self.alpha),
-            "ss_network_module": "lycoris.kohya",
-            "ss_network_args": json.dumps(ss_args),
-        }
+        meta = build_lora_metadata(rank=self.rank, alpha=self.alpha, network_args=ss_args)
         save_file(sd, str(path), metadata=meta)
         logger.info(f"LoRA 保存到: {path}")
 

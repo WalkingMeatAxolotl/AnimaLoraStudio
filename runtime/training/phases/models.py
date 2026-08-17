@@ -10,6 +10,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from studio.services.inference.lora_compat import (
+    base_arch_network_args_from_model,
+    check_lora_compat,
+    model_num_blocks,
+)
 from training.context import TrainingContext
 from training.families import resolve_family
 from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
@@ -174,16 +179,18 @@ def _inject_adapter(ctx: TrainingContext) -> None:
     from training.adapters import build_adapter
 
     ctx.injector = build_adapter(args, preset=ctx.family.lora_preset())
-    ctx.injector.metadata_extra = ctx.family.lora_metadata()
+    # LoRA 元数据 = 族标记（D13）+ 底模架构（lora_compat 契约：层数/通道/文件名，
+    # 同族不同层数的 LoRA 靠它分辨）
+    ctx.injector.metadata_extra = {
+        **ctx.family.lora_metadata(),
+        **base_arch_network_args_from_model(
+            ctx.model, getattr(args, "transformer_path", "") or "",
+        ),
+    }
     ctx.injector.inject(ctx.model)
 
     if getattr(args, "resume_lora", "") and Path(args.resume_lora).exists():
-        lora_family = _read_lora_family(args.resume_lora)
-        if lora_family != ctx.family.spec.family_id:
-            raise RuntimeError(
-                f"resume_lora 跨模型族被拒绝：{args.resume_lora} 属于 '{lora_family}'，"
-                f"当前 model_family='{ctx.family.spec.family_id}'"
-            )
+        _check_resume_lora_compat(ctx, args.resume_lora)
         ctx.injector.load(args.resume_lora)
         logger.info("将从已有 LoRA 继续训练: %s", args.resume_lora)
 
@@ -325,16 +332,25 @@ def finish(ctx: TrainingContext) -> None:
     _log_train_start_vram(ctx)
 
 
-def _read_lora_family(path) -> str:
-    """Read artifact family; legacy unmarked safetensors grandfather to Anima."""
-    import json
+def _check_resume_lora_compat(ctx: TrainingContext, path) -> None:
+    """resume_lora 的族 + 底模架构校验（与出图侧 apply_loras 同一契约）。
 
-    from safetensors import safe_open
+    族：无标记的存量文件 grandfather 为 anima。架构：元数据确证 / 键必然越界
+    → 拒绝；键扫描只是下界的存量文件 → 警告放行（可能是老 28 层 LoRA，也可能
+    只挂部分层——静默错位比崩溃更糟，但没有证据时不拦）。
+    """
+    from studio.services.inference.core import read_lora_meta
 
-    try:
-        with safe_open(str(path), framework="pt", device="cpu") as handle:
-            meta = handle.metadata() or {}
-        args = json.loads(meta.get("ss_network_args") or "{}")
-        return str(args.get("model_family") or "anima")
-    except Exception:
-        return "anima"
+    meta = read_lora_meta(str(path))
+    if meta.model_family != ctx.family.spec.family_id:
+        raise RuntimeError(
+            f"resume_lora 跨模型族被拒绝：{path} 属于 '{meta.model_family}'，"
+            f"当前 model_family='{ctx.family.spec.family_id}'"
+        )
+    verdict = check_lora_compat(
+        meta.base_arch, model_num_blocks(ctx.model), lora_name=Path(str(path)).name,
+    )
+    if verdict.level == "reject":
+        raise RuntimeError(f"resume_lora 与当前底模层数不匹配：{verdict.reason}")
+    if verdict.level == "warn":
+        logger.warning("resume_lora：%s", verdict.reason)
