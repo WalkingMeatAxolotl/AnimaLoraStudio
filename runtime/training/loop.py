@@ -173,6 +173,63 @@ def _sample_timesteps(timestep_sampler, bs: int, device, latents) -> torch.Tenso
     return timestep_sampler.sample(bs, device)
 
 
+def _cuda_reserved_gb(device) -> float | None:
+    """torch allocator 在 device 上的保留量（GB）；非 CUDA 设备返回 None。"""
+    try:
+        dev = torch.device(device)
+        if dev.type != "cuda" or not torch.cuda.is_available():
+            return None
+        return torch.cuda.memory_reserved(dev) / 1024**3
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class _BucketSwitchCacheRelease:
+    """ARB 切桶时把上一个桶留下的 allocator 缓存归还给驱动（issue #505）。
+
+    BucketBatchSampler 逐桶连续产出，同桶内每步激活形状相同、cached block 完全
+    复用；切到新桶后新形状的大张量塞不进旧桶的 cached block，allocator 只能再
+    cudaMalloc → reserved ≈ 旧桶峰值 + 新桶峰值。Linux 上 cudaMalloc 撞到显存
+    上限会失败，allocator 内置「失败 → 释放缓存 → 重试」自愈；Windows WDDM 下
+    cudaMalloc 不失败而是溢到共享内存，自愈永不触发，之后每步都走 PCIe，速度
+    永久掉一半以上（5090 32GB 实测 0.78→0.3 it/s）。这里在切桶点补上那次
+    释放：此时上一步的 backward/optimizer step 已完成、激活全部释放，
+    empty_cache 正好把旧峰值 segment 整段归还。一个 epoch 只切几次桶，开销
+    可忽略；Linux 上同样调用，少一条平台分叉。
+
+    只用于 ARB 网格路径：NaViT 每个 pack 形状都不同，按形状清会变成每步
+    empty_cache + 重新 cudaMalloc，明显拖慢；且 pack 有 token 上限，reserved
+    会自行收敛到最大 pack 的峰值，无需干预。
+    """
+
+    def __init__(self, device):
+        self._device = device
+        self._prev_hw: tuple[int, ...] | None = None
+        self._logged = False
+
+    def observe(self, latents) -> None:
+        hw = tuple(int(x) for x in latents.shape[-2:])
+        prev, self._prev_hw = self._prev_hw, hw
+        if prev is None or prev == hw:
+            return
+        before = _cuda_reserved_gb(self._device)
+        torch.cuda.empty_cache()
+        if self._logged:
+            return
+        self._logged = True
+        after = _cuda_reserved_gb(self._device)
+        detail = (
+            f"（torch 保留 {before:.2f}GB→{after:.2f}GB）"
+            if before is not None and after is not None
+            else ""
+        )
+        logger.info(
+            "[显存] ARB 切桶 %sx%s→%sx%s：已归还上一个桶的 allocator 缓存%s；"
+            "后续切桶不再逐条记录",
+            prev[0], prev[1], hw[0], hw[1], detail,
+        )
+
+
 def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
@@ -206,6 +263,8 @@ def run(ctx: TrainingContext) -> None:
             raise ValueError(
                 "timestep_shift_resolution_aware 不能与自带分辨率 shift 的 timestep sampler 同时启用"
             )
+
+    bucket_switch = _BucketSwitchCacheRelease(ctx.device)
 
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
@@ -250,6 +309,10 @@ def run(ctx: TrainingContext) -> None:
                     pixels_5d = pixels.unsqueeze(2)  # [B,C,1,H,W]
                     latents = ctx.vae.model.encode(pixels_5d, ctx.vae.scale)
                 bs = latents.shape[0]
+
+            # ARB 切桶 → 归还上一个桶的 allocator 缓存（navit 路径不适用，见类注释）
+            if navit_latents is None:
+                bucket_switch.observe(latents)
 
             # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
             # pad-to-512 / kv_trim / LLMAdapter 融合均为 Anima 私货）
