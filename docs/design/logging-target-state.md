@@ -1,6 +1,6 @@
 # 日志体系目标态：统一行契约 + 显示级过滤
 
-状态：四项关键决策已拍板（2026-08-19）；**刀 1（#507）/ 刀 2（#508）已合，刀 3 已实施**（分支 feat/logging-logview）。分刀见 §6。
+状态：四项关键决策已拍板（2026-08-19）；**刀 1（#507）/ 刀 2（#508）/ 刀 3（#509）已合，刀 4 已实施**（分支 feat/logging-diagnostics）。分刀见 §6。
 触发：issue #505 的切桶释放日志无处可去 → 全仓盘点发现 8 处 `logger.debug` 在任何配置下都不可见、run.log 是无级别的裸字节流、前端 6 套日志视图零级别解析。盘点原稿在 `tmp/logging-inventory.md`（本地）。
 上游：ADR 0009（logging/error system）定的 studio 侧骨架（`setup_logging` / JSON line / trace_id / 错误 envelope）不推翻，本文只补它没覆盖的子进程与显示面，并把跨进程的行契约定下来。
 
@@ -112,7 +112,7 @@ Traceback (most recent call last):
 
 ### 3.6 诊断包
 
-设置页 / 失败任务详情各一个入口：`GET /api/diagnostics/bundle?task_id=…` → zip：该任务 `run.log`、以任务起止时间为窗的 `studio.log` 片段、`GET /api/system/env` 已有的版本/GPU/依赖摘要、任务 config 快照。不含 secrets（wandb key 等走现有脱敏）。
+设置页（系统 → 日志「导出诊断包」）/ 任务详情页顶部「诊断包」（任务已启动过即有）两个入口：`GET /api/diagnostics/bundle?task_id=…` → zip：`README.txt`、`env.json`（studio 版本 / Python / 平台 / `/api/env/summary` 的驱动与 CUDA / torch 状态）、`task.json`（tasks 行）、`task/run.log`、`task/snapshot/config.yaml`、`task/monitor/state.json`、`studio.log`（任务起止各放宽 60s 的时间窗内片段，扫 studio.log + 轮转文件，按 `ts` 字段正则取时间不 json.loads，片段封顶 30MB）；不带 task_id = `env.json` + `studio.log` 尾 5MB。不含 secrets.json；run.log / studio.log / 快照文本过 `REDACT_PATTERNS`（api_key / token / password / Authorization / hf_* / sk-*），README 里写明让用户发出前过目。实现 `services/diagnostics.py`（env_summary 由 API 层传入，services 不反向依赖 routers）+ `api/routers/diagnostics.py`。
 
 ### 3.7 非目标
 

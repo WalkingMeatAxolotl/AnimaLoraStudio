@@ -3223,6 +3223,10 @@ export const api = {
     return req<LogPage>(`/api/logs/${id}${s ? `?${s}` : ''}`)
   },
   logRawUrl: (id: number) => `/api/logs/${id}/raw`,
+  /** 诊断包 zip（logging-target-state §3.6）：带 task_id = 该任务 run.log + 窗内 studio.log
+   *  + 快照 + env；不带 = env + studio.log 尾部。用 <a download> 直接下载。 */
+  diagnosticsBundleUrl: (taskId?: number | null) =>
+    taskId != null ? `/api/diagnostics/bundle?task_id=${taskId}` : '/api/diagnostics/bundle',
   /** 默认拉全量历史（max_points=0，server 跳过降采样）；想要降采样预览
    *  传具体数字。cold start 是一次性 HTTP，长训练（10k+ 步）下也只是 ~500KB
    *  payload，不值得为视觉损耗换网络节省。 */

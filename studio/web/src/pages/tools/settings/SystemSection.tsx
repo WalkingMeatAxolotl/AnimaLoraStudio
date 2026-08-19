@@ -120,6 +120,14 @@ export function LogsSection() {
       >
         <Bool value={value} onChange={(v) => void save(v)} disabled={saving} />
       </SettingsField>
+      <SettingsField
+        label={t('settings.logs.exportBundle')}
+        helpTooltip={<p>{t('settings.logs.exportBundleHelp')}</p>}
+      >
+        <a className="btn btn-secondary btn-sm no-underline" href={api.diagnosticsBundleUrl()} download>
+          {t('settings.logs.exportBundle')}
+        </a>
+      </SettingsField>
     </SettingsSection>
   )
 }

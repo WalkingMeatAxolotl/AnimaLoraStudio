@@ -392,6 +392,17 @@ export default function QueueDetailPage() {
             >{t('queueDetail.viewInReg')}</button>
           )}
           {/* R-5：数据作业类 task 跳原生步骤页（download→项目下载页、tag→打标页…） */}
+          {/* 诊断包（logging-target-state §3.6）：run.log + 配置快照 + 时间窗 studio.log +
+              env，报 issue 用。pending / scheduled 还没 run.log，不给入口 */}
+          {task && status !== 'pending' && status !== 'scheduled' && (
+            <a
+              href={api.diagnosticsBundleUrl(task.id)}
+              download
+              className="btn btn-ghost btn-sm no-underline"
+              title={t('queueDetail.diagBundleHint')}
+              data-testid="detail-diag-bundle"
+            >{t('queueDetail.diagBundle')}</a>
+          )}
           {task && jobJumpPath(task, evalSessionIdOf(task)) && (
             <button
               onClick={() => navigate(jobJumpPath(task, evalSessionIdOf(task))!)}

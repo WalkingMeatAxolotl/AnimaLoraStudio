@@ -806,6 +806,8 @@
     "viewInGenerate": "View render →",
     "viewInReg": "View reg set →",
     "deleteRecord": "Delete record",
+    "diagBundle": "Diagnostics",
+    "diagBundleHint": "Download this task's run.log, config snapshot, the studio.log slice for its time window and an environment summary (redacted); attach it when filing an issue",
     "deleteTitle": "Delete task record",
     "deleteDesc": "Will permanently delete task",
     "deleteNote": "LoRA / training logs / monitor files will remain on disk.",
@@ -1122,7 +1124,9 @@
       "debugDefaultLabel": "Show debug lines by default",
       "debugDefaultHelp": "Whether log views show DEBUG lines when opened. Logs always record debug lines; this only sets the default filter. Each log view has its own Debug toggle for temporary changes (not saved).",
       "debugDefaultOn": "Log views show debug lines by default",
-      "debugDefaultOff": "Log views hide debug lines by default"
+      "debugDefaultOff": "Log views hide debug lines by default",
+      "exportBundle": "Export diagnostics bundle",
+      "exportBundleHelp": "Zips the studio.log tail and an environment summary (version / driver / CUDA / PyTorch), no secrets; attach it when filing an issue. A per-task bundle (with that task's log and config snapshot) is exported from the task detail page."
     },
     "gpuNoneDetected": "No NVIDIA GPU detected",
     "gpuSelectLabel": "GPU",
