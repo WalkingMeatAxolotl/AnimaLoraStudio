@@ -33,7 +33,9 @@ from typing import Any
 
 # PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8。
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.reg_build_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.reg_build_worker")
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立

@@ -40,7 +40,9 @@ from studio.services import (
 )
 from studio.services.projects import projects, versions
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.eval_session_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.eval_session_worker")
 
 # runner key → (跑它的函数, 从 secrets 取默认模型名的取值器, 阶段级共享 scorer)
 #

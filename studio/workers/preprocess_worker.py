@@ -26,7 +26,9 @@ from typing import Any, Callable
 
 from PIL import Image
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.preprocess_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.preprocess_worker")
 
 from studio import db
 from studio.domain.errors import DomainError

@@ -85,6 +85,8 @@ OWN_LOGGER_NAMESPACES = (
     "anima_daemon",
     "anima_generate",
     "anima_reg_ai",
+    # 兜底：任何以脚本 / `python -m` 方式跑的自家模块若仍用 getLogger(__name__)
+    "__main__",
 )
 
 # 第三方库 logger 静音 list — root level=INFO 时这些库会大量出 INFO 噪音。
