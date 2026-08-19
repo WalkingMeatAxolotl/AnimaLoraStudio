@@ -21,7 +21,7 @@
 
 不开子进程：把 WD14 / postprocess 直接 import 进来，progress 走同一 log_path。
 
-日志只走 stdout：见 `download_worker.py` 顶部的说明。
+日志只走 logger：见 `download_worker.py` 顶部的说明。
 """
 from __future__ import annotations
 
@@ -33,7 +33,9 @@ from typing import Any
 
 # PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8。
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.reg_build_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.reg_build_worker")
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
@@ -141,10 +143,10 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("job %s not found", job_id)
         return 1
     if job["kind"] != "reg_build":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error("wrong kind: %s", job["kind"])
         return 1
 
     params: dict[str, Any] = job.get("params_decoded") or {}
@@ -152,7 +154,7 @@ def run(job_id: int) -> int:
     cancel_event = threading.Event()  # supervisor 走 SIGTERM；这里只为 API 完整性
 
     def progress(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     try:
         version_id = int(params["version_id"])

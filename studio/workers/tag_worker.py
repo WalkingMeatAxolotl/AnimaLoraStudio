@@ -15,7 +15,7 @@
 
 打标永远覆盖 train/ 下全部 repeat 子目录（不再支持按 folder 划分）。
 
-日志只走 stdout：见 `download_worker.py` 顶部的说明。
+日志只走 logger：见 `download_worker.py` 顶部的说明。
 """
 from __future__ import annotations
 
@@ -27,7 +27,9 @@ from typing import Any
 # PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8，
 # worker 顶层不再单独调（B-4.6: 之前只 2/4 worker 调）。
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.tag_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.tag_worker")
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
@@ -105,16 +107,16 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("job %s not found", job_id)
         return 1
     if job["kind"] != "tag":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error("wrong kind: %s", job["kind"])
         return 1
 
     params: dict[str, Any] = job.get("params_decoded") or {}
 
     def progress(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     try:
         tagger_name = params.get("tagger", "wd14")

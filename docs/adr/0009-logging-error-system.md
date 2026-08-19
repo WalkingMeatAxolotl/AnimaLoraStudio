@@ -1,6 +1,6 @@
 # 0009 — 统一日志 + 错误体系（0.12.0）
 
-**状态**：Accepted
+**状态**：Accepted + Addendum 1 2026-08-19（日志目标态刀 1：记录不过滤 / 一个格式 / 一个 env，见末尾「增量更新」）
 **日期**：2026-05-28
 **决策者**：@WalkingMeatAxolotl（三方 agent review：架构师 / 审计员 / 迁移策略师，各两轮）
 **落地**：PR #155 (PR-1 后端基础设施) / PR #156 (PR-2 错误体系) / PR #TBD (PR-3 前端 + CLI 收尾)
@@ -372,3 +372,30 @@ A agent 首轮主张。否决理由：当前 ~200 LOC 单文件完全 hold；6 �
   - `studio/domain/errors.py` — 错误体系入口
   - `studio/api/exception_handlers.py` — 3 个 handler 注册点
   - `studio/api/middleware/trace.py` — trace_id 入口
+
+## 增量更新
+
+### 2026-08-19 — Addendum 1: 日志目标态刀 1（记录不过滤 / 一个格式 / 一个 env）
+
+**影响范围**：改「决策」中 `setup_logging` 的级别语义、「实施 lessons」第 6 条的 `_say` 实现、「不在范围」里的 `jobs/<id>.log` GC 与「演进双写」条目。设计全文见 `docs/design/logging-target-state.md`（含四项拍板 D1-D4、五条不变量、四刀分工）；本 Addendum 只记录对本 ADR 结论有改动的部分。
+
+**起因**：issue #505 的切桶释放日志无处可去 → 全仓盘点发现 8 处 `logger.debug` 在任何配置下不可见（只有 webui 读 `ANIMA_LOG_LEVEL`，cli / worker / runtime 四入口硬编码 INFO）、run.log 是无级别的裸字节流（logger 行 + 裸 print + 协议行混流）、`[Debug]` 前缀的采样日志反而每次无条件刷屏。
+
+**拍板与推论**（D1-D4 原文在设计稿 §2）：
+
+| 决策 | 对本 ADR 的改动 |
+|---|---|
+| D1 调试开关进 UI；全局管默认、视图独立、**显示过滤而非不记录** | `setup_logging` 的级别模型改为：自家命名空间（`OWN_LOGGER_NAMESPACES`：studio / training / utils / runtime / modeling / anima_*）恒 DEBUG；root 保持 INFO 防第三方 debug 洪水；file handler 不设级别；console handler 级别 = 参数 > `ANIMA_LOG_LEVEL` > INFO。**`ANIMA_LOG_LEVEL` 从「进程日志级别」退化为「终端可读性」旋钮**，在 `setup_logging` 内部读，所有入口共用；supervisor / daemon spawn 注入 `ANIMA_LOG_LEVEL=DEBUG`（子进程 stderr 即 run.log，记录面必须 DEBUG） |
+| D2 子进程 / daemon 不落 studio.log | 「不在范围 → 演进双写」条目**作废**：worker 与 runtime 脚本永远 `file=False`，各写各的面，排障靠诊断包（刀 4）拼；`setup_logging(extra_handlers=…)` 死参数删除 |
+| D3 训练进度行算日志 | pipe 模式下 `log_every` 进度行走 `training.progress` logger、`ctx.emit` 走 `training.emit`；tty 交互（rich / plain `\r`）不变 |
+| D4 run.log 不做 GC | 「不在范围 → `jobs/<id>.log` GC 超 7 天」条目**作废**；run.log 随任务删除 |
+
+**行契约**（跨进程，改即 breaking）：所有进程的 stderr / run.log 行都是 `HumanConsoleFormatter`：`%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s: %(message)s`；解析正则 `LOG_LINE_RE` 导出在 `studio/infrastructure/logging.py`，不匹配行头的行是上一条记录的续行。四个 runtime 入口（anima_train / daemon / generate / reg_ai）弃各自 `basicConfig` 改调 `setup_logging(process, file=False, console=True)`，process 名 / trace_id 取 supervisor 注入的 env（`_spawn_job` 与 daemon spawn 补齐注入，之前只有 `_spawn_task` 有）。`console="auto"` 在 pipe 下不再输出 JSON（与 studio.log 重复）。
+
+**裸 print 白名单**（`tests/test_print_whitelist.py` AST 扫描锁死）：stdout 协议行（`__EVENT__:` / daemon line-JSON）、tty 交互（rich/plain 进度行、`input()` 配套提示、独立 CLI 工具 `__main__` 结果输出）、CLI 启动 banner。其余 runtime 35 处 / studio 41 处 print 已收编为 logger；`[Debug]` / `[WARN]` / `[OK]` 冒充级别的前缀清掉（`[Debug]` 11 条→ debug）；`anima_generate` / `anima_reg_ai` 的 `logger.error(str(e))` → `logger.exception`。
+
+**`_say` 改动**（覆盖实施 lessons 第 6 条）：`studio/cli.py::_say(msg, level)` 改为 `logging.getLogger("studio.cli")` 的薄包装，`level` 真起作用；`--verbose` 不做，走 `ANIMA_LOG_LEVEL`。第 6 条描述的「`_say` 内部用字符串拼接避免正则误伤」不再适用。
+
+**噪音表**：`_NOISY_LOGGERS` 扩到 transformers / diffusers / accelerate / peft / wandb / spandrel / multipart / charset_normalizer / numba / fsspec / watchfiles；`uvicorn.access` 压到 WARNING（uvicorn / uvicorn.error 的启动信息保留 INFO）。
+
+**后续刀**（见设计稿 §6）：刀 2 读取面（`/api/logs` 分页 + SSE seq 统一 + error_msg 取 ERROR 块）→ 刀 3 前端统一 LogView + 全局/视图调试开关（后端字段 `system.log_debug_default`）→ 刀 4 诊断包。

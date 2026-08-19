@@ -36,6 +36,7 @@ from ..services import eval_auto, eval_validation
 from ..services.runtime import xformers as _xformers_svc
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
+from ..infrastructure.logging import LOG_LEVEL_ENV
 from ..paths import (
     LOGS_DIR,
     REPO_ROOT,
@@ -869,8 +870,22 @@ class Supervisor:
         # worker 自己 append 模式开 log，supervisor 这里只挂个 stdout 转发到同一文件
         log_fp = open(log_path, "ab")
 
-        cmd = self._job_cmd_builder(job)
-        proc = self._popen(cmd, log_fp)
+        # trace / process 注入与 _spawn_task 对齐：jobs 表没有 request_trace_id 列，
+        # 用 bg-{uuid} 兜底，至少让 worker 侧 studio.log / run.log 的 trace_id 与
+        # supervisor 这段 spawn 日志对得上（之前 job 路径完全不注入，worker 只能自造）。
+        from ..infrastructure.logging import (
+            PROCESS_ENV, TRACE_ENV, bind_trace_id, new_trace_id, reset_trace_id,
+        )
+        trace_id = job.get("request_trace_id") or f"bg-{new_trace_id()}"
+        _trace_token = bind_trace_id(trace_id)
+        try:
+            cmd = self._job_cmd_builder(job)
+            proc = self._popen(cmd, log_fp, extra_env={
+                TRACE_ENV: trace_id,
+                PROCESS_ENV: f"worker:{job['kind']}/{job['id']}",
+            })
+        finally:
+            reset_trace_id(_trace_token)
 
         with db.connection_for(self._db_path) as conn:
             project_jobs.mark_running(conn, job["id"], pid=proc.pid)
@@ -1275,6 +1290,10 @@ class Supervisor:
         env.setdefault("TRANSFORMERS_VERBOSITY", "error")
         env.setdefault("DIFFUSERS_VERBOSITY", "error")
         env.setdefault("ACCELERATE_DISABLE_RICH", "1")
+        # 子进程的 stderr 就是 run.log：记录不过滤、显示才过滤（docs/design/
+        # logging-target-state.md D1），所以 console 级别给 DEBUG 让调试行落盘；
+        # setdefault 保留外部显式设的值。
+        env.setdefault(LOG_LEVEL_ENV, "DEBUG")
         # xformers 的 triton 探测会把无害的 ImportError traceback 打进 task log
         # （Windows 无官方 triton wheel），被失败摘要误当失败原因；本 app 的
         # xformers 路径不用 triton kernel，无条件短路。

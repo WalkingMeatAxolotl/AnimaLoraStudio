@@ -34,6 +34,9 @@ from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_
 
 
 logger = logging.getLogger(__name__)
+# 训练进度行（step/loss/lr/speed）专用 logger：与本模块其它日志分名，方便
+# 显示端按名折叠/过滤高频行（docs/design/logging-target-state.md §7 open question 2）。
+_progress_logger = logging.getLogger("training.progress")
 
 
 def _resolve_sra_weight(args: Any) -> float:
@@ -739,14 +742,12 @@ def run(ctx: TrainingContext) -> None:
                             if sra_align_loss_val is not None and sra_weighted_loss_val is not None
                             else f" denoise={denoise_loss_val:.6f}"
                         )
-                        # flush 必须开：studio spawn 的 stdout 是 pipe（全缓冲
-                        # 8KB），不 flush 时 step 行滞留缓冲——短训练/中止的
-                        # task log 里一行都看不到（曾被误判为 krea2 没打日志）
-                        print(
-                            f"epoch={epoch} step={ctx.global_step} "
-                            f"loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} "
-                            f"speed={steps_per_sec:.2f} it/s",
-                            flush=True,
+                        # pipe 模式（studio spawn）：进度行也是日志（设计 D3），走
+                        # 独立 logger 名 training.progress，与其它行同契约、前端可
+                        # 单独折叠。StreamHandler 每条 flush，不会滞留 8KB 缓冲。
+                        _progress_logger.info(
+                            "epoch=%d step=%d loss=%.6f%s lr=%.2e speed=%.2f it/s",
+                            epoch, ctx.global_step, loss_val, sra_suffix, lr, steps_per_sec,
                         )
 
                 # 按 step 采样（轮换提示词）
