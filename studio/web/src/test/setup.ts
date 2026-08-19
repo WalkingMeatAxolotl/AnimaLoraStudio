@@ -28,3 +28,10 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 // ready 状态的具体测试可以 __setStateForTest 覆盖。
 import { __setStateForTest } from '../tagDict/store'
 __setStateForTest({ status: 'empty' })
+
+// 同理预热 tagDict 偏好 store（chip 翻译 / 输入补全开关，后端 secrets 镜像）为
+// loaded：useShowTagTranslation / useTagAutocompleteEnabled 的 mount effect 看到
+// loaded 就不打 /api/secrets。值保持推导默认（测试态 lang=zh → 翻译开、补全开）；
+// 要改开关的测试用 __setTagPrefsForTest，测 seed/加载流程的用 __resetTagPrefsForTest。
+import { __setTagPrefsForTest } from '../tagDict/prefs'
+__setTagPrefsForTest({ loaded: true })

@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type React from 'react'
 
-import { useTagAutocompleteEnabled } from '../../tagDict/autocompleteToggle'
+import { useTagAutocompleteEnabled } from '../../tagDict/prefs'
 import { useTagDict } from '../../tagDict/store'
 import { extractCurrentToken, findSuggestions } from '../../tagDict/suggest'
 import type { TagSuggestion } from '../../tagDict/types'

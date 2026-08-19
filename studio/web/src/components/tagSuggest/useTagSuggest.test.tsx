@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { useRef, useState } from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import { __setTagPrefsForTest } from '../../tagDict/prefs'
 import { __setStateForTest } from '../../tagDict/store'
 import { TagSuggestList } from './TagSuggestList'
 import { useTagSuggest } from './useTagSuggest'
@@ -62,7 +63,7 @@ function Harness({ initial = '' }: { initial?: string }) {
 
 describe('useTagSuggest 弹出规则', () => {
   beforeEach(() => {
-    localStorage.clear()
+    __setTagPrefsForTest({ loaded: true, autocomplete: true })
     seedDict()
   })
 
@@ -92,7 +93,7 @@ describe('useTagSuggest 弹出规则', () => {
   })
 
   it('全局开关关闭后，输入也不弹候选', async () => {
-    localStorage.setItem('studio.tag.autocomplete', '0')
+    __setTagPrefsForTest({ autocomplete: false })
     const user = userEvent.setup()
     render(<Harness />)
     await user.type(screen.getByRole('textbox'), 'sol')

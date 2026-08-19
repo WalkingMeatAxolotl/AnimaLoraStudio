@@ -12,8 +12,7 @@ import {
   type XformersStatus,
 } from '../../../api/client'
 import { useDialog } from '../../../components/Dialog'
-import { useTagAutocompleteEnabled } from '../../../tagDict/autocompleteToggle'
-import { useShowTagTranslation } from '../../../tagDict/showToggle'
+import { useShowTagTranslation, useTagAutocompleteEnabled } from '../../../tagDict/prefs'
 import { useTagDict, reloadDict } from '../../../tagDict/store'
 import { useToast } from '../../../components/Toast'
 import { useSettingsData } from '../../../lib/SettingsData'
@@ -455,9 +454,12 @@ export function TagDictionarySection() {
   const [busy, setBusy] = useState<null | 'reset' | 'upload'>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // localStorage 即时设置也包一层 runSave：驱动右上角「已保存」指示，反馈跟
-  // 其他 instant-apply 设置一致（fn 同步落盘，不会失败）。
-  const applyLocal = (fn: () => void) => { void runSave(async () => { fn() }) }
+  // 两个开关是全站订阅的 tagDict/prefs store（乐观更新 + PUT secrets.tag_dictionary，
+  // 失败自行回滚并抛错）；包一层 runSave 驱动右上角「已保存」指示，反馈跟其他
+  // instant-apply 设置一致。
+  const applyPref = (fn: () => Promise<void>) => {
+    runSave(fn).catch((e) => toast(String(e), 'error'))
+  }
 
   const meta = dict.meta
   const sourceLabel = meta?.kind === 'default'
@@ -554,14 +556,14 @@ export function TagDictionarySection() {
         label={t('settings.tagDictionary.showToggleLabel')}
         helpTooltip={<p>{t('settings.tagDictionary.showToggleHint')}</p>}
       >
-        <Bool value={show} onChange={(v) => applyLocal(() => setShow(v))} />
+        <Bool value={show} onChange={(v) => applyPref(() => setShow(v))} />
       </SettingsField>
 
       <SettingsField
         label={t('settings.tagDictionary.autocompleteToggleLabel')}
         helpTooltip={<p>{t('settings.tagDictionary.autocompleteToggleHint')}</p>}
       >
-        <Bool value={acEnabled} onChange={(v) => applyLocal(() => setAcEnabled(v))} />
+        <Bool value={acEnabled} onChange={(v) => applyPref(() => setAcEnabled(v))} />
       </SettingsField>
     </SettingsSection>
   )
