@@ -626,3 +626,33 @@ def test_allocation_error_carries_context():
     assert err.first_swapped == 14
     assert "out of memory" in str(err)
     assert "14" in str(err)
+
+
+def test_build_packs_unpinned_weights_into_pow2_chunks():
+    """未 pinned 的基权重（anima 放置路径 / GPU 常驻路径）经 PinnedPacker 打包：
+    主副本全部 pinned，且落在少数几个共享大块上（不是逐张量 pin 各自一块）。"""
+    PinnedBlockSwap, _ = _import()
+    device = torch.device("cuda")
+    blocks = _make_blocks(4, 16, device)
+    # 末尾 2 层模拟 anima 放置：CPU 可分页；前 2 层留 GPU（验证 GPU→pinned 也走打包）
+    for b in list(blocks)[3:]:
+        for p in b.parameters():
+            p.data = p.detach().to("cpu")
+    ref = {n: p.detach().clone().cpu() for n, p in blocks.named_parameters()}
+    x = torch.randn(3, 16, device=device)
+    expected = _run_resident(_make_blocks(4, 16, device), x)  # 同 seed 的常驻基线
+
+    swap = PinnedBlockSwap(blocks, num_swap=2, device=device)
+
+    storages = set()
+    for rel in range(swap.num_swap):
+        for _name, t in swap._cpu_weights[rel].items():
+            assert t.is_pinned() and t.device.type == "cpu"
+            storages.add(t.untyped_storage().data_ptr())
+    # 2 层 × 4 个参数 = 8 张量，但只应有 1 个共享大块（总量 < 64MB 粒度）
+    assert len(storages) == 1
+    for n, p in blocks.named_parameters():
+        if n.startswith(("2.", "3.")):
+            assert torch.equal(p.detach().cpu(), ref[n])
+    # 行为不变：前向仍与常驻一致
+    torch.testing.assert_close(_run_swap(swap, blocks, x), expected)

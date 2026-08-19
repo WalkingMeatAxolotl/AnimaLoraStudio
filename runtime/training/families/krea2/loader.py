@@ -16,6 +16,7 @@ repository.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from training.families.krea2.quant_fp8 import (
     patch_fp8_linears,
 )
 
+
+logger = logging.getLogger(__name__)
 
 _PREFIX_CANDIDATES = (
     "",
@@ -350,6 +353,39 @@ def _swapped_bytes_from_checkpoint(
     return total
 
 
+def _swapped_pinned_bytes(
+    checkpoint: Path,
+    prefixes: tuple[str, ...],
+    normalized_to_source: dict,
+    dtype: torch.dtype,
+) -> int:
+    """换出层**实际将 pin 的**字节数（只读 header），给 ``PinnedPacker`` 做预分配计划。
+
+    与 ``_swapped_bytes_from_checkpoint``（预算护栏口径 = checkpoint 原始字节）
+    的差别：必须镜像 ``load_krea2_model`` 的落盘规则 —— fp8 张量原样 pin（按
+    checkpoint dtype），其余先 cast 到计算 dtype 再 pin（按 ``dtype`` 算）。
+    计划数字要**精确**：高估即白锁（packer 按它一次性预分配），低估则多开溢出块。
+    header 读不出来返回 0（packer 退化为按需开块，不比逐张量 pin 差）。
+    """
+    compute_size = torch.empty(0, dtype=dtype).element_size()
+    total = 0
+    try:
+        with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+            for normalized, source_key in normalized_to_source.items():
+                if not normalized.startswith(prefixes):
+                    continue
+                slice_ = handle.get_slice(source_key)
+                numel = 1
+                for dim in slice_.get_shape():
+                    numel *= dim
+                name = str(slice_.get_dtype()).upper()
+                per_elem = _dtype_size(name) if name.startswith("F8_") else compute_size
+                total += numel * per_elem
+    except Exception:  # noqa: BLE001
+        return 0
+    return total
+
+
 #: safetensors dtype 字符串 → 字节宽度（header 里是字符串不是 torch.dtype）
 _DTYPE_BYTES = {
     "F64": 8, "I64": 8,
@@ -426,10 +462,19 @@ def load_krea2_model(
     checkpoint = _checkpoint_path(path)
 
     swapped_prefixes = _swapped_block_prefixes(config, blocks_to_swap)
+    packer = None
     if swapped_prefixes:
         _check_swap_budget(
             config, blocks_to_swap, dtype, normalized_to_source, checkpoint,
         )
+        # 换出层不逐张量 pin_memory（host allocator 按 2 的幂取整会白锁 1.47×，
+        # 32GB 内存机器直接撞 Windows 可锁定上限），而是按精确总量一次性预分配
+        # 2 的幂大块再切 view —— 预算护栏过了这里才分配，分配失败即 fail-fast
+        from training.block_swap import PinnedPacker
+
+        packer = PinnedPacker(_swapped_pinned_bytes(
+            checkpoint, swapped_prefixes, normalized_to_source, dtype,
+        ))
 
     with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
         for normalized, source_key in normalized_to_source.items():
@@ -445,14 +490,14 @@ def load_krea2_model(
             ):
                 # fp8 原样常驻（显存收益所在），不 cast dtype
                 state_dict[normalized] = (
-                    tensor.pin_memory() if swapped
+                    packer.pin(tensor) if swapped
                     else tensor.to(device=target_device)
                 )
                 if normalized.endswith(".weight"):
                     layer = normalized[: -len(".weight")]
                     fp8_scales.setdefault(layer, None)
             elif swapped:
-                state_dict[normalized] = tensor.to(dtype=dtype).pin_memory()
+                state_dict[normalized] = packer.pin(tensor, dtype=dtype)
             else:
                 state_dict[normalized] = tensor.to(
                     device=target_device,
@@ -466,6 +511,12 @@ def load_krea2_model(
     model.load_state_dict(state_dict, strict=True, assign=True)
     del state_dict
     model.requires_grad_(False)
+    if packer is not None:
+        logger.info(
+            "block swap pinned：权重 %.2f GB 打包进 %d 块，实际锁定 %.2f GB（溢出块 %d）",
+            packer.packed_bytes / 1024 ** 3, packer.num_chunks,
+            packer.allocated_bytes / 1024 ** 3, packer.overflow_chunks,
+        )
     if fp8_scales:
         # scale 恒放计算设备：换出层的权重此刻在 CPU，跟随它会导致前向 device
         # 不匹配（见 patch_fp8_linears docstring）
