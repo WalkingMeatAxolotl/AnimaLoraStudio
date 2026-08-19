@@ -123,7 +123,7 @@ def test_auto_epoch_backup_event_persists_to_db(env) -> None:
         "epoch": 3,
         "step": 300,
     }
-    cb(f"__EVENT__:auto_epoch_backup_written:{json.dumps(payload)}")
+    cb(f"__EVENT__:auto_epoch_backup_written:{json.dumps(payload)}", 0)
 
     # slot 内存态照旧（is_pausable 信号依赖）
     assert slot.last_auto_epoch_state_path == payload["state_path"]
@@ -148,7 +148,7 @@ def test_auto_epoch_backup_event_overwrites_previous(env) -> None:
             "config_path": "/s/auto_epoch_state.config.json",
             "epoch": epoch,
             "step": epoch * 100,
-        }))
+        }), 0)
     task = _get_task(env, tid)
     assert task["last_state_epoch"] == 2
     assert task["last_state_step"] == 200

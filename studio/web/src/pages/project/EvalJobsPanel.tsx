@@ -36,8 +36,8 @@ function useRunningEvalLog(sessions: EvalSessionSummary[]): LogSource | null {
   useEffect(() => {
     if (!taskId) { setBaseLines([]); setLiveLines([]); return }
     let alive = true
-    void api.getLog(taskId)
-      .then((log) => { if (alive) { setBaseLines((log.content || '').split('\n')); setLiveLines([]) } })
+    void api.getLog(taskId, { tail: 1000 })
+      .then((log) => { if (alive) { setBaseLines(log.lines.map((l) => l.text)); setLiveLines([]) } })
       .catch(() => {})
     return () => { alive = false }
   }, [taskId])

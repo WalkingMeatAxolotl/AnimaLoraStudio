@@ -75,7 +75,7 @@ def test_unknown_task_log_returns_empty_not_error(client: TestClient) -> None:
     resp = client.get("/api/logs/999999")
     assert resp.status_code == 200, f"unknown task log expected 200 empty, got {resp.status_code}"
     body = resp.json()
-    assert body == {"task_id": 999999, "content": "", "size": 0}
+    assert body["task_id"] == 999999 and body["lines"] == [] and body["size"] == 0
 
 
 def test_validation_error_returns_422_with_detail(client: TestClient) -> None:

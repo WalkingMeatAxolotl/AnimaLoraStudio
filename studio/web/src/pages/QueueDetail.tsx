@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
+  logPageText,
   type EvalSessionSummary,
   type Task,
   type TaskOutputs,
@@ -666,7 +667,7 @@ function LogTab({ taskId }: { taskId: number }) {
   const setBoth = useCallback((s: string) => { contentRef.current = s; setContent(s) }, [])
 
   const refresh = useCallback(async () => {
-    try { const log = await api.getLog(taskId); setBoth(log.content); setError(null) }
+    try { const log = await api.getLog(taskId, { tail: 2000 }); setBoth(logPageText(log)); setError(null) }
     catch (e) { setError(String(e)) }
   }, [taskId, setBoth])
 
@@ -744,8 +745,8 @@ function useEvalLogSource(
       const latest = sessions[0] ?? null
       setSession(latest)
       if (!latest?.task_id) { setBaseLines([]); return }
-      const log = await api.getLog(latest.task_id)
-      setBaseLines((log.content || '').split('\n'))
+      const log = await api.getLog(latest.task_id, { tail: 1000 })
+      setBaseLines(log.lines.map((l) => l.text))
       setLiveLines([])  // 已并进 base，避免与 SSE 追加的重复
     } catch {
       // 辅助信息，拉失败不打扰

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 206,
+  "count": 207,
   "routes": [
     {
       "path": "/",
@@ -263,6 +263,14 @@
         "GET"
       ],
       "name": "get_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/logs/{task_id}/raw",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_log_raw",
       "type": "APIRoute"
     },
     {
