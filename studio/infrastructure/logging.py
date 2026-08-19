@@ -6,15 +6,19 @@ C3：完整 setup_logging + JsonLineFormatter + HumanConsoleFormatter + silence 
 C5：ContextVar trace_id + Filter（待加）
 C6：跨进程 env / db.tasks.request_trace_id（待加）
 
-使用规则（ADR-0009 §未来开发指南简版）：
-    每个进程入口（webui / cli / worker）开头调一次 `setup_logging(process=...)`。
-    业务代码模块顶 `logger = logging.getLogger(__name__)`，调 `.info/.warning/.exception`。
+使用规则（ADR-0009 §未来开发指南简版 + docs/design/logging-target-state.md）：
+    每个进程入口（webui / cli / worker / runtime 脚本）开头调一次 `setup_logging(process=...)`。
+    业务代码模块顶 `logger = logging.getLogger(__name__)`，调 `.debug/.info/.warning/.exception`；
+    debug 永远被记录（自家命名空间恒 DEBUG），显示端按级别过滤。
     不要在 import time 调 setup_logging（破 import smoke test）。
+    不用裸 print 写日志内容——白名单只有 stdout 协议行、tty 交互进度、CLI banner
+    （tests/test_print_whitelist.py 锁死）。
 
 `process` 标识规范：
     "webui"                 webui server
     "cli:<subcmd>"          CLI run / dev / build / test
     "worker:<kind>/<id>"    worker subprocess（kind=download/tag/preprocess/reg_build）
+    "anima_train" / "anima_daemon" / "anima_generate" / "anima_reg_ai"  runtime 脚本
     "client"                前端上报（C 系列 PR-3 才用到）
 """
 from __future__ import annotations
@@ -25,6 +29,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 import traceback as _traceback
 import uuid
@@ -59,9 +64,35 @@ _task_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
     "studio_task_id", default=None
 )
 
+# 终端可读性开关（docs/design/logging-target-state.md §3.1）：只管 console
+# handler 的级别，不管记录。被 studio 拉起的子进程 stderr 就是 run.log，
+# supervisor / daemon spawn 时注入 DEBUG 让调试行落盘；人手跑默认 INFO。
+LOG_LEVEL_ENV = "ANIMA_LOG_LEVEL"
+DEFAULT_CONSOLE_LEVEL = "INFO"
+
+# 自家代码的顶层 logger 命名空间：这些永远 DEBUG（记录不过滤，显示才过滤）。
+# root 保持 INFO——第三方库有多少 debug 洪水没人数得清（python-multipart /
+# charset_normalizer / numba …），只给自己人开闸。runtime 脚本裸跑时顶层包是
+# training / utils / anima_*；tests 以 runtime.training 导入时多一层 runtime。
+OWN_LOGGER_NAMESPACES = (
+    "studio",
+    "training",
+    "utils",
+    "runtime",
+    "modeling",
+    "train_monitor",
+    "anima_train",
+    "anima_daemon",
+    "anima_generate",
+    "anima_reg_ai",
+    # 兜底：任何以脚本 / `python -m` 方式跑的自家模块若仍用 getLogger(__name__)
+    "__main__",
+)
+
 # 第三方库 logger 静音 list — root level=INFO 时这些库会大量出 INFO 噪音。
 # silence list 必须显式，避免漏一条让 stderr 爆 10×（B audit N.1 / A round2 §5.2）。
-# 在 setup_logging 末尾应用。
+# 在 setup_logging 末尾应用。子进程另有 TRANSFORMERS_VERBOSITY=error 等 env
+# 兜底（supervisor spawn 注入），主进程内的 tagger / eval 推理只靠这张表。
 _NOISY_LOGGERS = (
     "asyncio",
     "urllib3",
@@ -72,6 +103,21 @@ _NOISY_LOGGERS = (
     "modelscope",
     "huggingface_hub",
     "filelock",
+    "transformers",
+    "diffusers",
+    "accelerate",
+    "peft",
+    "wandb",
+    "spandrel",
+    "python_multipart",
+    "multipart",
+    "charset_normalizer",
+    "numba",
+    "fsspec",
+    "watchfiles",
+    # uvicorn access log：每个请求一行，与业务日志抢 studio.log 的 50MB 配额；
+    # uvicorn / uvicorn.error 的启动与错误信息保留 INFO。
+    "uvicorn.access",
 )
 
 # ── trace_id 公开 API ────────────────────────────────────────────────────
@@ -207,9 +253,13 @@ class JsonLineFormatter(logging.Formatter):
 
 
 class HumanConsoleFormatter(logging.Formatter):
-    """人读 console format，给 CLI / dev terminal。
+    """人读 console format —— 也是跨进程的**行契约**（docs/design/logging-target-state.md §3.2）。
 
     `2026-05-28 14:32:18.453 INFO  studio.api.routers.queue: queued task=42`
+
+    webui / cli / worker / runtime 脚本的 stderr 全用它，run.log 每行因此可被
+    LOG_LINE_RE 解析出 ts / level / logger；不匹配行头的行（traceback、多行消息）
+    是上一条记录的续行。改这里的格式 = 改契约，前端解析器要跟着改。
     """
 
     def __init__(self) -> None:
@@ -217,6 +267,16 @@ class HumanConsoleFormatter(logging.Formatter):
             fmt="%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+
+
+# 行契约的解析正则：`<ts> <LEVEL 左对齐补到 5>[空格]<logger>: <msg>`。`-5s` 只补
+# 不截：INFO 后跟两个空格，WARNING / CRITICAL 全名后跟一个空格。
+LOG_LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) "
+    r"(?P<level>[A-Z]+)\s+"
+    r"(?P<logger>[^\s:]+): "
+    r"(?P<msg>.*)$"
+)
 
 
 # ── Public API ────────────────────────────────────────────────────────────
@@ -262,40 +322,54 @@ def make_studio_log_handler(
     return handler
 
 
+def console_level_from_env(default: str = DEFAULT_CONSOLE_LEVEL) -> int:
+    """`ANIMA_LOG_LEVEL` → logging 级别；未设 / 非法值回落 default。"""
+    raw = os.environ.get(LOG_LEVEL_ENV, "").strip().upper()
+    lvl = getattr(logging, raw, None) if raw else None
+    if not isinstance(lvl, int):
+        lvl = getattr(logging, default.upper(), logging.INFO)
+    return lvl
+
+
 def setup_logging(
     process: str,
     *,
     log_dir: Path | None = None,
-    level: str = "INFO",
+    level: str | None = None,
     console: str | bool = "auto",
     file: bool = True,
-    extra_handlers: list[logging.Handler] | None = None,
 ) -> None:
-    """安装全局 logging 配置。每个进程入口调一次（webui / cli / worker）。
+    """安装全局 logging 配置。每个进程入口调一次（webui / cli / worker / runtime 脚本）。
 
     幂等：同一 `process` 名重复调 noop（防 supervisor 重启 / 测试 reload 累加 handler）。
+
+    级别模型（docs/design/logging-target-state.md §3.1「记录不过滤，显示才过滤」）：
+      - 自家命名空间（OWN_LOGGER_NAMESPACES）永远 DEBUG；root 保持 INFO，第三方库
+        不跟着放闸；_NOISY_LOGGERS 再压到 WARNING。
+      - file handler 不设级别：自家 DEBUG + 第三方 INFO+ 全落 studio.log。
+      - console handler 级别 = `level` 参数 > env ANIMA_LOG_LEVEL > INFO。这是唯一的
+        「终端可读性」旋钮：webui/cli 的 stderr 默认只看 INFO+；被 studio 拉起的
+        子进程 stderr 就是 run.log，spawn 方注入 ANIMA_LOG_LEVEL=DEBUG 让调试行落盘。
 
     行为：
       1. reconfigure_console_utf8（Windows 编码兜底）
       2. 清 root logger 现有 handler（防累加）
       3. （可选）装 RotatingFileHandler 到 {log_dir}/studio.log（JSON line, 50MB×5）
-      4. 装 console handler（auto/json/bool 三态，详 below）
-      5. 装 extra_handlers（worker 用来塞 jobs/<id>.log handler）
-      6. 静音第三方库（asyncio/urllib3/PIL/...）→ WARNING
-      7. 接管 uvicorn.access / uvicorn.error logger（走我们的 root handler 而非 uvicorn 默认）
-      8. 装 sys.excepthook → logger.critical 记未捕获异常
-      9. 装 threading.excepthook → 同上（仅 Python 3.8+）
+      4. 装 console handler（Human 格式到 stderr；console="json" 才出 JSON）
+      5. 自家命名空间 DEBUG；第三方静音表 → WARNING（含 uvicorn.access）
+      6. 接管 uvicorn / uvicorn.error / uvicorn.access logger（走 root handler）
+      7. 装 sys.excepthook / threading.excepthook → logger.critical
 
     Args:
-        process: 进程标识（"webui" / "cli:run" / "worker:tag/42" / ...）
+        process: 进程标识（"webui" / "cli:run" / "worker:tag/42" / "anima_train" / ...）
         log_dir: studio.log 落盘目录；默认读 env ANIMA_LOG_DIR，否则 paths.LOGS_DIR
-        level: root logger level（"DEBUG" / "INFO" / "WARNING" / "ERROR"）
-        console: "auto" = stderr isatty → Human, 否则 JSON；
-                 "json" 强制 JSON；True 强制 Human；False 不装 console
-        file: 是否装 file handler 到 studio.log；webui 默认 True；
-              worker / cli 应传 False（worker 走 stdout 进 supervisor 重定向单写；
-              CLI 5s 短命周期落盘价值低）。0.13.x ADR-0009 §还的债"演进双写"后 worker 改 True
-        extra_handlers: 额外装到 root 的 handler（worker 用来塞 jobs/<id>.log）
+        level: console 级别显式覆盖（"DEBUG"/"INFO"/...）；None = 读 env
+        console: "auto" / True → Human 格式到 stderr；"json" → JSON line 到 stderr；
+                 False 不装 console。（"auto" 曾按 isatty 切 JSON——pipe 下与
+                 studio.log 内容完全重复且终端不可读，已改为恒 Human。）
+        file: 是否装 file handler 到 studio.log；只有 webui 传 True。
+              worker / runtime 脚本的 stderr 由 supervisor 重定向到 run.log，
+              各写各的（设计 D2：子进程不落 studio.log）。
     """
     # pytest 全局 fixture 设 ANIMA_LOGGING_NO_BOOTSTRAP=1 让业务代码 bootstrap
     # 调用全部 noop，避免污染 caplog / 反复装 handler；测 setup_logging 本身的
@@ -312,9 +386,9 @@ def setup_logging(
     # 清掉默认 / 累加的 handler（pytest fixture 反复调时关键）
     for h in list(root.handlers):
         root.removeHandler(h)
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    root.setLevel(logging.INFO)
 
-    # 1. 文件 handler — JSON line 到 studio.log（worker / cli 不装）
+    # 1. 文件 handler — JSON line 到 studio.log（worker / cli / runtime 不装）
     if file:
         effective_log_dir = log_dir or _resolve_log_dir()
         root.addHandler(make_studio_log_handler(log_dir=effective_log_dir, process=process))
@@ -322,6 +396,9 @@ def setup_logging(
     # 2. console handler
     console_handler = _build_console_handler(console, process)
     if console_handler is not None:
+        console_handler.setLevel(
+            getattr(logging, level.upper(), logging.INFO) if level else console_level_from_env()
+        )
         root.addHandler(console_handler)
 
     # ContextFilter — 装到每个 handler 而非 logger。
@@ -332,23 +409,20 @@ def setup_logging(
     for h in root.handlers:
         h.addFilter(_ctx_filter)
 
-    # 3. extra handlers（worker job log 等）— 同样装 ContextFilter
-    for h in extra_handlers or ():
-        h.addFilter(ContextFilter())
-        root.addHandler(h)
-
-    # 4. 第三方库静音（防 root=INFO 后 stderr 噪音爆 10×）
+    # 3. 自家命名空间放到 DEBUG（记录不过滤）；第三方静音到 WARNING
+    for name in OWN_LOGGER_NAMESPACES:
+        logging.getLogger(name).setLevel(logging.DEBUG)
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    # 5. uvicorn logger 接管 — 让 access log 跟业务 log 同格式同 trace_id
+    # 4. uvicorn logger 接管 — 让 access log 跟业务 log 同格式同 trace_id
     #    (B audit 跨问题 C / A round2 §4.1 盲点 2)
     for uname in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         u = logging.getLogger(uname)
         u.handlers = []        # 清掉 uvicorn 自带 StreamHandler
         u.propagate = True     # 让 root handler 接管
 
-    # 6. 未捕获异常路由进 logger
+    # 5. 未捕获异常路由进 logger
     _install_excepthooks()
 
 
@@ -366,12 +440,7 @@ def _resolve_log_dir() -> Path:
 def _build_console_handler(console: str | bool, process: str) -> logging.Handler | None:
     if console is False:
         return None
-    if console == "auto":
-        use_json = not sys.stderr.isatty()
-    elif console == "json":
-        use_json = True
-    else:  # True 或其它
-        use_json = False
+    use_json = console == "json"
     h = logging.StreamHandler(sys.stderr)
     h.setFormatter(JsonLineFormatter(process) if use_json else HumanConsoleFormatter())
     return h
@@ -438,7 +507,8 @@ def _reset_for_tests() -> None:
 # 编码兜底是无条件常量，导出给 workers/_base.py 旧 import 兼容
 __all__ = [
     "STUDIO_LOG_NAME", "STUDIO_LOG_MAX_BYTES", "STUDIO_LOG_BACKUP_COUNT",
-    "TRACE_HEADER", "TRACE_ENV", "PROCESS_ENV",
+    "TRACE_HEADER", "TRACE_ENV", "PROCESS_ENV", "LOG_LEVEL_ENV",
+    "OWN_LOGGER_NAMESPACES", "console_level_from_env", "LOG_LINE_RE",
     "JsonLineFormatter", "HumanConsoleFormatter", "ContextFilter",
     "make_studio_log_handler", "setup_logging", "reconfigure_console_utf8",
     "new_trace_id", "bind_trace_id", "reset_trace_id", "get_trace_id",

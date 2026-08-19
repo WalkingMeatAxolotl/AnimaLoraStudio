@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ...infrastructure.logging import LOG_LEVEL_ENV, PROCESS_ENV, TRACE_ENV, new_trace_id
 from ...paths import REPO_ROOT
 from .. import generate_storage
 from ..runtime import xformers as _xformers_svc
@@ -285,6 +286,12 @@ class InferenceDaemon:
         env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         env.setdefault("TRANSFORMERS_VERBOSITY", "error")
         env.setdefault("DIFFUSERS_VERBOSITY", "error")
+        # daemon 的 stderr 进 ring buffer 给 UI 抽屉：记录不过滤、显示才过滤
+        # （docs/design/logging-target-state.md D1），console 级别 DEBUG。
+        # trace / process 名与 supervisor 子进程对齐（之前 daemon 完全游离）。
+        env.setdefault(LOG_LEVEL_ENV, "DEBUG")
+        env.setdefault(TRACE_ENV, f"bg-{new_trace_id()}")
+        env.setdefault(PROCESS_ENV, "anima_daemon")
         # xformers 的 triton 探测会把无害的 ImportError traceback 打进 daemon
         # 日志抽屉；本 app 的 xformers 路径不用 triton kernel，无条件短路。
         _xformers_svc.disable_triton_probe(env)

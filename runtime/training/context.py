@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,9 @@ import torch
 
 if TYPE_CHECKING:
     from training.losses.protocol import LossProtocol
+
+# ctx.emit 在非 tty 下的出口：采样 / 保存 / resume / 暂停等 user-facing 提示
+_emit_logger = logging.getLogger("training.emit")
 
 
 @dataclass
@@ -147,16 +151,19 @@ class TrainingContext:
     def emit(self, msg: str) -> None:
         """打印一条 user-facing 消息，按当前进度显示模式分流。
 
-        移植自原 main() 内 emit 闭包；行为完全一致。
+        tty 交互（rich live / progress / plain）三路不变；非 tty（studio spawn 的
+        pipe）走 logger，与 run.log 其它行同契约（设计 D3：进度/提示也是日志）。
         """
         if self.use_plain:
-            print()
+            print()  # 冲掉 loop 的 `\r` 进度行（tty 交互）
         if self.live:
             self.live.console.print(msg)
         elif self.use_rich:
             self.progress.console.print(msg)
-        else:
+        elif self.use_plain:
             print(msg)
+        else:
+            _emit_logger.info(msg)
 
     def get_next_sample_prompt(self) -> str:
         """取下一个采样提示词（轮换；sample_prompts 为空则返回默认）。"""

@@ -25,6 +25,7 @@ import base64
 import io
 import json
 import logging
+import os
 import random
 import sys
 import threading
@@ -64,13 +65,10 @@ try:
 except Exception:
     pass
 
-# 日志走 stderr，stdout 留给协议
-logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stderr,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+# 日志走 stderr（setup_logging 的 console handler 即 stderr），stdout 留给协议
+from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E402
+
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_daemon", file=False, console=True)
 logger = logging.getLogger("anima_daemon")
 
 

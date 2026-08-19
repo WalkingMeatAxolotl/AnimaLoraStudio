@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import sys
 from pathlib import Path
@@ -50,11 +51,9 @@ from studio.services.inference.core import (  # noqa: E402
     release_vae_after_decode,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E402
+
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_generate", file=False, console=True)
 logger = logging.getLogger("anima_generate")
 
 
@@ -279,7 +278,7 @@ def main() -> None:
                 if _update_monitor:
                     _update_monitor(sample_path=str(out_path), step=img_idx + 1)
             except Exception as e:
-                logger.error(f"生成失败 [{img_idx + 1}/{total}]: {e}")
+                logger.exception(f"生成失败 [{img_idx + 1}/{total}]: {e}")
 
             img_idx += 1
 
@@ -469,7 +468,7 @@ def _run_xy_matrix(
                         xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                     )
             except Exception as e:
-                logger.error(f"XY [{xi},{yi}] 失败: {e}")
+                logger.exception(f"XY [{xi},{yi}] 失败: {e}")
 
             img_idx += 1
 

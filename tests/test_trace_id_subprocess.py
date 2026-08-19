@@ -269,3 +269,90 @@ def test_worker_main_generates_trace_when_env_missing(
 
     assert captured["trace"] is not None
     assert len(captured["trace"]) == 24, "兜底应是 new_trace_id (24 字符 hex)"
+
+
+# ── 日志目标态刀 1：_spawn_job / daemon / _popen 的 env 注入 ─────────────────
+
+
+def test_spawn_job_injects_trace_and_process_env(tmp_path: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """job 路径之前完全不注入 trace/process；现与 _spawn_task 对齐（bg- 兜底）。"""
+    import contextlib
+
+    from studio.supervisor.core import Supervisor
+
+    captured_env: dict = {}
+
+    def fake_popen(self_, cmd, log_fp, extra_env=None):
+        captured_env.update(extra_env or {})
+        proc = MagicMock(); proc.pid = 3; proc.poll = lambda: None
+        return proc
+
+    monkeypatch.setattr(Supervisor, "_popen", fake_popen)
+    monkeypatch.setattr(Supervisor, "_make_job_log_callback",
+                        lambda self_, *a: (lambda line: None))
+    monkeypatch.setattr("studio.supervisor.core.LogTailer",
+                        lambda *a, **kw: MagicMock(start=lambda: None))
+    monkeypatch.setattr("studio.supervisor.core.db.connection_for",
+                        lambda *_a, **_k: contextlib.nullcontext(MagicMock()))
+    monkeypatch.setattr("studio.supervisor.core.project_jobs.mark_running", lambda *a, **k: None)
+
+    sup = Supervisor(on_event=lambda evt: None, job_cmd_builder=lambda job: ["python", "-c", "0"])
+    job = {"id": 9, "kind": "tag", "project_id": 1, "version_id": None,
+           "log_path": str(tmp_path / "run.log")}
+    sup._spawn_job(MagicMock(name="DATA"), job)
+
+    assert captured_env[TRACE_ENV].startswith("bg-")
+    assert captured_env[PROCESS_ENV] == "worker:tag/9"
+
+
+def test_popen_injects_debug_console_level_by_default(tmp_path: Path,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """子进程 stderr 即 run.log：记录不过滤 → 注入 ANIMA_LOG_LEVEL=DEBUG；外部显式设的值不覆盖。"""
+    from studio.infrastructure.logging import LOG_LEVEL_ENV
+    from studio.supervisor import core as core_mod
+
+    seen: dict = {}
+
+    class _FakeProc:
+        pid = 1
+
+    def fake_popen(cmd, **kw):
+        seen.update(kw["env"])
+        return _FakeProc()
+
+    monkeypatch.setattr(core_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(core_mod._secrets, "load", lambda: MagicMock(
+        training=MagicMock(ram_guard=True), wandb=MagicMock(enabled=False)))
+    sup = core_mod.Supervisor(on_event=lambda evt: None)
+
+    monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+    sup._popen(["python", "-c", "0"], open(tmp_path / "a.log", "wb"))
+    assert seen[LOG_LEVEL_ENV] == "DEBUG"
+
+    seen.clear()
+    monkeypatch.setenv(LOG_LEVEL_ENV, "WARNING")
+    sup._popen(["python", "-c", "0"], open(tmp_path / "b.log", "wb"))
+    assert seen[LOG_LEVEL_ENV] == "WARNING"
+
+
+def test_daemon_start_injects_log_level_trace_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    from studio.infrastructure.logging import LOG_LEVEL_ENV
+    from studio.services.inference import daemon as daemon_mod
+
+    seen: dict = {}
+
+    def fake_popen(cmd, **kw):
+        seen.update(kw["env"])
+        raise RuntimeError("stop here")  # 不真起进程
+
+    monkeypatch.setattr(daemon_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+    monkeypatch.delenv(TRACE_ENV, raising=False)
+    monkeypatch.delenv(PROCESS_ENV, raising=False)
+    d = daemon_mod.InferenceDaemon()
+    with pytest.raises(RuntimeError):
+        d.start()
+    assert seen[LOG_LEVEL_ENV] == "DEBUG"
+    assert seen[TRACE_ENV].startswith("bg-")
+    assert seen[PROCESS_ENV] == "anima_daemon"

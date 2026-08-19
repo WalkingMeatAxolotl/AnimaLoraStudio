@@ -40,7 +40,9 @@ from studio.services import (
 )
 from studio.services.projects import projects, versions
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.eval_session_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.eval_session_worker")
 
 # runner key → (跑它的函数, 从 secrets 取默认模型名的取值器, 阶段级共享 scorer)
 #
@@ -73,21 +75,21 @@ _RUNNERS: dict[
 
 def run(task_id: int) -> int:
     def progress(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
         if not task:
-            progress(f"[error] task {task_id} not found")
+            logger.error("task %s not found", task_id)
             return 1
         params = task.get("params_decoded") or {}
         session_id = int(params.get("session_id") or 0)
         if not session_id:
-            progress(f"[error] task {task_id} has no session_id")
+            logger.error("task %s has no session_id", task_id)
             return 1
         session = eval_session.get_session(conn, session_id)
         if session is None:
-            progress(f"[error] eval session {session_id} not found")
+            logger.error("eval session %s not found", session_id)
             return 1
         project = projects.get_project(conn, int(session["project_id"] or 0))
         version = versions.get_version(conn, int(session["version_id"] or 0))
@@ -95,7 +97,7 @@ def run(task_id: int) -> int:
     if not project or not version:
         with db.connection_for() as conn:
             _fail(conn, session_id, "project / version 不存在")
-        progress("[error] project or version missing")
+        logger.error("project or version missing")
         return 1
 
     vdir = versions.version_dir(

@@ -211,7 +211,7 @@ class LycorisAdapter:
             self.network.apply_to()
 
         if _dropout_filter.dropped:
-            logger.info(
+            logger.warning(
                 "LoKr/LoHa 不支持 normal dropout（lora_dropout=%s），已静默忽略；"
                 "上游逐层告警 %d 条已收敛。rank_dropout/module_dropout 不受影响。",
                 self.dropout,

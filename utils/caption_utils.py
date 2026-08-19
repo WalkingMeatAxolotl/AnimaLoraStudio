@@ -7,10 +7,13 @@ Caption 处理工具
 from __future__ import annotations
 
 import json
+import logging
 import random
 import sys
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # 兼容 `python utils/caption_utils.py` 直接当脚本跑：python 默认只把脚本目录加入
 # sys.path，导致 studio.* 不可见。手动把仓库根注入一次，作为模块导入时 sys.path
@@ -264,7 +267,7 @@ def batch_convert_json(
             
             count += 1
         except Exception as e:
-            print(f"Error converting {json_path}: {e}")
+            logger.warning(f"Error converting {json_path}: {e}")
     
     return count
 

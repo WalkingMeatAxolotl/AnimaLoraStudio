@@ -8,6 +8,7 @@ download_flat[_ms] 实际下载，调 paths.py / families 拿 target Path 和模
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -66,6 +67,8 @@ from .paths import (
 )
 from . import sources as _sources
 from .sources import MS_ANIMA_TEXT_ENCODER_PATH
+
+logger = logging.getLogger(__name__)
 
 # 提示：跨文件调用 download_flat[_ms] / _get_download_source / _resolve_endpoint /
 # _ms_wd14_repo_id 一律走 _sources.X(...) —— 这样测试 monkeypatch
@@ -555,10 +558,11 @@ def start_download_async(
             ds.log.append(line)
             if len(ds.log) > 200:
                 del ds.log[:-200]
-        # 回显到 backend stdout —— UI ring buffer 容量 200 行；长下载早期日志会被
-        # 截掉，print 让 studio_*.log / 终端保留完整流，调试 / oncall 排错时能直接 grep。
-        # 锁外执行避免持锁做 I/O 拖慢其它 download tasks 写日志。
-        print(line, flush=True)
+        # 回显到 backend logger —— UI ring buffer 容量 200 行；长下载早期日志会被
+        # 截掉，logger.debug 让 studio.log 保留完整流（自家 logger 恒 DEBUG，
+        # 记录不过滤），终端默认 INFO 不刷屏；调试 / oncall 排错时直接 grep
+        # studio.log。锁外执行避免持锁做 I/O 拖慢其它 download tasks 写日志。
+        logger.debug(line)
 
     def _run() -> None:
         bus.publish({
