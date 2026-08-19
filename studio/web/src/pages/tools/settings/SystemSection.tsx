@@ -36,7 +36,8 @@ import {
 } from '../../../lib/versionPanel'
 import i18n from '../../../i18n'
 import { textInputClass } from './constants'
-import { SettingsField, SettingsSection } from './fields'
+import { Bool, SettingsField, SettingsSection } from './fields'
+import { ensureLogDebugDefaultLoaded, setLogDebugDefaultCache } from '../../../lib/logDebugPref'
 import {
   FlashAttentionSection,
   ONNXRuntimeSection,
@@ -71,8 +72,55 @@ export function SystemSection() {
       <VersionSection />
       <GpuSection />
       <StorageSection />
+      <LogsSection />
       <ServiceSection />
     </>
+  )
+}
+
+
+// ── 日志 Section（docs/design/logging-target-state.md D1）──────────────────
+//
+// 「默认显示调试日志」只管日志视图的**默认**过滤：run.log / daemon ring 恒记
+// DEBUG，每个日志视图有自己的「调试」开关（不持久化）以此为初值——报错后在
+// 视图里临时打开就能看到调试行，不用重跑。存 secrets.system.log_debug_default。
+export function LogsSection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const { runSave } = useSettingsData()
+  const [value, setValue] = useState<boolean>(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    void ensureLogDebugDefaultLoaded()
+    void api.getSecrets().then((sec) => setValue(!!sec.system?.log_debug_default)).catch(() => { /* 显示用 */ })
+  }, [])
+
+  const save = async (next: boolean) => {
+    setSaving(true)
+    const prev = value
+    setValue(next)
+    try {
+      await runSave(() => api.updateSecrets({ system: { log_debug_default: next } }))
+      setLogDebugDefaultCache(next)
+      toast(next ? t('settings.logs.debugDefaultOn') : t('settings.logs.debugDefaultOff'), 'success')
+    } catch (e) {
+      setValue(prev)
+      toast(String(e), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <SettingsSection id="logs" title={t('settings.logs.sectionTitle')}>
+      <SettingsField
+        label={t('settings.logs.debugDefaultLabel')}
+        helpTooltip={<p>{t('settings.logs.debugDefaultHelp')}</p>}
+      >
+        <Bool value={value} onChange={(v) => void save(v)} disabled={saving} />
+      </SettingsField>
+    </SettingsSection>
   )
 }
 

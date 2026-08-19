@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useState,
   type ReactNode,
 } from 'react'
@@ -62,20 +61,10 @@ export function useToast(): ToastApi {
   return ctx
 }
 
-/** 把任意 throw 的错误转成 toast，避免 alert/console。 */
-export function useReportError() {
-  const { toast } = useToast()
-  return useCallback(
-    (e: unknown) => toast(e instanceof Error ? e.message : String(e), 'error'),
-    [toast]
-  )
-}
+const _noopToast: ToastApi = { toast: () => {} }
 
-/** 副作用：当 deps 变化且 cond 真，弹一条 toast。常用于事件提示。 */
-export function useToastOn(cond: boolean, message: string, kind: Kind = 'info') {
-  const { toast } = useToast()
-  useEffect(() => {
-    if (cond) toast(message, kind)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cond])
+/** 可选版：不在 ToastProvider 内（单测 / 独立挂载）时退化为 no-op，不抛。
+ *  给可复用的展示组件（LogView）用——它的 toast 只是反馈，不是功能前提。 */
+export function useOptionalToast(): ToastApi {
+  return useContext(Ctx) ?? _noopToast
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../../api/client'
 import { useEventStream } from '../../../lib/useEventStream'
-import { useToast } from '../../../components/Toast'
+import LogView from '../../../components/LogView'
 
 interface LogEntry {
   ts: number
@@ -10,12 +10,17 @@ interface LogEntry {
   line: string
 }
 
+const RING_MAX = 2000
+
 /** daemon stderr ring buffer 抽屉。
  *
  * - 从底部向上滑出 40vh，z-index 高，挡住下方 Generate 页表面但 layout 不占空间
  * - 隐藏时 translateY(100%) 完全不可见（不只是 visibility:hidden，整块抽屉离开视口）
- * - 首次打开 GET /api/generate/daemon/logs 拉历史，之后靠 SSE daemon_log_line 增量
+ * - 首次打开 GET /api/generate/daemon/logs 拉历史，之后靠 SSE daemon_log_line 增量；
+ *   SSE 重连（onOpen）按 since_seq 补拉，断线期间的行不丢
  * - 关闭后再开：只显示历史 + 此后增量；不会丢内容（ring buffer maxlen=2000）
+ * - 内容区是统一 LogView：daemon 经 setup_logging 写 stderr，行契约同 run.log，
+ *   按级别着色 / 调试开关 / 复制；「清屏」只清客户端显示
  */
 export default function DaemonLogDrawer({
   open, onClose,
@@ -24,29 +29,33 @@ export default function DaemonLogDrawer({
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const { toast } = useToast()
   const [entries, setEntries] = useState<LogEntry[]>([])
-  const [autoScroll, setAutoScroll] = useState(true)
   const seqRef = useRef(0)
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const openRef = useRef(open)
+  openRef.current = open
 
-  // 打开时拉历史；关闭不清空（保留下次打开时立即可见）
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
+  // 从 since_seq 补拉（首次打开 / 重连）
+  const fill = useCallback(() => {
     void api.getDaemonLogs(seqRef.current).then((r) => {
-      if (cancelled) return
       if (r.entries.length > 0) {
-        setEntries((prev) => [...prev, ...r.entries])
+        const minSeq = seqRef.current
+        setEntries((prev) => {
+          const next = [...prev, ...r.entries.filter((e) => e.seq >= minSeq)]
+          return next.length > RING_MAX ? next.slice(-RING_MAX) : next
+        })
         seqRef.current = r.next_seq
       } else if (seqRef.current === 0) {
         seqRef.current = r.next_seq
       }
     }).catch(() => { /* 不阻塞 */ })
-    return () => { cancelled = true }
-  }, [open])
+  }, [])
 
-  // SSE 增量
+  // 打开时拉历史；关闭不清空（保留下次打开时立即可见）
+  useEffect(() => {
+    if (open) fill()
+  }, [open, fill])
+
+  // SSE 增量 + 重连补拉
   useEventStream(useCallback((evt) => {
     if (evt.type !== 'daemon_log_line') return
     const seq = typeof evt.seq === 'number' ? evt.seq : seqRef.current
@@ -59,106 +68,41 @@ export default function DaemonLogDrawer({
         line: String(evt.line ?? ''),
       }]
       // 保护内存：客户端也限 2000 行
-      return next.length > 2000 ? next.slice(-2000) : next
+      return next.length > RING_MAX ? next.slice(-RING_MAX) : next
     })
-  }, []))
+  }, []), { onOpen: () => { if (openRef.current) fill() } })
 
-  // auto-scroll 到底
-  useEffect(() => {
-    if (!autoScroll || !open) return
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [entries, autoScroll, open])
-
-  const handleClear = () => {
-    setEntries([])
-  }
-
-  const handleCopy = async () => {
-    const text = entries.map((e) => e.line).join('\n')
-    try {
-      await navigator.clipboard.writeText(text)
-      toast(t('generate.logDrawerCopied'), 'success')
-    } catch {
-      toast(t('queueDetail.copyFailed'), 'error')
-    }
-  }
+  const lines = entries.map((e) => e.line)
 
   return (
     <div
       aria-hidden={!open}
-      style={{
-        position: 'fixed',
-        left: 0, right: 0, bottom: 0,
-        height: '40vh',
-        background: 'var(--bg-elevated)',
-        borderTop: '1px solid var(--border-default)',
-        boxShadow: open ? '0 -8px 32px rgba(0,0,0,0.4)' : 'none',
-        transform: open ? 'translateY(0)' : 'translateY(100%)',
-        transition: 'transform 220ms ease',
-        zIndex: 60,
-        display: 'flex',
-        flexDirection: 'column',
-        pointerEvents: open ? 'auto' : 'none',
-      }}
+      className={`fixed inset-x-0 bottom-0 h-[40vh] z-[60] flex flex-col bg-elevated border-t border-subtle transition-transform duration-200 ease-out ${
+        open ? 'translate-y-0 shadow-2xl pointer-events-auto' : 'translate-y-full pointer-events-none'
+      }`}
     >
-      <header
-        style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '8px 16px',
-          borderBottom: '1px solid var(--border-subtle)',
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontSize: 'var(--t-sm)', fontWeight: 600, color: 'var(--fg-primary)' }}>
-          {t('generate.logDrawerTitle')}
-        </span>
-        <span style={{ fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)', fontFamily: 'var(--font-mono)' }}>
-          {entries.length}
-        </span>
-        <span style={{ flex: 1 }} />
-        <label className="flex items-center gap-1 text-xs text-fg-secondary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={autoScroll}
-            onChange={(e) => setAutoScroll(e.target.checked)}
-          />
-          {t('generate.logDrawerAutoScroll')}
-        </label>
-        <button className="btn btn-ghost btn-sm" onClick={handleCopy} disabled={entries.length === 0}>
-          {t('generate.logDrawerCopy')}
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={handleClear} disabled={entries.length === 0}>
-          {t('generate.logDrawerClear')}
-        </button>
+      <header className="flex items-center gap-2.5 px-4 py-2 border-b border-subtle shrink-0">
+        <span className="text-sm font-semibold text-fg-primary">{t('generate.logDrawerTitle')}</span>
+        <span className="text-xs font-mono text-fg-tertiary">{entries.length}</span>
+        <span className="flex-1" />
         <button className="btn btn-ghost btn-sm" onClick={onClose}>
           {t('generate.logDrawerClose')}
         </button>
       </header>
-      <div
-        ref={scrollRef}
-        style={{
-          flex: 1, minHeight: 0,
-          overflowY: 'auto',
-          padding: '8px 16px',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 'var(--t-xs)',
-          lineHeight: 1.5,
-          background: 'var(--bg-sunken)',
-        }}
-      >
-        {entries.length === 0 ? (
-          <div style={{ color: 'var(--fg-tertiary)', fontStyle: 'italic' }}>
-            {t('generate.logDrawerEmpty')}
-          </div>
-        ) : (
-          entries.map((e) => (
-            <div key={e.seq} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--fg-primary)' }}>
-              {e.line}
-            </div>
-          ))
-        )}
-      </div>
+      {/* 关着时不渲染内容区，省掉隐藏抽屉的解析 / 滚动 */}
+      {open && (
+        <LogView
+          className="flex-1 min-h-0 px-4 pt-2 pb-2"
+          lines={lines}
+          status="live"
+          emptyText={t('generate.logDrawerEmpty')}
+          extraActions={
+            <button className="btn btn-ghost btn-sm" onClick={() => setEntries([])} disabled={entries.length === 0}>
+              {t('generate.logDrawerClear')}
+            </button>
+          }
+        />
+      )}
     </div>
   )
 }

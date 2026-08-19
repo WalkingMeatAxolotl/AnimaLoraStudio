@@ -1,6 +1,6 @@
 # 日志体系目标态：统一行契约 + 显示级过滤
 
-状态：四项关键决策已拍板（2026-08-19）；**刀 1 已合（#507）、刀 2 已实施**（分支 feat/logging-read-surface）。分刀见 §6。
+状态：四项关键决策已拍板（2026-08-19）；**刀 1（#507）/ 刀 2（#508）已合，刀 3 已实施**（分支 feat/logging-logview）。分刀见 §6。
 触发：issue #505 的切桶释放日志无处可去 → 全仓盘点发现 8 处 `logger.debug` 在任何配置下都不可见、run.log 是无级别的裸字节流、前端 6 套日志视图零级别解析。盘点原稿在 `tmp/logging-inventory.md`（本地）。
 上游：ADR 0009（logging/error system）定的 studio 侧骨架（`setup_logging` / JSON line / trace_id / 错误 envelope）不推翻，本文只补它没覆盖的子进程与显示面，并把跨进程的行契约定下来。
 
@@ -88,7 +88,7 @@ Traceback (most recent call last):
 | 操作 | 自动滚动开关、复制、下载（原始 run.log） |
 | 状态 | 等待日志 / 已结束 / 断线重连中 |
 
-替换关系：`TaskLogDrawer` 内容区、`QueueDetail` LogTab、`DaemonLogDrawer` 内容区、`useEvalLogSource` 全部改用 `LogView`；QueueDetail 同页两次 `getLog` 合成一次。设置页下载日志 / 更新日志 / onboarding 安装日志三个小面复用 `LogView` 只读模式（无 SSE、无分页）。抽屉的开合状态机、StepShell 的 `logSources` 挂载方式不变。
+替换关系：`TaskLogDrawer` 内容区、`QueueDetail` LogTab、`DaemonLogDrawer` 内容区、`useEvalLogSource` / `EvalJobsPanel` 全部改用 `LogView`（数据由 `useTaskLog` 提供）。设置页下载日志 / 更新日志 / onboarding 安装日志三个小面**保留原 `<pre>`**：内容不是契约行（downloader / updater / 安装脚本输出），LogView 的解析与工具栏在那里没有增益（刀 3 实施时定）。抽屉的开合状态机、StepShell 的 `logSources` 挂载方式不变；`LogSource` 加可选 `downloadUrl / hasMoreBefore / onLoadEarlier`。
 
 其它显示修正：DaemonLogDrawer 渲染 `ts`；PreprocessDuplicates 的 per-line `status` 映射到级别；`PauseProgressModal` 深链改 `navigate('/queue/<id>#log')`；error toast 末尾接上已写好的 `formatErrorTraceSuffix`。
 
@@ -162,4 +162,4 @@ studio.log 查看 UI；子进程写 studio.log（D2）；run.log GC（D4）；�
 
 - ~~runtime 入口复用 `setup_logging` 还是轻量版~~：已定复用（刀 1）。
 - ~~进度行 logger 名~~：已定 `training.progress`，`ctx.emit` 非 tty 出口 `training.emit`（刀 1）。
-- 视图开关的默认值在「全局开关变化时」是否同步已打开的视图：倾向不同步（不持久化 + 挂载取值，语义最简单）。
+- ~~视图开关的默认值在「全局开关变化时」是否同步已打开的视图~~：已定不同步（刀 3：挂载取值；用户没动过开关之前全局值晚到会采纳一次，动过之后不回推）。

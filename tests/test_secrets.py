@@ -943,3 +943,12 @@ def test_model_sources_round_trip_persistence(secrets_file: Path) -> None:
     assert cands[0].filename == "4x-UltraSharp.pth"
     assert cands[1].kind == "local"
     assert cands[1].path == "D:/up/x.pth"
+
+
+def test_system_log_debug_default_false_and_roundtrip(client: TestClient, secrets_file: Path) -> None:
+    """日志目标态 D1：全局「默认显示调试日志」是后端字段，默认关，PUT 局部更新可存可读。"""
+    assert secrets.load().system.log_debug_default is False
+    r = client.put("/api/secrets", json={"system": {"log_debug_default": True}})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/secrets").json()["system"]["log_debug_default"] is True
+    assert json.loads(secrets_file.read_text(encoding="utf-8"))["system"]["log_debug_default"] is True

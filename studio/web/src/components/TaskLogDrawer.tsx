@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import LogView from './LogView'
+
 export type LogSourceStatus =
   | 'pending'
   | 'running'
@@ -23,6 +25,12 @@ export interface LogSource {
   onCancel?: () => void
   /** failed 时 header 右侧显示重试按钮；缺省 = 不可重试。 */
   onRetry?: () => void
+  /** 原始 run.log 下载地址（有 task/job id 的 source 传 `api.logRawUrl(id)`）。 */
+  downloadUrl?: string | null
+  /** 顶部「加载更早」（useTaskLog 提供；前端合成日志没有）。 */
+  hasMoreBefore?: boolean
+  loadingEarlier?: boolean
+  onLoadEarlier?: () => void
 }
 
 const STATUS_BADGE: Record<LogSourceStatus, string> = {
@@ -72,7 +80,6 @@ export default function TaskLogDrawer({
   const active = pickActive(list)
 
   const [expanded, setExpanded] = useState(false)
-  const preRef = useRef<HTMLPreElement>(null)
   const prevRef = useRef<{ key: string; status: LogSourceStatus } | null>(null)
 
   const activeKey = active?.key ?? null
@@ -93,14 +100,6 @@ export default function TaskLogDrawer({
     const id = window.setInterval(() => setTick((n) => n + 1), 1000)
     return () => window.clearInterval(id)
   }, [live])
-
-  // 展开时跟随日志滚到底
-  const lineCount = active?.lines.length ?? 0
-  useEffect(() => {
-    if (expanded && preRef.current) {
-      preRef.current.scrollTop = preRef.current.scrollHeight
-    }
-  }, [expanded, lineCount])
 
   if (!active) return null
 
@@ -170,14 +169,21 @@ export default function TaskLogDrawer({
           className="overflow-hidden bg-sunken transition-[height] duration-200 ease-out"
           style={{ height: expanded ? '40vh' : '0px' }}
         >
-          <pre
-            ref={preRef}
-            className="m-0 h-full px-4 py-2 text-[11px] leading-relaxed font-mono text-fg-secondary overflow-y-auto whitespace-pre-wrap break-words"
-          >
-            {active.lines.length === 0
-              ? t('jobProgress.waitingLogs')
-              : active.lines.slice(-1000).join('\n')}
-          </pre>
+          {/* 内容区 = 统一 LogView（解析着色 / 调试开关 / 复制 / 下载 / 加载更早）；
+              抽屉只管开合与 header。收起时不渲染，省掉隐藏面板的解析与滚动 */}
+          {expanded && (
+            <LogView
+              lines={active.lines}
+              status={live ? (active.lines.length === 0 ? 'waiting' : 'live') : 'finished'}
+              emptyText={active.lines.length === 0 && live ? t('jobProgress.waitingLogs') : undefined}
+              downloadUrl={active.downloadUrl ?? null}
+              hasMoreBefore={active.hasMoreBefore}
+              loadingEarlier={active.loadingEarlier}
+              onLoadEarlier={active.onLoadEarlier}
+              maxRender={1000}
+              className="h-full px-4 pt-2 pb-2"
+            />
+          )}
         </div>
       </div>
     </>
