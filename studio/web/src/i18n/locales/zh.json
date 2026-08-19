@@ -806,6 +806,8 @@
     "viewInGenerate": "查看出图结果 →",
     "viewInReg": "查看正则集 →",
     "deleteRecord": "删除记录",
+    "diagBundle": "诊断包",
+    "diagBundleHint": "下载该任务的 run.log、配置快照、时间窗内的 studio.log 与环境摘要（已脱敏），报 issue 时附上",
     "deleteTitle": "删除任务记录",
     "deleteDesc": "将永久删除任务",
     "deleteNote": "LoRA / 训练日志 / 监控状态文件不会被删，仍在磁盘上。",
@@ -1122,7 +1124,9 @@
       "debugDefaultLabel": "默认显示调试日志",
       "debugDefaultHelp": "所有日志视图打开时是否默认显示 DEBUG 行。记录始终包含调试行，这里只管默认过滤；每个日志视图自己的「调试」开关可临时改，不会保存。",
       "debugDefaultOn": "日志视图默认显示调试行",
-      "debugDefaultOff": "日志视图默认隐藏调试行"
+      "debugDefaultOff": "日志视图默认隐藏调试行",
+      "exportBundle": "导出诊断包",
+      "exportBundleHelp": "打包 studio.log 尾部与环境摘要（版本 / 驱动 / CUDA / PyTorch），不含密钥；报 issue 时附上。某个任务的诊断包在任务详情页导出，会多带该任务的日志与配置快照。"
     },
     "gpuNoneDetected": "未检测到 NVIDIA 显卡",
     "gpuSelectLabel": "显卡",

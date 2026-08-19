@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 207,
+  "count": 208,
   "routes": [
     {
       "path": "/",
@@ -79,6 +79,14 @@
         "GET"
       ],
       "name": "get_dataset_thumbnail",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/diagnostics/bundle",
+      "methods": [
+        "GET"
+      ],
+      "name": "diagnostics_bundle",
       "type": "APIRoute"
     },
     {
