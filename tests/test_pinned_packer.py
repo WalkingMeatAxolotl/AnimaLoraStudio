@@ -95,7 +95,8 @@ def test_pin_returns_aligned_views_with_same_content_dtype_shape():
         # 同一大块上的 view，偏移 256B 对齐
         storage_ptr = out.untyped_storage().data_ptr()
         assert storage_ptr == chunk_ptr
-        assert (out.data_ptr() - chunk_ptr) % PinnedPacker.ALIGN == 0
+        if out.numel():  # 空张量的 data_ptr() 在 Linux 上返回 0，对齐断言无意义
+            assert (out.data_ptr() - chunk_ptr) % PinnedPacker.ALIGN == 0
     assert packer.packed_bytes == total
 
     # 改 view 等于改大块（param.data = view 后就是靠这个语义工作的）
