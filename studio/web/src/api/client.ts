@@ -675,6 +675,16 @@ export interface TrainingSecretsConfig {
   ram_guard: boolean
 }
 
+/** Tag 翻译词典的全站 UI 偏好（Settings → 标签词典）。null = 用户从未设过：
+ *  前端（tagDict/prefs.ts）据此一次性 seed（旧 localStorage 值 → 否则
+ *  show_translation 按界面语言推导、autocomplete 不写=默认开）。 */
+export interface TagDictionarySecretsConfig {
+  /** tag chip 上是否附带中文翻译（仅显示，不改 caption）。 */
+  show_translation: boolean | null
+  /** prompt / tag 输入框是否弹出补全候选（基于词典）。 */
+  autocomplete: boolean | null
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -698,6 +708,7 @@ export interface Secrets {
   training: TrainingSecretsConfig
   system: SystemPrefsConfig
   proxy: ProxyConfig
+  tag_dictionary: TagDictionarySecretsConfig
 }
 
 /** PUT /api/secrets 的 body：嵌套的 partial dict；MASK ("***") 表示「保持不变」。 */

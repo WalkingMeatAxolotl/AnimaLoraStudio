@@ -654,6 +654,26 @@ class SystemConfig(BaseModel):
     ram_guard_default_off: bool = True
 
 
+class TagDictionaryConfig(BaseModel):
+    """Tag 翻译词典的全站 UI 偏好（Settings → 标签词典）。
+
+    两个开关原先存浏览器 localStorage（`studio.tag.showTranslation` /
+    `studio.tag.autocomplete`），与其它设置项不同源、换浏览器即丢，故迁到
+    这里随 secrets.json 落盘。字段用 Optional：**None = 用户从未设过**
+    （新装 / 旧盘无此字段）。前端据此做一次性 seed 并写回：旧 localStorage
+    值优先；`show_translation` 无旧值时按界面语言推导（zh 开、其它关）；
+    `autocomplete` 无旧值不写（生效默认开）。seed 后即为 bool，之后切换
+    界面语言不再覆盖。后端无界面语言信息（i18n lang 留在前端），故默认推导
+    只能在前端做；这里的 None 哨兵是「别覆盖用户手动设置」的判据——save()
+    全量落盘时 None 仍写成 null，不会被误判成显式值。
+
+    - `show_translation`：tag chip 上是否附带中文翻译（仅显示，不改 caption）。
+    - `autocomplete`：prompt / tag 输入框是否弹出补全候选（基于词典）。
+    """
+    show_translation: Optional[bool] = None
+    autocomplete: Optional[bool] = None
+
+
 class ProxyConfig(BaseModel):
     """全局 HTTP/HTTPS 代理配置。"""
     enabled: bool = False
@@ -744,6 +764,7 @@ class Secrets(BaseModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+    tag_dictionary: TagDictionaryConfig = Field(default_factory=TagDictionaryConfig)
     # 统一模型来源候选：domain → 用户添加的候选列表。domain 白名单校验在
     # API 层（families 注册表在 services 层）。内置 preset 不在此存储——
     # 候选全集 = 代码内置 + 本字段。当前选中值仍写各 domain 原字段

@@ -248,7 +248,8 @@ export const EMPTY: Secrets = {
     http_proxy: '',
     https_proxy: '',
     no_proxy: '',
-  }
+  },
+  tag_dictionary: { show_translation: null, autocomplete: null },
 }
 
 export const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'

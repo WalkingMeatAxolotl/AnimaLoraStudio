@@ -7,7 +7,7 @@
  * 内部归一成空格（dict 存储一律 canonical）。这样 Reg/booru 边界 tag 也能命中。
  */
 import { useTagDict } from '../../tagDict/store'
-import { useShowTagTranslation } from '../../tagDict/showToggle'
+import { useShowTagTranslation } from '../../tagDict/prefs'
 
 export function TranslatedTag({ tag }: { tag: string }) {
   const [show] = useShowTagTranslation()

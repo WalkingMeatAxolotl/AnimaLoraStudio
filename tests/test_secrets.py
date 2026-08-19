@@ -647,6 +647,66 @@ def test_system_update_channel_round_trip(secrets_file: Path) -> None:
     assert secrets.load().system.update_channel == "stable"
 
 
+# ---------------------------------------------------------------------------
+# tag_dictionary — 标签词典全站 UI 偏好（原 localStorage 开关迁入）
+# ---------------------------------------------------------------------------
+
+
+def test_tag_dictionary_defaults_unset(secrets_file: Path) -> None:
+    """新装 / 旧盘无此组：两开关都是 None（= 从未设过，前端据此一次性 seed）。"""
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is None
+    assert s.tag_dictionary.autocomplete is None
+    secrets_file.write_text(
+        json.dumps({"gelbooru": {"user_id": "alice"}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is None
+    assert s.tag_dictionary.autocomplete is None
+
+
+def test_tag_dictionary_unset_survives_full_dump(secrets_file: Path) -> None:
+    """save() 全量落盘：别的组写盘不能把 None 哨兵变成显式值（否则前端 seed
+    判据失效，旧 localStorage 值迁不过来）。"""
+    secrets.update({"gelbooru": {"user_id": "alice"}})
+    raw = json.loads(secrets_file.read_text(encoding="utf-8"))
+    assert raw["tag_dictionary"] == {"show_translation": None, "autocomplete": None}
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is None
+    assert s.tag_dictionary.autocomplete is None
+
+
+def test_tag_dictionary_round_trip_per_field(secrets_file: Path) -> None:
+    """单字段 PUT 只动该字段（另一字段保持 None / 既有值），false 也要持久化。"""
+    secrets.update({"tag_dictionary": {"show_translation": True}})
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is True
+    assert s.tag_dictionary.autocomplete is None
+    secrets.update({"tag_dictionary": {"autocomplete": False}})
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is True
+    assert s.tag_dictionary.autocomplete is False
+    secrets.update({"tag_dictionary": {"show_translation": False}})
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is False
+    assert s.tag_dictionary.autocomplete is False
+
+
+def test_tag_dictionary_http_round_trip(client: TestClient) -> None:
+    """GET 暴露 tag_dictionary；PUT 部分 patch 后 GET 回显。"""
+    got = client.get("/api/secrets").json()
+    assert got["tag_dictionary"] == {"show_translation": None, "autocomplete": None}
+    r = client.put(
+        "/api/secrets",
+        json={"tag_dictionary": {"show_translation": False, "autocomplete": True}},
+    )
+    assert r.status_code == 200
+    assert r.json()["tag_dictionary"] == {"show_translation": False, "autocomplete": True}
+    got = client.get("/api/secrets").json()
+    assert got["tag_dictionary"] == {"show_translation": False, "autocomplete": True}
+
+
 def test_system_legacy_file_without_system_field(secrets_file: Path) -> None:
     """老 secrets.json 没有 system 字段时，加载用默认值 stable。"""
     secrets_file.write_text(
