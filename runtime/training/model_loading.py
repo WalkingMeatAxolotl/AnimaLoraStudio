@@ -258,6 +258,18 @@ def _load_weights_best_effort(model: torch.nn.Module, sd: dict, label: str) -> d
             f"关键参数缺失: {preview_missing or 'N/A'}。\n"
             f"这通常表示你选错了 .safetensors（不是完整 transformer/vae 权重），或 checkpoint key 前缀不匹配。"
         )
+    # 反向同样致命：checkpoint 里有关键层而模型没有 —— 典型是层数比模型多
+    # （建模时层数推断错），静默丢层后模型仍能"跑"，只是全是垃圾。这里必须
+    # 硬报错而不是只 log（此前 unexpected 只打一行 info）。
+    critical_unexpected = [k for k in unexpected if k.startswith(critical_prefixes)]
+    if critical_unexpected:
+        preview_unexpected = ", ".join(critical_unexpected[:8])
+        raise RuntimeError(
+            f"{label} checkpoint 含有模型里不存在的关键参数（{len(critical_unexpected)} 个，"
+            f"remap={remap_name}）: {preview_unexpected}。\n"
+            f"checkpoint 的层数/结构与建出的模型不一致——多半是模型层数推断错了，"
+            f"或这不是当前模型族的权重。"
+        )
     return {
         "remap": remap_name,
         "coverage": coverage,
