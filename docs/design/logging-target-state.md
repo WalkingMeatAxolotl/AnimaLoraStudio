@@ -72,7 +72,7 @@ Traceback (most recent call last):
 
 ### 3.3 显示面
 
-**全局开关**：设置页「日志」组一项「默认显示调试日志」（布尔，默认关）。只影响显示默认值，前端 localStorage 持久化即可（先例：tag autocomplete 全局开关 `autocompleteToggle.ts`），后端不加字段。
+**全局开关**：设置页一项「默认显示调试日志」（布尔，默认关），**后端字段** `Secrets.system.log_debug_default`（与设置页其它项一样走 secrets 落盘 + 现有 settings API / instant-apply），换浏览器不丢。它只影响显示默认值，不影响记录（记录恒 DEBUG，见 §3.1）。
 
 **视图开关**：每个日志视图头部一个「调试」toggle，不持久化，挂载时取全局开关值；开 = 显示 DEBUG 及以上，关 = 显示 INFO 及以上。WARNING/ERROR 永远显示且着色（黄/红），DEBUG 行显示时用弱化色。
 
@@ -130,11 +130,12 @@ studio.log 查看 UI；子进程写 studio.log（D2）；run.log GC（D4）；�
 - workers 5 处 `progress()`/`log()` 闭包与 8 处 `[error]` print → logger（进度闭包保留函数形状，内部换 logger.info）。
 - `studio/cli.py:67-80` `_say` 接 logger；14 处裸 print 收编；`services/runtime/pending_install.py:74-95` 收编。
 - `studio/api/routers/logs.py`：分页 + raw；`supervisor/core.py:74-101` `_tail_log_for_error_msg` 改按 ERROR 块；`core.py:1108-1133` daemon 回写补 seq/offset；`core.py:922-950` job 路径补 `event_malformed`；两处 try 范围收窄。
+- `studio/infrastructure/secrets.py` `SystemConfig` 加 `log_debug_default: bool = False`；settings 端点/前端 client 类型同步。
 - 新增 `studio/api/routers/diagnostics.py`（诊断包）。
 
 **前端**
 - 新增 `components/LogView.tsx` + `lib/useLogSource.ts`；`TaskLogDrawer` / `QueueDetail` LogTab / `DaemonLogDrawer` / `useEvalLogSource` 改用；三个小面复用只读模式。
-- 设置页「日志」组：全局开关（localStorage）。
+- 设置页：全局开关「默认显示调试日志」读写 `system.log_debug_default`。
 - `PauseProgressModal.tsx:124` 深链；`api/client.ts` error toast 接 trace suffix；删 `Toast.tsx:66,75` 死导出；孤儿 i18n `duplicates.logTitle` / `reg.aiLogTitle` / `reg.tabConfig` 清理。
 - i18n：`logView.*`（调试开关、加载更早、下载、断线重连、事件解析失败）；`settings.log.*`。
 
