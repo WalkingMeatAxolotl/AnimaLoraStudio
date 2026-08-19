@@ -37,18 +37,19 @@ for _p in (_REPO_ROOT, _REPO_ROOT / "runtime"):
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
 
-# Windows 控制台默认 cp936，logging / print 写中文会 UnicodeEncodeError，
-# 默认 handler 的 errors='backslashreplace' 会把中文转成 \uXXXX 形式 ——
-# 这就是 task log 里看到的「检查 VAE」之类乱码的来源。
-# 强制 stdout/stderr UTF-8 + replace 让中文 / emoji 永远直出。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+# 统一日志 bootstrap（docs/design/logging-target-state.md）：与 studio / worker
+# 同一 formatter；console 级别读 ANIMA_LOG_LEVEL（supervisor spawn 注入 DEBUG，
+# 人手跑默认 INFO）；内含 Windows 控制台 UTF-8 兜底（cp936 下中文变 \uXXXX 的
+# 老问题）。process 名 / trace_id 优先取 supervisor 注入的 env（与 worker 一致），
+# 人手跑退回脚本名。sister script（daemon / generate / reg_ai）import 本模块后
+# 再各自调一次，process 名不同则替换成自己的一套 handler。
+from studio.infrastructure.logging import (  # noqa: E402
+    PROCESS_ENV, TRACE_ENV, bind_trace_id, new_trace_id, setup_logging,
+)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_train", file=False, console=True)
+bind_trace_id(os.environ.get(TRACE_ENV) or new_trace_id())
+logger = logging.getLogger("anima_train")
 
 
 # ─── Re-exports for sister script / tests (ADR 0003 PR-A) ────────────────────

@@ -21,6 +21,8 @@ import pytest
 from studio.infrastructure.logging import (
     HumanConsoleFormatter,
     JsonLineFormatter,
+    LOG_LEVEL_ENV,
+    OWN_LOGGER_NAMESPACES,
     STUDIO_LOG_NAME,
     _NOISY_LOGGERS,
     _reset_for_tests,
@@ -41,10 +43,16 @@ def reset_logging(monkeypatch: pytest.MonkeyPatch):
     saved_handlers = list(logging.getLogger().handlers)
     saved_level = logging.getLogger().level
     saved_excepthook = sys.excepthook
+    saved_levels = {
+        n: logging.getLogger(n).level
+        for n in (*OWN_LOGGER_NAMESPACES, *_NOISY_LOGGERS, "uvicorn", "uvicorn.error", "uvicorn.access")
+    }
     yield
     _reset_for_tests()
     logging.getLogger().handlers = saved_handlers
     logging.getLogger().level = saved_level
+    for n, lv in saved_levels.items():
+        logging.getLogger(n).setLevel(lv)
     sys.excepthook = saved_excepthook
 
 
@@ -220,10 +228,85 @@ def test_setup_logging_excepthook_preserves_keyboardinterrupt(tmp_path: Path,
     assert critical_records == [], "KeyboardInterrupt 不应路由到 logger.critical"
 
 
-def test_setup_logging_extra_handlers_attached(tmp_path: Path) -> None:
-    extra = logging.StreamHandler()
-    setup_logging("worker:tag/1", log_dir=tmp_path, console=False, extra_handlers=[extra])
-    assert extra in logging.getLogger().handlers
+# ── 级别模型（docs/design/logging-target-state.md §3.1）──────────────────
+
+
+def _console_handlers() -> list[logging.Handler]:
+    return [
+        h for h in logging.getLogger().handlers
+        if type(h) is logging.StreamHandler
+    ]
+
+
+def test_own_namespaces_debug_root_info(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """自家命名空间恒 DEBUG（记录不过滤），root 保持 INFO 防第三方 debug 洪水。"""
+    monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+    for n in OWN_LOGGER_NAMESPACES:
+        logging.getLogger(n).setLevel(logging.NOTSET)
+    setup_logging("webui", log_dir=tmp_path, console=False)
+    assert logging.getLogger().level == logging.INFO
+    for n in OWN_LOGGER_NAMESPACES:
+        assert logging.getLogger(n).getEffectiveLevel() == logging.DEBUG, n
+    # 未列入的第三方 logger 跟 root 走 INFO
+    assert logging.getLogger("some_third_party_lib").getEffectiveLevel() == logging.INFO
+
+
+def test_file_handler_records_own_debug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+    setup_logging("webui", log_dir=tmp_path, console=False)
+    logging.getLogger("studio.test_dbg").debug("dbg-line")
+    for h in logging.getLogger().handlers:
+        h.flush()
+    text = (tmp_path / STUDIO_LOG_NAME).read_text(encoding="utf-8")
+    assert "dbg-line" in text
+
+
+def test_console_level_defaults_info_and_reads_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+    setup_logging("cli:x", log_dir=tmp_path, console=True, file=False)
+    (h,) = _console_handlers()
+    assert h.level == logging.INFO
+
+    _reset_for_tests()
+    monkeypatch.setenv(LOG_LEVEL_ENV, "debug")
+    setup_logging("cli:y", log_dir=tmp_path, console=True, file=False)
+    (h,) = _console_handlers()
+    assert h.level == logging.DEBUG
+
+    _reset_for_tests()
+    monkeypatch.setenv(LOG_LEVEL_ENV, "bogus")
+    setup_logging("cli:z", log_dir=tmp_path, console=True, file=False)
+    (h,) = _console_handlers()
+    assert h.level == logging.INFO, "非法 env 值回落 INFO"
+
+
+def test_console_level_param_overrides_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(LOG_LEVEL_ENV, "DEBUG")
+    setup_logging("cli:w", log_dir=tmp_path, console=True, file=False, level="WARNING")
+    (h,) = _console_handlers()
+    assert h.level == logging.WARNING
+
+
+def test_console_auto_is_human_even_when_piped(tmp_path: Path) -> None:
+    """pipe 下不再输出 JSON（与 studio.log 重复且终端不可读）。测试进程 stderr 即非 tty。"""
+    assert not sys.stderr.isatty()
+    setup_logging("webui", log_dir=tmp_path, console="auto")
+    (h,) = _console_handlers()
+    assert isinstance(h.formatter, HumanConsoleFormatter)
+
+
+def test_console_json_explicit(tmp_path: Path) -> None:
+    setup_logging("webui", log_dir=tmp_path, console="json")
+    (h,) = _console_handlers()
+    assert isinstance(h.formatter, JsonLineFormatter)
+
+
+def test_uvicorn_access_silenced_others_kept(tmp_path: Path) -> None:
+    for n in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        logging.getLogger(n).setLevel(logging.NOTSET)
+    setup_logging("webui", log_dir=tmp_path, console=False)
+    assert logging.getLogger("uvicorn.access").level == logging.WARNING
+    assert logging.getLogger("uvicorn.error").getEffectiveLevel() == logging.INFO
 
 
 def test_reconfigure_console_utf8_does_not_crash() -> None:

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import sys
 from pathlib import Path
@@ -50,11 +51,9 @@ from studio.services.inference.core import (  # noqa: E402
     release_vae_after_decode,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E402
+
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_generate", file=False, console=True)
 logger = logging.getLogger("anima_generate")
 
 

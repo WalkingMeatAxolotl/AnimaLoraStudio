@@ -104,7 +104,7 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     # PR-1 C4: 统一日志体系入口 (ADR-0009)。第一行调，让 ensure_dirs / db.init_db
     # 自己 emit 的 log 也能进 studio.log。setup_logging 自身 mkdir LOGS_DIR
     # 不需要等 ensure_dirs。env ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
-    setup_logging("webui", level=os.environ.get("ANIMA_LOG_LEVEL", "INFO"))
+    setup_logging("webui")  # console 级别读 ANIMA_LOG_LEVEL（setup_logging 内部）
 
     # 装 Windows ProactorEventLoop 的 ConnectionResetError 过滤器（详见 helper docstring）
     _install_proactor_disconnect_filter(asyncio.get_running_loop())

@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import shutil
 import sys
@@ -58,11 +59,9 @@ from studio.services.tagging.caption_format import (  # noqa: E402
     normalize_caption_json,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E402
+
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_reg_ai", file=False, console=True)
 logger = logging.getLogger("anima_reg_ai")
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
