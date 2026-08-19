@@ -205,27 +205,25 @@ class _BucketSwitchCacheRelease:
     def __init__(self, device):
         self._device = device
         self._prev_hw: tuple[int, ...] | None = None
-        self._logged = False
 
     def observe(self, latents) -> None:
         hw = tuple(int(x) for x in latents.shape[-2:])
         prev, self._prev_hw = self._prev_hw, hw
         if prev is None or prev == hw:
             return
-        before = _cuda_reserved_gb(self._device)
+        debug = logger.isEnabledFor(logging.DEBUG)
+        before = _cuda_reserved_gb(self._device) if debug else None
         torch.cuda.empty_cache()
-        if self._logged:
+        if not debug:
             return
-        self._logged = True
         after = _cuda_reserved_gb(self._device)
         detail = (
             f"（torch 保留 {before:.2f}GB→{after:.2f}GB）"
             if before is not None and after is not None
             else ""
         )
-        logger.info(
-            "[显存] ARB 切桶 %sx%s→%sx%s：已归还上一个桶的 allocator 缓存%s；"
-            "后续切桶不再逐条记录",
+        logger.debug(
+            "[显存] ARB 切桶 %sx%s→%sx%s：已归还上一个桶的 allocator 缓存%s",
             prev[0], prev[1], hw[0], hw[1], detail,
         )
 

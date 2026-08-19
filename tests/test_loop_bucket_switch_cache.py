@@ -64,17 +64,23 @@ def test_batch_size_change_within_bucket_does_not_release(monkeypatch):
     assert spy.calls == 0
 
 
-def test_only_first_switch_is_logged(monkeypatch, caplog):
+def test_each_switch_logged_at_debug_only(monkeypatch, caplog):
     _EmptyCacheSpy(monkeypatch)
     tracker = loop_mod._BucketSwitchCacheRelease("cpu")
+    with caplog.at_level("DEBUG", logger=loop_mod.logger.name):
+        tracker.observe(_lat(8, 8))
+        tracker.observe(_lat(6, 10))
+        tracker.observe(_lat(8, 8))
+        tracker.observe(_lat(6, 10))
+    recs = [r for r in caplog.records if "ARB 切桶" in r.getMessage()]
+    assert [r.levelname for r in recs] == ["DEBUG"] * 3
+    assert "8x8→6x10" in recs[0].getMessage()
+    assert "6x10→8x8" in recs[1].getMessage()
+
+    caplog.clear()
     with caplog.at_level("INFO", logger=loop_mod.logger.name):
         tracker.observe(_lat(8, 8))
-        tracker.observe(_lat(6, 10))
-        tracker.observe(_lat(8, 8))
-        tracker.observe(_lat(6, 10))
-    lines = [r.getMessage() for r in caplog.records if "ARB 切桶" in r.getMessage()]
-    assert len(lines) == 1
-    assert "8x8→6x10" in lines[0]
+    assert not [r for r in caplog.records if "ARB 切桶" in r.getMessage()]
 
 
 # ---------------------------------------------------------------- loop 接线
