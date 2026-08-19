@@ -206,7 +206,7 @@ def test_get_job_log_via_task_logs(client: TestClient, isolated, monkeypatch) ->
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("a\nb\nc\nd\n", encoding="utf-8")
     r = client.get(f"/api/logs/{job['id']}").json()
-    assert r["content"].splitlines() == ["a", "b", "c", "d"]
+    assert [l["text"] for l in r["lines"]] == ["a", "b", "c", "d"]
 
 
 # ---------------------------------------------------------------------------

@@ -2769,6 +2769,10 @@
       "invalid": "Invalid snapshot id",
       "id_collision": "Could not allocate a snapshot id; please retry"
     },
+    "log": {
+      "not_found": "Log file not found",
+      "query_conflict": "tail / before / after are mutually exclusive"
+    },
     "task": {
       "not_found": "Task not found",
       "already_finished": "This task has already finished",

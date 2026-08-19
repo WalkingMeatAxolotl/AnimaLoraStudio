@@ -2769,6 +2769,10 @@
       "invalid": "快照标识无效",
       "id_collision": "无法分配快照编号，请重试"
     },
+    "log": {
+      "not_found": "日志文件不存在",
+      "query_conflict": "tail / before / after 只能指定一个"
+    },
     "task": {
       "not_found": "任务不存在",
       "already_finished": "该任务已结束",

@@ -1743,10 +1743,28 @@ export interface QueueHoldState {
   pending_waiting: number
 }
 
-export interface LogResponse {
+/** `GET /api/logs/{id}` 分页响应（docs/design/logging-target-state.md §3.4）。
+ *  `lines[].offset` = 该行起始字节；`end_offset` = 最后一行结束后的偏移，既是
+ *  「往后补拉」的 after 游标，也与 SSE task_log_appended.end_offset 同坐标系；
+ *  `start_offset` 给「加载更早」当 before。末尾半行不返回。 */
+export interface LogPage {
   task_id: number
-  content: string
+  lines: { offset: number; text: string }[]
+  start_offset: number
+  end_offset: number
   size: number
+  has_more_before: boolean
+}
+
+/** 分页查询参数：tail / before / after 三选一（都不给 = tail，服务端默认 500 行）。 */
+export type LogPageQuery =
+  | { tail?: number }
+  | { before: number; limit?: number }
+  | { after: number; limit?: number }
+
+/** 把一页日志拼回文本（刀 3 LogView 上线前的过渡：现有视图仍按字符串渲染）。 */
+export function logPageText(page: LogPage): string {
+  return page.lines.length ? page.lines.map((l) => l.text).join('\n') + '\n' : ''
 }
 
 /** /api/state — per-task monitor state written by the training process */
@@ -3180,7 +3198,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ordered_ids: orderedIds }),
     }),
-  getLog: (id: number) => req<LogResponse>(`/api/logs/${id}`),
+  getLog: (id: number, q: LogPageQuery = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(q)) if (v != null) qs.set(k, String(v))
+    const s = qs.toString()
+    return req<LogPage>(`/api/logs/${id}${s ? `?${s}` : ''}`)
+  },
+  logRawUrl: (id: number) => `/api/logs/${id}/raw`,
   /** 默认拉全量历史（max_points=0，server 跳过降采样）；想要降采样预览
    *  传具体数字。cold start 是一次性 HTTP，长训练（10k+ 步）下也只是 ~500KB
    *  payload，不值得为视觉损耗换网络节省。 */

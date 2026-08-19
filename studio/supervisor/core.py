@@ -22,6 +22,7 @@ builder / _maybe_finalize_version / _kill_process_tree）已搬到 sibling
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import os
 import signal
@@ -35,8 +36,8 @@ from .. import db, secrets as _secrets
 from ..services import eval_auto, eval_validation
 from ..services.runtime import xformers as _xformers_svc
 from ..services.projects import jobs as project_jobs
-from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
-from ..infrastructure.logging import LOG_LEVEL_ENV
+from ..infrastructure.log_tail import LogTailer, MonitorStatePoller, clean_log_line
+from ..infrastructure.logging import LOG_LEVEL_ENV, LOG_LINE_RE
 from ..paths import (
     LOGS_DIR,
     REPO_ROOT,
@@ -72,27 +73,66 @@ from .slot import SLOT_DATA, SLOT_TRAIN, _Slot
 logger = logging.getLogger(__name__)
 
 
+_ERROR_MSG_TAIL_BYTES = 256 * 1024
+
+
+def _parse_event_marker(line: str) -> tuple[str, dict[str, Any]]:
+    """`__EVENT__:type:json` → (type, payload)；格式不对抛异常由 caller 处理。"""
+    rest = line[len(_EVENT_MARKER):]
+    evt_type, payload_str = rest.split(":", 1)
+    payload = json.loads(payload_str) if payload_str else {}
+    if not isinstance(payload, dict):
+        raise ValueError("event payload must be a JSON object")
+    return evt_type, payload
+
+
 def _tail_log_for_error_msg(log_path: Path, max_lines: int = 12, max_chars: int = 800) -> str:
-    """B-1.6: 失败 task 的 db.error_msg 从 "exit code 1" 升级为 traceback 摘要。
+    """失败 task 的 db.error_msg：从 run.log 尾部取「最后一个错误块」。
 
-    策略：读 jobs/<id>.log 末 N 行；找到最后一处 'Traceback' 截取那一段；
-    没有则取末 N 行。截断到 max_chars 适配 UI 显示宽度。
-
+    行契约（LOG_LINE_RE）落地后 run.log 每条记录有行头，续行（traceback）无前缀：
+      1. 找最后一条 ERROR/CRITICAL 记录（行头 + 其续行，去掉行头前缀）；
+      2. 找最后一个裸 `Traceback` 行（子进程未捕获异常直接打到 stderr，不经 logger）；
+      3. 两者取位置靠后的那个；都没有则退回末 N 行。
+    只读文件尾 256KB（长训练 run.log 上百 MB 不能整读）；截断到 max_chars 适配 UI。
     失败兜底返 ""（caller 用 "exit code N" 默认值）。
     """
     try:
         if not log_path.exists():
             return ""
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines()
+        size = log_path.stat().st_size
+        with open(log_path, "rb") as f:
+            if size > _ERROR_MSG_TAIL_BYTES:
+                f.seek(size - _ERROR_MSG_TAIL_BYTES)
+                f.readline()  # 丢掉切在中间的半行
+            lines = [clean_log_line(b) for b in f.read().split(b"\n")]
+        while lines and not lines[-1].strip():
+            lines.pop()
         if not lines:
             return ""
-        tb_start = None
+        err_start = tb_start = None
         for i in range(len(lines) - 1, -1, -1):
-            if lines[i].startswith("Traceback"):
+            m = LOG_LINE_RE.match(lines[i])
+            if m and err_start is None and m["level"] in ("ERROR", "CRITICAL"):
+                err_start = i
+            if tb_start is None and lines[i].startswith("Traceback"):
                 tb_start = i
+            if err_start is not None and tb_start is not None:
                 break
-        snippet_lines = lines[tb_start:] if tb_start is not None else lines[-max_lines:]
+        err_end = None
+        if err_start is not None:
+            # 记录块 = 行头（去前缀只留 msg）+ 到下一条记录行头之前的续行
+            err_end = err_start + 1
+            while err_end < len(lines) and not LOG_LINE_RE.match(lines[err_end]):
+                err_end += 1
+        # 裸 Traceback 若落在 ERROR 记录块内（logger.exception 的续行）就属于该块，
+        # 不单拎；只有块外更靠后的裸 Traceback（子进程未捕获异常）才盖过记录块
+        if err_start is not None and (tb_start is None or tb_start < err_end):
+            head = LOG_LINE_RE.match(lines[err_start])
+            snippet_lines = [head["msg"] if head else lines[err_start], *lines[err_start + 1:err_end]]
+        elif tb_start is not None:
+            snippet_lines = lines[tb_start:]
+        else:
+            snippet_lines = lines[-max_lines:]
         out = "\n".join(snippet_lines).strip()
         if len(out) > max_chars:
             out = "..." + out[-(max_chars - 3):]
@@ -724,21 +764,18 @@ class Supervisor:
 
     def _make_task_log_callback(
         self, slot: _Slot, tid: int
-    ) -> Callable[[str], None]:
+    ) -> Callable[[str, int], None]:
         """LogTailer 回调：识别 __EVENT__: 协议 → 镜像状态到 slot + publish SSE；
-        普通行 → task_log_appended。
+        普通行 → task_log_appended（带 seq + end_offset，前端断线按 end_offset 补拉）。
 
         ADR 0006 PR-2：训练 worker 通过 __EVENT__: 协议跟 supervisor 通信
         （pause_state / train_loop_started / auto_epoch_backup_written /
         resume_state_loaded）。跟 jobs 的 _on_line 路径对齐。
         """
-        def _on_task_log(line: str) -> None:
+        def _on_task_log(line: str, end_offset: int) -> None:
             if line.startswith(_EVENT_MARKER):
                 try:
-                    rest = line[len(_EVENT_MARKER):]
-                    evt_type, payload_str = rest.split(":", 1)
-                    import json as _json
-                    payload = _json.loads(payload_str) if payload_str else {}
+                    evt_type, payload = _parse_event_marker(line)
                 except Exception:
                     # B-4.4: malformed event 静默丢导致 UI pause_state 永远收不到
                     # → 暂停按钮永远灰。logger.exception 进 studio.log；
@@ -788,6 +825,7 @@ class Supervisor:
                 "task_id": tid,
                 "text": line,
                 "seq": next(self._log_seq),
+                "end_offset": end_offset,
             })
         return _on_task_log
 
@@ -926,31 +964,40 @@ class Supervisor:
         pid_: Optional[int],
         vid: Optional[int],
         kind: str,
-    ) -> Callable[[str], None]:
+    ) -> Callable[[str, int], None]:
         """LogTailer 回调：识别 __EVENT__: 协议 publish typed SSE；普通行
-        → job_log_appended。
+        → job_log_appended（带 seq + end_offset）。
 
         结构化事件标记：worker 写 `__EVENT__:type:json_payload` 让 supervisor
         publish 成 typed SSE 事件（不进 job log）。比专门搭 IPC 通道轻，比
         让前端按文本 grep 日志靠谱。job_id / project_id 由 supervisor 注入。
         """
-        def _on_line(line: str) -> None:
+        def _on_line(line: str, end_offset: int) -> None:
             if line.startswith(_EVENT_MARKER):
+                # try 只包解析：广播自身抛错不能被误报成 malformed marker
                 try:
-                    rest = line[len(_EVENT_MARKER):]
-                    evt_type, payload_str = rest.split(":", 1)
-                    import json as _json
-                    payload = _json.loads(payload_str) if payload_str else {}
+                    evt_type, payload = _parse_event_marker(line)
+                except Exception:
+                    # 与 task 路径对齐（B-4.4 之前只落了一半）：进 studio.log +
+                    # SSE event_malformed 让前端可见
+                    logger.exception("malformed event marker: %r", line[:200])
                     self._on_event({
-                        "type": evt_type,
+                        "type": "event_malformed",
                         "job_id": jid,
                         "project_id": pid_,
                         "version_id": vid,
                         "kind": kind,
-                        **payload,
+                        "raw_preview": line[:200],
                     })
-                except Exception:
-                    logger.exception("malformed event marker: %r", line[:200])
+                    return
+                self._on_event({
+                    "type": evt_type,
+                    "job_id": jid,
+                    "project_id": pid_,
+                    "version_id": vid,
+                    "kind": kind,
+                    **payload,
+                })
                 return  # 不当成日志推
 
             self._on_event({
@@ -961,6 +1008,7 @@ class Supervisor:
                 "kind": kind,
                 "text": line,
                 "seq": next(self._log_seq),
+                "end_offset": end_offset,
             })
         return _on_line
 
@@ -1133,6 +1181,7 @@ class Supervisor:
             "seq": entry.get("seq"),
             "line": line,
         })
+        end_offset: int | None = None
         with self._daemon_lock:
             tid = self._daemon_active_task_id
             fp = self._daemon_log_fp
@@ -1140,12 +1189,20 @@ class Supervisor:
                 try:
                     fp.write((line + "\n").encode("utf-8", errors="replace"))
                     fp.flush()
+                    end_offset = fp.tell()
                 except Exception:
                     logger.exception("write daemon task log failed")
             else:
                 tid = None
         if tid is not None and isinstance(line, str):
-            self._on_event({"type": "task_log_appended", "task_id": tid, "text": line})
+            # 与 LogTailer 路径同形状（seq + end_offset），前端不用区分来源
+            self._on_event({
+                "type": "task_log_appended",
+                "task_id": tid,
+                "text": line,
+                "seq": next(self._log_seq),
+                "end_offset": end_offset,
+            })
 
     def _on_daemon_global_event(self, event: dict[str, Any]) -> None:
         """daemon 进程级事件（loaded / unloaded / stopped）。"""
