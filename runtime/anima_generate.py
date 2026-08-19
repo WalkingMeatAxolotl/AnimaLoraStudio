@@ -278,7 +278,7 @@ def main() -> None:
                 if _update_monitor:
                     _update_monitor(sample_path=str(out_path), step=img_idx + 1)
             except Exception as e:
-                logger.error(f"生成失败 [{img_idx + 1}/{total}]: {e}")
+                logger.exception(f"生成失败 [{img_idx + 1}/{total}]: {e}")
 
             img_idx += 1
 
@@ -468,7 +468,7 @@ def _run_xy_matrix(
                         xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                     )
             except Exception as e:
-                logger.error(f"XY [{xi},{yi}] 失败: {e}")
+                logger.exception(f"XY [{xi},{yi}] 失败: {e}")
 
             img_idx += 1
 

@@ -295,9 +295,11 @@ def create_8bit_adamw(
             "Install with: pip install bitsandbytes"
         )
     
-    print(f"Creating 8-bit AdamW optimizer (lr={lr}, weight_decay={weight_decay})")
-    print(f"  min_8bit_size: {min_8bit_size}")
-    
+    logger.info(
+        f"Creating 8-bit AdamW optimizer (lr={lr}, weight_decay={weight_decay}, "
+        f"min_8bit_size={min_8bit_size})"
+    )
+
     # 将参数转换为列表（bitsandbytes 需要可索引的参数）
     param_list = list(params)
     
@@ -317,7 +319,7 @@ def create_8bit_adamw(
     # 8-bit 优化器状态：约 2 bytes per parameter (vs 8 bytes for 32-bit)
     # 节省约 75% 的优化器状态内存
     estimated_savings_gb = (total_params * 6) / (1024 ** 3)  # 节省 6 bytes per param
-    print(f"  [OK] 8-bit AdamW created (estimated memory savings: {estimated_savings_gb:.2f} GB)")
+    logger.info(f"8-bit AdamW created (estimated memory savings: {estimated_savings_gb:.2f} GB)")
     
     return optimizer
 
@@ -351,8 +353,8 @@ def create_standard_adamw(
     Returns:
         AdamW: 标准 AdamW 优化器
     """
-    print(f"Creating standard AdamW optimizer (lr={lr}, weight_decay={weight_decay})")
-    
+    logger.info(f"Creating standard AdamW optimizer (lr={lr}, weight_decay={weight_decay})")
+
     # 将参数转换为列表
     param_list = list(params)
     
@@ -365,7 +367,7 @@ def create_standard_adamw(
         **kwargs
     )
     
-    print("  [OK] AdamW optimizer created")
+    logger.info("AdamW optimizer created")
 
     return optimizer
 
@@ -735,11 +737,11 @@ def create_automagic(
         weight_decay=weight_decay,
         **kwargs,
     )
-    print(
+    logger.info(
         f"Creating Automagic optimizer (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
         f"lr_bump={lr_bump}, beta2={beta2}, weight_decay={weight_decay})"
     )
-    print("  [OK] Automagic optimizer created")
+    logger.info("Automagic optimizer created")
     return optimizer
 
 
@@ -1063,8 +1065,8 @@ def create_lion(
         )
     param_list = params if _is_param_groups(params) else list(params)
     optimizer = Lion(param_list, lr=lr, betas=betas, weight_decay=weight_decay, **kwargs)
-    print(f"Creating Lion optimizer (lr={lr}, betas={betas}, weight_decay={weight_decay})")
-    print("  [OK] Lion optimizer created")
+    logger.info(f"Creating Lion optimizer (lr={lr}, betas={betas}, weight_decay={weight_decay})")
+    logger.info("Lion optimizer created")
     return optimizer
 
 
@@ -1333,13 +1335,13 @@ def create_prodigy(
         ) from e
 
     if abs(lr - 1.0) > 1e-9:
-        print(
-            f"[WARN] Prodigy requires lr=1.0 (received {lr}); forcing lr=1.0. "
+        logger.warning(
+            f"Prodigy requires lr=1.0 (received {lr}); forcing lr=1.0. "
             f"Tune d_coef/weight_decay instead of lr."
         )
         lr = 1.0
 
-    print(
+    logger.info(
         f"Creating Prodigy optimizer (lr={lr}, weight_decay={weight_decay}, "
         f"d_coef={d_coef}, safeguard_warmup={safeguard_warmup})"
     )
@@ -1358,7 +1360,7 @@ def create_prodigy(
         **kwargs,
     )
 
-    print("  [OK] Prodigy optimizer created")
+    logger.info("Prodigy optimizer created")
 
     return optimizer
 
@@ -1676,9 +1678,11 @@ def create_optimizer_grouped_parameters(
     # 打印统计信息
     num_decay_params = sum(p.numel() for p in decay_params)
     num_no_decay_params = sum(p.numel() for p in no_decay_params)
-    print(f"Parameter groups:")
-    print(f"  With weight decay: {len(decay_params)} params, {num_decay_params:,} elements")
-    print(f"  Without weight decay: {len(no_decay_params)} params, {num_no_decay_params:,} elements")
+    logger.info(
+        f"Parameter groups: with weight decay: {len(decay_params)} params, "
+        f"{num_decay_params:,} elements; without weight decay: "
+        f"{len(no_decay_params)} params, {num_no_decay_params:,} elements"
+    )
     
     return optimizer_grouped_parameters
 

@@ -595,7 +595,7 @@ def main() -> None:
             if _update_monitor:
                 _update_monitor(sample_path=str(out_path), step=idx + 1)
         except Exception as e:
-            logger.error(f"  生成失败: {e}")
+            logger.exception(f"  生成失败: {e}")
             if not out_path.exists():
                 caption_path.unlink(missing_ok=True)
 

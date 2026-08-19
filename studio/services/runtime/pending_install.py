@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from typing import Any, Optional
 
 from ...paths import STUDIO_DATA
@@ -61,8 +60,9 @@ def clear_pending() -> None:
 def apply_pending() -> None:
     """启动期处理 pending 请求；必须在任何 `import torch` 之前调。
 
-    成功 → 清 marker；失败 → 保留 marker（下次启动再试一次）。错误打印到 stderr，
-    不抛异常，让 launcher 继续起 server（用户可以在 UI 里看到旧 torch 仍在用）。
+    成功 → 清 marker；失败 → 保留 marker（下次启动再试一次）。错误走 logger
+    （warning / error 级），不抛异常，让 launcher 继续起 server（用户可以在 UI
+    里看到旧 torch 仍在用）。
     """
     pending = read_pending()
     if not pending:
@@ -71,30 +71,24 @@ def apply_pending() -> None:
     kind = pending.get("kind")
     if kind == "torch":
         target = pending.get("target", "auto")
-        print(f"[studio] 检测到 pending torch 重装请求 (target={target})，开始安装...")
-        print("[studio] 提示：按 Ctrl+C 可跳过本次安装（marker 保留，下次启动重试）")
-        print(f"[studio] 若希望永久跳过，删除 marker 文件：{PENDING_MARKER}")
+        logger.info("检测到 pending torch 重装请求 (target=%s)，开始安装...", target)
+        logger.info("提示：按 Ctrl+C 可跳过本次安装（marker 保留，下次启动重试）")
+        logger.info("若希望永久跳过，删除 marker 文件：%s", PENDING_MARKER)
         # 延迟 import：torch_setup -> onnxruntime_setup 链触发的副作用全留到此刻
         from . import torch as torch_setup  # noqa: PLC0415
         try:
             res = torch_setup.reinstall(target, stream=True)
         except KeyboardInterrupt:
-            print("\n[studio] 用户中断 torch 重装，跳过。marker 保留，下次启动会重试。",
-                  file=sys.stderr)
-            print(f"[studio] 若希望永久跳过，删除 marker 文件：{PENDING_MARKER}",
-                  file=sys.stderr)
+            logger.warning("用户中断 torch 重装，跳过。marker 保留，下次启动会重试。")
+            logger.warning("若希望永久跳过，删除 marker 文件：%s", PENDING_MARKER)
             return  # 不 clear_pending，下次启动继续尝试
         except RuntimeError as exc:
-            print(f"[studio] torch 重装失败: {exc}", file=sys.stderr)
-            print("[studio] marker 保留，下次启动会重试", file=sys.stderr)
-            print(f"[studio] 若装包持续失败想永久跳过，删除 marker 文件：{PENDING_MARKER}",
-                  file=sys.stderr)
+            logger.error("torch 重装失败: %s", exc)
+            logger.error("marker 保留，下次启动会重试")
+            logger.error("若装包持续失败想永久跳过，删除 marker 文件：%s", PENDING_MARKER)
             return
-        print(f"[studio] torch 重装完成: {res.get('version')} ({res.get('tag')})")
+        logger.info("torch 重装完成: %s (%s)", res.get("version"), res.get("tag"))
     else:
-        print(
-            f"[studio] 警告：未知 pending install kind {kind!r}，忽略并清除",
-            file=sys.stderr,
-        )
+        logger.warning("未知 pending install kind %r，忽略并清除", kind)
 
     clear_pending()

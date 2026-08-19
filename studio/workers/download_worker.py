@@ -5,10 +5,11 @@
 `studio.services.downloader.download()` → 写日志 → 退出码反映成败。
 状态字段（running / done / failed）由 supervisor 在子进程结束时统一回写。
 
-日志只走 stdout：supervisor 在 `subprocess.Popen(stdout=log_fp,
-stderr=STDOUT)` 把整个子进程输出重定向到 task log 文件，worker 自己**不能**
-再 open 同一个 log 直接 write —— 否则同一行会落盘两次，LogTailer 读两次，
-前端就看到每条日志重复一次。
+日志只走 logger（stderr，Human 行契约见 docs/design/logging-target-state.md
+§3.2）：supervisor 在 `subprocess.Popen(stdout=log_fp, stderr=STDOUT)` 把整个
+子进程输出重定向到 task log 文件，worker 自己**不能**再 open 同一个 log 直接
+write —— 否则同一行会落盘两次，LogTailer 读两次，前端就看到每条日志重复一次。
+裸 print 只留给 stdout 协议行（`__EVENT__:`，见 preprocess_worker）。
 """
 from __future__ import annotations
 
@@ -27,16 +28,16 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("job %s not found", job_id)
         return 1
     if job["kind"] != "download":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error("wrong kind: %s", job["kind"])
         return 1
 
     params = job.get("params_decoded") or {}
 
     def progress(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     try:
         with db.connection_for() as conn:

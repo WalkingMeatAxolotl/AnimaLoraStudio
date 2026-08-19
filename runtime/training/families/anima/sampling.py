@@ -296,13 +296,13 @@ def sample_image(
 
     sampler_name, scheduler = _resolve_parity_sampler_scheduler(sampler_name, scheduler)
 
-    logger.info(f"[Debug] Sampling start. Prompt: {prompt[:50]}...")
+    logger.debug(f"Sampling start. Prompt: {prompt[:50]}...")
 
     # Check VAE scale
     if isinstance(vae.scale, list) and len(vae.scale) == 2:
         m, s = vae.scale
-        logger.info(f"[Debug] VAE scale: mean_shape={m.shape}, std_inv_shape={s.shape}")
-        logger.info(f"[Debug] VAE scale values: mean={m.mean().item():.4f}, std_inv={s.mean().item():.4f}")
+        logger.debug(f"VAE scale: mean_shape={m.shape}, std_inv_shape={s.shape}")
+        logger.debug(f"VAE scale values: mean={m.mean().item():.4f}, std_inv={s.mean().item():.4f}")
 
     # 对齐 ComfyUI：负面提示词没有隐式默认，None 即空。
     negative_prompt = "" if negative_prompt is None else str(negative_prompt)
@@ -323,7 +323,7 @@ def sample_image(
                 device,
                 preserve_empty_text=True,
             )
-            logger.info(f"[Debug] Qwen embeds: {qwen_embeds.shape}, mean={qwen_embeds.mean().item():.4f}")
+            logger.debug(f"Qwen embeds: {qwen_embeds.shape}, mean={qwen_embeds.mean().item():.4f}")
             qwen_embeds = qwen_embeds.to(device=device, dtype=dtype)
             t5_ids = t5_ids.to(device)
             t5_attn = t5_attn.to(device)
@@ -342,7 +342,7 @@ def sample_image(
         cross_uncond = build_cross(negative_prompt)
 
     except Exception as e:
-        logger.error(f"[Debug] Encoding failed: {e}")
+        logger.error(f"文本编码失败: {e}")
         raise e
 
     # sigmas（对齐 ComfyUI supported_models.Anima: shift=3.0, multiplier=1.0）
@@ -364,7 +364,7 @@ def sample_image(
     # 初始化噪声（ComfyUI CONST.noise_scaling: x = sigma*noise + (1-sigma)*latent_image；txt2img latent_image=0）
     empty_latent = _prepare_comfy_ksampler_txt2img_latent(height, width, device="cpu")
     x = _prepare_comfy_t2i_noise(tuple(empty_latent.shape), sigmas, device=device, seed=seed)
-    logger.info(f"[Debug] Latents init: {x.shape}, mean={x.mean().item():.4f}, std={x.std().item():.4f}")
+    logger.debug(f"Latents init: {x.shape}, mean={x.mean().item():.4f}, std={x.std().item():.4f}")
 
     pad_mask = torch.zeros(1, 1, lat_h, lat_w, device=device, dtype=dtype)
     device_type = "cuda" if str(device).startswith("cuda") else "cpu"
@@ -423,7 +423,7 @@ def sample_image(
         return x_in - sigma_5d * v.float()
 
     sampler_name_l = str(sampler_name).lower().strip()
-    logger.info(f"[Debug] Sampler={sampler_name_l}, Scheduler={scheduler}, steps={steps}, cfg={cfg_scale}")
+    logger.debug(f"Sampler={sampler_name_l}, Scheduler={scheduler}, steps={steps}, cfg={cfg_scale}")
 
     # PR-C：通过 inference_samplers plugin registry 派发；白名单已在入口校验
     from training.inference_samplers import build_inference_sampler
@@ -456,7 +456,7 @@ def sample_image(
     if phase_callback:
         phase_callback("vae")
     latents = x.to(device=device, dtype=dtype)
-    logger.info(f"[Debug] Final latents: mean={latents.mean().item():.4f}, std={latents.std().item():.4f}")
+    logger.debug(f"Final latents: mean={latents.mean().item():.4f}, std={latents.std().item():.4f}")
     del denoise_fn, x, cross_cond, cross_uncond, pad_mask, sigmas, empty_latent
     offloaded_modules: list[tuple[object, torch.device]] = []
     try:
@@ -467,7 +467,7 @@ def sample_image(
         # VAEWrapper.should_offload_for_whole_decode。
         _should_offload = getattr(vae, "should_offload_for_whole_decode", None)
         if device_type == "cuda" and callable(_should_offload) and _should_offload(latents):
-            logger.info("[Debug] VAE decode: 显存紧张且峰值在崖下，offload 非活跃模块以整图 decode")
+            logger.info("[显存] VAE decode：显存紧张且峰值在崖下，offload 非活跃模块以整图 decode")
             offloaded_modules = _offload_modules_for_vae_decode(
                 *_decode_offload_targets(model, qwen_model)
             )
@@ -484,11 +484,11 @@ def sample_image(
         if device_type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception as e:
-        logger.error(f"[Debug] VAE decode failed: {e}")
+        logger.error(f"VAE decode 失败: {e}")
         raise
     finally:
         if offloaded_modules:
-            logger.info("[Debug] VAE decode: restoring offloaded modules after cleanup")
+            logger.debug("VAE decode: restoring offloaded modules after cleanup")
             _restore_offloaded_modules(offloaded_modules)
 
     model.train()

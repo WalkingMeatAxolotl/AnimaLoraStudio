@@ -90,6 +90,11 @@ def test_logger_getlogger_name_uses_dunder_name() -> None:
                 # 分开，便于 jq 'select(.logger | startswith("studio.client"))' 过滤
                 if arg.startswith('"studio.client') or arg.startswith("'studio.client"):
                     continue
+                # 允许 logging.getLogger("studio.cli") — cli.py 既可 `python -m studio`
+                # （__name__ == studio.cli）也可 `python -m studio.cli`（__main__）跑，
+                # 固定名让 _say 的记录在两种入口下同名（logging-target-state §3.5）
+                if arg in ('"studio.cli"', "'studio.cli'"):
+                    continue
                 bad.append(f"{py.relative_to(studio_root)}: getLogger({arg})")
     assert not bad, (
         "studio/ 内 getLogger 应该统一用 __name__；下列违反必须修或加 silence list 注释:\n"

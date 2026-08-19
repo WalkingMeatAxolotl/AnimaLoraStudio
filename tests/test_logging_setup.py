@@ -22,6 +22,7 @@ from studio.infrastructure.logging import (
     HumanConsoleFormatter,
     JsonLineFormatter,
     LOG_LEVEL_ENV,
+    LOG_LINE_RE,
     OWN_LOGGER_NAMESPACES,
     STUDIO_LOG_NAME,
     _NOISY_LOGGERS,
@@ -312,3 +313,29 @@ def test_uvicorn_access_silenced_others_kept(tmp_path: Path) -> None:
 def test_reconfigure_console_utf8_does_not_crash() -> None:
     """无论 stdout/stderr 是何种 stream 都不应 crash（包括测试下的 pipe）。"""
     reconfigure_console_utf8()  # 不抛即通过
+
+
+# ── 行契约（docs/design/logging-target-state.md §3.2）────────────────────────
+
+
+@pytest.mark.parametrize("level,expect", [
+    (logging.DEBUG, "DEBUG"), (logging.INFO, "INFO"),
+    (logging.WARNING, "WARNING"), (logging.ERROR, "ERROR"), (logging.CRITICAL, "CRITICAL"),
+])
+def test_human_line_matches_contract_regex(level: int, expect: str) -> None:
+    fmt = HumanConsoleFormatter()
+    rec = logging.LogRecord(
+        name="training.progress", level=level, pathname="/x.py", lineno=1,
+        msg="epoch=%d step=%d", args=(0, 50), exc_info=None,
+    )
+    line = fmt.format(rec)
+    m = LOG_LINE_RE.match(line)
+    assert m, line
+    assert m["level"] == expect
+    assert m["logger"] == "training.progress"
+    assert m["msg"] == "epoch=0 step=50"
+
+
+def test_contract_regex_rejects_continuation_lines() -> None:
+    for cont in ("Traceback (most recent call last):", '  File "x.py", line 1', "ValueError: boom", ""):
+        assert LOG_LINE_RE.match(cont) is None, cont

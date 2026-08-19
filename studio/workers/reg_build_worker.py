@@ -21,7 +21,7 @@
 
 不开子进程：把 WD14 / postprocess 直接 import 进来，progress 走同一 log_path。
 
-日志只走 stdout：见 `download_worker.py` 顶部的说明。
+日志只走 logger：见 `download_worker.py` 顶部的说明。
 """
 from __future__ import annotations
 
@@ -141,10 +141,10 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("job %s not found", job_id)
         return 1
     if job["kind"] != "reg_build":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error("wrong kind: %s", job["kind"])
         return 1
 
     params: dict[str, Any] = job.get("params_decoded") or {}
@@ -152,7 +152,7 @@ def run(job_id: int) -> int:
     cancel_event = threading.Event()  # supervisor 走 SIGTERM；这里只为 API 完整性
 
     def progress(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     try:
         version_id = int(params["version_id"])

@@ -29,6 +29,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 import traceback as _traceback
 import uuid
@@ -250,9 +251,13 @@ class JsonLineFormatter(logging.Formatter):
 
 
 class HumanConsoleFormatter(logging.Formatter):
-    """人读 console format，给 CLI / dev terminal。
+    """人读 console format —— 也是跨进程的**行契约**（docs/design/logging-target-state.md §3.2）。
 
     `2026-05-28 14:32:18.453 INFO  studio.api.routers.queue: queued task=42`
+
+    webui / cli / worker / runtime 脚本的 stderr 全用它，run.log 每行因此可被
+    LOG_LINE_RE 解析出 ts / level / logger；不匹配行头的行（traceback、多行消息）
+    是上一条记录的续行。改这里的格式 = 改契约，前端解析器要跟着改。
     """
 
     def __init__(self) -> None:
@@ -260,6 +265,16 @@ class HumanConsoleFormatter(logging.Formatter):
             fmt="%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+
+
+# 行契约的解析正则：`<ts> <LEVEL 左对齐补到 5>[空格]<logger>: <msg>`。`-5s` 只补
+# 不截：INFO 后跟两个空格，WARNING / CRITICAL 全名后跟一个空格。
+LOG_LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) "
+    r"(?P<level>[A-Z]+)\s+"
+    r"(?P<logger>[^\s:]+): "
+    r"(?P<msg>.*)$"
+)
 
 
 # ── Public API ────────────────────────────────────────────────────────────
@@ -491,7 +506,7 @@ def _reset_for_tests() -> None:
 __all__ = [
     "STUDIO_LOG_NAME", "STUDIO_LOG_MAX_BYTES", "STUDIO_LOG_BACKUP_COUNT",
     "TRACE_HEADER", "TRACE_ENV", "PROCESS_ENV", "LOG_LEVEL_ENV",
-    "OWN_LOGGER_NAMESPACES", "console_level_from_env",
+    "OWN_LOGGER_NAMESPACES", "console_level_from_env", "LOG_LINE_RE",
     "JsonLineFormatter", "HumanConsoleFormatter", "ContextFilter",
     "make_studio_log_handler", "setup_logging", "reconfigure_console_utf8",
     "new_trace_id", "bind_trace_id", "reset_trace_id", "get_trace_id",

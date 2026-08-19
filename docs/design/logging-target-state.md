@@ -1,6 +1,6 @@
 # 日志体系目标态：统一行契约 + 显示级过滤
 
-状态：四项关键决策已拍板（2026-08-19），待实施。分刀见 §6。
+状态：四项关键决策已拍板（2026-08-19）；**刀 1 已实施**（分支 feat/logging-unify，见 ADR 0009 Addendum 1）。分刀见 §6。
 触发：issue #505 的切桶释放日志无处可去 → 全仓盘点发现 8 处 `logger.debug` 在任何配置下都不可见、run.log 是无级别的裸字节流、前端 6 套日志视图零级别解析。盘点原稿在 `tmp/logging-inventory.md`（本地）。
 上游：ADR 0009（logging/error system）定的 studio 侧骨架（`setup_logging` / JSON line / trace_id / 错误 envelope）不推翻，本文只补它没覆盖的子进程与显示面，并把跨进程的行契约定下来。
 
@@ -50,7 +50,7 @@
 | anima_daemon | stderr → server ring buffer（2000 行不变） | DEBUG（daemon spawn 同样注入） | 同上；LyCORIS 掰 stderr 逻辑保留 | 即 ring |
 | anima_generate / 手跑 anima_train | 终端 | `ANIMA_LOG_LEVEL` 默认 INFO | 同上 | 终端 |
 
-规则一句话：**被 studio 拉起 → 记 DEBUG；人手拉起 → 默认 INFO；`ANIMA_LOG_LEVEL` 两边都能覆盖。** 只有这一个 env，`setup_logging` 内部读它（现在只有 webui 入口在外面读），四个 runtime 入口不再各自 `basicConfig`，改调同一个轻量 bootstrap（`setup_logging(process, file=False, console=True)` 或等价的 runtime 版，取决于 import 成本——见 §7）。
+规则一句话：**被 studio 拉起 → 记 DEBUG；人手拉起 → 默认 INFO；`ANIMA_LOG_LEVEL` 两边都能覆盖。** 只有这一个 env，`setup_logging` 内部读它（现在只有 webui 入口在外面读），四个 runtime 入口不再各自 `basicConfig`，改调 `setup_logging(process, file=False, console=True)`（runtime 本就 import studio.*，无额外成本；open question 1 已定）。
 
 trace / process 注入补齐：`_spawn_job`、daemon spawn 与 `_spawn_task` 一样注入 `ANIMA_TRACE_ID` / `ANIMA_PROCESS_NAME`。
 
@@ -67,7 +67,7 @@ Traceback (most recent call last):
 - 多行记录（traceback、rich 曲线面板）：续行无前缀；解析器把不匹配行头的行归入上一条记录、继承其级别。
 - 训练 pipe 模式：`log_every` 进度行、`ctx.emit` 消息全部 `logger.info`；tty 模式不变（rich Progress / plain `\r`）。`ctx.emit` 的三路分流保留，只把最后的 `print` 分支换成 logger。
 - 裸 print 合法白名单：`__EVENT__:` 协议行（`snapshot.emit_event`、`preprocess_worker`）、daemon `_emit*` line-JSON、rich/plain tty 进度、`api/main.py` banner。其余 print → logger（runtime 35 处 / studio 41 处，清单见盘点稿 §1）。
-- 严重度只由级别表达：`[Debug]`（sampling.py 11 处）→ `logger.debug` 去前缀；`[WARN]` → `logger.warning`；`[OK]` print → `logger.info`。主题 tag（`[显存]` `[navit]` `[text-cache]` `[masked-loss]` …）保留，同主题同级别。
+- 严重度只由级别表达：`[Debug]`（sampling.py 11 处）→ `logger.debug` 去前缀；`[WARN]` → `logger.warning`；`[OK]` print → `logger.info`。主题 tag（`[显存]` `[navit]` `[text-cache]` `[masked-loss]` …）保留；级别按事件本身定，tag 不携带级别语义。
 - `error_msg` 回写：从 run.log 尾部取**最后一个 ERROR 级记录块**（含续行），找不到再退回现在的 Traceback/末 12 行策略。
 
 ### 3.3 显示面
@@ -160,6 +160,6 @@ studio.log 查看 UI；子进程写 studio.log（D2）；run.log GC（D4）；�
 
 ## 7. Open questions（实施时定，不阻塞开工）
 
-- runtime 入口复用 `studio.infrastructure.logging.setup_logging` 还是抄一份轻量版：前者少一份 formatter 定义，但 runtime 进程要 import `studio.*`（现在只 import `studio.paths` 等少数）；后者多一处同步点。倾向前者，import 成本实测后定。
-- 进度行的 logger 名用 `training.loop` 还是单独 `training.progress`（方便前端将来单独折叠进度行）：倾向 `training.progress`。
+- ~~runtime 入口复用 `setup_logging` 还是轻量版~~：已定复用（刀 1）。
+- ~~进度行 logger 名~~：已定 `training.progress`，`ctx.emit` 非 tty 出口 `training.emit`（刀 1）。
 - 视图开关的默认值在「全局开关变化时」是否同步已打开的视图：倾向不同步（不持久化 + 挂载取值，语义最简单）。

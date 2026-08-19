@@ -15,7 +15,7 @@
 
 打标永远覆盖 train/ 下全部 repeat 子目录（不再支持按 folder 划分）。
 
-日志只走 stdout：见 `download_worker.py` 顶部的说明。
+日志只走 logger：见 `download_worker.py` 顶部的说明。
 """
 from __future__ import annotations
 
@@ -105,16 +105,16 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("job %s not found", job_id)
         return 1
     if job["kind"] != "tag":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error("wrong kind: %s", job["kind"])
         return 1
 
     params: dict[str, Any] = job.get("params_decoded") or {}
 
     def progress(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     try:
         tagger_name = params.get("tagger", "wd14")

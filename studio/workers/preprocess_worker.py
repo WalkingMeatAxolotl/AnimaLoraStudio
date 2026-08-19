@@ -6,8 +6,9 @@
   - stage='upscale' (默认)：串行调 `studio.services.upscaler.upscale_file()`
   - stage='crop'：用 PIL 把 preprocess/ 下的图按归一化 rect 切成 N 张产物
 
-日志规范：只走 stdout（supervisor 重定向到 log 文件），不要再 open 同一个
-log 文件，避免 LogTailer 读两次。
+日志规范：只走 logger（supervisor 把 stdout/stderr 合流重定向到 log 文件），
+不要再 open 同一个 log 文件，避免 LogTailer 读两次。唯一裸 print 是
+`emit_event` 的 `__EVENT__:` stdout 协议行。
 
 取消：worker 主体在每张图前检测 SIGTERM/CTRL_BREAK 信号（Python 解释器
 默认对 SIGTERM 抛 KeyboardInterrupt 在 main thread 里）；当前轮的图处理完
@@ -67,10 +68,10 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("job %s not found", job_id)
         return 1
     if job["kind"] != preprocess.PREPROCESS_KIND:
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error("wrong kind: %s", job["kind"])
         return 1
 
     params = job.get("params_decoded") or {}
@@ -78,11 +79,14 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
     stage = params.get("stage", preprocess.STAGE_UPSCALE)
 
     def log(line: str) -> None:
-        print(line, flush=True)
+        logger.info(line)
 
     def emit_event(evt_type: str, **payload) -> None:
         """通过 stdout 标记行 → supervisor 解析 → SSE。供前端实时更新用，
-        不会进 job 日志。supervisor 端常量见 `studio/supervisor.py:_EVENT_MARKER`。"""
+        不会进 job 日志。supervisor 端常量见 `studio/supervisor.py:_EVENT_MARKER`。
+
+        这里**必须**是裸 print（stdout 协议行白名单）：走 logger 会被 Human
+        formatter 加前缀，supervisor 就认不出 `__EVENT__:` 行头了。"""
         try:
             print(f"__EVENT__:{evt_type}:{json.dumps(payload, ensure_ascii=False)}", flush=True)
         except Exception:  # noqa: BLE001 — 推事件失败不影响主流程
