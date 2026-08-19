@@ -15,6 +15,7 @@
 // task_state_changed / pause_failed 事件。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useEventStream, type StudioEvent } from '../lib/useEventStream'
 import { useToast } from './Toast'
@@ -38,6 +39,7 @@ export interface PauseProgressModalProps {
 export function PauseProgressModal({ taskId, taskName, onClose }: PauseProgressModalProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const navigate = useNavigate()
   const [state, setState] = useState<PhaseState>({ phase: 'saving' })
   const [elapsedSec, setElapsedSec] = useState(0)
   const startedAt = useRef(Date.now())
@@ -120,8 +122,10 @@ export function PauseProgressModal({ taskId, taskName, onClose }: PauseProgressM
   }
 
   const handleViewLogs = () => {
-    // 打开 QueueDetail 日志 tab
-    window.location.href = `/queue/${taskId}?tab=logs`
+    // 打开 QueueDetail 日志 tab：tab 走 hash（QueueDetail 只读 hash，合法值是单数 log），
+    // 用 router navigate 不整页刷新；之前写成 `?tab=logs` 会落到概览
+    navigate(`/queue/${taskId}#log`)
+    onClose()
   }
 
   // ── 渲染

@@ -50,3 +50,19 @@ describe('makeApiError', () => {
     expect(e.traceId).toBe('hdr-trace')
   })
 })
+
+describe('ApiError 的 String() 形态（logging-target-state §3.3）', () => {
+  it('String(e) 无 "Error: " 前缀、末尾带 trace 后缀；e.message 保持干净', () => {
+    const e = makeApiError(500, 'Internal Server Error', {
+      error: { code: 'x.y', message: 'boom', trace_id: 'abcdef1234567890' },
+    })
+    expect(e.message).toBe('boom')
+    expect(String(e)).toBe('boom  ·  trace 34567890')
+    expect(`${e}`).toBe('boom  ·  trace 34567890')
+  })
+
+  it('没有 trace 时 String(e) 就是 message', () => {
+    const e = makeApiError(400, 'Bad Request', { detail: 'legacy' })
+    expect(String(e)).toBe('legacy')
+  })
+})

@@ -28,7 +28,8 @@ describe('TaskLogDrawer (issue #251)', () => {
       'true',
     )
     expect(screen.getByTestId('log-drawer-body')).toHaveStyle({ height: '40vh' })
-    expect(screen.getByText(/line a\s+line b/)).toBeInTheDocument()
+    expect(screen.getByText("line a")).toBeInTheDocument()
+    expect(screen.getAllByText("line b").length).toBeGreaterThan(0)
   })
 
   it('挂载即 done（历史回放）→ 默认收起（body 高度 0），条上显示最后一行', () => {

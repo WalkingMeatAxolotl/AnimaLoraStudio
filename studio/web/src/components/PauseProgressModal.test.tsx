@@ -28,6 +28,9 @@ vi.mock('./Toast', () => ({
   useToast: () => ({ toast: toastMock }),
 }))
 
+const navigateMock = vi.fn()
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigateMock }))
+
 const cancelTaskMock = vi.fn().mockResolvedValue({ task_id: 1, canceled: true })
 vi.mock('../api/client', () => ({
   api: {
@@ -115,5 +118,16 @@ describe('PauseProgressModal', () => {
       await Promise.resolve()
     })
     expect(cancelTaskMock).toHaveBeenCalledWith(42)
+  })
+
+  it('failed 阶段「查看日志」走 router 跳到 QueueDetail 的 #log（不是 ?tab=logs 整页刷新）', () => {
+    const onClose = vi.fn()
+    render(<PauseProgressModal taskId={42} taskName="my_lora" onClose={onClose} />)
+    act(() => {
+      onEventCb?.({ type: 'task_state_changed', task_id: 42, status: 'failed' })
+    })
+    fireEvent.click(screen.getByText('queue.pauseProgress.viewLogs'))
+    expect(navigateMock).toHaveBeenCalledWith('/queue/42#log')
+    expect(onClose).toHaveBeenCalled()
   })
 })

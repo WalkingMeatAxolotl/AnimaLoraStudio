@@ -640,6 +640,9 @@ export interface SystemPrefsConfig {
   /** 计算显卡（多卡机器，#491）：NVML/nvidia-smi 的 PCI 序号；null = 未设置
    *  （CUDA 自选，快卡优先）。启动期注入 CUDA env，重启生效。 */
   gpu_index?: number | null
+  /** 日志视图默认是否显示 DEBUG 行（logging-target-state D1）。只管显示默认值：
+   *  run.log 恒记 DEBUG，每个 LogView 的「调试」开关以此为初值、不持久化。 */
+  log_debug_default?: boolean
 }
 
 export interface ProxyConfig {
@@ -1929,6 +1932,10 @@ export function makeApiError(
   e.code = code
   e.detail = detail
   e.traceId = traceId
+  // 全站 91 处 `toast(String(e), 'error')`：String() 走 toString —— 去掉 `Error: `
+  // 英文前缀（中文 UI 里刺眼），并把 trace 后缀带上（用户截图给开发 jq 还原链路；
+  // logging-target-state §3.3）。`e.message` 保持干净给 toast(e.message) 与断言用。
+  e.toString = () => `${message}${formatErrorTraceSuffix(e)}`
   return e
 }
 

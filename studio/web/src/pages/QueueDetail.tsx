@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
-  logPageText,
   type EvalSessionSummary,
   type Task,
   type TaskOutputs,
@@ -19,6 +18,8 @@ import MonitorDashboard from '../components/MonitorDashboard'
 import { EvalMetricsPanel } from '../components/EvalMetricsPanel'
 import EvalSampleGrid from '../components/EvalSampleGrid'
 import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../components/TaskLogDrawer'
+import LogView from '../components/LogView'
+import { useTaskLog } from '../lib/useTaskLog'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { taskKind } from './Queue'
 import { fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
@@ -496,7 +497,7 @@ export default function QueueDetailPage() {
             {t('common.loading')}
           </div>
         )}
-        {tab === 'log' && <LogTab taskId={taskId} />}
+        {tab === 'log' && <LogTab taskId={taskId} live={isLive} />}
         {tab === 'monitor' && <MonitorTab taskId={taskId} />}
         {tab === 'metrics' && task && (
           <EvalMetricsTab task={task} sessionId={evalSessionId} />
@@ -656,56 +657,28 @@ function OverviewTab({ task }: { task: Task }) {
 
 // ── LogTab ──────────────────────────────────────────────────────────────────
 
-function LogTab({ taskId }: { taskId: number }) {
-  const { t } = useTranslation()
-  const [content, setContent] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [autoScroll, setAutoScroll] = useState(true)
-  const preRef = useRef<HTMLPreElement>(null)
-  const contentRef = useRef('')
-
-  const setBoth = useCallback((s: string) => { contentRef.current = s; setContent(s) }, [])
-
-  const refresh = useCallback(async () => {
-    try { const log = await api.getLog(taskId, { tail: 2000 }); setBoth(logPageText(log)); setError(null) }
-    catch (e) { setError(String(e)) }
-  }, [taskId, setBoth])
-
-  useEffect(() => { setBoth(''); void refresh() }, [taskId, refresh, setBoth])
-
-  useEventStream((evt) => {
-    if (evt.task_id !== taskId) return
-    if (evt.type === 'task_log_appended') {
-      const text = typeof evt.text === 'string' ? evt.text : ''
-      const prev = contentRef.current
-      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
-      setBoth(prev + sep + text + '\n')
-    } else if (evt.type === 'task_state_changed') {
-      void refresh()
-    }
-  })
-
-  useEffect(() => {
-    if (autoScroll && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight
-  }, [content, autoScroll])
-
+/** 日志 tab：统一 LogView + useTaskLog（尾部分页 / SSE 增量 / 断线补拉 / 加载更早）。
+ *  task 是否还在跑由上层 task.status 决定；这里只管展示。 */
+function LogTab({ taskId, live }: { taskId: number; live: boolean }) {
+  const log = useTaskLog(taskId, { tail: 500 })
+  const status =
+    log.status === 'error' ? 'error'
+      : log.status === 'loading' ? 'loading'
+        : live ? (log.lines.length === 0 ? 'waiting' : 'live')
+          : 'finished'
   return (
     <div className="flex flex-col flex-1 min-h-0 p-4">
-      <div className="flex items-center gap-3 text-xs pb-2.5 shrink-0">
-        <label className="text-fg-tertiary flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)}
-            style={{ width: 14, height: 14, accentColor: 'var(--accent)' }} />
-          {t('queueDetail.autoScroll')}
-        </label>
-        <span className="flex-1" />
-        <button onClick={() => void refresh()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
-      </div>
-      {error && (
-        <div className="mb-2.5 p-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">{error}</div>
-      )}
-      <pre ref={preRef} className="flex-1 min-h-0 overflow-auto bg-sunken border border-subtle rounded-md p-3.5 text-xs font-mono text-fg-secondary whitespace-pre-wrap break-all m-0" style={{ lineHeight: 1.6 }}>
-        {content || <span className="text-fg-tertiary">{t('queueDetail.noLogs')}</span>}
-      </pre>
+      <LogView
+        className="flex-1 min-h-0"
+        lines={log.lines}
+        status={status}
+        error={log.error}
+        hasMoreBefore={log.hasMoreBefore}
+        loadingEarlier={log.loadingEarlier}
+        onLoadEarlier={log.loadEarlier}
+        onRefresh={log.refresh}
+        downloadUrl={log.downloadUrl}
+      />
     </div>
   )
 }
@@ -733,8 +706,6 @@ function useEvalLogSource(
   const { t } = useTranslation()
   const { toast } = useToast()
   const [session, setSession] = useState<EvalSessionSummary | null>(null)
-  const [baseLines, setBaseLines] = useState<string[]>([])
-  const [liveLines, setLiveLines] = useState<string[]>([])
   const [retrying, setRetrying] = useState(false)
 
   const load = useCallback(async () => {
@@ -742,12 +713,7 @@ function useEvalLogSource(
     try {
       // 最新一次评估（历史全部保留，日志只看当前这次）
       const { sessions } = await api.listEvalSessions(pid, vid, taskId)
-      const latest = sessions[0] ?? null
-      setSession(latest)
-      if (!latest?.task_id) { setBaseLines([]); return }
-      const log = await api.getLog(latest.task_id, { tail: 1000 })
-      setBaseLines(log.lines.map((l) => l.text))
-      setLiveLines([])  // 已并进 base，避免与 SSE 追加的重复
+      setSession(sessions[0] ?? null)
     } catch {
       // 辅助信息，拉失败不打扰
     }
@@ -760,20 +726,11 @@ function useEvalLogSource(
     return () => window.clearInterval(id)
   }, [load])
 
-  // 实时续流：本 Session 作业的增量往尾部追（下一次 load 会并进 base）
-  const evalTaskId = session?.task_id ?? null
-  useEventStream((evt) => {
-    const isMine =
-      (evt.type === 'job_log_appended' && evt.job_id === evalTaskId)
-      || (evt.type === 'task_log_appended' && evt.task_id === evalTaskId)
-    if (!isMine || evalTaskId == null) return
-    const text = typeof evt.text === 'string' ? evt.text : ''
-    if (text) setLiveLines((prev) => [...prev, ...text.split('\n')])
-  })
+  // 日志本体：该 Session 作业的 run.log（尾部分页 + SSE 增量 + 断线补拉）
+  const log = useTaskLog(session?.task_id ?? null, { tail: 500 })
 
   return useMemo(() => {
     if (!session) return null
-    const lines = [...baseLines, ...liveLines]
     const status: LogSourceStatus =
       session.status === 'running' ? 'running'
         : session.status === 'pending' ? 'pending'
@@ -800,8 +757,12 @@ function useEvalLogSource(
             .finally(() => setRetrying(false))
         }
       : undefined
-    return { key: `eval-${taskId}`, label: '评估', status, lines, onCancel, onRetry }
-  }, [session, baseLines, liveLines, taskId, load, retrying, pid, vid, t, toast])
+    return {
+      key: `eval-${taskId}`, label: '评估', status, lines: log.lines, onCancel, onRetry,
+      downloadUrl: log.downloadUrl,
+      hasMoreBefore: log.hasMoreBefore, loadingEarlier: log.loadingEarlier, onLoadEarlier: log.loadEarlier,
+    }
+  }, [session, log.lines, log.downloadUrl, log.hasMoreBefore, log.loadingEarlier, log.loadEarlier, taskId, load, retrying, pid, vid, t, toast])
 }
 
 /** 指标 / 样图两个 tab 共用的上下文：看的是哪个 project/version、哪一次评估。

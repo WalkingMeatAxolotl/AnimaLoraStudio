@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, type EvalSessionSummary } from '../../api/client'
 import CreateEvalModal from '../../components/CreateEvalModal'
 import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../../components/TaskLogDrawer'
-import { useEventStream } from '../../lib/useEventStream'
+import { useTaskLog } from '../../lib/useTaskLog'
 
 const STATUS_BADGE: Record<string, string> = {
   pending: 'neutral', running: 'accent', done: 'ok',
@@ -29,27 +29,7 @@ function useRunningEvalLog(sessions: EvalSessionSummary[]): LogSource | null {
     () => sessions.find((s) => s.status === 'pending' || s.status === 'running') ?? null,
     [sessions],
   )
-  const taskId = active?.task_id ?? null
-  const [baseLines, setBaseLines] = useState<string[]>([])
-  const [liveLines, setLiveLines] = useState<string[]>([])
-
-  useEffect(() => {
-    if (!taskId) { setBaseLines([]); setLiveLines([]); return }
-    let alive = true
-    void api.getLog(taskId, { tail: 1000 })
-      .then((log) => { if (alive) { setBaseLines(log.lines.map((l) => l.text)); setLiveLines([]) } })
-      .catch(() => {})
-    return () => { alive = false }
-  }, [taskId])
-
-  useEventStream((evt) => {
-    const isMine =
-      (evt.type === 'job_log_appended' && evt.job_id === taskId)
-      || (evt.type === 'task_log_appended' && evt.task_id === taskId)
-    if (!isMine || taskId == null) return
-    const text = typeof evt.text === 'string' ? evt.text : ''
-    if (text) setLiveLines((prev) => [...prev, ...text.split('\n')])
-  })
+  const log = useTaskLog(active?.task_id ?? null, { tail: 500 })
 
   return useMemo(() => {
     if (!active) return null
@@ -58,9 +38,13 @@ function useRunningEvalLog(sessions: EvalSessionSummary[]): LogSource | null {
       key: `eval-session-${active.id}`,
       label: `评估 #${active.id}`,
       status,
-      lines: [...baseLines, ...liveLines],
+      lines: log.lines,
+      downloadUrl: log.downloadUrl,
+      hasMoreBefore: log.hasMoreBefore,
+      loadingEarlier: log.loadingEarlier,
+      onLoadEarlier: log.loadEarlier,
     }
-  }, [active, baseLines, liveLines])
+  }, [active, log.lines, log.downloadUrl, log.hasMoreBefore, log.loadingEarlier, log.loadEarlier])
 }
 
 export default function EvalJobsPanel({

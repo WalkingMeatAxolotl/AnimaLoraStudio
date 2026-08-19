@@ -646,6 +646,10 @@ class SystemConfig(BaseModel):
     #: 的 PCI 序号，启动期由 runtime.gpu_select 注入 CUDA_DEVICE_ORDER=PCI_BUS_ID
     #: + CUDA_VISIBLE_DEVICES 使训练/出图/打标全走这张卡；重启生效。
     gpu_index: Optional[int] = None
+    #: 日志视图默认是否显示 DEBUG 行（docs/design/logging-target-state.md D1）。
+    #: 只管显示默认值：run.log / daemon ring 恒记 DEBUG，每个日志视图有自己的
+    #: 「调试」开关（不持久化）以此为初值。报错后用户可在视图里临时打开，不用重跑。
+    log_debug_default: bool = False
     # v0.23.1 「ram_guard 默认改关」一次性迁移哨兵（_migrate_legacy_schema
     # 第 10 步）。判据是**盘上键缺失**（只有 v0.23.1 之前写的旧盘没有此键）
     # → 丢弃盘上的 generate/training ram_guard 旧值让新默认（关）生效；
