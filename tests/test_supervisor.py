@@ -547,3 +547,22 @@ def test_daemon_log_line_no_active_task_no_appended(env) -> None:
     sup._on_daemon_log_line({"line": "idle noise", "ts": 1, "seq": 1})
     assert not any(e.get("type") == "task_log_appended" for e in events)
     assert any(e.get("type") == "daemon_log_line" for e in events)
+
+
+def test_daemon_log_line_appended_has_seq_and_end_offset(env) -> None:
+    """daemon 回写路径与 LogTailer 路径同形状：seq + end_offset（= 写入后文件位置）。"""
+    events, on_event = _events_collector()
+    sup = _make_sup(env, on_event)
+    tid = 778
+    lp = env["tasks"] / str(tid) / "run.log"
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    sup._daemon_active_task_id = tid
+    sup._daemon_log_fp = open(lp, "ab")
+    try:
+        sup._on_daemon_log_line({"line": "ab", "ts": 1, "seq": 1})
+        sup._on_daemon_log_line({"line": "cde", "ts": 2, "seq": 2})
+    finally:
+        sup._daemon_log_fp.close()
+    appended = [e for e in events if e.get("type") == "task_log_appended"]
+    assert [e["end_offset"] for e in appended] == [3, 7]
+    assert appended[0]["seq"] < appended[1]["seq"]

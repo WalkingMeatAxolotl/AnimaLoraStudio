@@ -722,7 +722,7 @@ def test_status_filter_accepts_scheduled(client: TestClient) -> None:
 def test_logs_missing_returns_empty(client: TestClient) -> None:
     resp = client.get("/api/logs/9999")
     assert resp.status_code == 200
-    assert resp.json()["content"] == ""
+    assert resp.json()["lines"] == []
 
 
 def test_logs_returns_content(client: TestClient, isolated: Path) -> None:
@@ -730,4 +730,4 @@ def test_logs_returns_content(client: TestClient, isolated: Path) -> None:
     log_path.write_text("hello world\n", encoding="utf-8")
     resp = client.get("/api/logs/42")
     assert resp.status_code == 200
-    assert resp.json()["content"] == "hello world\n"
+    assert [l["text"] for l in resp.json()["lines"]] == ["hello world"]

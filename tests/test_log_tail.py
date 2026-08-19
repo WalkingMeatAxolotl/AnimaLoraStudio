@@ -18,7 +18,7 @@ def test_tailer_picks_up_appended_lines(tmp_path: Path) -> None:
     log = tmp_path / "x.log"
     log.touch()
     received: list[str] = []
-    tailer = LogTailer(log, received.append, poll_interval=0.05)
+    tailer = LogTailer(log, lambda line, _off: received.append(line), poll_interval=0.05)
     tailer.start()
     try:
         with open(log, "a", encoding="utf-8") as f:
@@ -37,7 +37,7 @@ def test_tailer_handles_missing_file(tmp_path: Path) -> None:
     """文件还没出现时不应抛错；出现后正常 tail。"""
     log = tmp_path / "later.log"
     received: list[str] = []
-    tailer = LogTailer(log, received.append, poll_interval=0.05)
+    tailer = LogTailer(log, lambda line, _off: received.append(line), poll_interval=0.05)
     tailer.start()
     try:
         time.sleep(0.1)  # 文件不存在的轮询周期
@@ -53,7 +53,7 @@ def test_tailer_flushes_partial_line_on_stop(tmp_path: Path) -> None:
     log = tmp_path / "p.log"
     log.write_text("abc", encoding="utf-8")
     received: list[str] = []
-    tailer = LogTailer(log, received.append, poll_interval=0.05)
+    tailer = LogTailer(log, lambda line, _off: received.append(line), poll_interval=0.05)
     tailer.start()
     time.sleep(0.1)
     tailer.stop()
@@ -198,7 +198,7 @@ def test_tailer_strips_ansi_and_nul(tmp_path: Path) -> None:
     )
     log.write_bytes(raw)
     received: list[str] = []
-    tailer = LogTailer(log, received.append, poll_interval=0.05)
+    tailer = LogTailer(log, lambda line, _off: received.append(line), poll_interval=0.05)
     tailer.start()
     _wait_lines(received, 2)
     tailer.stop()

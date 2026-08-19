@@ -1,6 +1,6 @@
 # 日志体系目标态：统一行契约 + 显示级过滤
 
-状态：四项关键决策已拍板（2026-08-19）；**刀 1 已实施**（分支 feat/logging-unify，见 ADR 0009 Addendum 1）。分刀见 §6。
+状态：四项关键决策已拍板（2026-08-19）；**刀 1 已合（#507）、刀 2 已实施**（分支 feat/logging-read-surface）。分刀见 §6。
 触发：issue #505 的切桶释放日志无处可去 → 全仓盘点发现 8 处 `logger.debug` 在任何配置下都不可见、run.log 是无级别的裸字节流、前端 6 套日志视图零级别解析。盘点原稿在 `tmp/logging-inventory.md`（本地）。
 上游：ADR 0009（logging/error system）定的 studio 侧骨架（`setup_logging` / JSON line / trace_id / 错误 envelope）不推翻，本文只补它没覆盖的子进程与显示面，并把跨进程的行契约定下来。
 
@@ -68,7 +68,7 @@ Traceback (most recent call last):
 - 训练 pipe 模式：`log_every` 进度行、`ctx.emit` 消息全部 `logger.info`；tty 模式不变（rich Progress / plain `\r`）。`ctx.emit` 的三路分流保留，只把最后的 `print` 分支换成 logger。
 - 裸 print 合法白名单：`__EVENT__:` 协议行（`snapshot.emit_event`、`preprocess_worker`）、daemon `_emit*` line-JSON、rich/plain tty 进度、`api/main.py` banner。其余 print → logger（runtime 35 处 / studio 41 处，清单见盘点稿 §1）。
 - 严重度只由级别表达：`[Debug]`（sampling.py 11 处）→ `logger.debug` 去前缀；`[WARN]` → `logger.warning`；`[OK]` print → `logger.info`。主题 tag（`[显存]` `[navit]` `[text-cache]` `[masked-loss]` …）保留；级别按事件本身定，tag 不携带级别语义。
-- `error_msg` 回写：从 run.log 尾部取**最后一个 ERROR 级记录块**（含续行），找不到再退回现在的 Traceback/末 12 行策略。
+- `error_msg` 回写：从 run.log 尾部（只读末 256KB）取**最后一个 ERROR/CRITICAL 记录块**（行头去前缀 + 续行）；块外更靠后的裸 `Traceback`（子进程未捕获异常）盖过它；都没有退回末 12 行。
 
 ### 3.3 显示面
 
@@ -96,13 +96,13 @@ Traceback (most recent call last):
 
 | 端点 / 事件 | 现状 | 目标 |
 |---|---|---|
-| `GET /api/logs/{task_id}` | 全文 `{content,size}` | `?tail=N`（默认 500 行）/ `?before=<offset>&limit=N`；返回 `{lines: [{offset,text}], start_offset, end_offset, size}`；服务端仍剥 `__EVENT__:` 行；不再一次性读整文件 |
+| `GET /api/logs/{task_id}` | 全文 `{content,size}` | `?tail=N`（默认 500 行）/ `?before=<offset>&limit=N`（往前翻）/ `?after=<offset>&limit=N`（断线补拉）；返回 `{lines: [{offset,text}], start_offset, end_offset, size, has_more_before}`，`offset` = 行起始字节、`end_offset` = 最后一行结束后的偏移（after 游标）；按字节切行再逐行 `clean_log_line`，与 LogTailer 同文本；末尾半行不返回；服务端仍剥 `__EVENT__:` 行；只按 64KB 块从尾部读 |
 | `GET /api/logs/{task_id}/raw` | 无 | 原始文件下载（诊断包 / 下载按钮用） |
-| SSE `task_log_appended` / `job_log_appended` | 两种形状（LogTailer 带 seq、daemon 回写不带） | 统一 `{type, task_id|job_id, seq, offset, text}`；daemon 回写路径补 seq/offset |
+| SSE `task_log_appended` / `job_log_appended` | 两种形状（LogTailer 带 seq、daemon 回写不带） | 统一 `{type, task_id|job_id, seq, end_offset, text}`（`end_offset` 与 API 的 after 游标同坐标系，LogTailer 改按字节切行计算）；daemon 回写路径补 seq/end_offset（`fp.tell()`） |
 | SSE `daemon_log_line` | `{ts, seq, line}` | 不变 |
 | `GET /api/generate/daemon/logs` | `since_seq` / `limit` | 不变（已是目标形状） |
-| `event_malformed` | task 路径 emit、job 路径不 emit、前端不消费 | job 路径补 emit；前端 LogView 收到后插一条 WARNING 伪记录「事件解析失败」 |
-| `_on_task_log` / `_on_line` | try 块包住 `_on_event` | 只包解析，广播移出 try |
+| `event_malformed` | task 路径 emit、job 路径不 emit、前端不消费 | job 路径补 emit（刀 2 已做）；前端 LogView 收到后插一条 WARNING 伪记录「事件解析失败」（刀 3） |
+| `_on_task_log` / `_on_line` | try 块包住 `_on_event` | 只包解析（`_parse_event_marker`），广播移出 try（刀 2 已做） |
 
 ### 3.5 CLI / 终端
 
