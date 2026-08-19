@@ -703,3 +703,52 @@ checkpoint 时它是唯一的换回时机。
 2. **非确定性环境里要先测噪声底再做判据**。第一次排查时我直接拿「梯度不逐位相等」
    当证据，其实无 swap 跑两遍也不相等 —— 缺对照组的测量会同时制造假阳性（当时）
    和假阴性（原单测）。判据应是「与对照组自身重复性同量级」。
+
+### 9.12 pinned 实际锁定 = 权重 × 1.47（5080 / 32GB 内存真机撞死，已修）
+
+**现象**：16GB 卡 + 32GB 内存的机器开 `blocks_to_swap=28`，`load_krea2_model` 在
+`tensor.pin_memory()` 处抛 `CUDA error: out of memory` —— 此时 DiT 一层都还没上卡，
+这不是显存 OOM，是 `cudaHostAlloc`（主机页锁定内存）失败。
+
+**两个叠加因素**：
+
+1. **Windows WDDM 对 `cudaHostAlloc` 有硬上限 ≈ 物理内存的 50%**，由 Windows 管理、
+   驱动改不了，与分配块大小无关（NVIDIA 论坛多贴确认）。`check_pinned_budget` 只按
+   可用内存比例算，没建模这条线。
+2. **PyTorch host caching allocator 把每次 pinned 分配向上取整到 2 的幂**
+   （`CachingHostAllocator.h` `PowerOf2Ceil`），而 loader 逐张量 `pin_memory()`。
+   krea2 的尺寸恰恰都很吃亏：
+
+   | 张量 | 实际 | 锁定 |
+   |---|---|---|
+   | 16384×6144 fp8 | 96 MB | 128 MB |
+   | 6144×6144 fp8 | 36 MB | 64 MB |
+   | 1536×6144 fp8 | 9 MB | 16 MB |
+
+   | blocks_to_swap | 日志/护栏计的 pinned | **真实锁定** |
+   |---|---|---|
+   | 14 | 5.66 GB | 8.31 GB |
+   | 18 | 7.28 GB | 10.69 GB |
+   | 28 | 11.32 GB | **16.63 GB** |
+
+   §9.5c 的 `pinned 11.32 GB` 是 `numel × element_size` 累加值，不是 allocator 真占用；
+   那台 5090 内存大（可用 37.5GB）所以 16.6GB 塞得下没暴露。32GB 机器 50% 线 = 16GB，
+   28 层 16.63GB 必炸 —— 而护栏按 11.32GB 放行。anima 2B 张量尺寸正好是 2 的幂
+   （1.02×），anima 36 层版 1.29×。
+
+**修法（`PinnedPacker`，`training/block_swap.py`）**：不逐张量 pin，按**精确总量**
+的二进制分解一次性预分配若干块（8G+2G+1G+256M+64M，每块恰为 2 的幂 → allocator
+零取整），每个张量 best-fit 装进某块、256B 对齐、返回块上的 view。多族多配置模拟
+（krea2 fp8/bf16 × 14/18/28、anima 2048/5120 × 8/14/全）实际锁定 = 权重 × 1.00–1.03；
+装不进的张量走溢出路径（`pow2_ceil(nbytes)` 单独一块 = 旧行为，永远不更差）。两条
+pin 路径都接了：krea2 loader 直落（计划字节由 `_swapped_pinned_bytes` 镜像加载规则
+——fp8 原样、其余按计算 dtype——从 header 精确算出）、`PinnedBlockSwap._build` 的
+非预 pinned 路径（anima 放置 / GPU 常驻）。view 语义对既有机制透明：`is_pinned()`
+成立、`param.data = view` 照旧、H2D 照常、`release_pinned_host_cache` 仍按 §9.7 归还。
+
+顺带把 `cudaHostAlloc` 失败翻译成可行动的文案（`PinnedAllocationError`：说明是页
+锁定内存不是显存、要锁多少、Windows 上限在哪、调小 `blocks_to_swap`）。
+
+**没改的**：护栏仍按 `numel × element_size` 口径且不建模 50% 线、`_build` 的
+`pinned x GB` 日志仍是 numel 口径 —— 修好打包后两者与真实锁定只差 ≤3%，误差方向
+可接受；loader 新增一行「权重 X GB 打包进 N 块，实际锁定 Y GB」的日志供真机核对。

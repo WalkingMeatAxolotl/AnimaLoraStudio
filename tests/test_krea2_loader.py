@@ -460,3 +460,99 @@ def test_validate_fp8_base_noop_for_bf16(tmp_path: Path) -> None:
     _write_checkpoint(bf16, _state_dict(_tiny_config()))
     ctx = _fp8_ctx(tmp_path, transformer_path=str(bf16), grad_checkpoint=False)
     _validate_fp8_base(ctx)  # bf16 底模不受 fp8 约束
+
+
+# ---------------------------------------------------------------- block swap 打包落 pinned
+
+
+@pytest.fixture
+def fake_pinned_alloc(monkeypatch: pytest.MonkeyPatch):
+    """CPU 机器上用普通 uint8 张量顶替 pinned 大块，并记录每次分配尺寸。"""
+    import training.block_swap as bs
+
+    sizes: list[int] = []
+
+    def _alloc(nbytes: int) -> torch.Tensor:
+        sizes.append(nbytes)
+        return torch.empty(nbytes, dtype=torch.uint8)
+
+    monkeypatch.setattr(bs, "_alloc_pinned_bytes", _alloc)
+    return sizes
+
+
+def test_swapped_layers_are_packed_views_not_per_tensor_pins(
+    tmp_path: Path, fake_pinned_alloc: list[int],
+) -> None:
+    """blocks_to_swap>0：换出层权重落在少数 2 的幂大块的 view 上，内容逐位正确；
+    非换出层照常上目标设备。预分配计划（_swapped_pinned_bytes）与实际打包量一致。"""
+    config = _tiny_config()
+    expected = _state_dict(config)
+    checkpoint = tmp_path / "raw.safetensors"
+    _write_checkpoint(checkpoint, expected)
+
+    model = load_krea2_model(
+        checkpoint, "cpu", torch.bfloat16, config=config, blocks_to_swap=1,
+    )
+
+    # 只分配了一块（总量 < 64MB 粒度 → 64MB 一块），且是 2 的幂
+    assert fake_pinned_alloc == [64 * 1024 ** 2]
+    storages = set()
+    swapped = 0
+    for name, param in model.named_parameters():
+        assert param.dtype == torch.bfloat16
+        torch.testing.assert_close(param.detach(), expected[name].to(torch.bfloat16))
+        if name.startswith("blocks.1."):
+            swapped += 1
+            storages.add(param.untyped_storage().data_ptr())
+            assert (param.data_ptr() - param.untyped_storage().data_ptr()) % 256 == 0
+    assert swapped > 0 and len(storages) == 1
+
+    prefixes = krea2_loader._swapped_block_prefixes(config, 1)
+    n2s = {key: key for key in expected}
+    planned = krea2_loader._swapped_pinned_bytes(checkpoint, prefixes, n2s, torch.bfloat16)
+    # 计划按计算 dtype（bf16）算，而 checkpoint 是 fp32 —— 必须是一半而不是原始字节
+    assert planned == sum(v.numel() * 2 for k, v in expected.items() if k.startswith(prefixes))
+    assert planned == krea2_loader._swapped_bytes_from_checkpoint(checkpoint, prefixes, n2s) // 2
+
+
+def test_fp8_scaled_swapped_layers_keep_fp8_in_packed_views(
+    tmp_path: Path, fake_pinned_alloc: list[int],
+) -> None:
+    """fp8_scaled + swap：换出层的 fp8 权重原样（dtype 不变）落 pinned 大块，scale
+    留在计算设备；计划字节按 fp8 原样 + 其余按计算 dtype 镜像加载规则。"""
+    config = _tiny_config()
+    state_dict = _state_dict(config)
+    checkpoint = tmp_path / "fp8_scaled.safetensors"
+    layers = _write_fp8_scaled_checkpoint(checkpoint, state_dict)
+
+    model = load_krea2_model(
+        checkpoint, "cpu", torch.bfloat16, config=config, blocks_to_swap=1,
+    )
+
+    assert fake_pinned_alloc == [64 * 1024 ** 2]
+    chunk_ptrs = set()
+    for name, param in model.named_parameters():
+        if not name.startswith("blocks.1."):
+            continue
+        layer = name[: -len(".weight")] if name.endswith(".weight") else None
+        if layer in layers:
+            assert param.dtype == torch.float8_e4m3fn
+        else:
+            assert param.dtype == torch.bfloat16
+        chunk_ptrs.add(param.untyped_storage().data_ptr())
+    assert len(chunk_ptrs) == 1
+
+    prefixes = krea2_loader._swapped_block_prefixes(config, 1)
+    info, n2s, _scales = krea2_loader._inspect(
+        checkpoint, config,
+        expected_shapes={k: tuple(v.shape) for k, v in state_dict.items()},
+        allow_fp8=True,
+    )
+    planned = krea2_loader._swapped_pinned_bytes(checkpoint, prefixes, n2s, torch.bfloat16)
+    want = 0
+    for key, value in state_dict.items():
+        if not key.startswith(prefixes):
+            continue
+        layer = key[: -len(".weight")] if key.endswith(".weight") else None
+        want += value.numel() * (1 if layer in layers else 2)
+    assert planned == want
