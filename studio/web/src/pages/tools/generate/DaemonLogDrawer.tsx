@@ -30,6 +30,8 @@ export default function DaemonLogDrawer({
 }) {
   const { t } = useTranslation()
   const [entries, setEntries] = useState<LogEntry[]>([])
+  // LogView 工具栏 portal 进 header（与 TaskLogDrawer 同构，避免两层工具栏行）
+  const [toolbarEl, setToolbarEl] = useState<HTMLElement | null>(null)
   const seqRef = useRef(0)
   const openRef = useRef(open)
   openRef.current = open
@@ -85,6 +87,7 @@ export default function DaemonLogDrawer({
         <span className="text-sm font-semibold text-fg-primary">{t('generate.logDrawerTitle')}</span>
         <span className="text-xs font-mono text-fg-tertiary">{entries.length}</span>
         <span className="flex-1" />
+        <div ref={setToolbarEl} className="flex items-center shrink-0" />
         <button className="btn btn-ghost btn-sm" onClick={onClose}>
           {t('generate.logDrawerClose')}
         </button>
@@ -92,10 +95,13 @@ export default function DaemonLogDrawer({
       {/* 关着时不渲染内容区，省掉隐藏抽屉的解析 / 滚动 */}
       {open && (
         <LogView
-          className="flex-1 min-h-0 px-4 pt-2 pb-2"
+          className="flex-1 min-h-0"
           lines={lines}
           status="live"
           emptyText={t('generate.logDrawerEmpty')}
+          toolbar={!!toolbarEl}
+          toolbarContainer={toolbarEl}
+          frameless
           extraActions={
             <button className="btn btn-ghost btn-sm" onClick={() => setEntries([])} disabled={entries.length === 0}>
               {t('generate.logDrawerClear')}

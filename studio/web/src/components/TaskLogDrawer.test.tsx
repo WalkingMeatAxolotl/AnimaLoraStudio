@@ -135,3 +135,35 @@ describe('TaskLogDrawer (issue #251)', () => {
     expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
   })
 })
+
+describe('抽屉一层化（日志二期 UI）', () => {
+  const HDR = (lvl: string, msg: string) =>
+    `2026-08-19 14:03:22.417 ${lvl.padEnd(5)} studio.workers.tag_worker: ${msg}`
+
+  it('收起态预览行跳过 DEBUG，显示最后一条 INFO+ 记录', () => {
+    render(
+      <TaskLogDrawer
+        sources={[makeSource({
+          status: 'done',
+          finishedAt: 1700000010,
+          lines: [HDR('INFO', 'tagging done 43/43'), HDR('DEBUG', 'internal detail')],
+        })]}
+      />,
+    )
+    expect(screen.getByText(/tagging done 43\/43/)).toBeInTheDocument()
+    expect(screen.queryByText(/internal detail/)).not.toBeInTheDocument()
+  })
+
+  it('展开后 LogView 工具栏渲染在 header 内（一层化），预览行让位', async () => {
+    const user = userEvent.setup()
+    render(<TaskLogDrawer sources={[makeSource({ status: 'done', finishedAt: 1700000010, lines: [HDR('INFO', 'hello world')] })]} />)
+    // 收起：预览可见、无工具栏
+    expect(screen.getByText(/hello world/)).toBeInTheDocument()
+    expect(screen.queryByTestId('log-view-toolbar')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { expanded: false }))
+    // 展开：工具栏出现且位于 header（aria-expanded 的开合条）内部
+    const toolbar = await screen.findByTestId('log-view-toolbar')
+    const header = screen.getByRole('button', { expanded: true })
+    expect(header.contains(toolbar)).toBe(true)
+  })
+})

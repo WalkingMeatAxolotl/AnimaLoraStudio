@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { lastVisibleLine } from '../lib/logLines'
 import LogView from './LogView'
 
 export type LogSourceStatus =
@@ -81,6 +82,9 @@ export default function TaskLogDrawer({
 
   const [expanded, setExpanded] = useState(false)
   const prevRef = useRef<{ key: string; status: LogSourceStatus } | null>(null)
+  // LogView 工具栏 portal 进 header（避免「header + 工具栏」两层）；用 state 存
+  // element 保证容器挂载后 portal 才渲染
+  const [toolbarEl, setToolbarEl] = useState<HTMLElement | null>(null)
 
   const activeKey = active?.key ?? null
   const activeStatus = active?.status ?? null
@@ -101,12 +105,18 @@ export default function TaskLogDrawer({
     return () => window.clearInterval(id)
   }, [live])
 
+  // 收起态预览：最后一条非 DEBUG 记录（调试行不顶到 header 上）
+  const activeLines = active?.lines
+  const lastLine = useMemo(
+    () => (activeLines ? lastVisibleLine(activeLines) : ''),
+    [activeLines],
+  )
+
   if (!active) return null
 
   const elapsed = active.startedAt
     ? (active.finishedAt ?? Date.now() / 1000) - active.startedAt
     : null
-  const lastLine = active.lines[active.lines.length - 1] ?? ''
 
   return (
     <>
@@ -140,7 +150,20 @@ export default function TaskLogDrawer({
           {elapsed != null && elapsed > 0 && (
             <span className="text-fg-tertiary text-xs shrink-0">· {Math.round(elapsed)}s</span>
           )}
-          <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">{lastLine}</span>
+          {/* 展开时预览让位给工具栏（日志本体已可见，预览冗余）；收起时显示预览 */}
+          {expanded ? (
+            <>
+              <span className="flex-1 min-w-0" />
+              <div
+                ref={setToolbarEl}
+                className="flex items-center shrink-0"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+            </>
+          ) : (
+            <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">{lastLine}</span>
+          )}
           {live && active.onCancel && (
             <button
               onClick={(e) => {
@@ -181,7 +204,10 @@ export default function TaskLogDrawer({
               loadingEarlier={active.loadingEarlier}
               onLoadEarlier={active.onLoadEarlier}
               maxRender={1000}
-              className="h-full px-4 pt-2 pb-2"
+              toolbar={!!toolbarEl}
+              toolbarContainer={toolbarEl}
+              frameless
+              className="h-full"
             />
           )}
         </div>
