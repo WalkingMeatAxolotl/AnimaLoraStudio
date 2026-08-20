@@ -1,6 +1,6 @@
 # 日志体系目标态：统一行契约 + 显示级过滤
 
-状态：四项关键决策已拍板（2026-08-19）；**刀 1（#507）/ 刀 2（#508）/ 刀 3（#509）已合，刀 4 已实施**（分支 feat/logging-diagnostics）。分刀见 §6。
+状态：**全部实施**。一期四刀：刀 1（#507）/ 刀 2（#508）/ 刀 3（#509）/ 刀 4 诊断包（#512）已合，分刀见 §6。第二期「文本与级别复审」（2026-08-20，#514 TaskLog 进度通道收编 + #516 风暴节流/i18n 字典/三域 879 条文案终稿）已合：全仓日志逐条判决与改写、INFO 用户面走 `infrastructure/log_messages` 双语字典（`ANIMA_UI_LANG`）、WARNING/ERROR/DEBUG 与 studio.log 面统一英文；分级与文风规则（R1-R10/T1-T7/S1-S8）底稿在 `tmp/log-text-audit/`（本地）。
 触发：issue #505 的切桶释放日志无处可去 → 全仓盘点发现 8 处 `logger.debug` 在任何配置下都不可见、run.log 是无级别的裸字节流、前端 6 套日志视图零级别解析。盘点原稿在 `tmp/logging-inventory.md`（本地）。
 上游：ADR 0009（logging/error system）定的 studio 侧骨架（`setup_logging` / JSON line / trace_id / 错误 envelope）不推翻，本文只补它没覆盖的子进程与显示面，并把跨进程的行契约定下来。
 
