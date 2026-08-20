@@ -16,6 +16,9 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
+# pyramid_noise 回退告警只出一次（R8 warn-once；见 tmp/log-text-audit）
+_pyramid_warned = False
+
 
 def noise_params_from_args(args) -> tuple[float, int, float]:
     """按 noise_enhancement_type 分派生效的噪声增强参数 → (offset, iters, discount)。
@@ -84,6 +87,14 @@ def make_noise(
                     break
             noise = cur / cur.std().clamp(min=1e-6)
         except Exception as exc:
-            logger.warning(f"pyramid_noise 失败，回退标准噪声: {exc}")
+            # warn-once（R8）：make_noise 每 step 调，逐条告警最坏 3 万行/任务
+            global _pyramid_warned
+            if not _pyramid_warned:
+                _pyramid_warned = True
+                logger.warning(
+                    "Pyramid noise failed: %s — falling back to standard Gaussian "
+                    "noise for the rest of the run; same warning is not repeated",
+                    exc,
+                )
 
     return noise

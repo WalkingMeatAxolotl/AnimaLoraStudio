@@ -96,12 +96,12 @@ def _keep_third_party_logs_off_stdout(
             if getattr(handler, "stream", None) is sys.stdout:
                 third.removeHandler(handler)
         if not third.handlers:
+            # formatter 必须走行契约（HumanConsoleFormatter）：自拼格式的行头
+            # 匹配不上 LOG_LINE_RE，会被 ring/LogView 解析器当成上一条的续行、
+            # 继承别人的级别（tmp/log-text-audit 刀 1 机制修复）。
+            from studio.infrastructure.logging import HumanConsoleFormatter
             stderr_handler = logging.StreamHandler(sys.stderr)
-            stderr_handler.setFormatter(
-                logging.Formatter(
-                    "%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S",
-                )
-            )
+            stderr_handler.setFormatter(HumanConsoleFormatter())
             third.addHandler(stderr_handler)
 
 

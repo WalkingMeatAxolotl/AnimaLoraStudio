@@ -617,7 +617,18 @@ class ImageDataset(Dataset):
                 tag_dropout=self.tag_dropout,
             )
         except Exception as e:
-            logger.warning(f"JSON 处理失败 {json_path}: {e}")
+            # 按 json_path 去重（R8/R9）：坏 JSON × epochs × repeats 会灌上千条；
+            # 每个坏文件只记一次全文。Dataset 无收尾时机，run 级汇总不在此实现。
+            warned = getattr(self, "_caption_json_warned", None)
+            if warned is None:
+                warned = self._caption_json_warned = set()
+            if str(json_path) not in warned:
+                warned.add(str(json_path))
+                logger.warning(
+                    "Caption JSON parse failed: %s (%s) — the caption is treated "
+                    "as empty; repeats of this file are not logged again",
+                    json_path, e,
+                )
             return None
 
     def __len__(self):
