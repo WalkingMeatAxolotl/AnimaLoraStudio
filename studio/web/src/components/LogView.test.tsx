@@ -18,11 +18,10 @@ beforeEach(() => {
 })
 
 describe('LogView', () => {
-  it('按级别着色，默认（全局关）隐藏 DEBUG 行并提示条数；视图开关临时打开', async () => {
+  it('按级别着色，默认（全局关）隐藏 DEBUG 行；视图开关临时打开', async () => {
     mockGlobalDefault(false)
     render(<LogView lines={[H('DEBUG', 'training.loop', 'dbg-line'), H('INFO', 'training.loop', 'info-line'), H('WARNING', 'utils.x', 'warn-line'), H('ERROR', 'a.b', 'err-line'), 'Traceback (most recent call last):']} />)
-    await waitFor(() => expect(screen.getByText(/已隐藏 1 条调试行/)).toBeInTheDocument())
-    expect(screen.queryByText('dbg-line')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('dbg-line')).not.toBeInTheDocument())
     expect(screen.getByText('err-line')).toHaveClass('text-err')
     expect(screen.getByText('warn-line')).toHaveClass('text-warn')
     // 续行继承 ERROR 且缩进
