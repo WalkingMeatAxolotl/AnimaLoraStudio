@@ -190,7 +190,6 @@
   },
   "logView": {
     "debug": "Debug",
-    "hiddenDebug": "{{n}} debug lines hidden",
     "autoScroll": "Auto-scroll",
     "copy": "Copy",
     "copied": "Copied to clipboard",

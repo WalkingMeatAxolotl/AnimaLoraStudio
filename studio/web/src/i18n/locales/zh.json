@@ -190,7 +190,6 @@
   },
   "logView": {
     "debug": "调试",
-    "hiddenDebug": "已隐藏 {{n}} 条调试行",
     "autoScroll": "自动滚动",
     "copy": "复制",
     "copied": "已复制到剪贴板",

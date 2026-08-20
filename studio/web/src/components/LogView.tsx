@@ -126,7 +126,6 @@ export default function LogView({
     const v = parsed.filter((l) => isLineVisible(l, showDebug))
     return maxRender && v.length > maxRender ? v.slice(-maxRender) : v
   }, [parsed, showDebug, maxRender])
-  const hiddenDebug = parsed.length - parsed.filter((l) => isLineVisible(l, showDebug)).length
 
   // 跟随到底
   useEffect(() => {
@@ -180,9 +179,6 @@ export default function LogView({
           style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
         />
         {t('logView.debug')}
-        {!showDebug && hiddenDebug > 0 && (
-          <span className="text-fg-tertiary">（{t('logView.hiddenDebug', { n: hiddenDebug })}）</span>
-        )}
       </label>
       <label className="text-fg-tertiary flex items-center gap-1.5 cursor-pointer">
         <input
