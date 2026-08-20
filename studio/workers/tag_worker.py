@@ -35,6 +35,7 @@ logger = logging.getLogger("studio.workers.tag_worker")
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
 # cli.py / server.py 已覆盖各自进程；worker 是独立 subprocess，靠 get_tagger
 # 懒加载链触发太晚（懒加载在 main() 里，某些路径下来不及）—— worker 顶层显式 import。
+from studio.infrastructure.task_log import TaskLog
 from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
 
 from studio import db
@@ -115,8 +116,7 @@ def run(job_id: int) -> int:
 
     params: dict[str, Any] = job.get("params_decoded") or {}
 
-    def progress(line: str) -> None:
-        logger.info(line)
+    progress = TaskLog(logger)
 
     try:
         tagger_name = params.get("tagger", "wd14")

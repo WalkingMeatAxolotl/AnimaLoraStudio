@@ -37,7 +37,12 @@ from typing import Any, Callable, Optional
 from ... import __version__
 from ...paths import REPO_ROOT, STUDIO_DATA
 
+from studio.infrastructure.task_log import TaskLogLike, TaskLog
+
 logger = logging.getLogger(__name__)
+
+#: 无人传 emit 时的兜底：走本模块 logger（终端 INFO 可见，不再裸 print）。
+_DEFAULT_LOG = TaskLog(logger)
 
 # ----- Flag / 缓存文件路径 ------------------------------------------------
 RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
@@ -809,7 +814,7 @@ def _backup_preserved_files(log_lines: list[str]) -> list[str]:
 
 
 def _restore_preserved_files(
-    saved: list[str], emit: Callable[[str], None], log_lines: list[str],
+    saved: list[str], emit: TaskLogLike, log_lines: list[str],
 ) -> None:
     """reset 后：把备份里"被 reset 删掉"的模型数据文件还原（更新零感知），收尾清
     备份目录。目标版本仍带该文件（如回滚到旧版）时 dst 已存在 → 不覆盖。"""
@@ -844,7 +849,7 @@ def _discard_preserved() -> None:
         pass
 
 
-def apply_pending(emit: Callable[[str], None] = print) -> bool:
+def apply_pending(emit: TaskLogLike = _DEFAULT_LOG) -> bool:
     """cli.py 启动期调。返回 True = 走过 pull 路径；False = 无 pending 跳过。
 
     流程：

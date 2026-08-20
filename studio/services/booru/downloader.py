@@ -28,8 +28,9 @@ import requests
 
 from . import api as booru_api, pool as booru_pool
 from ..proxy_manager import get_proxy_dict
+from studio.infrastructure.task_log import TaskLogLike
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 ImageSavedFn = Callable[[Path], None]
 
 

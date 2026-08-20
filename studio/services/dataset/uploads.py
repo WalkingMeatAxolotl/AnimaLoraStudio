@@ -47,9 +47,11 @@ from PIL import Image
 from ..booru.api import flatten_alpha, has_alpha
 from .scan import IMAGE_EXTS
 
+from studio.infrastructure.task_log import TaskLogLike
+
 logger = logging.getLogger(__name__)
 
-LogFn = Callable[[str], None]
+LogFn = TaskLogLike
 
 # PP10 起复用全链路白名单：上传 / 下载 / curation / 训练共用一份。
 ALLOWED_IMAGE_EXTS = IMAGE_EXTS

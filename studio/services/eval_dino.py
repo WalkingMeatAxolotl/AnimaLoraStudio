@@ -14,13 +14,14 @@ from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_dino"
 DEFAULT_MODEL_NAME = "facebook/dinov2-small"
 CACHE_KEY = "dino"
 
 DinoScorer = Callable[
-    [dict[str, Any], Path, str, Callable[[str], None]],
+    [dict[str, Any], Path, str, TaskLogLike],
     dict[str, Any],
 ]
 
@@ -37,7 +38,7 @@ def run_dino_job(
     *,
     scorer: DinoScorer | None = None,
     model_name: str | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: TaskLogLike | None = None,
     eval_root: Path | None = None,
 ) -> dict[str, Any]:
     """Compute DINO-I for one completed eval sample run."""
@@ -244,7 +245,7 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _load_dino(model_name: str, progress: Callable[[str], None]):
+def _load_dino(model_name: str, progress: TaskLogLike):
     import torch
     from transformers import AutoImageProcessor, AutoModel
 
@@ -264,7 +265,7 @@ def _default_scorer(
     run: dict[str, Any],
     version_dir: Path,
     model_name: str,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
     pool: eval_model_pool.ModelPool | None = None,
 ) -> dict[str, Any]:
     import numpy as np
@@ -335,7 +336,7 @@ def _encode_images(
     processor,
     paths: list[Path],
     device: str,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
     *,
     label: str = "generated",
 ):
@@ -472,7 +473,7 @@ def _rel_to_version(version_dir: Path, path: Path) -> str:
 
 
 @contextlib.contextmanager
-def shared_scorer(progress: Callable[[str], None] | None = None):
+def shared_scorer(progress: TaskLogLike | None = None):
     """阶段级共享的 scorer：DINO 只加载一次，跑完全部候选后释放。
 
     `_stage_metric` 本来就是「一个指标跑完所有候选再换下一个」，但

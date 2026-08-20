@@ -22,9 +22,11 @@ from typing import Any, Callable, Optional
 from studio.services import eval_session
 from studio.services.projects import projects, versions
 
+from studio.infrastructure.task_log import TaskLogLike
+
 logger = logging.getLogger(__name__)
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 
 
 def _version_eval_config(

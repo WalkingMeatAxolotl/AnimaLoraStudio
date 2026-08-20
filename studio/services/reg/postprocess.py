@@ -44,8 +44,9 @@ from PIL import Image
 from sklearn.cluster import KMeans
 
 from ...services.dataset.scan import IMAGE_EXTS
+from studio.infrastructure.task_log import TaskLogLike
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 
 VALID_METHODS = {"smart", "stretch", "crop"}
 

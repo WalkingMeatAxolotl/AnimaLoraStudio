@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_ccip"
 DEFAULT_MODEL_NAME = "ccip-caformer-24-randaug-pruned"
@@ -29,7 +30,7 @@ _CCIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 _CCIP_STD = (0.26862954, 0.26130258, 0.27577711)
 
 CcipScorer = Callable[
-    [dict[str, Any], Path, str, Callable[[str], None]],
+    [dict[str, Any], Path, str, TaskLogLike],
     dict[str, Any],
 ]
 
@@ -51,7 +52,7 @@ def run_ccip_job(
     *,
     scorer: CcipScorer | None = None,
     model_name: str | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: TaskLogLike | None = None,
     eval_root: Path | None = None,
 ) -> dict[str, Any]:
     """Compute CCIP-I for one completed eval sample run."""
@@ -278,7 +279,7 @@ def _ccip_preprocess(path: Path):
     return (arr - mean) / std  # (3, 384, 384)
 
 
-def _load_ccip(model_name: str, progress: Callable[[str], None]):
+def _load_ccip(model_name: str, progress: TaskLogLike):
     import json
 
     from studio.services.models.downloader import ensure_ccip_model
@@ -344,7 +345,7 @@ def _default_scorer(run, version_dir, model_name, progress, pool=None):
 
 
 @contextlib.contextmanager
-def shared_scorer(progress: Callable[[str], None] | None = None):
+def shared_scorer(progress: TaskLogLike | None = None):
     """阶段级共享的 scorer：CCIP session 只加载一次，跑完全部候选后释放。
 
     `_stage_metric` 本来就是「一个指标跑完所有候选再换下一个」，但

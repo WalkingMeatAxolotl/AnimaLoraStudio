@@ -68,7 +68,12 @@ from .paths import (
 from . import sources as _sources
 from .sources import MS_ANIMA_TEXT_ENCODER_PATH
 
+from studio.infrastructure.task_log import TaskLogLike, TaskLog
+
 logger = logging.getLogger(__name__)
+
+#: 手跑 / 无人传 on_log 时的兜底：走本模块 logger（终端 INFO 可见，不再裸 print）。
+_DEFAULT_LOG = TaskLog(logger)
 
 # 提示：跨文件调用 download_flat[_ms] / _get_download_source / _resolve_endpoint /
 # _ms_wd14_repo_id 一律走 _sources.X(...) —— 这样测试 monkeypatch
@@ -77,7 +82,7 @@ logger = logging.getLogger(__name__)
 
 def download_taeflux(
     *, root: Optional[Path] = None,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """同步下载 TAEFlux（config + weights）到本地。任意一个文件失败则返 False。"""
     target_dir = taeflux_dir(root)
@@ -91,7 +96,7 @@ def download_taeflux(
 
 
 def download_anima_main(
-    root: Path, variant: str, *, on_log: Callable[[str], None] = print
+    root: Path, variant: str, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
     if variant == "latest":
         variant = LATEST_ANIMA
@@ -106,7 +111,7 @@ def download_anima_main(
     return _sources.download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
 
 
-def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
+def download_anima_vae(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
     # 落点是族无关共享资产（Krea2 同用）；下载渠道走 Anima repo（文件在那儿）。
     target = qwen_image_vae_target(root)
     on_log("\n📥 Anima VAE (~250 MB)")
@@ -116,7 +121,7 @@ def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> 
 
 
 def download_krea2_main(
-    root: Path, variant: str, *, on_log: Callable[[str], None] = print
+    root: Path, variant: str, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
     """从 HuggingFace 官方仓库或 ModelScope Comfy-Org 镜像下载 Krea2。"""
     if variant == "latest":
@@ -138,7 +143,7 @@ def download_krea2_main(
 
 
 def download_qwen3_vl(
-    root: Path, *, on_log: Callable[[str], None] = print
+    root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
     """下载 Krea 2 使用的完整 Qwen3-VL-4B-Instruct transformers 目录。"""
     target_dir = qwen3_vl_dir(root)
@@ -166,7 +171,7 @@ def download_qwen3_vl(
 
 
 def download_qwen3_vl_fp8(
-    root: Path, *, on_log: Callable[[str], None] = print
+    root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
     """下载官方 fp8_scaled 单文件 TE + config/tokenizer 小文件到独立目录。
 
@@ -191,7 +196,7 @@ def download_qwen3_vl_fp8(
     return ok
 
 
-def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
+def download_qwen3(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
     """下载文本编码器（Qwen3）。
 
     - HuggingFace 源：从 Qwen/Qwen3-0.6B-Base 下载完整目录所需的 6 个文件。
@@ -227,7 +232,7 @@ def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool
 
 
 def download_t5_tokenizer(
-    root: Path, *, on_log: Callable[[str], None] = print
+    root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
     target_dir = t5_tokenizer_dir(root)
     on_log(f"\n📥 T5 tokenizer (3 个文件) → {target_dir}")
@@ -243,7 +248,7 @@ def download_cltagger(
     target_root: Path,
     cfg: Optional["secrets.CLTaggerConfig"] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     cfg = cfg or secrets.load().cltagger
     model_path, tag_mapping_path = cltagger_canonical_file_paths(
@@ -264,7 +269,7 @@ def download_upscaler(
     label: str = DEFAULT_UPSCALER,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """下载放大器权重到 `{models_root}/upscalers/{filename}`。
 
@@ -301,7 +306,7 @@ def download_upscaler_custom(
     filename: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """自定义 repo 下载：用户指定 HF/MS 仓库 + 文件名，落到 `{upscalers}/{filename}`。
 
@@ -333,7 +338,7 @@ def download_main_custom(
     filename: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """统一来源候选的第三方主模型单文件下载 → `{models_root}/diffusion_models/`。
 
@@ -371,7 +376,7 @@ def download_wd14(
     model_id: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """下载 WD14 单个 model_id 的两个文件到 `{models_root}/wd14/{safe_id}/`。
 
@@ -404,7 +409,7 @@ def download_eval_model(
     model_id: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """下载 CLIP / DINO eval 模型整个 repo 到 `{models_root}/eval/{kind}/{safe_id}/`。
 
@@ -429,7 +434,7 @@ def ensure_eval_model(
     model_id: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> Path:
     """返回 eval 模型本地目录，缺失则先下载（懒加载兜底，路径与下载卡片一致）。
 
@@ -459,7 +464,7 @@ def download_ccip_model(
     variant: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """下 deepghs/ccip_onnx 指定变体的 3 个文件到 `{models_root}/eval/ccip/{variant}/`。"""
     r = root or models_root()
@@ -475,7 +480,7 @@ def ensure_ccip_model(
     variant: str,
     root: Optional[Path] = None,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> Path:
     """返回 CCIP 变体本地目录，缺 3 个文件则先下载（懒加载兜底）。"""
     r = root or models_root()
@@ -536,8 +541,56 @@ def _failure_summary(log: list[str]) -> str:
     return err or "下载失败，详见下载日志"
 
 
+class _RingLog:
+    """单个下载任务的日志 sink（实现 TaskLogLike）：UI ring + studio.log mirror。
+
+    不变量：ring 是下载卡 UI 的唯一数据面、无级别概念，任何级别都**无条件
+    append**——级别只影响 logger mirror 一侧，绝不用于过滤 ring，否则下载卡
+    会被打空。
+
+    mirror 侧：ring 容量 200 行，长下载早期日志会被截掉，logger 让 studio.log
+    保留完整流（自家 logger 恒 DEBUG，记录不过滤）。旧签名 `__call__` 与
+    info/debug mirror 成 DEBUG（终端默认 INFO 不刷屏）；warning/error 按真实
+    级别 mirror（下载失败应在终端与诊断包里可见）。锁外做 logger I/O，避免
+    持锁拖慢其它 download tasks 写日志。
+    """
+
+    def __init__(self, ds: DownloadStatus) -> None:
+        self._ds = ds
+
+    def _append(self, line: str) -> None:
+        with _LOCK:
+            self._ds.log.append(line)
+            if len(self._ds.log) > 200:
+                del self._ds.log[:-200]
+
+    def __call__(self, line: str) -> None:
+        self._append(line)
+        logger.debug(line)
+
+    def debug(self, msg: str, *args: Any) -> None:
+        text = msg % args if args else msg
+        self._append(text)
+        logger.debug(text)
+
+    def info(self, msg: str, *args: Any) -> None:
+        text = msg % args if args else msg
+        self._append(text)
+        logger.debug(text)
+
+    def warning(self, msg: str, *args: Any, exc_info: bool = False) -> None:
+        text = msg % args if args else msg
+        self._append(text)
+        logger.warning(text, exc_info=exc_info)
+
+    def error(self, msg: str, *args: Any, exc_info: bool = False) -> None:
+        text = msg % args if args else msg
+        self._append(text)
+        logger.error(text, exc_info=exc_info)
+
+
 def start_download_async(
-    key: str, fn: Callable[[Callable[[str], None]], bool]
+    key: str, fn: Callable[[TaskLogLike], bool]
 ) -> DownloadStatus:
     """启动后台 thread 跑 `fn(on_log)`；fn 返回 True=成功。
 
@@ -553,16 +606,7 @@ def start_download_async(
         )
         _DOWNLOADS[key] = ds
 
-    def _on_log(line: str) -> None:
-        with _LOCK:
-            ds.log.append(line)
-            if len(ds.log) > 200:
-                del ds.log[:-200]
-        # 回显到 backend logger —— UI ring buffer 容量 200 行；长下载早期日志会被
-        # 截掉，logger.debug 让 studio.log 保留完整流（自家 logger 恒 DEBUG，
-        # 记录不过滤），终端默认 INFO 不刷屏；调试 / oncall 排错时直接 grep
-        # studio.log。锁外执行避免持锁做 I/O 拖慢其它 download tasks 写日志。
-        logger.debug(line)
+    _on_log = _RingLog(ds)
 
     def _run() -> None:
         bus.publish({

@@ -30,6 +30,7 @@ from PIL import Image
 # 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
 logger = logging.getLogger("studio.workers.preprocess_worker")
 
+from studio.infrastructure.task_log import TaskLog
 from studio import db
 from studio.domain.errors import DomainError
 from studio.services.preprocess import core as preprocess
@@ -80,8 +81,7 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
     # 缺 stage 字段视为老 upscale job（向后兼容）
     stage = params.get("stage", preprocess.STAGE_UPSCALE)
 
-    def log(line: str) -> None:
-        logger.info(line)
+    log = TaskLog(logger)
 
     def emit_event(evt_type: str, **payload) -> None:
         """通过 stdout 标记行 → supervisor 解析 → SSE。供前端实时更新用，
