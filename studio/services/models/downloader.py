@@ -68,12 +68,25 @@ from .paths import (
 from . import sources as _sources
 from .sources import MS_ANIMA_TEXT_ENCODER_PATH
 
-from studio.infrastructure.task_log import TaskLogLike, TaskLog
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLogLike, TaskLog, as_task_log
 
 logger = logging.getLogger(__name__)
 
 #: 手跑 / 无人传 on_log 时的兜底：走本模块 logger（终端 INFO 可见，不再裸 print）。
 _DEFAULT_LOG = TaskLog(logger)
+
+#: 头行里的体积估算（GB）：与 variant 元数据脱钩的硬编码在这里集中一次
+QWEN3_VL_SIZE_GB = 8.89
+QWEN3_VL_FP8_SIZE_GB = 5.24
+
+
+def _size_gb(info: Any, *, default: float) -> str:
+    """variant 元数据里的字节数 → 头行用的 GB 字符串；缺失走 default。"""
+    size = 0.0
+    if isinstance(info, dict):
+        size = float(info.get("size_estimate", 0) or 0)
+    return f"{size / 1e9:.1f}" if size else f"{default:.1f}"
 
 # 提示：跨文件调用 download_flat[_ms] / _get_download_source / _resolve_endpoint /
 # _ms_wd14_repo_id 一律走 _sources.X(...) —— 这样测试 monkeypatch
@@ -101,11 +114,17 @@ def download_anima_main(
     if variant == "latest":
         variant = LATEST_ANIMA
     if variant not in ANIMA_VARIANTS:
-        on_log(f"✗ 未知 variant {variant!r}")
+        as_task_log(on_log).error(
+            "unknown Anima variant %r; nothing was downloaded — pick a "
+            "variant from the model list", variant,
+        )
         return False
     target = anima_main_target(root, variant)
     subpath = ANIMA_VARIANTS[variant]
-    on_log(f"\n📥 Anima 主模型 [{variant}] (~4 GB)")
+    on_log(msg(
+        "download.anima_base", variant=variant,
+        size=_size_gb(ANIMA_VARIANTS[variant], default=4.0), target=target,
+    ))
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, subpath, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
@@ -114,7 +133,7 @@ def download_anima_main(
 def download_anima_vae(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
     # 落点是族无关共享资产（Krea2 同用）；下载渠道走 Anima repo（文件在那儿）。
     target = qwen_image_vae_target(root)
-    on_log("\n📥 Anima VAE (~250 MB)")
+    on_log(msg("download.anima_vae", size=250, target=target))
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
@@ -128,11 +147,17 @@ def download_krea2_main(
         variant = LATEST_KREA2
     info = KREA2_VARIANTS.get(variant)
     if info is None:
-        on_log(f"✗ 未知 Krea 2 variant {variant!r}")
+        as_task_log(on_log).error(
+            "unknown Krea 2 variant %r; nothing was downloaded — pick a "
+            "variant from the model list", variant,
+        )
         return False
     target = krea2_main_target(root, variant)
     size_gb = float(info.get("size_estimate", 0)) / 1e9
-    on_log(f"\n📥 Krea 2 [{variant}] (~{size_gb:.1f} GB) → {target}")
+    on_log(msg(
+        "download.krea2_base", variant=variant, size=f"{size_gb:.1f}",
+        target=target,
+    ))
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(
             str(info["ms_repo"]), str(info["ms_subpath"]), target, on_log=on_log,
@@ -150,10 +175,10 @@ def download_qwen3_vl(
     target_dir.mkdir(parents=True, exist_ok=True)
     use_modelscope = _sources._source_for("training") == "modelscope"
     source_label = "ModelScope" if use_modelscope else "HuggingFace"
-    on_log(
-        f"\n📥 Krea 2 文本编码器 Qwen3-VL-4B-Instruct "
-        f"(~8.89 GB, {source_label}) → {target_dir}"
-    )
+    on_log(msg(
+        "download.krea2_te", size=QWEN3_VL_SIZE_GB, source=source_label,
+        target=target_dir,
+    ))
     ok = True
     for filename in QWEN3_VL_FILES:
         target = target_dir / filename
@@ -182,7 +207,10 @@ def download_qwen3_vl_fp8(
     target_dir = qwen3_vl_fp8_dir(root)
     target_dir.mkdir(parents=True, exist_ok=True)
     use_ms = _sources._source_for("training") == "modelscope"
-    on_log(f"\n📥 Krea 2 文本编码器 Qwen3-VL fp8 (~5.24 GB) → {target_dir}")
+    on_log(msg(
+        "download.krea2_te_fp8", size=QWEN3_VL_FP8_SIZE_GB,
+        source="ModelScope" if use_ms else "HuggingFace", target=target_dir,
+    ))
     download = _sources.download_flat_ms if use_ms else _sources.download_flat
     ok = download(
         QWEN3_VL_FP8_REPO, QWEN3_VL_FP8_SUBPATH,
@@ -209,7 +237,7 @@ def download_qwen3(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
     ok = True
 
     if _sources._source_for("training") == "modelscope":
-        on_log(f"\n📥 Anima 文本编码器（ModelScope 权重 + HF tokenizer）→ {target_dir}")
+        on_log(msg("download.anima_te_ms", target=target_dir))
         # 魔搭 Anima repo 里只有权重；训练脚本仍要求完整 transformers 目录。
         ok &= _sources.download_flat_ms(
             ANIMA_REPO,
@@ -224,7 +252,7 @@ def download_qwen3(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
                 ok = False
         return ok
 
-    on_log(f"\n📥 Qwen3-0.6B-Base (~1.2 GB) → {target_dir}")
+    on_log(msg("download.anima_te_hf", size=1.2, target=target_dir))
     for f in QWEN_FILES:
         if not _sources.download_flat(QWEN_REPO, f, target_dir / f, on_log=on_log):
             ok = False
@@ -235,7 +263,7 @@ def download_t5_tokenizer(
     root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
     target_dir = t5_tokenizer_dir(root)
-    on_log(f"\n📥 T5 tokenizer (3 个文件) → {target_dir}")
+    on_log(msg("download.t5_tokenizer", n=len(T5_FILES), target=target_dir))
     target_dir.mkdir(parents=True, exist_ok=True)
     ok = True
     for f in T5_FILES:
@@ -256,7 +284,7 @@ def download_cltagger(
         cfg.model_path,
         cfg.tag_mapping_path,
     )
-    on_log(f"\n📥 CLTagger → {target_root}")
+    on_log(msg("download.cltagger", target=target_root))
     target_root.mkdir(parents=True, exist_ok=True)
     ok = True
     for f in cltagger_required_files(model_path, tag_mapping_path):
@@ -277,26 +305,35 @@ def download_upscaler(
     （e.g. R-ESRGAN_4x+Anime6B 没有 HF 镜像 → 用户即便选了 HF 也走 MS）。
     """
     if label not in UPSCALER_VARIANTS:
-        on_log(f"✗ 未知放大器 {label!r}")
+        as_task_log(on_log).error(
+            "unknown upscaler %r; nothing was downloaded — pick an upscaler "
+            "from the model list", label,
+        )
         return False
     info = UPSCALER_VARIANTS[label]
     hf_src = info.get("hf")
     ms_src = info.get("ms")
     if hf_src is None and ms_src is None:
-        on_log(f"✗ 放大器 {label!r} 未配置任何下载源")
+        as_task_log(on_log).error(
+            "upscaler %r has no download source configured; nothing was "
+            "downloaded — add a source in Settings → Models", label,
+        )
         return False
 
     target = upscaler_target(label, root)
     size_mb = info.get("size_mb", 64)
     prefer_ms = _sources._source_for("upscaler") == "modelscope"
-    on_log(f"\n📥 放大器 {label} (~{size_mb} MB) → {target}")
+    on_log(msg("download.upscaler", label=label, size=size_mb, target=target))
 
     if prefer_ms and ms_src is not None:
         return _sources.download_flat_ms(ms_src[0], ms_src[1], target, on_log=on_log)
     if hf_src is not None:
         return _sources.download_flat(hf_src[0], hf_src[1], target, on_log=on_log)
     # 偏好 HF 但 HF 缺失 → fallback MS
-    on_log(f"   ⚠ HF 无镜像，回退 ModelScope")
+    as_task_log(on_log).warning(
+        "upscaler %s has no HuggingFace source; falling back to ModelScope",
+        label,
+    )
     return _sources.download_flat_ms(ms_src[0], ms_src[1], target, on_log=on_log)  # type: ignore[index]
 
 
@@ -316,18 +353,30 @@ def download_upscaler_custom(
     但落地时会被剥成纯文件名（避免穿越）。
     """
     if source not in ("hf", "ms"):
-        on_log(f"✗ 未知下载源 {source!r}（支持 hf / ms）")
+        as_task_log(on_log).error(
+            "unknown download source %r (supported: hf, ms); nothing was "
+            "downloaded", source,
+        )
         return False
     repo_subpath = filename
     save_name = Path(filename).name  # 剥目录前缀，仅保留纯文件名
     if "/" in save_name or "\\" in save_name or ".." in save_name:
-        on_log(f"✗ 非法文件名 {save_name!r}")
+        as_task_log(on_log).error(
+            "invalid file name %r; use a plain file name without path "
+            "separators", save_name,
+        )
         return False
     if not save_name.lower().endswith(UPSCALER_EXTS):
-        on_log(f"✗ 仅支持 {UPSCALER_EXTS} 扩展名，收到 {save_name!r}")
+        as_task_log(on_log).error(
+            "unsupported file extension in %r; supported: %s",
+            save_name, ", ".join(UPSCALER_EXTS),
+        )
         return False
     target = upscaler_dir(root) / save_name
-    on_log(f"\n📥 自定义放大器 [{source}] {repo_id}/{repo_subpath} → {target}")
+    on_log(msg(
+        "download.custom_upscaler", repo_id=repo_id, subpath=repo_subpath,
+        source=source, target=target,
+    ))
     if source == "ms":
         return _sources.download_flat_ms(repo_id, repo_subpath, target, on_log=on_log)
     return _sources.download_flat(repo_id, repo_subpath, target, on_log=on_log)
@@ -348,11 +397,17 @@ def download_main_custom(
     """
     save_name = Path(filename).name
     if not save_name.lower().endswith(".safetensors"):
-        on_log(f"✗ 仅支持 .safetensors，收到 {save_name!r}")
+        as_task_log(on_log).error(
+            "unsupported file extension in %r; supported: .safetensors",
+            save_name,
+        )
         return False
     r = root or models_root()
     target = r / "diffusion_models" / save_name
-    on_log(f"\n📥 自定义主模型 {repo_id}/{filename} → {target}")
+    on_log(msg(
+        "download.custom_base", repo_id=repo_id, filename=filename,
+        target=target,
+    ))
     return _sources.download_flat(repo_id, filename, target, on_log=on_log)
 
 
@@ -390,14 +445,21 @@ def download_wd14(
     if _sources._source_for("wd14") == "modelscope":
         ms_repo = _sources._ms_wd14_repo_id(model_id)
         if ms_repo:
-            on_log(f"\n📥 WD14 {model_id} → {target}（via ModelScope: {ms_repo}）")
+            on_log(msg(
+                "download.wd14_via_ms", model_id=model_id, ms_repo=ms_repo,
+                target=target,
+            ))
             for f in WD14_FILES:
                 if not _sources.download_flat_ms(ms_repo, f, target / f, on_log=on_log):
                     ok = False
             return ok
-        on_log(f"\n📥 WD14 {model_id}：无魔搭映射，回退 HuggingFace")
+        as_task_log(on_log).warning(
+            "WD14 %s has no ModelScope mirror; falling back to HuggingFace",
+            model_id,
+        )
+        on_log(msg("download.wd14", model_id=model_id, target=target))
     else:
-        on_log(f"\n📥 WD14 {model_id} → {target}")
+        on_log(msg("download.wd14", model_id=model_id, target=target))
     for f in WD14_FILES:
         if not _sources.download_flat(model_id, f, target / f, on_log=on_log):
             ok = False
@@ -421,11 +483,22 @@ def download_eval_model(
     if _sources._source_for("eval") == "modelscope":
         ms_repo = _sources._ms_eval_repo_id(model_id)
         if ms_repo:
-            on_log(f"\n📥 {kind.upper()} {model_id} → {target}（via ModelScope: {ms_repo}）")
+            on_log(msg(
+                "download.eval_model_via_ms", kind=kind, model_id=model_id,
+                ms_repo=ms_repo, target=target,
+            ))
             return _sources.download_snapshot_ms(ms_repo, target, on_log=on_log)
-        on_log(f"\n📥 {kind.upper()} {model_id}：无魔搭映射，回退 HuggingFace")
+        as_task_log(on_log).warning(
+            "evaluation model %s %s has no ModelScope mirror; falling back "
+            "to HuggingFace", kind, model_id,
+        )
+        on_log(msg(
+            "download.eval_model", kind=kind, model_id=model_id, target=target,
+        ))
     else:
-        on_log(f"\n📥 {kind.upper()} {model_id} → {target}")
+        on_log(msg(
+            "download.eval_model", kind=kind, model_id=model_id, target=target,
+        ))
     return _sources.download_snapshot(model_id, target, on_log=on_log)
 
 
@@ -470,7 +543,9 @@ def download_ccip_model(
     r = root or models_root()
     eval_ccip_root = r / "eval" / "ccip"
     patterns = [f"{variant}/{f}" for f in CCIP_FILES]
-    on_log(f"\n📥 CCIP {variant} → {ccip_model_dir(r, variant)}")
+    on_log(msg(
+        "download.ccip", variant=variant, target=ccip_model_dir(r, variant),
+    ))
     return _sources.download_snapshot(
         CCIP_REPO, eval_ccip_root, allow_patterns=patterns, on_log=on_log,
     )
@@ -504,6 +579,10 @@ class DownloadStatus:
     finished_at: Optional[float] = None
     message: str = ""
     log: list[str] = field(default_factory=list)
+    #: 与 ``log`` 一一对应的 (level, text)。ring 给前端仍是纯文本（无级别
+    #: 概念）；``_failure_summary`` 从这里按级别选行，不再按 ✗ / ↳ 字符
+    #: 前缀 grep —— 那些字符已随文案改写消失（G1/G7 同批）。
+    leveled: list[tuple[str, str]] = field(default_factory=list)
 
 
 _LOCK = threading.Lock()
@@ -526,19 +605,31 @@ def get_status_snapshot() -> dict[str, dict[str, Any]]:
         }
 
 
-def _failure_summary(log: list[str]) -> str:
+def _failure_summary(entries: "list[tuple[str, str]] | list[str]") -> str:
     """从下载日志里提取一句可操作的失败原因（给前端 toast / message 用）。
 
-    download_flat 把错误写成 `   ✗ ...`；gated / 授权类失败再追加 `   ↳ ...提示`
-    （含 token / 申请授权指引）。优先返回带提示的那条，否则退回最后一条 ✗ 错误，
-    都没有再退到通用串。避免前端只看到 badge 红了却不知为何（原因只在终端 / 折叠
-    日志里）。
+    取**最后一条 ERROR 级别记录**的全文——gated / 授权提示现在是那条记录的
+    续行（同一条多行记录），所以「错误 + 怎么办」自然一起带出来。这取代了
+    旧的按 `✗` / `↳` 字符前缀 grep：那两个伪级别前缀已随文案改写删除。
+
+    入参是 ``DownloadStatus.leveled``（(level, text) 列表）。为兼容旧调用
+    与外部测试，纯字符串列表也接受：退化成「最后一条含 ✗ 的行 + ↳ 提示」。
     """
-    err = next((ln.strip() for ln in reversed(log) if ln.lstrip().startswith("✗")), "")
-    hint = next((ln.strip() for ln in reversed(log) if "↳" in ln), "")
-    if hint:
-        return f"{err} {hint}".strip() if err else hint
-    return err or "下载失败，详见下载日志"
+    if entries and isinstance(entries[0], str):
+        log = [str(x) for x in entries]
+        err = next(
+            (ln.strip() for ln in reversed(log) if ln.lstrip().startswith("✗")), "",
+        )
+        hint = next((ln.strip() for ln in reversed(log) if "↳" in ln), "")
+        if hint:
+            return f"{err} {hint}".strip() if err else hint
+        return err or "下载失败，详见下载日志"
+    for level, text in reversed(entries):  # type: ignore[misc]
+        if level == "error":
+            return " ".join(
+                ln.strip() for ln in str(text).splitlines() if ln.strip()
+            )
+    return "下载失败，详见下载日志"
 
 
 class _RingLog:
@@ -558,34 +649,36 @@ class _RingLog:
     def __init__(self, ds: DownloadStatus) -> None:
         self._ds = ds
 
-    def _append(self, line: str) -> None:
+    def _append(self, line: str, level: str) -> None:
         with _LOCK:
             self._ds.log.append(line)
+            self._ds.leveled.append((level, line))
             if len(self._ds.log) > 200:
                 del self._ds.log[:-200]
+                del self._ds.leveled[:-200]
 
     def __call__(self, line: str) -> None:
-        self._append(line)
+        self._append(line, "info")
         logger.debug(line)
 
     def debug(self, msg: str, *args: Any) -> None:
         text = msg % args if args else msg
-        self._append(text)
+        self._append(text, "debug")
         logger.debug(text)
 
     def info(self, msg: str, *args: Any) -> None:
         text = msg % args if args else msg
-        self._append(text)
+        self._append(text, "info")
         logger.debug(text)
 
     def warning(self, msg: str, *args: Any, exc_info: bool = False) -> None:
         text = msg % args if args else msg
-        self._append(text)
+        self._append(text, "warning")
         logger.warning(text, exc_info=exc_info)
 
     def error(self, msg: str, *args: Any, exc_info: bool = False) -> None:
         text = msg % args if args else msg
-        self._append(text)
+        self._append(text, "error")
         logger.error(text, exc_info=exc_info)
 
 
@@ -616,17 +709,22 @@ def start_download_async(
         })
         try:
             ok = fn(_on_log)
+            # 收尾汇总（「已存在 n/m」「失败 n/m」）必须在算 message 之前出，
+            # _failure_summary 取的就是最后一条 ERROR 记录。
+            _sources.finish_download_task(_on_log)
             with _LOCK:
                 ds.status = "done" if ok else "failed"
                 ds.finished_at = time.time()
                 if not ok:
-                    ds.message = _failure_summary(ds.log)
+                    ds.message = _failure_summary(ds.leveled)
         except Exception as exc:
+            # traceback 必须落 studio.log —— 否则诊断包里查不到下载线程为何崩
+            logger.exception("download thread crashed: key=%s", key)
+            _on_log.error("download thread crashed: %s", exc)
             with _LOCK:
                 ds.status = "failed"
                 ds.finished_at = time.time()
                 ds.message = str(exc)
-                ds.log.append(f"[exception] {exc}")
         bus.publish({
             "type": "model_download_changed",
             "key": key,

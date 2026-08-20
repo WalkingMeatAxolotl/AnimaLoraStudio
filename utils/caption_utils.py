@@ -25,6 +25,8 @@ if str(_REPO_ROOT) not in sys.path:
 # normalize_caption_json 的权威实现集中在 studio.services.caption_format —— PR #18
 # review 发现两份实现微妙不同（去重 / appearance 合并策略），改回单一源。
 from studio.services.tagging.caption_format import normalize_caption_json  # noqa: E402, F401
+from studio.infrastructure.log_messages import msg  # noqa: E402
+from utils.log_throttle import RepeatThrottle  # noqa: E402
 
 
 def load_caption_json(json_path: Path) -> dict | None:
@@ -241,6 +243,7 @@ def batch_convert_json(
         转换的文件数量
     """
     count = 0
+    repeat = RepeatThrottle(logger)
     for json_path in data_dir.rglob("*.json"):
         try:
             raw_json = load_caption_json(json_path)
@@ -267,8 +270,15 @@ def batch_convert_json(
             
             count += 1
         except Exception as e:
-            logger.warning(f"Error converting {json_path}: {e}")
-    
+            repeat.hit(
+                "convert_failed",
+                "%d caption files could not be converted (first: %s)",
+                "Caption JSON conversion failed: path=%s (%s); the file was left "
+                "unchanged",
+                json_path, e,
+                first=json_path,
+            )
+    repeat.drain()
     return count
 
 
@@ -292,13 +302,13 @@ if __name__ == "__main__":
             print(json.dumps(result, ensure_ascii=False, indent=2))
         elif args.dir:
             count = batch_convert_json(Path(args.dir), in_place=args.in_place)
-            print(f"Converted {count} files")
+            logger.info(msg("caption.convert_done", n=count))
         else:
-            print("Please specify --dir or --file")
-    
+            parser.error("--dir or --file is required")
+
     elif args.action == "test":
         if args.file:
             caption = load_and_build_caption(Path(args.file), shuffle=True)
             print(caption)
         else:
-            print("Please specify --file")
+            parser.error("--file is required")

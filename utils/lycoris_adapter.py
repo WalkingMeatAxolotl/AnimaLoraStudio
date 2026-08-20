@@ -26,6 +26,7 @@ import torch.nn as nn
 from safetensors.torch import save_file
 from safetensors import safe_open
 
+from studio.infrastructure.log_messages import msg
 from utils.lycoris_patch import apply_lokr_device_patch
 
 logger = logging.getLogger(__name__)
@@ -194,7 +195,7 @@ class LycorisAdapter:
         )
         if self.algo == "lokr" and has_fp8_base:
             extra["bypass_mode"] = True
-            logger.info("FP8 base detected: forcing LoKr bypass forward")
+            logger.debug("fp8 base detected: LoKr forward switched to bypass mode")
 
         with _suppress_lokr_dropout_spam() as _dropout_filter:
             self.network = LycorisNetwork(
@@ -212,8 +213,9 @@ class LycorisAdapter:
 
         if _dropout_filter.dropped:
             logger.warning(
-                "LoKr/LoHa 不支持 normal dropout（lora_dropout=%s），已静默忽略；"
-                "上游逐层告警 %d 条已收敛。rank_dropout/module_dropout 不受影响。",
+                "LoKr/LoHa ignore normal dropout (lora_dropout=%s): rank_dropout "
+                "and module_dropout still apply, %d upstream per-layer warnings "
+                "suppressed",
                 self.dropout,
                 _dropout_filter.dropped,
             )
@@ -261,12 +263,18 @@ class LycorisAdapter:
 
         n = len(self.network.loras)
         forward_path = "bypass (low-rank)" if extra.get("bypass_mode") else "rebuild (ΔW)"
-        logger.info(f"注入 {self.algo.upper()} 到 {n} 层（lycoris-lora, forward={forward_path}）")
+        logger.info(msg(
+            "lora.injected",
+            algo=self.algo.upper(), n=n, detail=f"forward={forward_path}",
+        ))
         if self.use_lokr:
             full_matrix = [lora for lora in self.network.loras if getattr(lora, "use_w2", False)]
             if full_matrix:
-                logger.info(
-                    "LoKr dim/rank=%s 触发 LyCORIS full dimension：%s/%s 层的第二块不再分解，alpha 将被忽略。",
+                # 用户填的 alpha 在这些层上被静默忽略 → WARNING（R7）
+                logger.warning(
+                    "LoKr rank=%s is larger than the factorized block: %d of %d "
+                    "layers keep a full second block, so the alpha you set has no "
+                    "effect on them",
                     self.rank,
                     len(full_matrix),
                     n,
@@ -315,13 +323,13 @@ class LycorisAdapter:
             lora._anima_original_make_weight = original_make_weight
             lora.make_weight = _make_weight_with_tlora
             lora._anima_tlora_patched = True
-        logger.info(
-            "T-LoRA timestep rank mask enabled on %s/%s LoRA layers (min_rank=%s, alpha_rank_scale=%s)",
-            len(self._tlora_modules),
-            len(self.network.loras),
-            self.tlora_min_rank,
-            self.tlora_alpha_rank_scale,
-        )
+        logger.info(msg(
+            "lora.tlora_mask_enabled",
+            n=len(self._tlora_modules),
+            total=len(self.network.loras),
+            min_rank=self.tlora_min_rank,
+            scale=self.tlora_alpha_rank_scale,
+        ))
 
     def _set_tlora_mask(self, sigma_t: torch.Tensor) -> None:
         if not self._tlora_modules:
@@ -372,12 +380,20 @@ class LycorisAdapter:
                     fn()
                     break
                 except Exception as e:
-                    logger.warning(f"LycorisNetwork.{restore_attr}() 失败: {e}")
+                    logger.warning(
+                        "LycorisNetwork.%s() failed: %s; the model will be "
+                        "reloaded to drop the LoRA hooks",
+                        restore_attr, e,
+                    )
                     ok = False
                     break
         else:
             # 三个接口都不存在 → 当前 lycoris 版本不支持热卸载
-            logger.warning("LycorisNetwork 无 restore/restore_apply/remove_apply 接口；hook 残留")
+            logger.warning(
+                "The installed lycoris-lora has no restore/restore_apply/"
+                "remove_apply API; LoRA hooks stay attached until the model is "
+                "reloaded"
+            )
             ok = False
 
         # 还原 model.train 劫持（无论 restore 是否成功都该还原 monkey patch）
@@ -385,7 +401,10 @@ class LycorisAdapter:
             try:
                 self._injected_model.train = self._orig_train  # type: ignore[method-assign]
             except Exception as e:
-                logger.warning(f"还原 model.train 失败: {e}")
+                logger.warning(
+                    "Restoring model.train failed: %s; the LoRA train/eval switch "
+                    "may stay patched", e,
+                )
                 ok = False
 
         # 释放引用让 GC 清掉 LycorisNetwork（含 closure 内 _network 引用）
@@ -477,11 +496,11 @@ class LycorisAdapter:
             "ss_network_args": json.dumps(ss_args),
         }
         save_file(sd, str(path), metadata=meta)
-        logger.info(f"LoRA 保存到: {path}")
+        logger.info(msg("lora.saved", path=path))
 
     def load(self, path: str | Path) -> None:
         """从 safetensors 加载已有 LoRA 权重（用于继续训练）"""
-        logger.info(f"加载已有 LoRA 权重: {path}")
+        logger.info(msg("lora.loaded", path=path))
         sd: dict[str, torch.Tensor] = {}
         with safe_open(str(path), framework="pt", device="cpu") as f:
             for k in f.keys():
@@ -494,10 +513,17 @@ class LycorisAdapter:
         result = self.load_state_dict(sd, strict=False)
         missing = len(getattr(result, "missing_keys", [])) if hasattr(result, "missing_keys") else 0
         unexpected = len(getattr(result, "unexpected_keys", [])) if hasattr(result, "unexpected_keys") else 0
-        logger.info(
-            f"加载 {len(sd)} 个权重张量，"
-            f"missing={missing}, unexpected={unexpected}"
+        logger.debug(
+            "lora state dict loaded: tensors=%d missing=%d unexpected=%d",
+            len(sd), missing, unexpected,
         )
+        if missing or unexpected:
+            # 续训的 LoRA 没完全加载上 —— 用户会想据此改点什么（R7）
+            logger.warning(
+                "LoRA weights only partly matched: missing=%d unexpected=%d of %d "
+                "tensors; training resumes from a partly initialized LoRA",
+                missing, unexpected, len(sd),
+            )
 
     # ─── ADR 0003 PR-C：AdapterProtocol 可选 hook 的 no-op 实现 ───
     # 给 LyCORIS adapter 满足 runtime_checkable Protocol；论文级变体
@@ -624,9 +650,10 @@ def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:
 
         # ── LoKr 全矩阵分支（use_w2=True）：rank 概念不适用，跳过 ──────────
         elif hasattr(lora_mod, "lokr_w2"):
-            logger.warning(
-                "[lora_reg_dims] %s: full-matrix LoKr branch (use_w2=True) — "
-                "rank override not applicable, skipped",
+            # 逐层触发（上百层）→ DEBUG；:647 已有汇总
+            logger.debug(
+                "lora_reg_dims: %s uses a full-matrix LoKr branch (use_w2=True), "
+                "rank override skipped",
                 name,
             )
             skipped += 1
@@ -635,9 +662,14 @@ def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:
             skipped += 1
 
     if changed:
-        logger.info("[lora_reg_dims] applied rank overrides to %d modules", changed)
+        logger.info(msg("lora.reg_dims_applied", n=changed))
     if skipped:
-        logger.info("[lora_reg_dims] skipped %d modules (full-matrix or unsupported)", skipped)
+        # 用户配的值在 N 个模块上没生效 = 忽略了用户输入（R7）
+        logger.warning(
+            "lora_reg_dims did not apply to %d of %d modules (full-matrix or "
+            "unsupported); their rank stays at the network default",
+            skipped, changed + skipped,
+        )
 
 
 # 兼容别名（更名于多模型 PR-2b；引用点逐步切换后删除）

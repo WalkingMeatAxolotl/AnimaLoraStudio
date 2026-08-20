@@ -504,8 +504,21 @@ def _reset_for_tests() -> None:
     # 不还原 sys.excepthook（测试间也不应该依赖那个）
 
 
+def log_file_vanished_during_migration(
+    logger: logging.Logger, rel: object,
+) -> None:
+    """「迁移期间文件消失，跳过」的共享模板。
+
+    models root 迁移（services/models_storage.py）与 studio_data 迁移
+    （services/studio_data.py）原来各有一份逐字相同的拷贝。逐文件、尽力
+    而为的动作 → DEBUG（进度条最多停在 <100%，用户无感）。
+    """
+    logger.debug("file vanished during migration; skipped: rel=%s", rel)
+
+
 # 编码兜底是无条件常量，导出给 workers/_base.py 旧 import 兼容
 __all__ = [
+    "log_file_vanished_during_migration",
     "STUDIO_LOG_NAME", "STUDIO_LOG_MAX_BYTES", "STUDIO_LOG_BACKUP_COUNT",
     "TRACE_HEADER", "TRACE_ENV", "PROCESS_ENV", "LOG_LEVEL_ENV",
     "OWN_LOGGER_NAMESPACES", "console_level_from_env", "LOG_LINE_RE",

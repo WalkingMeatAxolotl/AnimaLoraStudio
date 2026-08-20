@@ -78,6 +78,22 @@ export function isLineVisible(line: LogLine, showDebug: boolean): boolean {
   return line.level !== 'DEBUG'
 }
 
+/** 抽屉收起态的预览行：最后一条非 DEBUG 的记录（跳过续行与调试行）。
+ *  日志全无行头（前端合成 plain 文本）时退回最后一行原文；有行头但全是
+ *  DEBUG 时返回空串（预览留白好过把调试行顶到 header 上）。 */
+export function lastVisibleLine(lines: readonly string[]): string {
+  const parsed = parseLogLines(lines)
+  let sawLeveled = false
+  for (let i = parsed.length - 1; i >= 0; i--) {
+    const l = parsed[i]
+    if (l.kind === 'header' || l.kind === 'bare') {
+      sawLeveled = true
+      if (l.level !== 'DEBUG') return l.raw
+    }
+  }
+  return sawLeveled ? '' : (lines[lines.length - 1] ?? '')
+}
+
 /** 行内着色 token（与 Tailwind 色类一一对应，整站一套）。 */
 export function levelClass(level: LogLevel | null): string {
   switch (level) {

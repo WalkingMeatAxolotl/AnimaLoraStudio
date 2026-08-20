@@ -30,8 +30,6 @@ WHITELIST: dict[str, set[str]] = {
     "utils/caption_utils.py": {"<__main__>"},
     # stdout 协议行
     "studio/workers/preprocess_worker.py": {"emit_event"},
-    # CLI 启动 banner（setup_logging 之前）
-    "studio/api/main.py": {"main"},
 }
 
 

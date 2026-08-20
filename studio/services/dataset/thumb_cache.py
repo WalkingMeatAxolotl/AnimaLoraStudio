@@ -32,6 +32,9 @@ _KEY_LOCKS: dict[str, threading.Lock] = {}
 # Pillow 9.1+ 把 LANCZOS 挪到 Image.Resampling 下；旧版本仍可用 Image.LANCZOS。
 _RESAMPLE = getattr(Image, "Resampling", Image).LANCZOS  # type: ignore[attr-defined]
 
+#: 已记过一次 WARNING 的源图（R8 去重）：同一张坏图被反复请求时不刷屏
+_THUMB_FAIL_SEEN: set[str] = set()
+
 
 def _key_lock(key: str) -> threading.Lock:
     with _LOCKS_LOCK:
@@ -52,7 +55,7 @@ def _key_for(src: Path, size: int) -> Optional[str]:
     try:
         mtime = src.stat().st_mtime_ns
     except OSError as exc:
-        logger.warning("thumb cache: stat failed for %s: %s", src, exc)
+        logger.debug("stat failed: path=%s err=%s", src, exc)
         return None
     payload = f"{src.resolve()}|{mtime}|{size}".encode("utf-8")
     return hashlib.sha1(payload).hexdigest()
@@ -96,9 +99,18 @@ def get_or_make_thumb(src: Path, size: int) -> Path:
                 img.save(tmp, "JPEG", quality=80, optimize=True)
             os.replace(tmp, out)
         except Exception as exc:
-            logger.warning(
-                "thumb generation failed for %s (size=%d): %s", src, size, exc
-            )
+            # 同一张坏图会被反复请求 —— 进程内按 src 只记首条（R8）
+            if str(src) not in _THUMB_FAIL_SEEN:
+                _THUMB_FAIL_SEEN.add(str(src))
+                logger.warning(
+                    "thumbnail generation failed: path=%s size=%d err=%s",
+                    src, size, exc,
+                )
+            else:
+                logger.debug(
+                    "thumbnail generation failed: path=%s size=%d err=%s",
+                    src, size, exc,
+                )
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
@@ -147,8 +159,9 @@ def prewarm_from_image(
                 os.replace(tmp, out)
                 written.append(out)
             except Exception as exc:
-                logger.warning(
-                    "thumb prewarm failed for %s (size=%d): %s", src, size, exc
+                logger.debug(
+                    "thumbnail generation failed (prewarm): path=%s size=%d "
+                    "err=%s", src, size, exc,
                 )
                 try:
                     tmp.unlink(missing_ok=True)

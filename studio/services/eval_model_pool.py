@@ -25,7 +25,7 @@ import gc
 import logging
 from typing import Any, Callable, Optional
 
-from studio.infrastructure.task_log import TaskLogLike
+from studio.infrastructure.task_log import TaskLogLike, as_task_log
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,7 @@ class ModelPool:
         except Exception:
             # torch 没装 / CUDA 不可用都不该让评估失败 —— 引用已经丢了，
             # 剩下的交给 GC
-            logger.debug("%s: empty_cache 跳过", self._label, exc_info=True)
+            logger.debug("%s: empty_cache skipped", self._label, exc_info=True)
         if progress is not None:
-            progress(f"[eval-{self._label}] 模型已释放")
+            # 显存编排的内部动作，用户无从对照 → DEBUG（英文排障行）
+            as_task_log(progress).debug("[eval-%s] model released", self._label)

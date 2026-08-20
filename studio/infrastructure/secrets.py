@@ -647,6 +647,11 @@ class SystemConfig(BaseModel):
     #: 的 PCI 序号，启动期由 runtime.gpu_select 注入 CUDA_DEVICE_ORDER=PCI_BUS_ID
     #: + CUDA_VISIBLE_DEVICES 使训练/出图/打标全走这张卡；重启生效。
     gpu_index: Optional[int] = None
+    #: UI 语言（zh/en），前端切语言时同步写入。作为**子进程日志语言**的注入源：
+    #: supervisor / daemon spawn 时读它注入 ANIMA_UI_LANG，用户可见 INFO 叙事行
+    #: 按此语言输出（infrastructure/log_messages.py；排障行恒英文）。前端自身的
+    #: 显示语言仍以 localStorage 为准（首屏无闪烁），本字段只需最终一致。
+    ui_language: str = "zh"
     #: 日志视图默认是否显示 DEBUG 行（docs/design/logging-target-state.md D1）。
     #: 只管显示默认值：run.log / daemon ring 恒记 DEBUG，每个日志视图有自己的
     #: 「调试」开关（不持久化）以此为初值。报错后用户可在视图里临时打开，不用重跑。

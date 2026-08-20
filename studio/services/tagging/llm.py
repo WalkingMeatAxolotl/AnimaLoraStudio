@@ -529,8 +529,8 @@ class LLMTagger:
         if not needs_assist:
             if cfg.assist_tagger:
                 logger.warning(
-                    "LLM assist: assist_tagger=%s set but no {{tags}} placeholder in "
-                    "messages — assist is inert this run",
+                    "LLM assist: assist_tagger=%s is set but the prompt has no "
+                    "{{tags}} placeholder; assist does nothing this run",
                     cfg.assist_tagger,
                 )
             return {}
@@ -544,21 +544,41 @@ class LLMTagger:
         )
         out: dict[Path, str] = {}
         done = 0
+        failed = 0
+        first_error = ""
         total = len(image_paths)
+        last_progress = 0.0
         for result in assist.tag(image_paths):
             done += 1
             if result.get("error"):
-                logger.warning(
-                    "LLM assist: tagger failed on %s: %s",
-                    result.get("image"),
-                    result.get("error"),
-                )
+                failed += 1
+                # T6 节流：站点/模型挂掉时 1000 图 = 1000 条 —— 首条全文，
+                # 之后逐条 DEBUG，收尾一条计数汇总。
+                if failed == 1:
+                    first_error = str(result.get("error"))
+                    logger.warning(
+                        "LLM assist: tagger failed on %s: %s",
+                        result.get("image"), result.get("error"),
+                    )
+                else:
+                    logger.debug(
+                        "LLM assist: tagger failed on %s: %s",
+                        result.get("image"), result.get("error"),
+                    )
             else:
                 image = Path(result["image"])
                 out[image] = ", ".join(result.get("tags") or [])
-            # 每张一行，与 LLM 阶段 [progress] 的密度对齐——预打标是纯前置阶段，
-            # 任务进度条不动，日志是用户唯一能确认它在推进的地方。
-            logger.info("LLM assist: %d/%d pre-tagged", done, total)
+            # 预打标是纯前置阶段，任务进度条不动，日志是用户唯一能确认它在
+            # 推进的地方 —— 但不必每张一条：每 2s 或最后一张各记一次（R9）。
+            now = time.monotonic()
+            if done == total or now - last_progress >= 2.0:
+                last_progress = now
+                logger.info("LLM assist: %d/%d pre-tagged", done, total)
+        if failed:
+            logger.warning(
+                "LLM assist: pre-tagging failed for %d/%d images; first error: %s",
+                failed, total, first_error,
+            )
         return out
 
     def _tag_one(
@@ -637,13 +657,13 @@ class LLMTagger:
                 if rate_limiter is not None:
                     rate_limiter.wait()
                 started = time.monotonic()
-                logger.info(
-                    "LLM tagger POST %s model=%s endpoint=%s image=%s timeout=%ss",
+                logger.debug(
+                    "LLM tagger POST %s model=%s endpoint=%s image=%s timeout=%.1fs",
                     endpoint,
                     cfg.model,
                     cfg.endpoint,
                     image_path.name,
-                    cfg.timeout,
+                    float(cfg.timeout),
                 )
                 resp = self._session.post(
                     endpoint,
@@ -657,12 +677,12 @@ class LLMTagger:
                         f"HTTP {resp.status_code} after {elapsed_ms}ms at {endpoint}: {resp.text[:300]}"
                     )
                 content = _extract_llm_response_text(resp, endpoint=cfg.endpoint)
-                logger.info(
-                    "LLM tagger OK %s model=%s image=%s elapsed=%sms",
+                logger.debug(
+                    "LLM tagger ok %s model=%s image=%s elapsed=%d ms",
                     endpoint,
                     cfg.model,
                     image_path.name,
-                    elapsed_ms,
+                    int(elapsed_ms),
                 )
                 return content
             except Exception as exc:  # noqa: BLE001

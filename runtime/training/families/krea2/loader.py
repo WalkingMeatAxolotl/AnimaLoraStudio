@@ -512,8 +512,9 @@ def load_krea2_model(
     del state_dict
     model.requires_grad_(False)
     if packer is not None:
-        logger.info(
-            "block swap pinned：权重 %.2f GB 打包进 %d 块，实际锁定 %.2f GB（溢出块 %d）",
+        logger.debug(
+            "block_swap: pinned packing weights=%.2f GB chunks=%d locked=%.2f GB "
+            "overflow=%d",
             packer.packed_bytes / 1024 ** 3, packer.num_chunks,
             packer.allocated_bytes / 1024 ** 3, packer.overflow_chunks,
         )

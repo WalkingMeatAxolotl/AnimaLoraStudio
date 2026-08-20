@@ -44,11 +44,15 @@ def resolve_studio_data(pointer_file: Path | None = None) -> Path:
             if target.is_absolute() and target.is_dir():
                 return target
             logging.getLogger(__name__).warning(
-                "studio_data 指针目标无效（不存在或非绝对路径），回退默认位置: %s", target,
+                "studio_data pointer target is invalid (missing or not an absolute "
+                "path); using the default location: %s; data at the pointer target "
+                "is left untouched", target,
             )
     except Exception:
         logging.getLogger(__name__).warning(
-            "studio_data 指针文件解析失败，回退默认位置: %s", ptr, exc_info=True,
+            "studio_data pointer file could not be parsed; using the default "
+            "location: %s; data at the pointer target is left untouched",
+            ptr, exc_info=True,
         )
     return DEFAULT_STUDIO_DATA
 

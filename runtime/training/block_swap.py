@@ -319,8 +319,8 @@ class PinnedBlockSwap:
                 self.num_swap, self.first_swapped, str(exc)
             ) from exc
 
-        logger.info(
-            "block swap 就绪：换出末尾 %d/%d block，pinned %.2f GB，%d 个 GPU 槽",
+        logger.debug(
+            "block_swap: ready swapped=%d/%d pinned=%.2f GB gpu_slots=%d",
             self.num_swap, self.total, self._pinned_bytes / _GIB, self.num_slots,
         )
 
@@ -492,7 +492,7 @@ class PinnedBlockSwap:
             self._handles.append(block.register_forward_hook(post_hook))
             self._handles.append(block.register_full_backward_pre_hook(backward_pre_hook))
             self._handles.append(block.register_full_backward_hook(backward_hook))
-        logger.info("block swap 已挂载：%d 个 block 的前向/反向钩子", self.num_swap)
+        logger.debug("block_swap: forward/backward hooks attached blocks=%d", self.num_swap)
 
     def detach(self) -> None:
         """移除 attach 注册的钩子（权重不还原，需要时自行 ensure_resident）。"""

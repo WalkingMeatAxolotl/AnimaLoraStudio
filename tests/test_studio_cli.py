@@ -432,7 +432,8 @@ def test_check_torch_cuda_info_on_cpu_only_without_gpu(
     )
     cli._check_torch_cuda()
     info = _cli_info(cli_log)
-    assert "CPU-only build" in info
+    # INFO 叙事行走 msg_id 字典（默认 zh）：`CPU-only build` → `CPU-only 构建`
+    assert "CPU-only 构建" in info
     assert "未检测到 NVIDIA GPU" in info
     assert _cli_warn_plus(cli_log) == ""
 
@@ -599,7 +600,7 @@ def test_cmd_run_returns_42_when_installer_changed(
     rc = cli.main(["run", "--no-browser"])
     assert rc == cli._INSTALLER_RELOAD_EXIT_CODE == 42
     assert fake_flag.exists(), "flag 必须保留给 wrapper 走 exec-self 路径"
-    assert "launcher 文件更新" in _cli_info(cli_log)
+    assert "launcher 文件有更新" in _cli_info(cli_log)
 
 
 def test_cmd_run_normal_restart_when_installer_unchanged(

@@ -31,7 +31,8 @@ def main() -> None:
     args = parser.parse_args()
 
     # ADR 0012：SPA 入口在根路径 /（不再用 /studio 子路径）。
-    print(f"[AnimaStudio] http://{args.host}:{args.port}/")
+    # URL 由 cli.py 的 `cli.backend_started` 行打印（带 ts/级别，符合行契约），
+    # 这里不再重复一条裸 print banner。
     uvicorn.run(
         "studio.server:app",
         host=args.host,

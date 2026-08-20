@@ -54,7 +54,8 @@ def apply_lokr_device_patch() -> PatchStatus:
         from lycoris.modules.lokr import LokrModule, make_kron, rebuild_tucker
     except Exception as exc:  # pragma: no cover - 装了 lycoris-lora 但 import 异常的边界
         logger.warning(
-            "lycoris-lora %s 已安装但 lycoris.modules.lokr 导入失败: %s；跳过 device patch",
+            "lycoris-lora %s is installed but lycoris.modules.lokr could not be "
+            "imported (%s); the rank_dropout device patch was skipped",
             installed,
             exc,
         )
@@ -64,9 +65,11 @@ def apply_lokr_device_patch() -> PatchStatus:
         return "skipped_already_patched"
 
     if installed not in KNOWN_AFFECTED_VERSIONS:
-        logger.warning(
-            "lycoris-lora %s 不在已知受 rank_dropout device bug 影响的版本集合 %s；"
-            "跳过 patch（假定上游已修。若你训练时报 device mismatch，请在 issue 上报版本）",
+        # R4：这是「什么都没做」的正常路径，所有新版用户每次训练吃一条 WARNING
+        # 属误报 —— 降 DEBUG。
+        logger.debug(
+            "lycoris-lora %s is not in the known-affected set %s; rank_dropout "
+            "device patch skipped",
             installed,
             sorted(KNOWN_AFFECTED_VERSIONS),
         )
@@ -103,8 +106,9 @@ def apply_lokr_device_patch() -> PatchStatus:
 
     LokrModule.get_weight = _get_weight_fixed
     setattr(LokrModule, _PATCHED_FLAG, True)
-    logger.info(
-        "lycoris-lora %s: 已 patch LokrModule.get_weight（rank_dropout device 修复）",
+    logger.debug(
+        "lycoris-lora %s: patched LokrModule.get_weight for the rank_dropout "
+        "device bug",
         installed,
     )
     return "applied"

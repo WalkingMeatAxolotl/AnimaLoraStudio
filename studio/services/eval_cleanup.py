@@ -129,7 +129,7 @@ def purge_legacy_jobs(
             continue
         shutil.rmtree(d, ignore_errors=True)
         if d.exists():
-            logger.warning("purge_legacy_jobs: rmtree 未清干净 %s", d)
+            logger.warning("legacy eval job dir not fully removed: path=%s", d)
             continue
         removed_dirs += 1
         freed += int(job["bytes"])
@@ -144,7 +144,7 @@ def purge_legacy_jobs(
     conn.commit()
 
     logger.info(
-        "purged %s legacy eval job rows (%s log dirs, %.1f MB)",
+        "legacy eval cleanup: job_rows=%s log_dirs=%s freed=%.1f MB",
         removed_rows, removed_dirs, freed / 1_048_576,
     )
     return {
@@ -185,9 +185,4 @@ def cleanup_legacy_eval_on_startup(conn: sqlite3.Connection) -> dict[str, Any]:
         return {"skipped": True, "reason": "already done"}
     result = purge_legacy_jobs(conn, with_size=False)
     mark_done(conn)
-    if result["removed_rows"]:
-        logger.info(
-            "legacy eval cleanup: removed %s job rows and %s log dirs (#465)",
-            result["removed_rows"], result["removed_dirs"],
-        )
     return {"skipped": False, **result}

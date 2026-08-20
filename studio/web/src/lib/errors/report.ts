@@ -95,7 +95,7 @@ export function reportClientError(input: ClientErrorReport): void {
   } catch {
     // fetch 都抛了（极罕见）也吞
     try {
-      console.warn('[reportClientError] failed silently')
+      console.warn('[reportClientError] send failed; the report was dropped')
     } catch {
       // even console.warn 不能用了，放弃
     }

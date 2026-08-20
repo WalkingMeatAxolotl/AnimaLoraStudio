@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.log_messages import msg
 from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_clip"
@@ -64,7 +65,7 @@ def run_clip_job(
     )
 
     try:
-        progress(f"[eval-clip] scoring run={run['run_id']} model={model}")
+        progress(msg("eval.clip_start", run_id=run["run_id"], model=model))
         scored = (scorer or _default_scorer)(run, version_dir, model, progress)
         result = _result_from_scores(scored, model)
         saved = eval_metrics.save_result(
@@ -73,11 +74,11 @@ def run_clip_job(
             result,
             eval_root=eval_root,
         )
-        progress(
-            "[eval-clip] done "
-            f"clip_t={saved['metric_states']['clip_t']['status']} "
-            f"clip_i={saved['metric_states']['clip_i']['status']}"
-        )
+        progress(msg(
+            "eval.clip_done",
+            clip_t=saved["metric_states"]["clip_t"]["status"],
+            clip_i=saved["metric_states"]["clip_i"]["status"],
+        ))
         return saved
     except Exception as exc:
         _save_failed(version_dir, str(run["run_id"]), model, str(exc), eval_root)
@@ -288,7 +289,7 @@ def _load_clip(model_name: str, progress: TaskLogLike):
     from studio.services.models.downloader import ensure_eval_model
 
     local_dir = ensure_eval_model("clip", model_name, on_log=progress)
-    progress(f"[eval-clip] loading CLIP on {device}")
+    progress(msg("eval.clip_loading", device=device))
     processor = CLIPProcessor.from_pretrained(str(local_dir))
     model = CLIPModel.from_pretrained(str(local_dir)).to(device)
     model.eval()
@@ -393,7 +394,9 @@ def _encode_images(
     for start in range(0, len(paths), batch_size):
         batch_paths = paths[start:start + batch_size]
         end = start + len(batch_paths)
-        progress(f"[eval-clip] encoding {label} images {start + 1}-{end}")
+        progress(msg(
+            "eval.clip_encoding", label=label, start=start + 1, end=end,
+        ))
         images = []
         for path in batch_paths:
             with Image.open(path) as img:

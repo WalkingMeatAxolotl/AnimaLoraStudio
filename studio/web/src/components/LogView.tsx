@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { isLineVisible, levelClass, parseLogLines, type LogLine } from '../lib/logLines'
@@ -25,6 +26,12 @@ export interface LogViewProps {
   toolbar?: boolean
   /** 工具栏右侧额外按钮（如 daemon 抽屉的「清屏」） */
   extraActions?: ReactNode
+  /** 工具栏外置：portal 到父级容器（抽屉把它并进自己的 header 行，避免
+   *  「抽屉 header + 工具栏行」两层）。非空时内联位置不再渲染工具栏。 */
+  toolbarContainer?: HTMLElement | null
+  /** 无边框模式：内容区去掉自带的 bg/border/rounded（背景由父级抽屉提供），
+   *  抽屉场景避免面板里再包一层框。 */
+  frameless?: boolean
   /** 没有任何行时的占位文案；缺省按 status 选 */
   emptyText?: string
   /** 容器 class（高度由父级给：flex-1 min-h-0 或固定 h-*） */
@@ -94,6 +101,8 @@ export default function LogView({
   downloadUrl = null,
   toolbar = true,
   extraActions,
+  toolbarContainer = null,
+  frameless = false,
   emptyText,
   className = '',
   maxRender,
@@ -117,7 +126,6 @@ export default function LogView({
     const v = parsed.filter((l) => isLineVisible(l, showDebug))
     return maxRender && v.length > maxRender ? v.slice(-maxRender) : v
   }, [parsed, showDebug, maxRender])
-  const hiddenDebug = parsed.length - parsed.filter((l) => isLineVisible(l, showDebug)).length
 
   // 跟随到底
   useEffect(() => {
@@ -157,48 +165,51 @@ export default function LogView({
       : status === 'waiting' || status === 'live' ? t('logView.waiting')
         : t('logView.empty'))
 
+  // 外置（portal 进抽屉 header）时不带底部间距；内联时保持原布局
+  const toolbarContent = toolbar ? (
+    <div
+      className={`flex items-center gap-3 text-xs shrink-0 flex-wrap ${toolbarContainer ? '' : 'pb-2'}`}
+      data-testid="log-view-toolbar"
+    >
+      <label className="text-fg-tertiary flex items-center gap-1.5 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={showDebug}
+          onChange={(e) => { touchedRef.current = true; setShowDebug(e.target.checked) }}
+          style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
+        />
+        {t('logView.debug')}
+      </label>
+      <label className="text-fg-tertiary flex items-center gap-1.5 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={autoScroll}
+          onChange={(e) => setAutoScroll(e.target.checked)}
+          style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
+        />
+        {t('logView.autoScroll')}
+      </label>
+      {!toolbarContainer && <span className="flex-1" />}
+      {extraActions}
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleCopy()} disabled={visible.length === 0}>
+        {t('logView.copy')}
+      </button>
+      {downloadUrl && (
+        <a className="btn btn-ghost btn-sm" href={downloadUrl} download>
+          {t('logView.download')}
+        </a>
+      )}
+      {onRefresh && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRefresh}>
+          {t('common.refresh')}
+        </button>
+      )}
+    </div>
+  ) : null
+
   return (
     <div className={`flex flex-col min-h-0 ${className}`} data-testid="log-view">
-      {toolbar && (
-        <div className="flex items-center gap-3 text-xs pb-2 shrink-0 flex-wrap">
-          <label className="text-fg-tertiary flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showDebug}
-              onChange={(e) => { touchedRef.current = true; setShowDebug(e.target.checked) }}
-              style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
-            />
-            {t('logView.debug')}
-            {!showDebug && hiddenDebug > 0 && (
-              <span className="text-fg-tertiary">（{t('logView.hiddenDebug', { n: hiddenDebug })}）</span>
-            )}
-          </label>
-          <label className="text-fg-tertiary flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-              style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
-            />
-            {t('logView.autoScroll')}
-          </label>
-          <span className="flex-1" />
-          {extraActions}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleCopy()} disabled={visible.length === 0}>
-            {t('logView.copy')}
-          </button>
-          {downloadUrl && (
-            <a className="btn btn-ghost btn-sm" href={downloadUrl} download>
-              {t('logView.download')}
-            </a>
-          )}
-          {onRefresh && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onRefresh}>
-              {t('common.refresh')}
-            </button>
-          )}
-        </div>
-      )}
+      {toolbarContainer ? createPortal(toolbarContent, toolbarContainer) : toolbarContent}
       {status === 'error' && error && (
         <div className="mb-2 p-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono shrink-0 flex items-center gap-2">
           <span className="flex-1 min-w-0 break-all">{error}</span>
@@ -209,7 +220,9 @@ export default function LogView({
       )}
       <div
         ref={bodyRef}
-        className="flex-1 min-h-0 overflow-auto bg-sunken border border-subtle rounded-md px-3 py-2 text-[11px] font-mono leading-relaxed"
+        className={`flex-1 min-h-0 overflow-auto px-3 py-2 text-[11px] font-mono leading-relaxed ${
+          frameless ? '' : 'bg-sunken border border-subtle rounded-md'
+        }`}
         data-testid="log-view-body"
       >
         {hasMoreBefore && onLoadEarlier && (

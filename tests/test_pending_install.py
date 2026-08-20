@@ -122,7 +122,7 @@ def test_apply_pending_keeps_marker_on_failure(
     assert isolated_marker.exists()
     assert pending_install.read_pending()["target"] == "cu128"
     err = _msgs(caplog, min_level=logging.ERROR)
-    assert "torch 重装失败" in err
+    assert "torch reinstall failed" in err
     assert "network failed" in err
 
 
@@ -140,4 +140,4 @@ def test_apply_pending_unknown_kind_clears_marker(
         r for r in caplog.records
         if r.name == _LOGGER and r.levelno == logging.WARNING
     ]
-    assert warn and "未知" in warn[0].getMessage()
+    assert warn and "unknown pending install kind" in warn[0].getMessage()

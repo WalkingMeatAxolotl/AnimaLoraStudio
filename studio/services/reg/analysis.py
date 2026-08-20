@@ -37,7 +37,8 @@ from PIL import Image
 from ...services.dataset.scan import IMAGE_EXTS
 from ..booru import api as booru_api, pool as booru_pool
 from ..dataset import tagedit
-from studio.infrastructure.task_log import TaskLogLike
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import NULL_LOG, TaskLogLike, as_task_log
 
 
 ProgressFn = TaskLogLike
@@ -73,7 +74,7 @@ def analyze_tags_in_file(image_path: Path) -> list[str]:
 
 
 def analyze_dataset_structure(
-    dataset_path: Path, on_progress: ProgressFn = print
+    dataset_path: Path, on_progress: ProgressFn = NULL_LOG
 ) -> dict[str, Any]:
     """扫子文件夹 + 根目录，统计 tag 频率 / 分辨率 / 长宽比。
 
@@ -92,6 +93,8 @@ def analyze_dataset_structure(
     }
     ```
     """
+    # 对外仍接受历史的单参回调（tools / 测试传 lambda）；内部按级别分派
+    on_progress = as_task_log(on_progress)
     structure: dict[str, Any] = {
         "subfolders": {},
         "total_images": 0,
@@ -100,6 +103,9 @@ def analyze_dataset_structure(
         "resolutions": [],
         "aspect_ratios": [],
     }
+
+    # 逐图读尺寸失败按 R8 节流：首条全文 WARNING，之后 DEBUG，收尾汇总
+    size_fail = {"n": 0, "first": ""}
 
     def _scan_folder(folder: Path, key: str) -> None:
         data = {"images": [], "tag_freq": Counter(), "image_count": 0}
@@ -118,7 +124,18 @@ def analyze_dataset_structure(
                     if h > 0:
                         ar = w / h
             except Exception as exc:
-                on_progress(f"    警告：无法读取图片尺寸 {img.name}: {exc}")
+                size_fail["n"] += 1
+                if size_fail["n"] == 1:
+                    size_fail["first"] = f"{type(exc).__name__}: {exc}"
+                    on_progress.warning(
+                        "reg analysis: reading the image size failed: "
+                        "name=%s err=%s", img.name, exc,
+                    )
+                else:
+                    on_progress.debug(
+                        "reg analysis: reading the image size failed: "
+                        "name=%s err=%s", img.name, exc,
+                    )
             data["images"].append({
                 "image": img.name,
                 "tags": tags,
@@ -136,10 +153,10 @@ def analyze_dataset_structure(
                     structure["aspect_ratios"].append(ar)
         if data["image_count"] > 0:
             structure["subfolders"][key] = data
-            on_progress(
-                f"  [{key or '<root>'}] {data['image_count']} 张图片，"
-                f"{len(data['tag_freq'])} tag 种类"
-            )
+            on_progress(msg(
+                "reg.analysis_subfolder", key=key or "<root>",
+                n=data["image_count"], tags=len(data["tag_freq"]),
+            ))
 
     # 根目录直接图
     has_root_imgs = any(
@@ -153,6 +170,12 @@ def analyze_dataset_structure(
     for sub in sorted(dataset_path.iterdir()):
         if sub.is_dir():
             _scan_folder(sub, sub.name)
+
+    if size_fail["n"]:
+        on_progress.warning(
+            "reg analysis: the image size could not be read for %d images; "
+            "first error: %s", size_fail["n"], size_fail["first"],
+        )
 
     # 全局权重
     if structure["total_images"] > 0:

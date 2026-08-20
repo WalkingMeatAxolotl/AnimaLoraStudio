@@ -12,7 +12,6 @@
 LoRA / LoKr 实现：见 utils.lycoris_adapter.AnimaLycorisAdapter（ADR 0001）。
 """
 
-import logging
 import os
 import sys
 from pathlib import Path
@@ -49,7 +48,6 @@ from studio.infrastructure.logging import (  # noqa: E402
 
 setup_logging(os.environ.get(PROCESS_ENV) or "anima_train", file=False, console=True)
 bind_trace_id(os.environ.get(TRACE_ENV) or new_trace_id())
-logger = logging.getLogger("anima_train")
 
 
 # ─── Re-exports for sister script / tests (ADR 0003 PR-A) ────────────────────

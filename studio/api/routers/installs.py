@@ -211,7 +211,9 @@ def flash_attn_status() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         # logger.exception 把 traceback 落盘 + 带 trace_id（trace middleware bound）
         import logging  # noqa: PLC0415
-        logging.getLogger(__name__).exception("flash_attn status endpoint failed")
+        logging.getLogger(__name__).warning(
+            "flash_attn status probe failed; returning installed=false", exc_info=True,
+        )
         return {
             "installed": False,
             "version": None,

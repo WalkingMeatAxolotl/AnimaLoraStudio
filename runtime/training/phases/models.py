@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.families import resolve_family
 from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
@@ -22,11 +23,21 @@ from training.model_loading import (
 
 logger = logging.getLogger(__name__)
 
+#: 日志里 lora_type 的规范大小写。裸 ``.upper()`` 会打出「LOKR」这种不成词的
+#: 拼写；schema 的 Literal 集合是权威来源，新增变体在此补一行。
+_LORA_TYPE_LABELS = {
+    "lora": "LoRA",
+    "lokr": "LoKr",
+    "loha": "LoHa",
+    "ortho": "Ortho",
+    "tlora": "T-LoRA",
+}
+
 
 def _resolve_paths(ctx: TrainingContext) -> None:
     args = ctx.args
     ctx.repo_root = find_diffusion_pipe_root()
-    logger.info("模型代码路径: %s", ctx.repo_root)
+    logger.debug("model_code: path=%s", ctx.repo_root)
 
     phases_dir = Path(__file__).resolve().parent
     training_dir = phases_dir.parent
@@ -76,10 +87,8 @@ def _load_dit(ctx: TrainingContext) -> None:
     args = ctx.args
     backend = getattr(args, "attention_backend", "flash_attn")
     if backend == "none":
-        logger.info(
-            "attention_backend=none，flash_attn / xformers 都不启用，走 PyTorch SDPA"
-        )
-    logger.info("加载 Transformer...")
+        logger.info(msg("train.attention_sdpa"))
+    logger.info(msg("train.loading_transformer"))
     extra = {}
     blocks_to_swap = int(getattr(args, "blocks_to_swap", 0) or 0)
     if blocks_to_swap > 0:
@@ -92,7 +101,10 @@ def _load_dit(ctx: TrainingContext) -> None:
             )
         # 换出层由 loader 直接落 CPU pinned，不经过显存（12/16GB 目标的前提）
         extra["blocks_to_swap"] = blocks_to_swap
-        logger.info("block swap：末尾 %d 层将常驻内存，不载入显存", blocks_to_swap)
+        logger.debug(
+            "block_swap: planned swap_blocks=%d (tail blocks stay in pinned memory, "
+            "never loaded to VRAM)", blocks_to_swap,
+        )
     ctx.model = ctx.family.load_dit(
         args.transformer_path,
         ctx.device,
@@ -105,23 +117,24 @@ def _load_dit(ctx: TrainingContext) -> None:
     from training.sysmem import trim_working_set
 
     trim_working_set()
-    log_vram("DiT 加载后", ctx.device)
+    log_vram("train.vram_stage_transformer_loaded", ctx.device)
 
 
 def _log_train_start_vram(ctx: TrainingContext) -> None:
     """训练循环开始前的显存基线 —— 判断 blocks_to_swap 实际效果的读数点。"""
     swap = getattr(ctx, "block_swap", None)
     if swap is not None:
-        logger.info(
-            "block swap 生效：换出 %d/%d 层，pinned %.2fGB",
-            swap.num_swap, swap.total, swap.pinned_bytes / 1024**3,
-        )
-    log_vram("训练开始前", ctx.device)
+        logger.info(msg(
+            "train.block_swap_active",
+            n=swap.num_swap, total=swap.total,
+            pinned=f"{swap.pinned_bytes / 1024**3:.2f}",
+        ))
+    log_vram("train.vram_stage_train_start", ctx.device)
 
 
 def _load_vae(ctx: TrainingContext) -> None:
     args = ctx.args
-    logger.info("加载 VAE...")
+    logger.info(msg("train.loading_vae"))
     ctx.vae = ctx.family.load_vae(
         args.vae_path,
         ctx.device,
@@ -132,7 +145,7 @@ def _load_vae(ctx: TrainingContext) -> None:
 
 def _load_text(ctx: TrainingContext) -> None:
     args = ctx.args
-    logger.info("加载文本编码器...")
+    logger.info(msg("train.loading_text_encoder"))
     ctx.text_stack = ctx.family.load_text(
         args.text_encoder_path,
         ctx.device,
@@ -165,12 +178,16 @@ def _setup_block_swap(ctx: TrainingContext) -> None:
         ctx.model.blocks, min(blocks_to_swap, len(ctx.model.blocks)), ctx.device,
     )
     ctx.block_swap.attach()
-    log_vram("block swap 挂载后", ctx.device)
+    log_vram("train.vram_stage_block_swap_ready", ctx.device)
 
 
 def _inject_adapter(ctx: TrainingContext) -> None:
     args = ctx.args
-    logger.info("注入 %s...", args.lora_type.upper())
+    lora_type = str(args.lora_type)
+    logger.info(msg(
+        "train.injecting_lora",
+        lora_type=_LORA_TYPE_LABELS.get(lora_type, lora_type),
+    ))
     from training.adapters import build_adapter
 
     ctx.injector = build_adapter(args, preset=ctx.family.lora_preset())
@@ -185,7 +202,7 @@ def _inject_adapter(ctx: TrainingContext) -> None:
                 f"当前 model_family='{ctx.family.spec.family_id}'"
             )
         ctx.injector.load(args.resume_lora)
-        logger.info("将从已有 LoRA 继续训练: %s", args.resume_lora)
+        logger.info(msg("train.resume_from_lora", path=args.resume_lora))
 
     _setup_block_swap(ctx)
 
@@ -197,7 +214,7 @@ def _inject_adapter(ctx: TrainingContext) -> None:
         num_blocks = len(ctx.model.blocks)
         if block_idx >= num_blocks:
             logger.warning(
-                "sra_block=%d >= 模型 blocks 数(%d)，clamp 到 %d",
+                "sra_block=%d is beyond the model block count (%d): clamped to %d",
                 block_idx,
                 num_blocks,
                 num_blocks - 1,
@@ -255,9 +272,7 @@ def _validate_fp8_base(ctx: TrainingContext) -> None:
         raise RuntimeError(
             "fp8 底模与当前配置不兼容：\n- " + "\n- ".join(problems)
         )
-    logger.info(
-        "检测到 fp8 底模：以 fp8_base 语义训练（权重常驻 fp8，前向逐层 dequant）"
-    )
+    logger.info(msg("train.fp8_base_detected"))
 
 
 def run(ctx: TrainingContext) -> None:
@@ -270,9 +285,7 @@ def run(ctx: TrainingContext) -> None:
     _validate_fp8_base(ctx)
 
     if _defer_dit_for_text_cache(ctx):
-        logger.info(
-            "文本缓存已开启：先加载 VAE/Qwen3-VL，缓存并释放 TE 后再加载 Transformer"
-        )
+        logger.info(msg("train.text_cache_order"))
         # 分段预算：本段只加载 VAE + TE（DiT 由 finish 段单独预算）。
         # 开关来自 设置 → 训练 → 训练参数（supervisor 经 env 注入，默认开）。
         check_load_budget(
@@ -312,7 +325,7 @@ def finish(ctx: TrainingContext) -> None:
         return
     from training.sysmem import check_load_budget, guard_enabled_from_env
 
-    logger.info("文本缓存完成且文本编码器已释放；继续加载 Transformer...")
+    logger.info(msg("train.text_cache_done_loading"))
     check_load_budget(
         guard_enabled_from_env(),
         weight_paths=[getattr(ctx.args, "transformer_path", "")],

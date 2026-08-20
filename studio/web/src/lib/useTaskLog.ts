@@ -6,7 +6,7 @@
  *   （≤ 当前游标的事件是冷启动已含的或重复的）
  * - 断线重连（`useEventStream` onOpen）与任务状态变化时用 `after=<游标>` 补拉，
  *   断线期间丢的行不会丢
- * - `event_malformed` 合成一条 WARNING 行（裸前缀，LogView 解析着色）
+ * - `event_malformed` 合成一条 WARNING 行（完整行契约：ts + 级别 + `web.logview`）
  * - 客户端最多保留 `maxLines` 行：超出从头丢，丢掉的部分可再「加载更早」拿回
  *
  * 返回 `lines: string[]`（原文）；解析/着色在 LogView。
@@ -37,6 +37,16 @@ interface Entry { offset: number; text: string }
 
 const DEFAULT_TAIL = 500
 const DEFAULT_MAX = 5000
+
+/** 合成行的行头时间戳，与后端 LOG_LINE_RE 同格式：`YYYY-MM-DD HH:MM:SS.mmm`。 */
+function logTimestamp(now: Date = new Date()): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, '0')
+  return (
+    `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ` +
+    `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}.` +
+    `${p(now.getMilliseconds(), 3)}`
+  )
+}
 
 function _matches(evt: StudioEvent, id: number): boolean {
   if (evt.type === 'task_log_appended' || evt.type === 'event_malformed') {
@@ -91,7 +101,9 @@ export function useTaskLog(
     if (cursor === null) return
     if (evt.type === 'event_malformed') {
       const preview = typeof evt.raw_preview === 'string' ? evt.raw_preview : ''
-      appendEntries([{ offset: cursor, text: `WARNING: ${i18n.t('logView.eventMalformed')} ${preview}`.trimEnd() }])
+      // 完整行契约（ts + 级别 + 来源），不再只靠裸 `WARNING: ` 前缀兜底
+      const text = `${logTimestamp()} WARNING web.logview: ${i18n.t('logView.eventMalformed')} ${preview}`
+      appendEntries([{ offset: cursor, text: text.trimEnd() }])
       return
     }
     const text = typeof evt.text === 'string' ? evt.text : ''

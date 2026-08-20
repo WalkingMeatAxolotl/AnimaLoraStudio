@@ -35,8 +35,11 @@ logger = logging.getLogger("studio.workers.tag_worker")
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
 # cli.py / server.py 已覆盖各自进程；worker 是独立 subprocess，靠 get_tagger
 # 懒加载链触发太晚（懒加载在 main() 里，某些路径下来不及）—— worker 顶层显式 import。
+from studio.infrastructure.log_messages import msg
 from studio.infrastructure.task_log import TaskLog
 from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
+
+from utils.log_throttle import ProgressThrottle, RepeatThrottle
 
 from studio import db
 from studio.services.projects import jobs as project_jobs, projects, versions
@@ -108,15 +111,19 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        logger.error("job %s not found", job_id)
+        logger.error("Tagging job %s not found in the database; nothing to run", job_id)
         return 1
     if job["kind"] != "tag":
-        logger.error("wrong kind: %s", job["kind"])
+        logger.error(
+            "Internal error: job %s has kind=%s, not a tagging job; aborting",
+            job_id, job["kind"],
+        )
         return 1
 
     params: dict[str, Any] = job.get("params_decoded") or {}
 
     progress = TaskLog(logger)
+    repeat = RepeatThrottle(progress)
 
     try:
         tagger_name = params.get("tagger", "wd14")
@@ -134,7 +141,10 @@ def run(job_id: int) -> int:
         with db.connection_for() as conn:
             v = versions.get_version(conn, version_id)
             if not v or v["project_id"] != job["project_id"]:
-                progress(f"[error] version {version_id} not in project {job['project_id']}")
+                progress.error(
+                    "Version %s does not belong to project %s; tagging aborted",
+                    version_id, job["project_id"],
+                )
                 return 1
             p = projects.get_project(conn, v["project_id"])
         assert p is not None
@@ -142,44 +152,57 @@ def run(job_id: int) -> int:
 
         images = _collect_for_scope(version_dir, scope)
         if not images:
-            progress(f"[done] 没有图可打标（范围 {scope} 下没有图）")
+            progress.info(msg("worker.tag.no_images", scope=scope))
             return 0
         total_images = len(images)
 
-        progress(
-            f"[start] tagger={tagger_name} version={v['label']} "
-            f"images={total_images} on_existing={on_existing}"
-        )
+        progress.info(msg(
+            "worker.tag.start",
+            tagger=tagger_name,
+            version=v["label"],
+            total=total_images,
+            mode=on_existing,
+        ))
         if trigger_word:
-            progress(f"[trigger] '{trigger_word}' 将作为第一个 tag prepend 到每张图")
+            progress.info(msg("worker.tag.trigger_word", word=trigger_word))
         skipped = 0
         if on_existing == "skip":
             images, skipped_images = _filter_existing_captions(images)
             skipped = len(skipped_images)
             for img in skipped_images:
-                progress(f"[skip] {img.name}")
+                progress.debug("skip: %s already has a caption", img.name)
         if not images:
-            suffix = f" (skipped={skipped})" if skipped else ""
-            progress(f"[done] tagged {skipped}/{total_images} (errors=0){suffix}")
+            _log_tag_done(progress, done=0, total=total_images, skipped=skipped, errors=0)
             return 0
 
         tagger = get_tagger(tagger_name, overrides=overrides)
         tagger.prepare()
         if overrides:
-            progress(
-                f"[overrides] {', '.join(f'{k}={v}' for k, v in overrides.items())}"
-            )
-        progress(f"[ready] {tagger_name} 已就绪")
+            progress.info(msg(
+                "worker.tag.overrides",
+                overrides=", ".join(f"{k}={v}" for k, v in overrides.items()),
+            ))
+        progress.info(msg("worker.tag.ready", tagger=tagger_name))
+
+        # 逐图行降 DEBUG，可见进度由节流后的计数 INFO 承担（Q3 三件套）。
+        throttle = ProgressThrottle(len(images))
+
+        def _on_progress(done: int, total: int) -> None:
+            if throttle.should_emit(done):
+                progress.info(msg("worker.tag.progress", done=done, total=total))
 
         ok = 0
+        tagged = 0
         errs = 0
-        appended = 0
-        for r in tagger.tag(
-            images,
-            on_progress=lambda d, t: progress(f"[progress] {d}/{t}"),
-        ):
+        for r in tagger.tag(images, on_progress=_on_progress):
             if r.get("error"):
-                progress(f"[err] {r['image'].name}: {r['error']}")
+                repeat.hit(
+                    "tag_failed",
+                    "%d images could not be tagged (first: %s)",
+                    "Tagging failed for %s: %s; image skipped",
+                    r["image"].name, r["error"],
+                    first=r["image"].name,
+                )
                 errs += 1
                 continue
             action = _write_caption(
@@ -192,21 +215,40 @@ def run(job_id: int) -> int:
             )
             if action == "skipped":
                 skipped += 1
-                progress(f"[skip] {r['image'].name}")
-            elif action == "appended":
-                appended += 1
+                progress.debug(
+                    "skip: caption kept for %s (on_existing=skip)", r["image"].name
+                )
+            else:
+                tagged += 1
+                progress.debug("tagged: %s", r["image"].name)
             ok += 1
-        suffix = ""
-        if skipped or appended:
-            suffix = f" (skipped={skipped}, appended={appended})"
-        progress(f"[done] tagged {ok + skipped}/{total_images} (errors={errs}){suffix}")
+        _log_tag_done(
+            progress, done=tagged, total=total_images, skipped=skipped, errors=errs,
+        )
         return 0 if ok > 0 or errs == 0 else 1
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         # PR-1 C7: logger.exception 进 stderr（supervisor 收 → jobs/<id>.log），
-        # 同时带 trace_id 进 studio.unhandled chain；progress 给人读短摘要。
-        logger.exception("tag worker crashed (job_id=%s)", job_id)
-        progress(f"[error] {exc}")
+        # 同时带 trace_id 进 studio.unhandled chain；异常摘要由 traceback 提供（C6）。
+        logger.exception("Tag worker crashed: job=%s", job_id)
         return 1
+    finally:
+        repeat.drain()
+
+
+def _log_tag_done(
+    progress: TaskLog, *, done: int, total: int, skipped: int, errors: int
+) -> None:
+    """收尾汇总（R10）：有失败时整行升 WARNING，否则默认视图会全白。"""
+    if errors:
+        progress.warning(
+            "Tagging finished with failures: tagged=%d/%d skipped=%d failed=%d",
+            done, total, skipped, errors,
+        )
+    else:
+        progress.info(msg(
+            "worker.tag.done",
+            done=done, total=total, skipped=skipped, errors=errors,
+        ))
 
 
 def _prepend_trigger_to_tags(tags: list[str], trigger_word: str) -> list[str]:

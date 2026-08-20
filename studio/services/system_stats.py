@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional
 
@@ -41,7 +42,7 @@ def _ensure_nvml() -> bool:
             _nvml_state["ok"] = True
         except Exception as e:
             _nvml_state["ok"] = False
-            logger.info("pynvml unavailable; GPU stats disabled (%s)", e)
+            logger.info("pynvml unavailable; GPU stats disabled: %s", e)
         return _nvml_state["ok"]
 
 
@@ -79,7 +80,10 @@ def _torch_pci_bus_id() -> Optional[str]:
                         f"{domain:08X}:{bus:02X}:{device:02X}.0"
                     )
         except Exception:  # noqa: BLE001
-            logger.info("torch PCI bus id 查询失败；GPU active 标记停用")
+            logger.warning(
+                "torch PCI bus id lookup failed; the active-GPU marker is disabled "
+                "(on multi-GPU hosts the highlighted card may be wrong)"
+            )
         return _torch_pci_state["bus_id"]
 
 
@@ -140,11 +144,21 @@ class SystemStats:
 
 
 # ── 采集 ─────────────────────────────────────────────────────────────
+# 采集失败熔断状态（R8）：list 单元素当可变 cell 用（函数内免 global 声明）。
+_FUSE_LIMIT = 3
+_GPU_FAILS = [0]
+_GPU_DISABLED = [False]
+_PSUTIL_FAILS = [0]
+_PSUTIL_DISABLED = [False]
+
+
 def _bytes_to_gb(n: int) -> float:
     return round(n / (1024 ** 3), 2)
 
 
 def _collect_gpu() -> Optional[list[GpuStats]]:
+    if _GPU_DISABLED[0]:
+        return None
     if not _ensure_nvml():
         return None
     try:
@@ -172,13 +186,28 @@ def _collect_gpu() -> Optional[list[GpuStats]]:
                 temp_c=int(temp) if temp is not None else None,
                 active=(i == active_idx),
             ))
+        _GPU_FAILS[0] = 0
         return out
     except Exception:
-        logger.exception("gpu stats collection failed")
+        # 熔断（R8）：采样 2.5s 一 tick，NVML 坏死时逐条 exception 是
+        # ~1440 条带 traceback/小时，能吃穿 studio.log 配额。首次 WARNING
+        # 全文，连续 3 次后停止采集（重启进程恢复）——与 _ensure_nvml 的
+        # 一次性缓存失败模式同构。GPU 面板空了但 server 全功能正常。
+        _GPU_FAILS[0] += 1
+        if _GPU_FAILS[0] == 1:
+            logger.warning("gpu stats collection failed", exc_info=True)
+        elif _GPU_FAILS[0] >= _FUSE_LIMIT and not _GPU_DISABLED[0]:
+            _GPU_DISABLED[0] = True
+            logger.warning(
+                "gpu stats collection failed %d times in a row, sampling disabled "
+                "for this process (restart to recover)", _GPU_FAILS[0],
+            )
         return None
 
 
 def collect_stats() -> SystemStats:
+    if _PSUTIL_DISABLED[0]:
+        return SystemStats(cpu_pct=0.0, ram_used_gb=0.0, ram_total_gb=0.0, gpu=_collect_gpu())
     try:
         # interval=None: 返回自上次调用以来的 CPU 占用；首次调用返回 0.0，
         # 后续轮询拿到的就是 2-3s 平均值，对实时监控刚好。
@@ -186,8 +215,18 @@ def collect_stats() -> SystemStats:
         mem = psutil.virtual_memory()
         ram_used = _bytes_to_gb(mem.total - mem.available)
         ram_total = _bytes_to_gb(mem.total)
+        _PSUTIL_FAILS[0] = 0
     except Exception:
-        logger.exception("psutil stats collection failed")
+        # 熔断（R8）：同 _collect_gpu——psutil 挂掉是环境级问题，重试无意义
+        _PSUTIL_FAILS[0] += 1
+        if _PSUTIL_FAILS[0] == 1:
+            logger.warning("psutil stats collection failed", exc_info=True)
+        elif _PSUTIL_FAILS[0] >= _FUSE_LIMIT and not _PSUTIL_DISABLED[0]:
+            _PSUTIL_DISABLED[0] = True
+            logger.warning(
+                "psutil stats collection failed %d times in a row, reporting "
+                "zeros for this process (restart to recover)", _PSUTIL_FAILS[0],
+            )
         cpu = 0.0
         ram_used = 0.0
         ram_total = 0.0
@@ -243,10 +282,24 @@ class SystemStatsSampler:
             self._thread = None
 
     def _run(self) -> None:
+        # tick 兜底节流（R8）：首条 ERROR 全文（这层通常是 bus/序列化 bug），
+        # 之后每 60s 一条计数汇总；不熔断——下游可能恢复。
+        fail_count = 0
+        last_report = 0.0
         while not self._stop.is_set():
             try:
                 payload = stats_to_json(collect_stats())
                 self._on_sample(payload)
+                if fail_count:
+                    logger.info("system stats sampler recovered after %d failed tick(s)", fail_count)
+                    fail_count = 0
             except Exception:
-                logger.exception("system stats sampler tick failed")
+                fail_count += 1
+                now = time.monotonic()
+                if fail_count == 1:
+                    logger.exception("system stats sampler tick failed")
+                    last_report = now
+                elif now - last_report >= 60.0:
+                    logger.warning("system stats sampler still failing: %d tick(s) since last report", fail_count)
+                    last_report = now
             self._stop.wait(self._interval)

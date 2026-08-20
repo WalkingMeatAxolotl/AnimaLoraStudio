@@ -41,7 +41,10 @@ def _selected_index() -> Optional[int]:
             return None
         return int(idx)
     except Exception:  # noqa: BLE001
-        logger.exception("读取计算显卡设置失败；本次跳过选卡注入")
+        logger.warning(
+            "read the compute GPU setting failed; using the CUDA default device",
+            exc_info=True,
+        )
         return None
 
 
@@ -91,8 +94,8 @@ def apply_gpu_selection_env(
         # 卡不在了（eGPU 拔线 / 换硬件）：忽略选择回 CUDA 默认——注入
         # 一个不存在的序号会让 torch 面对空设备列表，训练/出图全瘫。
         logger.warning(
-            "计算显卡设置 gpu_index=%d 超出当前卡数 %d，本次忽略（回 CUDA 默认）",
-            idx, count,
+            "compute GPU setting gpu_index=%d is out of range (device_count=%d); "
+            "ignored, using the CUDA default device", idx, count,
         )
         if applied_by_us:
             _revoke(env)
@@ -100,4 +103,6 @@ def apply_gpu_selection_env(
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = str(idx)
     env[_MARKER] = "1"
-    logger.info("计算显卡已钉定：PCI 序号 %d（CUDA_DEVICE_ORDER=PCI_BUS_ID）", idx)
+    logger.debug(
+        "compute GPU pinned: pci_index=%d (CUDA_DEVICE_ORDER=PCI_BUS_ID)", idx,
+    )

@@ -52,13 +52,14 @@ def validate(args) -> None:
         grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
         if grad_clip > 0:
             logger.warning(
-                "Automagic v2 使用 fused backward hook，grad_clip=%.2g 将无效"
-                "（参数在 backward 中已更新）", grad_clip
+                "Automagic v2 updates weights inside the backward pass: "
+                "grad_clip=%.2g has no effect — remove it or switch to another "
+                "optimizer", grad_clip,
             )
     else:
         grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
         if grad_clip > 0:
             logger.warning(
-                "Automagic v1 内置 RMS clip (clip_threshold)；外部 grad_clip=%.2g "
-                "会双重裁剪梯度", grad_clip
+                "Automagic v1 already clips gradients by RMS (clip_threshold): the "
+                "external grad_clip=%.2g clips them a second time", grad_clip,
             )

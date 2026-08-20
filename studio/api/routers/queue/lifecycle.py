@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,6 +41,7 @@ from ....supervisor.resources import (
     TASK_TYPE_RESOURCE_CLASS,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # R-5 档位视图：GPU 视图 = exclusive 档（train/reg_ai/generate/eval_session），
@@ -471,12 +473,10 @@ def _delete_generate_outputs(task: dict[str, Any]) -> None:
     全程 best-effort:行已删,文件清理失败只 log。
     """
     import json as _json
-    import logging
     import shutil
 
     from ....services.generate_storage import TEST_IMAGES_DIR
 
-    logger = logging.getLogger(__name__)
     raw = task.get("generate_images")
     try:
         images = _json.loads(raw) if raw else []
@@ -508,11 +508,23 @@ def _delete_generate_outputs(task: dict[str, Any]) -> None:
             folders.add(p.parent)
         else:
             files.append(p)
+    # T6 节流：一个被占用的目录会让每张图各刷一条黄行 —— 逐条 DEBUG，
+    # 收尾一条计数 WARNING（带首个原因）。
+    failed = 0
+    first_error = ""
     for p in files:
         try:
             p.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("delete generate image failed: %s", p, exc_info=True)
+        except OSError as exc:
+            failed += 1
+            if not first_error:
+                first_error = f"{type(exc).__name__}: {exc}"
+            logger.debug("delete generate image failed: path=%s", p, exc_info=True)
+    if failed:
+        logger.warning(
+            "delete generate images: failed=%d total=%d first error: %s",
+            failed, len(files), first_error,
+        )
     for d in folders:
         if d != base and str(d).startswith(str(base)):
             shutil.rmtree(d, ignore_errors=True)

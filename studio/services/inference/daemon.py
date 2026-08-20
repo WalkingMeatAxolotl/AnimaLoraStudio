@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ...infrastructure.logging import LOG_LEVEL_ENV, PROCESS_ENV, TRACE_ENV, new_trace_id
+from ...infrastructure.log_messages import UI_LANG_ENV
 from ...paths import REPO_ROOT
 from .. import generate_storage
 from ..runtime import xformers as _xformers_svc
@@ -118,6 +119,13 @@ class InferenceDaemon:
         self._log_buffer: collections.deque[dict[str, Any]] = collections.deque(maxlen=2000)
         self._log_seq = 0
         self._log_listeners: list[EventCallback] = []
+        #: listener 连续失败计数（R8 摘除机制），key=id(cb)，成功一次清零
+        self._listener_fails: dict[int, int] = {}
+        #: 本次进程是否是我们主动停的（stop / request_unload 置位，退出后清）
+        #: —— 退出行按「预期 / 意外」分级用，比按 rc 推断可靠（§3.4）
+        self._expected_exit = False
+        #: stdout 非 JSON 行计数（T7：首条 WARNING，之后 DEBUG，退出汇总）
+        self._stdout_non_json = 0
         # idle timeout：daemon 闲 N 秒（模型已 load）自动 unload 释放 VRAM。
         # 0 = 关闭。supervisor 在 spawn 后通过 sync_idle_timeout_from_secrets() 注入；
         # PUT /api/secrets 后 router 也会调一次同步。
@@ -188,7 +196,7 @@ class InferenceDaemon:
             task_minutes = int(getattr(gen, "task_timeout_minutes", 0) or 0)
         except Exception:
             logger.warning(
-                "failed to read timeouts from secrets; keeping current values",
+                "read timeouts from secrets failed; keeping the current values",
                 exc_info=True,
             )
             return
@@ -267,15 +275,18 @@ class InferenceDaemon:
                 or self._state != STATE_BUSY or proc is None
             ):
                 return
-        logger.warning(
-            "generate task %s made no image progress within timeout (%.0fs); "
-            "killing daemon process",
-            active.task_id, timeout,
+        logger.error(
+            "generate task made no image progress within %.1fs: task_id=%s "
+            "pid=%d; killing the daemon, the task is marked failed",
+            timeout, active.task_id, proc.pid,
         )
         try:
             proc.kill()
         except Exception:
-            logger.exception("task-timeout kill failed")
+            logger.exception(
+                "task-timeout kill failed: pid=%d task_id=%s; the daemon stays "
+                "busy until it is killed manually", proc.pid, active.task_id,
+            )
 
     def _on_idle_timeout(self) -> None:
         """idle timer 到期回调：仍 idle+loaded 时触发 unload。
@@ -292,11 +303,14 @@ class InferenceDaemon:
             timeout = self._idle_timeout_seconds
         if not should_unload:
             return
-        logger.info("daemon idle for %.0fs; auto-unloading model", timeout)
+        logger.info("daemon idle for %.1fs; auto-unloading the model", timeout)
         try:
             self.request_unload()
         except Exception:
-            logger.exception("auto unload from idle timer failed")
+            logger.warning(
+                "auto unload from the idle timer failed; the model stays "
+                "resident and the next schedule retries", exc_info=True,
+            )
 
     # --------------------------------------------------------------- 生命周期
     def start(self) -> None:
@@ -317,6 +331,12 @@ class InferenceDaemon:
         # （docs/design/logging-target-state.md D1），console 级别 DEBUG。
         # trace / process 名与 supervisor 子进程对齐（之前 daemon 完全游离）。
         env.setdefault(LOG_LEVEL_ENV, "DEBUG")
+        # 子进程日志语言（Q1 i18n 字典口径）
+        try:
+            from ... import secrets as _sec  # noqa: PLC0415
+            env.setdefault(UI_LANG_ENV, str(_sec.load().system.ui_language))
+        except Exception:
+            pass
         env.setdefault(TRACE_ENV, f"bg-{new_trace_id()}")
         env.setdefault(PROCESS_ENV, "anima_daemon")
         # xformers 的 triton 探测会把无害的 ImportError traceback 打进 daemon
@@ -329,7 +349,8 @@ class InferenceDaemon:
 
         cmd = [sys.executable, str(self._script)]
         logger.info("spawning inference daemon: %s", " ".join(cmd))
-        self._append_log(f"$ {' '.join(cmd)}")
+        # ring 行与上面那条讲同一件事，用同一种说法（不再用 shell 风格 `$ ` 前缀）
+        self._append_log("spawning inference daemon: %s" % " ".join(cmd))
 
         try:
             proc = subprocess.Popen(
@@ -347,7 +368,8 @@ class InferenceDaemon:
         except Exception:
             with self._lock:
                 self._state = STATE_STOPPED
-            logger.exception("failed to spawn daemon")
+            # 上抛给调用方；外层 supervisor 已按 ERROR 记并把 task 标失败（R3）
+            logger.debug("spawn daemon failed; raising to the caller", exc_info=True)
             raise
 
         with self._lock:
@@ -384,6 +406,8 @@ class InferenceDaemon:
         """关闭 daemon 子进程。优雅 → 强杀。"""
         with self._lock:
             proc = self._proc
+            # 主动停 → 退出行走「预期退出」分支（INFO），不再留一条假黄行
+            self._expected_exit = True
             if proc is None:
                 self._state = STATE_STOPPED
                 return
@@ -396,7 +420,10 @@ class InferenceDaemon:
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            logger.warning("daemon didn't exit in %.1fs, killing", timeout)
+            logger.warning(
+                "inference daemon did not exit in %.1fs; killing process tree: "
+                "pid=%d", timeout, proc.pid,
+            )
             try:
                 proc.kill()
                 proc.wait(timeout=3.0)
@@ -443,6 +470,8 @@ class InferenceDaemon:
                 mode=mode,
             )
             self._state = STATE_BUSY
+            # 新任务开跑 → 上一次 stop/unload 的「预期退出」标记作废
+            self._expected_exit = False
             self._reschedule_idle_timer_locked()
             # 任务超时兜底 timer（0=关闭；按单张图计时，图片边界事件里重置）
             self._restart_task_timer_locked(req_id)
@@ -464,7 +493,11 @@ class InferenceDaemon:
             stdin.write(json.dumps(msg) + "\n")
             stdin.flush()
         except Exception as e:
-            logger.exception("failed to send task to daemon")
+            # 外层 supervisor 的 daemon submit failed 是决定失败语义的层（R3）
+            logger.debug(
+                "send task to daemon failed: task_id=%s request_id=%s; raising "
+                "to the caller", task_id, req_id, exc_info=True,
+            )
             with self._lock:
                 self._state = STATE_IDLE
                 self._active = None
@@ -490,7 +523,10 @@ class InferenceDaemon:
             }) + "\n")
             stdin.flush()
         except Exception:
-            logger.exception("failed to send cancel")
+            logger.warning(
+                "send cancel to daemon failed: task_id=%s request_id=%s; the "
+                "task may keep running", task_id, req_id, exc_info=True,
+            )
             return False
         return True
 
@@ -503,17 +539,22 @@ class InferenceDaemon:
             if self._state == STATE_STOPPED:
                 return
             if self._state == STATE_BUSY:
-                logger.warning("unload requested while busy; ignored")
+                logger.debug("unload requested while busy; ignored")
                 return
             assert self._proc is not None and self._proc.stdin is not None
             stdin = self._proc.stdin
             self._state = STATE_UNLOADING
+            # 卸载后 daemon 常常顺带退出 —— 同样算预期退出
+            self._expected_exit = True
             self._reschedule_idle_timer_locked()
         try:
             stdin.write(json.dumps({"id": "_unload", "action": "unload"}) + "\n")
             stdin.flush()
         except Exception:
-            logger.exception("failed to send unload")
+            logger.warning(
+                "send unload to daemon failed; the model stays resident and "
+                "the next tick retries", exc_info=True,
+            )
 
     # ----------------------------------------------------------- 内部 reader
     def _read_stdout_loop(self, proc: subprocess.Popen) -> None:
@@ -527,11 +568,19 @@ class InferenceDaemon:
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.warning("daemon stdout non-JSON: %r", line[:200])
+                    # T7 节流：首条全文，之后同进程内降 DEBUG，退出时一条汇总
+                    self._stdout_non_json += 1
+                    if self._stdout_non_json == 1:
+                        logger.warning("daemon stdout non-JSON: %r", line[:200])
+                    else:
+                        logger.debug("daemon stdout non-JSON: %r", line[:200])
                     continue
                 self._handle_event(msg)
         except Exception:
-            logger.exception("daemon stdout reader crashed")
+            logger.exception(
+                "daemon stdout reader crashed; no further events are received "
+                "from the daemon"
+            )
         finally:
             self._handle_proc_exit(proc)
 
@@ -558,8 +607,9 @@ class InferenceDaemon:
                 # 正常 EOF（proc 退出 stderr 关闭）— 退出 loop
                 return
             except Exception:
-                logger.exception(
-                    "daemon stderr reader crashed (attempt %d/2)", attempt
+                logger.debug(
+                    "daemon stderr reader crashed: attempt=%d/2",
+                    attempt, exc_info=True,
                 )
                 if attempt < 2 and proc.poll() is None:
                     # 短暂 backoff 再 restart 本 loop
@@ -574,12 +624,48 @@ class InferenceDaemon:
             )
             for cb in list(self._log_listeners):
                 try:
+                    # ring 行自带级别词：前端没有级别字段可用，靠行契约识别
                     cb({"ts": time.time(), "seq": -1,
-                        "line": "[stderr reader stopped — daemon log no longer captured]"})
+                        "line": "ERROR daemon stderr reader stopped; the daemon "
+                                "log is no longer captured"})
                 except Exception:
-                    logger.exception("daemon log listener failed during stderr-down emit")
+                    logger.warning(
+                        "daemon log listener failed during the stderr-down "
+                        "emit: listener=%s pid=%d",
+                        getattr(cb, "__qualname__", None) or repr(cb),
+                        proc.pid, exc_info=True,
+                    )
 
     # ----------------------------------------------------------- log buffer
+    def _note_listener_failure(
+        self, cb, registry: list, lock, what: str, detail: str,
+    ) -> None:
+        """自我放大回路摘除（R8）：调用点处在「每行日志 / 每个事件 × 每个
+        listener」的路径上，坏掉的 listener 留在注册表里每行重试毫无收益，还把
+        日志量随输入线性放大。连续失败 ≥3 次即摘除（首条 + 摘除条，共 2 条）。
+
+        失败记录走 logger（studio.log），与失败目标（listener/SSE）是不同
+        通道——绝不能改成推给 listener 自己，否则是死循环。"""
+        key = id(cb)
+        n = self._listener_fails.get(key, 0) + 1
+        self._listener_fails[key] = n
+        name = getattr(cb, "__qualname__", None) or repr(cb)
+        if n == 1:
+            logger.warning(
+                "%s failed: listener=%s %s", what, name, detail, exc_info=True,
+            )
+        if n >= 3:
+            with lock:
+                try:
+                    registry.remove(cb)
+                except ValueError:
+                    pass
+            self._listener_fails.pop(key, None)
+            logger.warning(
+                "%s removed after %d consecutive failures: listener=%s; that "
+                "subscriber no longer receives these payloads", what, n, name,
+            )
+
     def _append_log(self, line: str) -> None:
         """收 daemon stderr 一行 → ring buffer + 推给 listeners（线程安全）。"""
         entry = {"ts": time.time(), "line": line}
@@ -593,7 +679,12 @@ class InferenceDaemon:
             try:
                 cb(entry_out)
             except Exception:
-                logger.exception("daemon log listener failed")
+                self._note_listener_failure(
+                    cb, self._log_listeners, self._log_lock,
+                    "daemon log listener", "seq=%d" % seq,
+                )
+            else:
+                self._listener_fails.pop(id(cb), None)
 
     def read_logs(self, since_seq: int = 0, limit: int = 2000) -> dict[str, Any]:
         """返回 ring buffer 历史。since_seq>0 时只返新于该 seq 的行（增量）。"""
@@ -632,6 +723,8 @@ class InferenceDaemon:
                 elif kind == "unloaded":
                     self._state = STATE_IDLE
                     self._model_loaded = False
+                    # 卸载完成而进程仍活着 → 之后再退出就不是「预期」了
+                    self._expected_exit = False
                 # `loaded` 进入 idle+loaded → 启动 idle timer；`unloaded` 模型走 → cancel
                 if kind in ("ready", "loaded", "unloaded"):
                     self._reschedule_idle_timer_locked()
@@ -639,14 +732,20 @@ class InferenceDaemon:
                 try:
                     cb(msg)
                 except Exception:
-                    logger.exception("global listener failed")
+                    self._note_listener_failure(
+                        cb, self._global_listeners, self._lock,
+                        "global event listener",
+                        "kind=%s msg_id=%s" % (kind, msg_id),
+                    )
+                else:
+                    self._listener_fails.pop(id(cb), None)
             return
 
         # task 事件
         with self._lock:
             active = self._active
         if active is None or active.request_id != msg_id:
-            logger.warning("event for unknown request: %s", msg_id)
+            logger.debug("event for an unknown request: msg_id=%s", msg_id)
             return
 
         # 任务超时按单张图计时：图片边界事件重置倒计时。语义是「一张图 N 分钟
@@ -680,7 +779,11 @@ class InferenceDaemon:
                     save_to_disk=active.save_to_disk,
                 )
             except Exception:
-                logger.exception("image_done handling failed for %s", filename)
+                logger.exception(
+                    "image_done handling failed: task_id=%s file=%s; this image "
+                    "is neither cached nor written to disk",
+                    active.task_id, filename,
+                )
             forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}
 
         # done/error/canceled 先切状态，再回调 —— 让 callback 内查询 is_busy/state 时
@@ -696,12 +799,14 @@ class InferenceDaemon:
         try:
             active.on_event({**forward_msg, "task_id": active.task_id})
         except Exception:
-            logger.exception("task on_event handler failed")
+            logger.warning(
+                "task on_event handler failed: task_id=%s kind=%s; the UI "
+                "misses this update", active.task_id, kind, exc_info=True,
+            )
 
     def _handle_proc_exit(self, proc: subprocess.Popen) -> None:
         """子进程退出处理：标 STOPPED + 给 active task 推 error + 通知 listeners。"""
         rc = proc.wait()
-        logger.warning("inference daemon exited rc=%d", rc)
         with self._lock:
             self._proc = None
             prev_state = self._state
@@ -709,9 +814,32 @@ class InferenceDaemon:
             self._model_loaded = False
             active = self._active
             self._active = None
+            expected = self._expected_exit
+            self._expected_exit = False
+            non_json = self._stdout_non_json
+            self._stdout_non_json = 0
             listeners = list(self._global_listeners)
             self._cancel_task_timer_locked()
             self._reschedule_idle_timer_locked()
+
+        # §3.4 三分：有任务在跑就死了 = 用户任务失败（ERROR）；主动 stop/unload
+        # 且没在跑任务 = 正常收摊（INFO，不再留假黄行）；其余 = 非正常退出。
+        if active is not None and prev_state != STATE_UNLOADING:
+            logger.error(
+                "inference daemon exited unexpectedly: rc=%d task_id=%s; "
+                "the task is marked failed", rc, active.task_id,
+            )
+        elif expected and active is None:
+            logger.info("inference daemon exited: rc=%d (expected stop)", rc)
+        else:
+            logger.warning(
+                "inference daemon exited abnormally: rc=%d (no task in flight)", rc,
+            )
+        if non_json:
+            logger.warning(
+                "daemon stdout had %d non-JSON lines (the daemon may be writing "
+                "plain output to stdout)", non_json,
+            )
 
         if active is not None and prev_state != STATE_UNLOADING:
             try:
@@ -721,13 +849,21 @@ class InferenceDaemon:
                     "message": f"daemon exited unexpectedly (rc={rc})",
                 })
             except Exception:
-                logger.exception("error handler failed")
+                logger.exception(
+                    "daemon-exit error handler failed: task_id=%s; the task "
+                    "never receives the failure event and will hang until it "
+                    "times out", active.task_id,
+                )
 
         for cb in listeners:
             try:
                 cb({"id": "_evt", "kind": "stopped", "rc": rc})
             except Exception:
-                logger.exception("listener failed on proc exit")
+                logger.warning(
+                    "listener failed on daemon exit: listener=%s rc=%d",
+                    getattr(cb, "__qualname__", None) or repr(cb), rc,
+                    exc_info=True,
+                )
 
 
 # Singleton 句柄；server 启动时初始化（lazy spawn）

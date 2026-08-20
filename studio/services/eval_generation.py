@@ -36,7 +36,8 @@ from studio.domain.common import supports_capability
 from studio.services import version_config
 from studio.services.inference.daemon import InferenceDaemon
 
-from studio.infrastructure.task_log import TaskLogLike
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLogLike, as_task_log
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,25 @@ class EvalGenerationError(RuntimeError):
 
 # 「该族不支持 block swap」只提示一次（见 _generate_settings）
 _BLOCK_SWAP_NOTICED: set[str] = set()
+
+
+def note_block_swap_unsupported(
+    family_id: str, blocks_to_swap: Any, *, scope: str,
+) -> None:
+    """「这个族不支持 block swap，本次忽略全局设置」的唯一记录点。
+
+    评估出图（每候选走一遍 `_generate_settings`）与测试出图（`api/routers/
+    generate.py`）是同一句话的两个调用方，去重集合也共用：按族记一次，
+    200 个 checkpoint 不会打 200 行同样的话。``scope`` 区分 generate/eval。
+    """
+    if family_id in _BLOCK_SWAP_NOTICED:
+        return
+    _BLOCK_SWAP_NOTICED.add(family_id)
+    logger.info(
+        "block swap is not supported by model_family=%s; "
+        "ignoring blocks_to_swap=%s for scope=%s",
+        family_id, blocks_to_swap, scope,
+    )
 
 _FALLBACK_SETTINGS: dict[str, Any] = {
     "vae_precision": "bf16", "lora_merge_precision": "fp32",
@@ -80,18 +100,16 @@ def _generate_settings(family_id: str) -> dict[str, Any]:
             "blocks_to_swap": int(getattr(gen, "blocks_to_swap", 0) or 0),
         }
     except Exception:
-        logger.warning("读取出图设置失败，评估出图用保守默认", exc_info=True)
+        logger.warning(
+            "read generate settings failed; evaluation images use conservative defaults",
+            exc_info=True,
+        )
         return dict(_FALLBACK_SETTINGS)
 
     if settings["blocks_to_swap"] and not supports_capability(family_id, "block_swap"):
-        # 每个候选都会走一遍本函数，逐次打就是 200 个 checkpoint 打 200 行同样的话
-        # ——正是 #465 抱怨的那种噪音。按族记一次就够。
-        if family_id not in _BLOCK_SWAP_NOTICED:
-            _BLOCK_SWAP_NOTICED.add(family_id)
-            logger.info(
-                "model_family=%s 不支持 block swap，评估出图忽略全局设置的 "
-                "blocks_to_swap=%s", family_id, settings["blocks_to_swap"],
-            )
+        note_block_swap_unsupported(
+            family_id, settings["blocks_to_swap"], scope="eval",
+        )
         settings["blocks_to_swap"] = 0
     return settings
 
@@ -184,7 +202,7 @@ class DaemonSampleGenerator:
         task_id: int = 0,
         daemon: Optional[InferenceDaemon] = None,
     ) -> None:
-        self._progress = progress
+        self._progress = as_task_log(progress)
         self._task_id = int(task_id)
         # cache_images=False：图归评估的 run 目录，不进测试页的 generate_cache
         self._daemon = daemon or InferenceDaemon(cache_images=False)
@@ -193,7 +211,7 @@ class DaemonSampleGenerator:
     # ---------------------------------------------------------------- 生命周期
     def __enter__(self) -> "DaemonSampleGenerator":
         self._daemon.start()
-        self._progress("[eval-samples] 出图 daemon 就绪（底模按需加载一次，之后候选间只热换 LoRA）")
+        self._progress(msg("eval.samples_daemon_ready"))
         return self
 
     def __exit__(self, *_exc: Any) -> None:
@@ -204,9 +222,12 @@ class DaemonSampleGenerator:
             return
         try:
             self._daemon.stop()
-            self._progress("[eval-samples] 出图 daemon 已退出，显存释放")
+            self._progress(msg("eval.samples_daemon_stopped"))
         except Exception:
-            logger.warning("停止评估 daemon 失败", exc_info=True)
+            logger.warning(
+                "stopping the evaluation daemon failed; VRAM stays held until "
+                "the process exits", exc_info=True,
+            )
 
     # ---------------------------------------------------------------- 出图
     def __call__(
@@ -217,6 +238,8 @@ class DaemonSampleGenerator:
     ) -> None:
         from studio.services import eval_samples
 
+        # 调用方可能仍传裸单参回调（旧接口 / 测试桩）
+        progress = as_task_log(progress)
         items = run.get("items") if isinstance(run.get("items"), list) else []
         if not items:
             return
@@ -242,10 +265,11 @@ class DaemonSampleGenerator:
                         state["run"] = eval_samples.mark_item_running(
                             version_dir, state["run"], idx, eval_root
                         )
-                        progress(
-                            f"[eval-samples] {idx + 1}/{len(items)} "
-                            f"prompt={str(items[idx].get('prompt') or '')[:80]}"
-                        )
+                        progress(msg(
+                            "eval.samples_progress",
+                            n=idx + 1, total=len(items),
+                            prompt=str(items[idx].get("prompt") or "")[:80],
+                        ))
                 elif kind == "image_done":
                     self._write_image(evt, items, images_dir)
                     idx = int(evt.get("step") or 0) - 1
@@ -260,13 +284,20 @@ class DaemonSampleGenerator:
                         state["run"] = eval_samples.mark_item_failed(
                             version_dir, state["run"], idx, message, eval_root
                         )
-                    progress(f"[eval-samples] 第 {idx + 1} 张失败：{message}")
+                    progress.warning(
+                        "eval-samples: image %d of %d failed: %s; the metrics for "
+                        "this candidate are computed from fewer images",
+                        idx + 1, len(items), message,
+                    )
                 elif kind in ("done", "error", "canceled"):
                     if kind != "done":
                         failure.append(str(evt.get("message") or kind))
                     done.set()
             except Exception as exc:  # noqa: BLE001
-                logger.exception("评估出图事件处理失败 (kind=%s)", kind)
+                logger.exception(
+                    "evaluation image event handling failed: session=%s kind=%s; "
+                    "the evaluation may stall", run.get("run_id"), kind,
+                )
                 failure.append(str(exc))
                 done.set()
 

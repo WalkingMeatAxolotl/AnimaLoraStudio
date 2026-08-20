@@ -106,16 +106,21 @@ def test_apply_when_not_installed_returns_skipped(
     assert fresh_patch_module.apply_lokr_device_patch() == "skipped_not_installed"
 
 
-def test_apply_unknown_version_skips_and_warns(
+def test_apply_unknown_version_skips_quietly(
     fresh_patch_module, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """未知版本（如上游已修的 3.5.0）→ 跳过并 warn，避免覆盖上游修复。"""
+    """未知版本（如上游已修的 3.5.0）→ 跳过，避免覆盖上游修复。
+
+    这是「什么都没做」的正常路径：新版用户每次训练吃一条 WARNING 属误报，
+    按 leveling-rules R4 记 DEBUG（版本号仍在，排障可查）。
+    """
     pytest.importorskip("lycoris.modules.lokr")
     monkeypatch.setattr(fresh_patch_module, "version", lambda _: "999.0.0")
-    with caplog.at_level(logging.WARNING, logger="utils.lycoris_patch"):
+    with caplog.at_level(logging.DEBUG, logger="utils.lycoris_patch"):
         status = fresh_patch_module.apply_lokr_device_patch()
     assert status == "skipped_version_unknown"
     assert any("999.0.0" in rec.message for rec in caplog.records)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 def test_apply_idempotent(

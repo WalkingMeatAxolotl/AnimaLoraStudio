@@ -394,11 +394,12 @@ def _ensure_preload() -> dict[str, Any]:
     _PRELOAD_RESULT = _preload_torch_cuda_libs()
     if sys.platform == "win32" and _PRELOAD_RESULT["preloaded"]:
         logger.info(
-            "[onnx_setup] DLL 搜索路径已加入 torch/lib（onnxruntime-gpu CUDA dlopen 用）"
+            "[onnx_setup] added torch/lib to the DLL search path (needed for "
+            "the onnxruntime-gpu CUDA dlopen)"
         )
     elif _PRELOAD_RESULT["preloaded"]:
-        logger.info(
-            "[onnx_setup] 预加载 torch 自带 CUDA 库 %d 个: %s",
+        logger.debug(
+            "[onnx_setup] preloaded %d bundled torch CUDA libraries: %s",
             len(_PRELOAD_RESULT["preloaded"]),
             ", ".join(
                 os.path.basename(p) for p in _PRELOAD_RESULT["preloaded"]
@@ -406,11 +407,13 @@ def _ensure_preload() -> dict[str, Any]:
         )
     elif _PRELOAD_RESULT.get("system_cuda_skip"):
         logger.info(
-            "[onnx_setup] 检测到系统 CUDA，跳过 torch wheel preload（避免 cuBLAS 版本错位）"
+            "[onnx_setup] system CUDA detected; skipping the torch wheel preload "
+            "(avoids a cuBLAS version mismatch)"
         )
     elif _PRELOAD_RESULT["applied"] and _PRELOAD_RESULT["candidates"] == 0:
         logger.debug(
-            "[onnx_setup] 未发现 torch 自带 CUDA wheel；GPU EP 依赖系统 CUDA"
+            "[onnx_setup] no bundled torch CUDA wheel found; the GPU EP relies "
+            "on system CUDA"
         )
     return _PRELOAD_RESULT
 
@@ -460,7 +463,7 @@ def detect_cuda() -> dict[str, Any]:
             check=False,
         )
     except (subprocess.SubprocessError, OSError) as exc:
-        logger.debug("nvidia-smi exec failed: %s", exc)
+        logger.debug("[onnx_setup] nvidia-smi exec failed: %s", exc)
         return {"available": False, "driver_version": None, "gpu_name": None}
     if out.returncode != 0:
         return {"available": False, "driver_version": None, "gpu_name": None}
@@ -665,7 +668,10 @@ def _install_cuda_runtime_wheels(major: Optional[int] = None) -> dict[str, Any]:
         }
     rc, out = _pip(["install", *targets])
     if rc != 0:
-        logger.warning("[onnx_setup] CUDA wheels pip 官方源失败，切换腾讯镜像重试...")
+        logger.warning(
+            "[onnx_setup] pip failed on the official index for the CUDA runtime "
+            "wheels; retrying on the Tencent mirror"
+        )
         rc, out = _pip(["install", *targets], mirror=_PIP_FALLBACK_MIRROR)
     if rc != 0:
         # 回滚：把本次想装的从 venv 里再卸掉，保持装包前的状态
@@ -701,7 +707,10 @@ def install_runtime(target: str = "auto") -> dict[str, Any]:
     rc1, log1 = _pip(["uninstall", "-y", *_MUTUALLY_EXCLUSIVE_PACKAGES])
     rc2, log2 = _pip(["install", "--upgrade", spec])
     if rc2 != 0:
-        logger.warning("[onnx_setup] pip 官方源失败，切换腾讯镜像重试...")
+        logger.warning(
+            "[onnx_setup] pip failed on the official index for the onnxruntime "
+            "wheels; retrying on the Tencent mirror"
+        )
         rc2, log2 = _pip(["install", "--upgrade", spec], mirror=_PIP_FALLBACK_MIRROR)
     if rc2 != 0:
         raise RuntimeError(f"安装 {spec} 失败（rc={rc2}）:\n{log2}")
@@ -715,7 +724,11 @@ def install_runtime(target: str = "auto") -> dict[str, Any]:
         except RuntimeError as exc:
             # CUDA wheels 装失败不致命：onnxruntime-gpu 已装上，让用户去 Settings 页
             # 看到 cuda_load_error + 手动修。日志记下原因，UI 也能拿到。
-            logger.error("[onnx_setup] CUDA runtime wheels 装失败: %s", exc)
+            logger.warning(
+                "[onnx_setup] installing the CUDA runtime wheels failed; tagging "
+                "keeps running on the CPU, reinstall from Settings → ONNX Runtime",
+                exc_info=True,
+            )
             cuda_runtime = {
                 "installed": [],
                 "skipped": [],

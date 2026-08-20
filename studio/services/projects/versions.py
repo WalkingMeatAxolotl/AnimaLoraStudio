@@ -148,7 +148,7 @@ def reconcile_version_status(
         return v, False
 
     logger.warning(
-        "version %d status mismatch: stored=%r derived=%r → correcting",
+        "version status mismatch: version_id=%d stored=%r derived=%r; corrected",
         version_id, stored, derived,
     )
     update_version(conn, version_id, status=derived)

@@ -190,7 +190,6 @@
   },
   "logView": {
     "debug": "Debug",
-    "hiddenDebug": "{{n}} debug lines hidden",
     "autoScroll": "Auto-scroll",
     "copy": "Copy",
     "copied": "Copied to clipboard",
@@ -201,7 +200,7 @@
     "loading": "(loading…)",
     "waiting": "(waiting for logs…)",
     "empty": "(no logs)",
-    "eventMalformed": "Malformed event:"
+    "eventMalformed": "Malformed line in the event stream:"
   },
   "jobProgress": {
     "waitingLogs": "(Waiting for logs...)"

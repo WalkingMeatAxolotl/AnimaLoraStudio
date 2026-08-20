@@ -1452,6 +1452,8 @@ export function DisplaySection() {
     setLang(newLang)
     setStoredLang(newLang)
     void i18n.changeLanguage(newLang)
+    // 同步后端 secrets.system.ui_language：子进程日志语言的注入源（最终一致即可）
+    void api.updateSecrets({ system: { ui_language: newLang } }).catch(() => {})
   }
 
   const densityLabel = (d: Density): string => {

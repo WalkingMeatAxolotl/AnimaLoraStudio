@@ -7,6 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
+# 模块 logger（根 logger 会让日志行失去「每行可定位模块」的定位能力）
+_logger = logging.getLogger(__name__)
+
 CACHE_T = 2
 
 
@@ -605,7 +608,7 @@ def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
         model = WanVAE_(**cfg)
 
     # load checkpoint
-    logging.info(f'loading {pretrained_path}')
+    _logger.debug('wan_vae: loading weights path=%s', pretrained_path)
     model.load_state_dict(
         torch.load(pretrained_path, map_location=device), assign=True)
 
