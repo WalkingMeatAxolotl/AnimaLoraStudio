@@ -4,6 +4,7 @@
 // 无法预览要选的语言长什么样）。
 import { useEffect, useRef, useState } from 'react'
 import { ONBOARDING_EVENTS } from './FirstRunOnboardingModal'
+import { api } from '../api/client'
 import i18n, { getStoredLang, setStoredLang } from '../i18n'
 
 type Lang = 'en' | 'zh'
@@ -37,6 +38,8 @@ export function FirstRunLangModal() {
   const handlePick = (lang: Lang) => {
     setStoredLang(lang)
     void i18n.changeLanguage(lang)
+    // 同步后端 secrets.system.ui_language：子进程日志语言的注入源
+    void api.updateSecrets({ system: { ui_language: lang } }).catch(() => {})
     setOpen(false)
     // 通知 OnboardingModal: lang 已设好,可以接力弹引导。
     window.dispatchEvent(new Event(ONBOARDING_EVENTS.langSet))

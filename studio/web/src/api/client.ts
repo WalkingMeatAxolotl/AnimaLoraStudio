@@ -640,6 +640,9 @@ export interface SystemPrefsConfig {
   /** 计算显卡（多卡机器，#491）：NVML/nvidia-smi 的 PCI 序号；null = 未设置
    *  （CUDA 自选，快卡优先）。启动期注入 CUDA env，重启生效。 */
   gpu_index?: number | null
+  /** UI 语言（zh/en）。前端显示语言以 localStorage 为准；本字段是**子进程
+   *  日志语言**的注入源（ANIMA_UI_LANG），切语言时 fire-and-forget 同步。 */
+  ui_language?: string
   /** 日志视图默认是否显示 DEBUG 行（logging-target-state D1）。只管显示默认值：
    *  run.log 恒记 DEBUG，每个 LogView 的「调试」开关以此为初值、不持久化。 */
   log_debug_default?: boolean

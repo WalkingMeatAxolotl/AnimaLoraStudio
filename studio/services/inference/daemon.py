@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ...infrastructure.logging import LOG_LEVEL_ENV, PROCESS_ENV, TRACE_ENV, new_trace_id
+from ...infrastructure.log_messages import UI_LANG_ENV
 from ...paths import REPO_ROOT
 from .. import generate_storage
 from ..runtime import xformers as _xformers_svc
@@ -319,6 +320,12 @@ class InferenceDaemon:
         # （docs/design/logging-target-state.md D1），console 级别 DEBUG。
         # trace / process 名与 supervisor 子进程对齐（之前 daemon 完全游离）。
         env.setdefault(LOG_LEVEL_ENV, "DEBUG")
+        # 子进程日志语言（Q1 i18n 字典口径）
+        try:
+            from ... import secrets as _sec  # noqa: PLC0415
+            env.setdefault(UI_LANG_ENV, str(_sec.load().system.ui_language))
+        except Exception:
+            pass
         env.setdefault(TRACE_ENV, f"bg-{new_trace_id()}")
         env.setdefault(PROCESS_ENV, "anima_daemon")
         # xformers 的 triton 探测会把无害的 ImportError traceback 打进 daemon
