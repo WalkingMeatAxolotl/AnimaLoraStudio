@@ -26,6 +26,9 @@ warnings.filterwarnings(
     module="torchsde",
 )
 
+# torchsde 缺失回退告警只出一次（R8 warn-once）
+_torchsde_warned = False
+
 
 class _BrownianTreeNoiseSampler:
     """对齐 ComfyUI BrownianTreeNoiseSampler + BatchedBrownianTree。

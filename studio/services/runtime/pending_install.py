@@ -22,6 +22,8 @@ from typing import Any, Optional
 
 from ...paths import STUDIO_DATA
 
+from ...infrastructure.log_messages import msg
+
 logger = logging.getLogger(__name__)
 
 # studio_data/ 是 gitignore 的，跨重启保留
@@ -35,9 +37,7 @@ def register_torch_reinstall(target: str) -> None:
         json.dumps({"kind": "torch", "target": target}, ensure_ascii=False),
         encoding="utf-8",
     )
-    logger.info(
-        "[pending_install] torch reinstall registered: target=%s", target,
-    )
+    logger.info(msg("install.torch_reinstall_registered", target=target))
 
 
 def read_pending() -> Optional[dict[str, Any]]:
@@ -79,14 +79,9 @@ def apply_pending() -> None:
     if kind == "torch":
         target = pending.get("target", "auto")
         # 一段提示 = 一条多行记录（续行 2 空格），不是三条独立记录
-        logger.info(
-            "[pending_install] pending torch reinstall detected: target=%s; "
-            "installing now\n"
-            "  press Ctrl+C to skip this run (the marker is kept and retried "
-            "on the next start)\n"
-            "  to skip permanently, delete the marker file: %s",
-            target, PENDING_MARKER,
-        )
+        logger.info(msg(
+            "install.torch_reinstall_start", target=target, marker=PENDING_MARKER,
+        ))
         # 延迟 import：torch_setup -> onnxruntime_setup 链触发的副作用全留到此刻
         from . import torch as torch_setup  # noqa: PLC0415
         try:
@@ -107,10 +102,10 @@ def apply_pending() -> None:
                 exc, PENDING_MARKER,
             )
             return
-        logger.info(
-            "[pending_install] torch reinstall done: version=%s tag=%s",
-            res.get("version"), res.get("tag"),
-        )
+        logger.info(msg(
+            "install.torch_reinstall_done",
+            version=res.get("version"), tag=res.get("tag"),
+        ))
     else:
         logger.warning(
             "[pending_install] unknown pending install kind %r; ignored and "

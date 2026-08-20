@@ -91,7 +91,7 @@ def test_missing_t5_dir_download_error_is_wrapped(tm, monkeypatch, tmp_path, cap
     assert "t5_tokenizer_path" in msg  # 指引用户检查配置
     assert isinstance(excinfo.value.__cause__, ConnectionError)
     assert t5_calls == ["google/t5-v1_1-xxl"]
-    assert any("本地目录缺失" in r.getMessage() for r in caplog.records)
+    assert any("not found locally" in r.getMessage() for r in caplog.records)
 
 
 def test_missing_t5_dir_fallback_success_logs_warning(tm, monkeypatch, tmp_path, caplog):
@@ -107,7 +107,7 @@ def test_missing_t5_dir_fallback_success_logs_warning(tm, monkeypatch, tmp_path,
     assert t5_tokenizer == "tok"
     assert t5_calls == ["google/t5-v1_1-xxl"]
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("本地目录缺失" in m and "google/t5-v1_1-xxl" in m for m in warnings)
+    assert any("not found locally" in m and "google/t5-v1_1-xxl" in m for m in warnings)
 
 
 def test_local_t5_dir_never_falls_back(tm, monkeypatch, tmp_path, caplog):

@@ -120,6 +120,25 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Running vitest",
     },
 
+    # -------------------------------------------------------------- install.*
+    "install.torch_reinstall_registered": {
+        "zh": "已注册 torch 重装: target={target}（下次启动时执行）",
+        "en": "torch reinstall registered: target={target} (runs on the next start)",
+    },
+    "install.torch_reinstall_start": {
+        "zh": "检测到待执行的 torch 重装: target={target}，开始安装\n"
+              "  按 Ctrl+C 可跳过本次安装（marker 保留，下次启动重试）\n"
+              "  若希望永久跳过，删除 marker 文件: {marker}",
+        "en": "pending torch reinstall detected: target={target}; installing now\n"
+              "  press Ctrl+C to skip this run (the marker is kept and retried "
+              "on the next start)\n"
+              "  to skip permanently, delete the marker file: {marker}",
+    },
+    "install.torch_reinstall_done": {
+        "zh": "torch 重装完成: {version}（{tag}）",
+        "en": "torch reinstall done: version={version} tag={tag}",
+    },
+
     # ---------------------------------------------------------------- booru.*
     "booru.canceled": {
         "zh": "下载已停止：用户请求",
