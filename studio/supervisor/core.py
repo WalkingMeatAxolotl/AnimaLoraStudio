@@ -39,6 +39,7 @@ from ..services.runtime import xformers as _xformers_svc
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller, clean_log_line
 from ..infrastructure.logging import LOG_LEVEL_ENV, LOG_LINE_RE
+from ..infrastructure.log_messages import UI_LANG_ENV
 from ..paths import (
     LOGS_DIR,
     REPO_ROOT,
@@ -1426,6 +1427,11 @@ class Supervisor:
         # 起默认关）。runtime 侧 env 缺省=开（CLI 直跑的安全兜底），只有
         # 关闭时才需要显式传；训练与正则 AI 子进程读它，generate daemon
         # 走自己的 cfg.ram_guard 不受影响。
+        # 子进程日志语言（Q1 i18n 字典口径）：INFO 叙事行按 UI 语言输出
+        try:
+            env.setdefault(UI_LANG_ENV, str(_secrets.load().system.ui_language))
+        except Exception:
+            pass
         try:
             if not _secrets.load().training.ram_guard:
                 env.setdefault("LORA_RAM_GUARD", "0")
