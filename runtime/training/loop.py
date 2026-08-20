@@ -267,6 +267,32 @@ def run(ctx: TrainingContext) -> None:
 
     bucket_switch = _BucketSwitchCacheRelease(ctx.device)
 
+    # NaN 风暴节流（R8/R9）：loss/grad NaN 各打一条首条全文，之后只计数，
+    # epoch 末一条汇总；连续 50 个 optimizer step 无有效更新时升一条 ERROR
+    # （不改控制流，不自动停训）。逐条刷 WARNING 会在 NaN 崩溃场景灌满
+    # run.log，把最后的真 ERROR 块埋掉（error_msg 提取按 ERROR 块）。
+    nan_stats = {
+        "loss_first": True, "grad_first": True,
+        "epoch_micro_skipped": 0, "epoch_micro_total": 0,
+        "epoch_steps_skipped": 0, "epoch_steps_total": 0,
+        "consecutive_skipped": 0, "first_skipped_step": 0, "error_emitted": False,
+    }
+
+    def _note_skipped_step() -> None:
+        nan_stats["epoch_steps_skipped"] += 1
+        if nan_stats["consecutive_skipped"] == 0:
+            nan_stats["first_skipped_step"] = ctx.global_step
+        nan_stats["consecutive_skipped"] += 1
+        if nan_stats["consecutive_skipped"] >= 50 and not nan_stats["error_emitted"]:
+            nan_stats["error_emitted"] = True
+            logger.error(
+                "No effective update for %d consecutive steps: every optimizer step "
+                "since step %d was skipped on NaN/Inf — the run is burning time "
+                "without learning; stop the task and lower the learning rate or "
+                "turn off fp16",
+                nan_stats["consecutive_skipped"], nan_stats["first_skipped_step"],
+            )
+
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
         epoch_loss_sum = 0.0
@@ -588,10 +614,17 @@ def run(ctx: TrainingContext) -> None:
             # 不 zero_grad —— 同一累积组内其它 micro-batch 已积累的正常梯度要保留；
             # 也不跳过组尾结算 —— 否则组尾撞上 NaN 时整组梯度作废且 global_step 冻结。
             loss_is_finite = bool(torch.isfinite(loss))
+            nan_stats["epoch_micro_total"] += 1
             if not loss_is_finite:
-                logger.warning(
-                    f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过 backward"
-                )
+                nan_stats["epoch_micro_skipped"] += 1
+                if nan_stats["loss_first"]:
+                    nan_stats["loss_first"] = False
+                    logger.warning(
+                        "Loss is NaN/Inf at step %d micro-batch %d: loss=%.4g — "
+                        "backward skipped for this micro-batch; further NaN steps "
+                        "are counted and summarized at each epoch end",
+                        ctx.global_step, batch_idx, loss.item(),
+                    )
             else:
                 loss = loss / group_size
                 if ctx.scaler is not None:
@@ -600,10 +633,12 @@ def run(ctx: TrainingContext) -> None:
                     loss.backward()
 
             if is_group_end:
+                nan_stats["epoch_steps_total"] += 1
                 # 组内所有 micro-batch 都被跳过 → 无梯度可结算：不 step、不推进
                 # global_step（无梯度的 step 会污染 Prodigy 的 k / scheduler 进度；
                 # fp16 下 GradScaler 对空梯度组 step 会直接 assert 崩）。
                 if not any(p.grad is not None for p in ctx.trainable_params):
+                    _note_skipped_step()
                     continue
                 if ctx.scaler is not None:
                     ctx.scaler.unscale_(ctx.optimizer)
@@ -613,7 +648,15 @@ def run(ctx: TrainingContext) -> None:
                     for p in ctx.trainable_params
                 )
                 if has_nan_grad:
-                    logger.warning(f"step {ctx.global_step}: 梯度含 NaN/Inf，跳过 optimizer.step()")
+                    if nan_stats["grad_first"]:
+                        nan_stats["grad_first"] = False
+                        logger.warning(
+                            "Gradient contains NaN/Inf at step %d: optimizer step "
+                            "skipped and gradients cleared — further NaN steps are "
+                            "counted and summarized at each epoch end",
+                            ctx.global_step,
+                        )
+                    _note_skipped_step()
                     ctx.optimizer.zero_grad()
                     if ctx.scaler is not None:
                         ctx.scaler.update()
@@ -629,6 +672,9 @@ def run(ctx: TrainingContext) -> None:
                 if ctx.scheduler is not None and ctx.optimizer_type != "prodigy_plus_schedulefree":
                     ctx.scheduler.step()
                 ctx.optimizer.zero_grad()
+                # 有效更新：连续跳步计数清零，允许下一轮 NaN 段再次升 ERROR
+                nan_stats["consecutive_skipped"] = 0
+                nan_stats["error_emitted"] = False
                 ctx.global_step += 1
 
                 # 自适应采样器：刷新采样分布；baseline 是 no-op
@@ -807,6 +853,17 @@ def run(ctx: TrainingContext) -> None:
                     break
 
         # epoch 结束后的操作
+        if nan_stats["epoch_micro_skipped"] or nan_stats["epoch_steps_skipped"]:
+            logger.warning(
+                "NaN summary for epoch %d: %d/%d micro-batches skipped on NaN loss, "
+                "%d/%d optimizer steps skipped on NaN gradients — those samples did "
+                "not train",
+                epoch,
+                nan_stats["epoch_micro_skipped"], nan_stats["epoch_micro_total"],
+                nan_stats["epoch_steps_skipped"], nan_stats["epoch_steps_total"],
+            )
+        nan_stats["epoch_micro_skipped"] = nan_stats["epoch_micro_total"] = 0
+        nan_stats["epoch_steps_skipped"] = nan_stats["epoch_steps_total"] = 0
         ctx.current_epoch = epoch + 1
         if epoch_step_count > 0:
             ctx.wandb_monitor.log(

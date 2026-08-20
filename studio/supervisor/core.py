@@ -27,6 +27,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -71,6 +72,47 @@ from .process import _kill_process_tree
 from .slot import SLOT_DATA, SLOT_TRAIN, _Slot
 
 logger = logging.getLogger(__name__)
+
+
+class _ErrorThrottle:
+    """轮询站点错误节流（R8）：首条全文 exception，之后同异常类型 60s 一条
+    计数 WARNING，异常类型变化重新全文记一次，恢复时一条 INFO。
+
+    supervisor 的 _poll=1.0s，持续故障下逐条 exception 是 3600 条带
+    traceback/小时 × 站点数，会吃穿 studio.log 配额并把诊断包冲成噪音。
+    """
+
+    def __init__(self, site: str, window: float = 60.0) -> None:
+        self._site = site
+        self._window = window
+        self._count = 0
+        self._last_type: Optional[str] = None
+        self._last_report = 0.0
+
+    def failed(self) -> None:
+        exc = sys.exc_info()[1]
+        exc_type = type(exc).__name__ if exc is not None else "?"
+        now = time.monotonic()
+        self._count += 1
+        if exc_type != self._last_type:
+            self._last_type = exc_type
+            self._last_report = now
+            logger.exception("%s failed", self._site)
+        elif now - self._last_report >= self._window:
+            self._last_report = now
+            logger.warning(
+                "%s still failing: count=%d err=%s",
+                self._site, self._count, exc_type,
+            )
+
+    def recovered(self) -> None:
+        if self._count:
+            logger.info(
+                "%s recovered after %d failures", self._site, self._count,
+            )
+            self._count = 0
+            self._last_type = None
+
 
 
 _ERROR_MSG_TAIL_BYTES = 256 * 1024
@@ -159,6 +201,11 @@ class Supervisor:
         terminate_grace: Optional[float] = None,
     ) -> None:
         self._on_event: EventCallback = on_event or (lambda _evt: None)
+        # 轮询站点错误节流（R8），各站点独立计数
+        self._tick_throttle = _ErrorThrottle("supervisor tick")
+        self._promote_throttle = _ErrorThrottle("promote_due_scheduled")
+        self._queue_held_throttle = _ErrorThrottle("read queue_held")
+        self._unload_throttle = _ErrorThrottle("daemon unload request")
         self._cmd_builder: CmdBuilder = cmd_builder or _default_cmd_builder
         self._job_cmd_builder: JobCmdBuilder = (
             job_cmd_builder or _default_job_cmd_builder
@@ -357,8 +404,9 @@ class Supervisor:
         while not self._stop.is_set():
             try:
                 self._tick()
+                self._tick_throttle.recovered()
             except Exception:
-                logger.exception("supervisor tick failed")
+                self._tick_throttle.failed()
             self._stop.wait(self._poll)
 
     def _reconcile_orphans(self) -> None:
@@ -417,8 +465,9 @@ class Supervisor:
         try:
             with db.connection_for(self._db_path) as conn:
                 promoted = db.promote_due_scheduled(conn)
+            self._promote_throttle.recovered()
         except Exception:
-            logger.exception("promote_due_scheduled failed")
+            self._promote_throttle.failed()
             return
         for tid in promoted:
             logger.info("scheduled task %d due → pending", tid)
@@ -523,9 +572,11 @@ class Supervisor:
         """ADR §3.2 queue hold 开关，跨 supervisor 重启保留（db kv）。"""
         try:
             with db.connection_for(self._db_path) as conn:
-                return db.get_queue_held(conn)
+                held = db.get_queue_held(conn)
+            self._queue_held_throttle.recovered()
+            return held
         except Exception:
-            logger.exception("failed to read queue_held")
+            self._queue_held_throttle.failed()
             return False  # 读失败默认放行，安全降级
 
     def _maybe_yield_daemon(self) -> bool:
@@ -550,8 +601,9 @@ class Supervisor:
         try:
             daemon.request_unload()
             logger.info("requested daemon unload to yield GPU")
+            self._unload_throttle.recovered()
         except Exception:
-            logger.exception("daemon unload request failed")
+            self._unload_throttle.failed()
         return True
 
     def _dispatch_data(self, slot: _Slot) -> None:
@@ -1185,13 +1237,28 @@ class Supervisor:
         with self._daemon_lock:
             tid = self._daemon_active_task_id
             fp = self._daemon_log_fp
-            if tid is not None and fp is not None and isinstance(line, str):
-                try:
-                    fp.write((line + "\n").encode("utf-8", errors="replace"))
-                    fp.flush()
-                    end_offset = fp.tell()
-                except Exception:
-                    logger.exception("write daemon task log failed")
+            if tid is not None and isinstance(line, str):
+                if fp is not None:
+                    try:
+                        fp.write((line + "\n").encode("utf-8", errors="replace"))
+                        fp.flush()
+                        end_offset = fp.tell()
+                    except Exception:
+                        # 自我放大回路摘除（R8）：本分支处在**每一行 daemon 日志**
+                        # 的路径上，写失败一次就关闭句柄置 None——后续行零日志、
+                        # SSE 广播继续（end_offset=None，前端已兼容）。这条失败
+                        # 记录走 logger（studio.log），与失败目标（run.log 句柄）
+                        # 是不同通道；绝不能改成写 run.log，否则是死循环。
+                        logger.warning(
+                            "write daemon task log failed: task_id=%s; run.log "
+                            "for this task is closed, the SSE log stream "
+                            "continues", tid, exc_info=True,
+                        )
+                        try:
+                            fp.close()
+                        except Exception:
+                            pass
+                        self._daemon_log_fp = None
             else:
                 tid = None
         if tid is not None and isinstance(line, str):

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -79,9 +78,12 @@ def _run_postprocess(
             on_progress=progress,
             cancel_event=cancel_event,
         )
-    except Exception as exc:
-        progress(f"[postprocess] 失败: {exc}")
-        progress(traceback.format_exc())
+    except Exception:
+        # exc_info 取代整段 format_exc 灌 INFO（traceback 作为续行归属本条 WARNING）
+        progress.warning(
+            "Regularization post-processing failed; skipped it, the "
+            "regularization set is still usable", exc_info=True,
+        )
         reg_builder.update_meta_postprocess(
             reg_dir, when=None, clusters=None, method=None, max_crop_ratio=None
         )
@@ -134,9 +136,11 @@ def _run_auto_tag(reg_dir: Path, progress, kind: str = "wd14") -> bool:
             ok += 1
         progress(f"[auto-tag] done {ok}/{len(images)} (errors={errs})")
         return ok > 0
-    except Exception as exc:
-        progress(f"[auto-tag] 失败: {exc}")
-        progress(traceback.format_exc())
+    except Exception:
+        progress.warning(
+            "Auto-tagging the regularization set failed; the images are kept "
+            "but left untagged", exc_info=True,
+        )
         return False
 
 

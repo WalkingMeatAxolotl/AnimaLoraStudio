@@ -91,6 +91,9 @@ class WandBMonitor:
         self._upload_state_auto_enabled = upload_state_auto
         self._upload_state_auto_policy = upload_state_auto_policy
         self._last_artifact: dict[str, Any] = {}
+        # W&B 上报失败节流（R8）：log() 每 step 调，首条全文，finish() 汇总
+        self._log_fail_count = 0
+        self._log_fail_last = ""
 
     @property
     def enabled(self) -> bool:
@@ -102,7 +105,14 @@ class WandBMonitor:
         try:
             self._run.log(data, step=step)
         except Exception as exc:
-            logger.warning(f"W&B log 失败: {exc}")
+            self._log_fail_count += 1
+            self._log_fail_last = str(exc)
+            if self._log_fail_count == 1:
+                logger.warning(
+                    "W&B metric upload failed: %s — metrics for this step are "
+                    "missing from the dashboard; further failures are counted "
+                    "and reported at the end", exc,
+                )
 
     def _should_log_step(self, key: str, step: Optional[int]) -> bool:
         # baseline / epoch 边界一律放行；step 模式按 sample_every_n_steps 节流。
@@ -227,6 +237,12 @@ class WandBMonitor:
     def finish(self) -> None:
         if not self.enabled:
             return
+        if self._log_fail_count > 1:
+            logger.warning(
+                "W&B metric upload failed %d time(s) during this run: the "
+                "dashboard is incomplete (last error: %s)",
+                self._log_fail_count, self._log_fail_last,
+            )
         try:
             self._run.finish()
         except Exception as exc:

@@ -118,6 +118,8 @@ class InferenceDaemon:
         self._log_buffer: collections.deque[dict[str, Any]] = collections.deque(maxlen=2000)
         self._log_seq = 0
         self._log_listeners: list[EventCallback] = []
+        #: listener 连续失败计数（R8 摘除机制），key=id(cb)，成功一次清零
+        self._listener_fails: dict[int, int] = {}
         # idle timeout：daemon 闲 N 秒（模型已 load）自动 unload 释放 VRAM。
         # 0 = 关闭。supervisor 在 spawn 后通过 sync_idle_timeout_from_secrets() 注入；
         # PUT /api/secrets 后 router 也会调一次同步。
@@ -580,6 +582,35 @@ class InferenceDaemon:
                     logger.exception("daemon log listener failed during stderr-down emit")
 
     # ----------------------------------------------------------- log buffer
+    def _note_listener_failure(
+        self, cb, registry: list, lock, what: str, detail: str,
+    ) -> None:
+        """自我放大回路摘除（R8）：调用点处在「每行日志 / 每个事件 × 每个
+        listener」的路径上，坏掉的 listener 留在注册表里每行重试毫无收益，还把
+        日志量随输入线性放大。连续失败 ≥3 次即摘除（首条 + 摘除条，共 2 条）。
+
+        失败记录走 logger（studio.log），与失败目标（listener/SSE）是不同
+        通道——绝不能改成推给 listener 自己，否则是死循环。"""
+        key = id(cb)
+        n = self._listener_fails.get(key, 0) + 1
+        self._listener_fails[key] = n
+        name = getattr(cb, "__qualname__", None) or repr(cb)
+        if n == 1:
+            logger.warning(
+                "%s failed: listener=%s %s", what, name, detail, exc_info=True,
+            )
+        if n >= 3:
+            with lock:
+                try:
+                    registry.remove(cb)
+                except ValueError:
+                    pass
+            self._listener_fails.pop(key, None)
+            logger.warning(
+                "%s removed after %d consecutive failures: listener=%s; that "
+                "subscriber no longer receives these payloads", what, n, name,
+            )
+
     def _append_log(self, line: str) -> None:
         """收 daemon stderr 一行 → ring buffer + 推给 listeners（线程安全）。"""
         entry = {"ts": time.time(), "line": line}
@@ -593,7 +624,12 @@ class InferenceDaemon:
             try:
                 cb(entry_out)
             except Exception:
-                logger.exception("daemon log listener failed")
+                self._note_listener_failure(
+                    cb, self._log_listeners, self._log_lock,
+                    "daemon log listener", "seq=%d" % seq,
+                )
+            else:
+                self._listener_fails.pop(id(cb), None)
 
     def read_logs(self, since_seq: int = 0, limit: int = 2000) -> dict[str, Any]:
         """返回 ring buffer 历史。since_seq>0 时只返新于该 seq 的行（增量）。"""
@@ -639,7 +675,13 @@ class InferenceDaemon:
                 try:
                     cb(msg)
                 except Exception:
-                    logger.exception("global listener failed")
+                    self._note_listener_failure(
+                        cb, self._global_listeners, self._lock,
+                        "global event listener",
+                        "kind=%s msg_id=%s" % (kind, msg_id),
+                    )
+                else:
+                    self._listener_fails.pop(id(cb), None)
             return
 
         # task 事件
