@@ -1075,6 +1075,65 @@ def import_wandb_preset(
 
 
 # ---------------------------------------------------------------------------
+# LLM tagger preset 导入导出
+# ---------------------------------------------------------------------------
+
+
+def export_llm_preset(preset_id: str) -> Optional[dict[str, Any]]:
+    """按 id 导出 LLM preset dict，**抹掉 API 信息**：api_key 是凭证、base_url
+    可能是私有中转地址、model_ids 是从该 API 拉回的列表缓存，全部置空。
+    预设文件用于分享提示词配方，连接信息由接收方自己填。找不到返回 None。"""
+    for preset in load().llm_tagger.presets:
+        if preset.id == preset_id:
+            data = preset.model_dump()
+            data["api_key"] = ""
+            data["base_url"] = ""
+            data["model_ids"] = []
+            return data
+    return None
+
+
+def import_llm_preset(
+    data: Any, fallback_label: str = ""
+) -> tuple[Secrets, "LLMPresetConfig"]:
+    """导入一条 LLM preset：id 从 label 生成、撞名自动加后缀，追加到列表末尾。
+
+    与 wandb 版不同，**不改全局默认**（current_preset）——LLM 预设是列表管理，
+    导入不该抢走打标页正在用的默认预设。
+
+    - ``api_key == MASK`` 哨兵按空处理（导出文件本就不含 key）
+    - ``builtin`` 字段丢弃：导入的一律是自定义预设（validator 按 id 判定）
+    - 值非法时抛 pydantic ValidationError，由 caller 翻 400
+    """
+    if not isinstance(data, dict):
+        raise ValueError("preset data must be a mapping")
+    payload = dict(data)
+    payload.pop("builtin", None)
+    if str(payload.get("api_key") or "") == MASK:
+        payload["api_key"] = ""
+
+    label = str(payload.get("label") or fallback_label or "imported").strip() or "imported"
+    slug = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
+    ).strip("_") or "imported"
+
+    s = load()
+    used = {p.id for p in s.llm_tagger.presets}
+    pid, idx = slug, 1
+    while pid in used:
+        idx += 1
+        pid = f"{slug}_{idx}"
+
+    preset = LLMPresetConfig(**{**payload, "id": pid, "label": label})
+    s.llm_tagger.presets.append(preset)
+    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（内置排序/去重）
+    save(new)
+    # validator 会按内置顺序重排列表，按 id 取回权威 preset
+    imported = next(p for p in new.llm_tagger.presets if p.id == pid)
+    return new, imported
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

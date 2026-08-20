@@ -843,6 +843,91 @@ def test_wandb_import_preset_rejects_non_mapping(secrets_file: Path) -> None:
         secrets.import_wandb_preset(["not", "a", "dict"])
 
 
+def test_llm_export_preset_strips_api_info(secrets_file: Path) -> None:
+    """导出抹掉 API 信息（api_key / base_url / model_ids），其余字段原样。"""
+    secrets.update({
+        "llm_tagger": {
+            "presets": [{
+                "id": "style_json",
+                "api_key": "sk-real",
+                "base_url": "https://relay.example/v1",
+                "model": "gpt-4o",
+            }]
+        }
+    })
+    data = secrets.export_llm_preset("style_json")
+    assert data is not None
+    assert data["api_key"] == ""
+    assert data["base_url"] == ""
+    assert data["model_ids"] == []  # validator 会把 model 前插进 model_ids，导出必须清掉
+    assert data["model"] == "gpt-4o"
+    assert secrets.export_llm_preset("nonexistent") is None
+
+
+def test_llm_import_preset_appends_without_switching_default(secrets_file: Path) -> None:
+    """导入追加到列表、MASK 哨兵按空；与 wandb 版不同，不抢全局默认。"""
+    before = secrets.load().llm_tagger.current_preset
+    new, preset = secrets.import_llm_preset({
+        "label": "Shared Recipe",
+        "api_key": secrets.MASK,
+        "temperature": 0.7,
+    })
+    assert preset.id == "Shared_Recipe"
+    assert preset.api_key == ""
+    assert preset.temperature == pytest.approx(0.7)
+    assert preset.builtin is False
+    assert new.llm_tagger.current_preset == before
+    assert any(p.id == preset.id for p in secrets.load().llm_tagger.presets)
+
+
+def test_llm_import_preset_uniquifies_id_and_drops_builtin_flag(secrets_file: Path) -> None:
+    """label 撞 builtin id 时加后缀；文件里的 builtin 标记丢弃。"""
+    new, preset = secrets.import_llm_preset(
+        {"id": "whatever", "label": "style_json", "builtin": True}
+    )
+    assert preset.id == "style_json_2"
+    assert preset.builtin is False
+    assert any(p.id == "style_json_2" for p in new.llm_tagger.presets)
+
+
+def test_llm_import_preset_rejects_non_mapping(secrets_file: Path) -> None:
+    with pytest.raises(ValueError):
+        secrets.import_llm_preset(["not", "a", "dict"])
+
+
+def test_llm_preset_export_endpoint(client: TestClient) -> None:
+    """导出端点：json attachment、API 信息已抹掉；未知 id 404。"""
+    client.put("/api/secrets", json={
+        "llm_tagger": {"presets": [{"id": "style_json", "api_key": "sk-real", "base_url": "https://x/v1"}]}
+    })
+    resp = client.get("/api/secrets/llm/presets/style_json/export")
+    assert resp.status_code == 200
+    assert "llm-preset-style_json.json" in resp.headers["content-disposition"]
+    data = json.loads(resp.text)
+    assert data["id"] == "style_json"
+    assert data["api_key"] == ""
+    assert data["base_url"] == ""
+    assert client.get("/api/secrets/llm/presets/nope/export").status_code == 404
+
+
+def test_llm_preset_import_endpoint(client: TestClient) -> None:
+    """导入端点：json 上传落盘并返回 masked snapshot；坏文件 400。"""
+    payload = json.dumps({"label": "Team Recipe", "temperature": 0.9})
+    resp = client.post(
+        "/api/secrets/llm/presets/import",
+        files={"file": ("team-recipe.json", payload, "application/json")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["label"] == "Team Recipe"
+    assert any(p["id"] == body["id"] for p in body["secrets"]["llm_tagger"]["presets"])
+    bad = client.post(
+        "/api/secrets/llm/presets/import",
+        files={"file": ("bad.json", "[1, 2, 3]", "application/json")},
+    )
+    assert bad.status_code == 400
+
+
 def test_wandb_current_preset_falls_back_when_missing(secrets_file: Path) -> None:
     """current_preset 指向不存在的 id 时回落到第一个 preset。"""
     secrets.update({

@@ -2187,6 +2187,24 @@ export const api = {
     return (await resp.json()) as { id: string; label: string; secrets: Secrets }
   },
 
+  /** LLM preset json 下载直链（**不含 API 信息**：api_key/base_url/model_ids 置空）。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  llmPresetExportUrl: (id: string) =>
+    `/api/secrets/llm/presets/${encodeURIComponent(id)}/export`,
+  /** 上传 json/yaml 导入 LLM preset；返回新 preset 标识 + 最新 masked secrets。 */
+  importLLMPreset: async (
+    file: File,
+  ): Promise<{ id: string; label: string; secrets: Secrets }> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/secrets/llm/presets/import', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { id: string; label: string; secrets: Secrets }
+  },
+
   // 兼容别名：PP0 之前叫 listConfigs / getConfig / ...。保留一段时间。
   listConfigs: () =>
     req<{ items: PresetSummary[] }>('/api/presets').then((r) => r.items),
