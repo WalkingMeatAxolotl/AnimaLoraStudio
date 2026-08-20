@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.log_messages import msg
 from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_ccip"
@@ -67,14 +68,14 @@ def run_ccip_job(
         clear_value=True, eval_root=eval_root,
     )
     try:
-        progress(f"[eval-ccip] scoring run={run['run_id']} model={model}")
+        progress(msg("eval.ccip_start", run_id=run["run_id"], model=model))
         scored = (scorer or _default_scorer)(run, version_dir, model, progress)
         result = _result_from_scores(scored, model)
         saved = eval_metrics.save_result(
             version_dir, str(run["run_id"]), result, eval_root=eval_root,
         )
         state = saved["metric_states"][METRIC_KEY]
-        progress(f"[eval-ccip] done ccip_i={state['status']}")
+        progress(msg("eval.ccip_done", status=state["status"]))
         return saved
     except Exception as exc:
         _save_failed(version_dir, str(run["run_id"]), model, str(exc), eval_root)
@@ -288,7 +289,7 @@ def _load_ccip(model_name: str, progress: TaskLogLike):
     threshold = float(
         json.loads((model_dir / "metrics.json").read_text(encoding="utf-8"))["threshold"]
     )
-    progress(f"[eval-ccip] loading CCIP onnx (threshold={threshold:.4f})")
+    progress(msg("eval.ccip_loading", threshold=f"{threshold:.4f}"))
     feat_sess = _make_session(model_dir / "model_feat.onnx")
     metric_sess = _make_session(model_dir / "model_metrics.onnx")
     return (
@@ -326,7 +327,7 @@ def _default_scorer(run, version_dir, model_name, progress, pool=None):
         return np.asarray(out).reshape(-1).astype(np.float32)  # (768,)
 
     n = len(pairs)
-    progress(f"[eval-ccip] extracting CCIP features for {n} pairs")
+    progress(msg("eval.ccip_extract", n=n))
     gen_feats = [_feat(g) for g, _ in pairs]
     ref_feats = [_feat(r) for _, r in pairs]
     stacked = np.stack(gen_feats + ref_feats, axis=0).astype(np.float32)  # (2n,768)

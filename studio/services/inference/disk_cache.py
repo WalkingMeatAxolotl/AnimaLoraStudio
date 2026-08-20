@@ -173,12 +173,14 @@ class SessionCache:
             with self._lock:
                 self._index.pop(key, None)
                 self._bytes_total -= entry.size
-            logger.warning("disk cache file gone: %s", file_path)
+            logger.debug("disk cache file gone: path=%s", file_path)
             return None
         try:
             return _decrypt_and_strip(self.aes_key, blob)
         except Exception:
-            logger.exception("decrypt failed for %s", file_path)
+            logger.exception(
+                "decrypt failed: path=%s; this image cannot be recovered", file_path,
+            )
             return None
 
     # ---------------------------------------------------------------- 列表 / 删
@@ -222,7 +224,10 @@ class SessionCache:
             try:
                 shutil.rmtree(self.session_dir)
             except OSError:
-                logger.exception("clear_all: rmtree failed for %s", self.session_dir)
+                logger.warning(
+                    "clear cache: rmtree failed for %s; the directory is recreated",
+                    self.session_dir, exc_info=True,
+                )
         # 让后续 put() 能继续工作（重 mkdir）
         self.ensure_dir()
 
@@ -302,9 +307,12 @@ def startup_clean(root: Path) -> int:
                 shutil.rmtree(child)
                 n += 1
             except OSError:
-                logger.warning("startup_clean: rmtree failed for %s", child, exc_info=True)
+                logger.warning(
+                    "stale session dir cleanup: rmtree failed for %s",
+                    child, exc_info=True,
+                )
     if n:
-        logger.info("startup_clean: removed %d stale session dir(s) under %s", n, root)
+        logger.info("removed %d stale session dir(s) under %s", n, root)
     return n
 
 
@@ -411,4 +419,4 @@ def _safe_unlink(p: Path) -> None:
     except FileNotFoundError:
         pass
     except OSError:
-        logger.warning("unlink failed for %s", p, exc_info=True)
+        logger.debug("unlink failed: path=%s", p, exc_info=True)

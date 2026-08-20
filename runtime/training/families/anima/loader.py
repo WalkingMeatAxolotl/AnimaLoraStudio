@@ -11,6 +11,7 @@ import logging
 import re
 from pathlib import Path
 
+from studio.infrastructure.log_messages import msg
 from training.model_loading import (
     _load_safetensors_state_dict,
     _load_weights_best_effort,
@@ -94,20 +95,24 @@ def place_model_for_block_swap(model, device, dtype, blocks_to_swap: int) -> int
     # .to() 恢复时会把 CPU 主副本搬上卡，swap 白做且瞬时占用=完整模型），
     # families/anima/sampling.py 按它分流
     model.blocks_to_swap = num_swap
-    logger.info(
-        "block swap 放置：末尾 %d/%d 层留在内存（%.2f GB），其余上卡",
+    logger.debug(
+        "block_swap: placement swapped=%d/%d pinned=%.2f GB rest_on_gpu=true",
         num_swap, total, need / 1024 ** 3,
     )
     return num_swap
 
 
 def load_anima_model(transformer_path, device, dtype, repo_root, *,
-                     flash_attn: bool = True, blocks_to_swap: int = 0):
+                     flash_attn: bool = True, blocks_to_swap: int = 0,
+                     attention_backend: str = ""):
     """加载 Anima transformer 模型。
 
     `flash_attn=False` 显式禁用 flash_attn fast path（attention_backend=xformers/none
     时由 caller 传入），让 caller 完全决定 attention 实现 —— PR #17 那版默认
     fn(True) 强制开 flash_attn 不让用户关，与 cfg.attention_backend 解耦不彻底。
+
+    `attention_backend` 只用于日志：告诉用户「flash_attn 没开是因为你选了哪个
+    backend」，与「装没装 flash_attn 包」是两个不同的原因。
     """
     from safetensors import safe_open
 
@@ -128,7 +133,10 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
                 flash_enabled = (effective == "flash_attn") or flash_enabled
                 continue
             except Exception as exc:  # noqa: BLE001
-                logger.warning("attention backend 设置失败，继续走 SDPA fallback: %s", exc)
+                logger.warning(
+                    "Attention backend could not be set: %s — attention falls back "
+                    "to PyTorch SDPA", exc,
+                )
                 continue
         fn = getattr(module, "set_flash_attn_enabled", None)
         if fn is None:
@@ -136,12 +144,20 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
         try:
             flash_enabled = bool(fn(flash_attn)) or flash_enabled
         except Exception as exc:  # noqa: BLE001
-            logger.warning("flash_attn 启用失败，继续走 SDPA fallback: %s", exc)
+            logger.warning(
+                "flash_attn could not be enabled: %s — attention falls back to "
+                "PyTorch SDPA", exc,
+            )
     if flash_enabled:
-        logger.info("flash_attn 启用（训练 + sample 走 fast path）")
+        logger.info(msg("train.flash_attn_on"))
+    elif not flash_attn:
+        # 「设置里关掉」与「包没装」是两个确定原因，各给一条确定文案。
+        logger.info(msg(
+            "train.flash_attn_off_by_setting",
+            backend=attention_backend or "none",
+        ))
     else:
-        logger.info("flash_attn 关闭（attention_backend=%s 或包未安装）",
-                    "flash_attn" if flash_attn else "non-flash")
+        logger.info(msg("train.flash_attn_off_missing"))
 
     # 从 checkpoint 推断配置
     with safe_open(transformer_path, framework="pt", device="cpu") as f:
@@ -187,7 +203,10 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
     if not has_llm_adapter and hasattr(model, "llm_adapter"):
         try:
             model.llm_adapter = None
-            logger.warning("检测到 checkpoint 不包含 llm_adapter 权重：已禁用 llm_adapter（回退为直接使用 Qwen embeddings）")
+            logger.warning(
+                "The model file has no text-adapter weights: the adapter is "
+                "disabled and the text encoder output is fed to the model directly"
+            )
         except Exception:
             pass
     if blocks_to_swap > 0:
@@ -196,7 +215,9 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *,
         model = model.to(device=device, dtype=dtype)
     model.requires_grad_(False)
 
-    logger.info(f"Anima 模型加载完成: {model_channels}ch, {num_blocks} blocks")
+    logger.info(msg(
+        "train.anima_model_loaded", channels=model_channels, blocks=num_blocks,
+    ))
     return model
 
 
@@ -229,9 +250,10 @@ def load_text_encoders(
         t5_tokenizer = t5_cls.from_pretrained(t5_tokenizer_path)
     else:
         logger.warning(
-            "T5 tokenizer 本地目录缺失（t5_tokenizer_path=%s），"
-            "开始从 Hugging Face 下载 google/t5-v1_1-xxl",
-            t5_tokenizer_path or "未配置",
+            "T5 tokenizer not found locally (t5_tokenizer_path=%s): downloading "
+            "google/t5-v1_1-xxl from Hugging Face — this needs a working internet "
+            "connection",
+            t5_tokenizer_path or "unset",
         )
         try:
             t5_tokenizer = t5_cls.from_pretrained("google/t5-v1_1-xxl")
@@ -242,5 +264,5 @@ def load_text_encoders(
                 f"并确认 t5_tokenizer_path（当前值：{t5_tokenizer_path or '未配置'}）指向该目录。"
             ) from e
 
-    logger.info("文本编码器加载完成")
+    logger.info(msg("train.text_encoder_loaded"))
     return qwen_model, qwen_tokenizer, t5_tokenizer

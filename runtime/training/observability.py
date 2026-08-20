@@ -16,8 +16,28 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from studio.infrastructure.log_messages import msg
+
 
 logger = logging.getLogger(__name__)
+
+
+def _delete_artifact_version(artifact_name: str, artifact) -> bool:
+    """删一个旧 artifact 版本；两条清理路径（api 扫描 / 上一次句柄）共用一处实现。"""
+    version = getattr(artifact, "version", "?")
+    try:
+        artifact.delete(delete_aliases=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "W&B artifact version delete failed: %s:%s (%s) — the old version "
+            "stays and keeps using storage quota", artifact_name, version, exc,
+        )
+        return False
+    logger.debug(
+        "wandb_artifact: old version deleted name=%s version=%s",
+        artifact_name, version,
+    )
+    return True
 
 
 def render_loss_curve(losses, width=60, height=10):
@@ -94,6 +114,10 @@ class WandBMonitor:
         # W&B 上报失败节流（R8）：log() 每 step 调，首条全文，finish() 汇总
         self._log_fail_count = 0
         self._log_fail_last = ""
+        # 采样图上报失败节流（R8）：每张图一条 → warn-once + finish 汇总
+        self._image_fail_count = 0
+        self._image_fail_last = ""
+        self._resize_fail_warned = False
 
     @property
     def enabled(self) -> bool:
@@ -143,7 +167,12 @@ class WandBMonitor:
                     img = img.resize(new_size, Image.LANCZOS)
                 return self._wandb.Image(img, caption=caption)
         except Exception as exc:
-            logger.warning(f"W&B 图片缩放失败，改传原图: {exc}")
+            if not self._resize_fail_warned:
+                self._resize_fail_warned = True
+                logger.warning(
+                    "W&B image resize failed: %s — uploading the full-size image "
+                    "instead; same warning is not repeated", exc,
+                )
             return self._wandb.Image(str(image_path), caption=caption)
 
     def log_image(self, key: str, image_path: Path, *, caption: str, step: Optional[int] = None) -> None:
@@ -155,7 +184,14 @@ class WandBMonitor:
             self._run.log({key: [self._prepare_image(image_path, caption)]}, step=step)
             self._last_logged_step = step
         except Exception as exc:
-            logger.warning(f"W&B 图片记录失败: {exc}")
+            self._image_fail_count += 1
+            self._image_fail_last = str(exc)
+            if self._image_fail_count == 1:
+                logger.warning(
+                    "W&B image upload failed: %s — this sample image is missing "
+                    "from the dashboard; further failures are counted and reported "
+                    "at the end", exc,
+                )
 
     def _delete_previous_artifact_versions(self, artifact_name: str, artifact_type: str, keep_artifact) -> None:
         keep_version = getattr(keep_artifact, "version", None)
@@ -166,16 +202,18 @@ class WandBMonitor:
             for artifact in api.artifacts(type_name=artifact_type, name=collection_name):
                 if getattr(artifact, "version", None) == keep_version:
                     continue
-                try:
-                    artifact.delete(delete_aliases=True)
+                if _delete_artifact_version(artifact_name, artifact):
                     deleted += 1
-                    logger.info(f"W&B artifact 旧版本已删除: {artifact_name}:{artifact.version}")
-                except Exception as exc:
-                    logger.warning(f"W&B 删除旧 artifact 版本失败 ({artifact_name}:{getattr(artifact, 'version', '?')}): {exc}")
             if deleted:
-                logger.info(f"W&B artifact 已清理旧版本: {artifact_name} ({deleted} 个)")
+                logger.debug(
+                    "wandb_artifact: old versions cleaned name=%s deleted=%d",
+                    artifact_name, deleted,
+                )
         except Exception as exc:
-            logger.warning(f"W&B artifact 历史版本清理失败 ({artifact_name}): {exc}")
+            logger.warning(
+                "W&B artifact cleanup failed: %s (%s) — old versions keep "
+                "accumulating and using storage quota", artifact_name, exc,
+            )
 
     def _upload_artifact(self, file_path: Path, artifact_name: str, artifact_type: str, policy: str) -> None:
         if not self.enabled:
@@ -184,15 +222,32 @@ class WandBMonitor:
             artifact = self._wandb.Artifact(artifact_name, type=artifact_type)
             artifact.add_file(str(file_path), name=file_path.name)
             size_mb = file_path.stat().st_size / 1024 / 1024
-            logger.info(f"W&B artifact 开始上传: {artifact_name} ({file_path.name}, {size_mb:.1f} MB)")
+            logger.debug(
+                "wandb_artifact: upload started name=%s file=%s size=%.1f MB",
+                artifact_name, file_path.name, size_mb,
+            )
             logged_artifact = self._run.log_artifact(artifact)
             start_time = time.monotonic()
             done = threading.Event()
 
             def report_waiting() -> None:
-                while not done.wait(10):
+                slow_warned = False
+                # 30s 一条 DEBUG 心跳；超 5 分钟另打一条 WARNING（慢上传从
+                # 「刷屏 INFO」改成「一条告警」）。
+                while not done.wait(30):
                     elapsed = time.monotonic() - start_time
-                    logger.info(f"W&B artifact 仍在上传: {artifact_name} ({elapsed:.0f}s, {size_mb:.1f} MB)")
+                    logger.debug(
+                        "wandb_artifact: upload in progress name=%s elapsed=%.1f s "
+                        "size=%.1f MB", artifact_name, elapsed, size_mb,
+                    )
+                    if elapsed >= 300 and not slow_warned:
+                        slow_warned = True
+                        logger.warning(
+                            "W&B artifact upload still running after %.1f s: %s "
+                            "(%.1f MB) — training continues, the upload may be "
+                            "stuck on a slow connection",
+                            elapsed, artifact_name, size_mb,
+                        )
 
             progress_thread = threading.Thread(target=report_waiting, daemon=True)
             progress_thread.start()
@@ -202,19 +257,22 @@ class WandBMonitor:
                 done.set()
                 progress_thread.join(timeout=1)
             elapsed = time.monotonic() - start_time
-            logger.info(f"W&B artifact 已上传: {artifact_name} ({file_path.name}, {size_mb:.1f} MB, {elapsed:.1f}s)")
+            logger.info(msg(
+                "train.wandb_artifact_uploaded",
+                name=artifact_name, file=file_path.name,
+                size=f"{size_mb:.1f}", elapsed=f"{elapsed:.1f}",
+            ))
             if policy == "last":
                 self._delete_previous_artifact_versions(artifact_name, artifact_type, logged_artifact)
                 prev = self._last_artifact.get(artifact_name)
                 if prev is not None and getattr(prev, "version", None) != getattr(logged_artifact, "version", None):
-                    try:
-                        prev.delete(delete_aliases=True)
-                        logger.info(f"W&B artifact 旧版本已删除: {artifact_name}:{prev.version}")
-                    except Exception as exc:
-                        logger.warning(f"W&B 删除旧 artifact 失败: {exc}")
+                    _delete_artifact_version(artifact_name, prev)
                 self._last_artifact[artifact_name] = logged_artifact
         except Exception as exc:
-            logger.warning(f"W&B artifact 上传失败 ({artifact_name}): {exc}")
+            logger.warning(
+                "W&B artifact upload failed: %s (%s) — the file exists locally "
+                "only, nothing was uploaded to W&B", artifact_name, exc,
+            )
 
     def upload_model(self, file_path: Path) -> None:
         if not self._upload_model_enabled or not self.enabled:
@@ -243,10 +301,19 @@ class WandBMonitor:
                 "dashboard is incomplete (last error: %s)",
                 self._log_fail_count, self._log_fail_last,
             )
+        if self._image_fail_count > 1:
+            logger.warning(
+                "W&B image upload failed %d time(s) during this run: the "
+                "dashboard is incomplete (last error: %s)",
+                self._image_fail_count, self._image_fail_last,
+            )
         try:
             self._run.finish()
         except Exception as exc:
-            logger.warning(f"W&B finish 失败: {exc}")
+            logger.warning(
+                "W&B run failed to close: %s — the run may stay marked as running "
+                "on the dashboard", exc,
+            )
 
 
 def init_wandb_monitor(args, output_dir: Path, config_path: Optional[Path]) -> WandBMonitor:
@@ -321,7 +388,7 @@ def init_wandb_monitor(args, output_dir: Path, config_path: Optional[Path]) -> W
         config=cfg,
         dir=str(wandb_dir),
     )
-    logger.info(f"W&B 监控已启用: project={project}, run={run_name}, mode={mode}")
+    logger.info(msg("train.wandb_enabled", project=project, run=run_name, mode=mode))
     return WandBMonitor(
         wandb,
         run,

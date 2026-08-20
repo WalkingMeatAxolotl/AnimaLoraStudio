@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from studio.infrastructure.log_messages import msg
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,16 +42,21 @@ def ensure_dependencies(auto_install: bool = False) -> None:
     missing_list = ", ".join(sorted(set(missing)))
     if not auto_install:
         logger.error(
-            f"Missing dependencies: {missing_list}. Install them with:\n"
-            f"  {sys.executable} -m pip install {missing_list}"
+            "Dependency check failed: missing=%s — training aborted; "
+            "install with: %s -m pip install %s",
+            missing_list, sys.executable, missing_list,
         )
         raise SystemExit(1)
-    logger.info(f"Missing dependencies: {missing_list}; installing...")
+    logger.info(msg("train.deps_installing", missing=missing_list))
     cmd = [sys.executable, "-m", "pip", "install", *sorted(set(missing))]
     try:
         subprocess.run(cmd, check=False)
     except Exception as exc:
-        logger.error(f"Auto-install failed: {exc}")
+        logger.exception(
+            "Dependency auto-install failed: %s — training aborted; "
+            "install manually: %s -m pip install %s",
+            exc, sys.executable, missing_list,
+        )
         raise SystemExit(1)
     still_missing = []
     for module_name, pip_name in required.items():
@@ -59,7 +66,11 @@ def ensure_dependencies(auto_install: bool = False) -> None:
             still_missing.append(pip_name)
     if still_missing:
         still_list = ", ".join(sorted(set(still_missing)))
-        logger.error(f"Still missing after install: {still_list}")
+        logger.error(
+            "Dependency check failed after auto-install: missing=%s — training "
+            "aborted; install manually: %s -m pip install %s",
+            still_list, sys.executable, still_list,
+        )
         raise SystemExit(1)
 
 
@@ -68,7 +79,11 @@ def load_yaml_config(config_path):
     try:
         import yaml
     except ImportError:
-        logger.error("PyYAML not installed. Install with: pip install pyyaml")
+        logger.error(
+            "Dependency check failed: missing=pyyaml — config file cannot be read, "
+            "training aborted; install with: %s -m pip install pyyaml",
+            sys.executable,
+        )
         raise SystemExit(1)
 
     config_path = Path(config_path)
@@ -107,7 +122,7 @@ def apply_yaml_config(args, config):
         return namespace_from_config(args, dict(config or {}), TrainingConfig)
     except ValidationError as exc:
         errors = exc.errors()
-        lines = [f"配置校验失败（{len(errors)} 处）:"]
+        lines = [f"Config validation failed: {len(errors)} problem(s) — training aborted"]
         for err in errors:
             loc = ".".join(str(p) for p in err["loc"]) or "config"
             lines.append(f"  {loc}: {err['msg']}")

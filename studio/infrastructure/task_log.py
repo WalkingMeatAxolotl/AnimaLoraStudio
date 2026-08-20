@@ -88,3 +88,15 @@ class CallbackTaskLog:
 
 #: 丢弃一切输出的空实现（库函数默认值用，替代 ``lambda _l: None``）。
 NULL_LOG = CallbackTaskLog(lambda _l: None)
+
+
+def as_task_log(fn: Any) -> TaskLogLike:
+    """把裸 ``Callable[[str], None]`` 适配成 :class:`TaskLogLike`。
+
+    已经带级别方法的对象原样返回。库函数（下载原语等）对外仍接受历史的
+    单参回调 —— 内部想调 ``.warning`` / ``.error`` 时先过这一道，调用方
+    传 lambda 也不会 AttributeError。
+    """
+    if callable(getattr(fn, "warning", None)) and callable(getattr(fn, "debug", None)):
+        return fn
+    return CallbackTaskLog(fn)

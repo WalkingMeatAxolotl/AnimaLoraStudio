@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 
 
@@ -35,19 +36,24 @@ def run(ctx: TrainingContext) -> None:
     if ctx.sra_aligner is not None:
         sra_groups = ctx.sra_aligner.get_param_groups(lr=None)
         param_groups = param_groups + sra_groups
-        logger.info(f"SRA v2: 已将 projection MLP 参数加入 optimizer ({sum(p.numel() for g in sra_groups for p in g['params'])/1e6:.1f}M params)")
+        logger.debug(
+            "sra: projection layer params added to optimizer params=%.1fM",
+            sum(p.numel() for g in sra_groups for p in g["params"]) / 1e6,
+        )
 
     from training.optimizers import build_optimizer, validate_optimizer
     validate_optimizer(args)  # PPSF 检查 lr_scheduler=none 等启动期约束
     ctx.optimizer = build_optimizer(args, param_groups, args.learning_rate, ctx.weight_decay)
     if ctx.weight_decay > 0:
-        wd_info = f"{ctx.optimizer_type} weight_decay={ctx.weight_decay}"
-        if ctx.injector.use_lokr:
-            wd_info += "（w1 排除 weight_decay）"
-        logger.info(wd_info)
+        # LoKr 的 w1 不参与 weight_decay —— 条件后缀做成整句变体而不是拼片段
+        # （i18n 惯例：译者要能调整整句语序）。
+        logger.info(msg(
+            "train.weight_decay_lokr" if ctx.injector.use_lokr else "train.weight_decay",
+            optimizer=ctx.optimizer_type, wd=ctx.weight_decay,
+        ))
     ctx.grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
     if ctx.grad_clip > 0:
-        logger.info(f"梯度裁剪 max_norm={ctx.grad_clip}")
+        logger.info(msg("train.grad_clip", value=ctx.grad_clip))
     ctx.trainable_params = [p for group in ctx.optimizer.param_groups for p in group["params"]]
 
     # 计算总步数
@@ -77,9 +83,14 @@ def run(ctx: TrainingContext) -> None:
     candidates = [c for c in (by_epochs, by_max_steps) if c is not None and c > 0]
     ctx.total_steps = min(candidates) if candidates else None
 
-    logger.info(
-        f"数据集大小: {len(ctx.dataset)}, 每 epoch 步数: {ctx.steps_per_epoch}, "
-        f"总步数: {ctx.total_steps} (by_epochs={by_epochs}, by_max_steps={by_max_steps})"
+    logger.info(msg(
+        "train.step_plan",
+        samples=len(ctx.dataset), steps_per_epoch=ctx.steps_per_epoch,
+        total_steps=ctx.total_steps,
+    ))
+    logger.debug(
+        "steps: by_epochs=%s by_max_steps=%s chosen=%s",
+        by_epochs, by_max_steps, ctx.total_steps,
     )
 
     # 学习率调度器：PR-C 通过 schedulers/ plugin registry 派发；"none" 自动返回 None

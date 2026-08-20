@@ -28,7 +28,8 @@ import requests
 
 from . import api as booru_api, pool as booru_pool
 from ..proxy_manager import get_proxy_dict
-from studio.infrastructure.task_log import TaskLogLike
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import NULL_LOG, TaskLogLike, as_task_log
 
 ProgressFn = TaskLogLike
 ImageSavedFn = Callable[[Path], None]
@@ -78,7 +79,7 @@ def download(
     opts: DownloadOptions,
     dest_dir: Path,
     *,
-    on_progress: ProgressFn = print,
+    on_progress: ProgressFn = NULL_LOG,
     on_image_saved: Optional[ImageSavedFn] = None,
     cancel_event: Optional[threading.Event] = None,
     session: Optional[requests.Session] = None,
@@ -95,6 +96,8 @@ def download(
     控（API 2 / CDN 5 req/s）。`session=` 仍接受外部 session（旧 test 用），
     内部用 `client.search_posts/download_image` 包装。
     """
+    # 对外仍接受历史的单参回调（tools / 测试传 lambda）；内部按级别分派
+    on_progress = as_task_log(on_progress)
     dest_dir.mkdir(parents=True, exist_ok=True)
     if not opts.tag.strip():
         raise ValueError("tag 不能为空")
@@ -156,6 +159,7 @@ def _download_with_client(
     saved = 0
     skipped = 0
     failed = 0
+    first_error = ""
     page = 1
     api_limit = 100 if opts.api_source == "gelbooru" else 200
     # 跨 worker 线程共享的「已 emit」计数器，仅供 _fetch_one 实时打 [N/count] 用。
@@ -165,9 +169,9 @@ def _download_with_client(
 
     while saved < opts.count:
         if cancel_event and cancel_event.is_set():
-            on_progress("[cancel] user requested stop")
+            on_progress(msg("booru.canceled"))
             return saved
-        on_progress(f"[page {page}] fetching ...")
+        on_progress.debug("booru search: fetching page=%d", page)
         try:
             posts = client.search_posts(
                 opts.api_source,
@@ -179,10 +183,13 @@ def _download_with_client(
                 username=opts.username,
             )
         except requests.RequestException as exc:
-            on_progress(f"[err] search failed: {exc}")
+            on_progress.warning(
+                "booru search failed: page=%d err=%s; stopping with %d images "
+                "saved", page, exc, saved,
+            )
             return saved
         if not posts:
-            on_progress("[done] no more posts (server returned empty page)")
+            on_progress(msg("booru.no_more_posts"))
             break
 
         # 收集本页所有「待下载」候选；并发拉图
@@ -201,7 +208,9 @@ def _download_with_client(
             target = dest_dir / f"{post_id}.{ext}"
             if opts.skip_existing and target.exists():
                 skipped += 1
-                on_progress(f"[skip] {target.name} already exists")
+                on_progress.debug(
+                    "booru skip: file already exists name=%s", target.name,
+                )
                 continue
             candidates.append((post_id, file_url, file_ext, tags_str, target))
 
@@ -229,13 +238,16 @@ def _download_with_client(
                     with emit_lock:
                         emit_state["n"] += 1
                         n = emit_state["n"]
-                    on_progress(f"[{n}/{opts.count}] saved {final.name}")
+                    on_progress(msg(
+                        "booru.saved", n=n, total=opts.count, name=final.name,
+                    ))
                     return final
                 except requests.RequestException as exc:
                     last_exc = exc
                     backoff = 2 ** (attempt - 1)
-                    on_progress(
-                        f"[retry {attempt}/{max_retries}] {target.name}: {exc}"
+                    on_progress.debug(
+                        "booru retry %d/%d: name=%s err=%s",
+                        attempt, max_retries, target.name, exc,
                     )
                     if cancel_event and cancel_event.wait(backoff):
                         raise RuntimeError("canceled") from exc
@@ -247,15 +259,24 @@ def _download_with_client(
 
         for (post_id, _url, _ext, tags_str, target), final, exc in results:
             if cancel_event and cancel_event.is_set():
-                on_progress("[cancel] user requested stop")
+                on_progress(msg("booru.canceled"))
                 return saved
             if exc is not None:
                 # 取消引发的 RuntimeError("canceled") 在 _fetch_one 里抛出，
                 # 不当成「下载失败」report，否则用户取消会看到一堆 [err]。
                 if isinstance(exc, RuntimeError) and "canceled" in str(exc):
                     continue
-                on_progress(f"[err] {target.name}: {exc}")
+                # T6 节流：站点挂掉时整页每张一条 —— 首条全文，之后逐条 DEBUG
                 failed += 1
+                if failed == 1:
+                    first_error = f"{target.name}: {exc}"
+                    on_progress.warning(
+                        "booru download failed: name=%s err=%s", target.name, exc,
+                    )
+                else:
+                    on_progress.debug(
+                        "booru download failed: name=%s err=%s", target.name, exc,
+                    )
                 continue
             assert isinstance(final, Path)
             if opts.save_tags and tags_str:
@@ -270,22 +291,26 @@ def _download_with_client(
                 break
 
         if len(posts) < api_limit:
-            on_progress(
-                f"[done] page returned {len(posts)} < limit {api_limit}, "
-                "reached end"
-            )
+            on_progress(msg(
+                "booru.page_short_end", n=len(posts), limit=api_limit,
+            ))
             break
         if page_valid == 0:
-            on_progress("[done] no valid posts on this page; stopping")
+            on_progress(msg("booru.no_valid_posts"))
             break
         page += 1
         if cancel_event and cancel_event.wait(page_delay):
-            on_progress("[cancel] user requested stop")
+            on_progress(msg("booru.canceled"))
             return saved
 
-    on_progress(
-        f"[summary] saved={saved} skipped={skipped} failed={failed}"
-    )
+    # R10：部分失败的收尾汇总记 WARNING（用户会想重跑失败的那部分）
+    if failed:
+        on_progress.warning(
+            "booru download finished with failures: saved=%d skipped=%d "
+            "failed=%d; first error: %s", saved, skipped, failed, first_error,
+        )
+    else:
+        on_progress(msg("booru.summary", saved=saved, skipped=skipped))
     return saved
 
 

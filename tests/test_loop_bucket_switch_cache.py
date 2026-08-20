@@ -72,15 +72,15 @@ def test_each_switch_logged_at_debug_only(monkeypatch, caplog):
         tracker.observe(_lat(6, 10))
         tracker.observe(_lat(8, 8))
         tracker.observe(_lat(6, 10))
-    recs = [r for r in caplog.records if "ARB 切桶" in r.getMessage()]
+    recs = [r for r in caplog.records if "ARB bucket switch" in r.getMessage()]
     assert [r.levelname for r in recs] == ["DEBUG"] * 3
-    assert "8x8→6x10" in recs[0].getMessage()
-    assert "6x10→8x8" in recs[1].getMessage()
+    assert "8x8 -> 6x10" in recs[0].getMessage()
+    assert "6x10 -> 8x8" in recs[1].getMessage()
 
     caplog.clear()
     with caplog.at_level("INFO", logger=loop_mod.logger.name):
         tracker.observe(_lat(8, 8))
-    assert not [r for r in caplog.records if "ARB 切桶" in r.getMessage()]
+    assert not [r for r in caplog.records if "ARB bucket switch" in r.getMessage()]
 
 
 # ---------------------------------------------------------------- loop 接线

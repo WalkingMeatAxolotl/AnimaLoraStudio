@@ -32,6 +32,7 @@ from typing import Any, Callable
 
 from .. import secrets
 from ..infrastructure.event_bus import bus
+from ..infrastructure.logging import log_file_vanished_during_migration
 from ..infrastructure.paths import REPO_ROOT
 from .models import models_root
 
@@ -299,7 +300,7 @@ def _run_migration(
                 _copy_atomic(f, out)
             except FileNotFoundError:
                 # 扫描后被删（如临时文件）—— 跳过，进度可能停在 <100%，无碍
-                logger.info("迁移期间文件消失，跳过: %s", rel)
+                log_file_vanished_during_migration(logger, rel)
                 continue
             done_files += 1
             done_bytes += size
@@ -327,15 +328,19 @@ def _run_migration(
             "done_bytes": done_bytes,
         })
         logger.info(
-            "模型根目录迁移完成: %s → %s（%d 文件），已更新 secrets.models.root（立即生效）",
+            "models root migrated: from=%s to=%s files=%d; "
+            "secrets.models.root updated, effective immediately",
             src, dst, done_files,
         )
     except Exception as exc:
-        logger.exception("模型根目录迁移失败: %s → %s", src, dst)
+        logger.exception("models root migration failed: from=%s to=%s", src, dst)
         if dst_preexisted:
             # 合并模式：dst 的既有数据是用户的，绝不能整树删。已复制完成的文件
             # 都是完整有效副本（_copy_atomic 保证），留下无害；skip 幂等，重跑即续传。
-            logger.info("目标目录原有数据，保留已复制文件，不回滚: %s", dst)
+            logger.warning(
+                "migration was not rolled back because the target already had data; "
+                "the copied files are kept at %s", dst,
+            )
         else:
             # dst 开始前为空 / 不存在，整树清掉等于回到迁移前；
             # secret 未动；用户的 target 父目录不受影响。

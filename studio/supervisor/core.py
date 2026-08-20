@@ -181,7 +181,10 @@ def _tail_log_for_error_msg(log_path: Path, max_lines: int = 12, max_chars: int 
             out = "..." + out[-(max_chars - 3):]
         return out
     except Exception:
-        logger.exception("tail log %s failed", log_path)
+        logger.warning(
+            "tail run log failed: path=%s; error_msg stays empty for this task",
+            log_path, exc_info=True,
+        )
         return ""
 
 
@@ -207,6 +210,8 @@ class Supervisor:
         self._promote_throttle = _ErrorThrottle("promote_due_scheduled")
         self._queue_held_throttle = _ErrorThrottle("read queue_held")
         self._unload_throttle = _ErrorThrottle("daemon unload request")
+        # 启动对账走到哪一步（reconcile 失败时进日志，见 _reconcile_orphans）
+        self._reconcile_stage = "init"
         self._cmd_builder: CmdBuilder = cmd_builder or _default_cmd_builder
         self._job_cmd_builder: JobCmdBuilder = (
             job_cmd_builder or _default_job_cmd_builder
@@ -259,7 +264,10 @@ class Supervisor:
         try:
             get_daemon().stop(timeout=timeout)
         except Exception:
-            logger.exception("inference daemon stop failed")
+            logger.warning(
+                "inference daemon stop failed during shutdown; the supervisor "
+                "exits anyway", exc_info=True,
+            )
         if self._thread:
             self._thread.join(timeout=timeout)
 
@@ -325,7 +333,10 @@ class Supervisor:
             if is_daemon_task:
                 if get_daemon().cancel_active_task(task_id):
                     return True
-                logger.warning("daemon cancel request missed; task_id=%s", task_id)
+                logger.warning(
+                    "daemon cancel request missed: task_id=%s; the task may keep "
+                    "running", task_id,
+                )
             return True
         return False
 
@@ -401,7 +412,10 @@ class Supervisor:
         try:
             self._reconcile_orphans()
         except Exception:
-            logger.exception("reconcile failed")
+            logger.exception(
+                "startup reconcile failed: stage=%s; orphan tasks may stay in the "
+                "running state until the next restart", self._reconcile_stage,
+            )
         while not self._stop.is_set():
             try:
                 self._tick()
@@ -414,9 +428,13 @@ class Supervisor:
         # ADR 0006 PR-2 兼容性 note：此处 list_tasks(status="running") 精确按
         # status 过滤，paused task（status='paused'）天然不进 this loop —
         # 跨 supervisor 重启的 paused task 保持状态不变（ADR §8.4）。
+        # 失败时上面那条 startup reconcile 行要说清卡在哪一步（G 清单「就近来源 —」）
+        self._reconcile_stage = "tasks"
+        orphan_tasks = 0
         with db.connection_for(self._db_path) as conn:
             for t in db.list_tasks(conn, status="running"):
-                logger.info("orphan running task %d → failed", t["id"])
+                orphan_tasks += 1
+                logger.debug("orphan running task marked failed: task_id=%d", t["id"])
                 db.update_task(
                     conn,
                     t["id"],
@@ -432,9 +450,16 @@ class Supervisor:
                         "status": "failed",
                     }
                 )
+            self._reconcile_stage = "jobs"
             n = project_jobs.cleanup_orphan_running(conn)
-            if n:
-                logger.info("orphan running jobs → failed: %d", n)
+        # 上次进程没干净退出的证据 —— 任务与作业合成一条，不再逐个孤儿刷屏
+        if orphan_tasks or n:
+            logger.warning(
+                "orphan running tasks and jobs marked failed on startup: "
+                "tasks=%d jobs=%d (the previous process did not exit cleanly)",
+                orphan_tasks, n,
+            )
+        self._reconcile_stage = "done"
 
     def _tick(self) -> None:
         # 0) 0.17 P-B：到点的 scheduled task 提升为 pending，让下面的 dispatch
@@ -471,7 +496,7 @@ class Supervisor:
             self._promote_throttle.failed()
             return
         for tid in promoted:
-            logger.info("scheduled task %d due → pending", tid)
+            logger.info("scheduled task due: task_id=%d → pending", tid)
             self._on_event(
                 {"type": "task_state_changed", "task_id": tid, "status": "pending"}
             )
@@ -601,7 +626,7 @@ class Supervisor:
             return True
         try:
             daemon.request_unload()
-            logger.info("requested daemon unload to yield GPU")
+            logger.debug("requested daemon unload to yield GPU")
             self._unload_throttle.recovered()
         except Exception:
             self._unload_throttle.failed()
@@ -736,7 +761,8 @@ class Supervisor:
                 }
             )
             logger.info(
-                "started task %d on slot=%s (pid=%d)", task["id"], slot.name, proc.pid
+                "started task: task_id=%d slot=%s pid=%d",
+                task["id"], slot.name, proc.pid,
             )
         finally:
             reset_trace_id(_trace_token)
@@ -762,7 +788,10 @@ class Supervisor:
             with db.connection_for(self._db_path) as conn:
                 summary = eval_validation.split_for_task(conn, task, cfg_path)
         except Exception:
-            logger.exception("validation split failed for task=%s", task.get("id"))
+            logger.warning(
+                "validation split failed: task_id=%s; training continues without "
+                "a validation set", task.get("id"), exc_info=True,
+            )
             return
         if summary and summary.get("moved"):
             try:
@@ -811,8 +840,9 @@ class Supervisor:
             from ..services import task_snapshot
             task_snapshot.freeze_config(task_id, cfg_path)
         except Exception:
-            logger.exception(
-                "task %s config snapshot freeze failed (non-fatal)", task_id
+            logger.warning(
+                "config snapshot freeze failed: task_id=%s; the task runs against "
+                "the live config", task_id, exc_info=True,
             )
 
     def _make_task_log_callback(
@@ -833,7 +863,10 @@ class Supervisor:
                     # B-4.4: malformed event 静默丢导致 UI pause_state 永远收不到
                     # → 暂停按钮永远灰。logger.exception 进 studio.log；
                     # SSE event_malformed 让前端可见（不阻断 task）。
-                    logger.exception("malformed event marker: %r", line[:200])
+                    logger.warning(
+                        "malformed event marker on the task stream: "
+                        "task_id=%s raw=%r", tid, line[:200], exc_info=True,
+                    )
                     self._on_event({
                         "type": "event_malformed",
                         "task_id": tid,
@@ -893,7 +926,10 @@ class Supervisor:
                     return
                 session = eval_auto.queue_training_finished_eval(conn, task, payload)
         except Exception:
-            logger.exception("after-training auto eval enqueue failed for task=%s", tid)
+            logger.warning(
+                "after-training auto eval enqueue failed: task_id=%s; training "
+                "finished and was saved, no evaluation was queued", tid, exc_info=True,
+            )
             return
         if not session:
             return
@@ -950,9 +986,9 @@ class Supervisor:
                         status=_versions.VersionStatus.TRAINING,
                     )
                 except Exception:
-                    logger.exception(
-                        "version.status=training write failed for task %s",
-                        task["id"],
+                    logger.warning(
+                        "version status write failed: task_id=%s; the status is "
+                        "corrected on the next read", task["id"], exc_info=True,
                     )
 
     def _spawn_job(self, slot: _Slot, job: dict[str, Any]) -> None:
@@ -1007,7 +1043,7 @@ class Supervisor:
             "status": "running",
         })
         logger.info(
-            "started job %d on slot=%s (kind=%s, pid=%d)",
+            "started job: job_id=%d slot=%s kind=%s pid=%d",
             jid, slot.name, kind, proc.pid,
         )
 
@@ -1033,7 +1069,11 @@ class Supervisor:
                 except Exception:
                     # 与 task 路径对齐（B-4.4 之前只落了一半）：进 studio.log +
                     # SSE event_malformed 让前端可见
-                    logger.exception("malformed event marker: %r", line[:200])
+                    logger.warning(
+                        "malformed event marker on the job stream: "
+                        "job_id=%s project_id=%s raw=%r",
+                        jid, pid_, line[:200], exc_info=True,
+                    )
                     self._on_event({
                         "type": "event_malformed",
                         "job_id": jid,
@@ -1103,7 +1143,10 @@ class Supervisor:
             try:
                 daemon.start()
             except Exception as e:
-                logger.exception("daemon start failed")
+                logger.exception(
+                    "inference daemon start failed: task_id=%s; the task is "
+                    "marked failed", task_id,
+                )
                 self._fail_daemon_task(task_id, f"daemon start failed: {e}")
                 return
 
@@ -1121,12 +1164,17 @@ class Supervisor:
             self._daemon_cancel_pending = False
             # 0.17 item1：开该 generate task 的 run.log（LogTab 读 /api/logs →
             # tasks/<id>/run.log）。daemon 串行跑一个，其间的日志都归这个 task。
+            lp = None
             try:
                 lp = task_log_path(task_id)
                 lp.parent.mkdir(parents=True, exist_ok=True)
                 self._daemon_log_fp = open(lp, "ab")
             except Exception:
-                logger.exception("open daemon task log failed")
+                logger.warning(
+                    "open daemon task log failed: task_id=%s path=%s; this task "
+                    "has no run.log, generation continues",
+                    task_id, lp, exc_info=True,
+                )
                 self._daemon_log_fp = None
 
         # poller：daemon 写 monitor_state.json → SSE monitor_progress (增量协议)
@@ -1161,10 +1209,12 @@ class Supervisor:
                 output_dir=output_dir,
                 on_event=self._on_daemon_task_event,
             )
-            logger.info("submitted generate task %d to daemon", task_id)
+            logger.info("submitted generate task to daemon: task_id=%d", task_id)
             self._emit_daemon_state()
         except Exception as e:
-            logger.exception("daemon submit failed")
+            logger.exception(
+                "daemon submit failed: task_id=%s; the task is marked failed", task_id,
+            )
             self._on_daemon_task_event({
                 "kind": "error",
                 "task_id": task_id,
@@ -1306,7 +1356,10 @@ class Supervisor:
                 "active_task_id": active_tid,
             })
         except Exception:
-            logger.exception("emit daemon state failed")
+            logger.warning(
+                "emit daemon state failed; the next state change re-publishes it",
+                exc_info=True,
+            )
 
     def _finalize_daemon_task(
         self,
@@ -1352,18 +1405,32 @@ class Supervisor:
         with db.connection_for(self._db_path) as conn:
             db.update_task(conn, task_id, **fields)
 
+        # 落盘失败节流（T6）的收尾汇总：逐图 DEBUG 之后在这里给一条计数 WARNING
         try:
-            from ..services.inference.core import cleanup_generate_tempdir
+            from ..services.generate_storage import flush_disk_store_summary
+            flush_disk_store_summary(task_id)
+        except Exception:  # noqa: BLE001 — 收尾日志不能反过来把收尾流程炸掉
+            pass
+
+        try:
+            from ..services.inference.core import cleanup_generate_tempdir, generate_tempdir
             cleanup_generate_tempdir(task_id)
-        except Exception as e:
-            logger.warning("cleanup generate tempdir failed: %s", e)
+        except Exception:
+            try:
+                _tmpdir: Any = generate_tempdir(task_id)
+            except Exception:
+                _tmpdir = None
+            logger.warning(
+                "cleanup generate tempdir failed: task_id=%s path=%s",
+                task_id, _tmpdir, exc_info=True,
+            )
 
         self._on_event({
             "type": "task_state_changed",
             "task_id": task_id,
             "status": status,
         })
-        logger.info("daemon task %d finished: %s", task_id, status)
+        logger.info("daemon task finished: task_id=%d status=%s", task_id, status)
 
     def _fail_daemon_task(self, task_id: int, msg: str) -> None:
         """generate task 在派给 daemon 之前的失败（config 缺失等）。"""
@@ -1436,7 +1503,10 @@ class Supervisor:
             if not _secrets.load().training.ram_guard:
                 env.setdefault("LORA_RAM_GUARD", "0")
         except Exception:
-            logger.exception("failed to load training ram_guard setting")
+            logger.warning(
+                "read training ram_guard setting failed; using the default",
+                exc_info=True,
+            )
         try:
             wandb_cfg = _secrets.load().wandb
             if wandb_cfg.enabled:
@@ -1462,7 +1532,10 @@ class Supervisor:
                 if wb.base_url:
                     env.setdefault("WANDB_BASE_URL", wb.base_url)
         except Exception:
-            logger.exception("failed to load wandb settings")
+            logger.warning(
+                "read wandb settings failed; this run reports nothing to wandb",
+                exc_info=True,
+            )
         if extra_env:
             env.update(extra_env)
         return subprocess.Popen(
@@ -1543,7 +1616,7 @@ class Supervisor:
             self._on_event(
                 {"type": "task_state_changed", "task_id": cid, "status": status}
             )
-            logger.info("task %d finished: %s (rc=%d)", cid, status, rc)
+            logger.info("task finished: task_id=%d status=%s rc=%d", cid, status, rc)
             if status == "done" and slot.eval_training_finished_payload is not None:
                 self._queue_auto_eval_after_training(
                     cid,
@@ -1570,7 +1643,7 @@ class Supervisor:
                 "kind": job["kind"] if job else None,
                 "status": status,
             })
-            logger.info("job %d finished: %s (rc=%d)", cid, status, rc)
+            logger.info("job finished: job_id=%d status=%s rc=%d", cid, status, rc)
 
         slot.reset()
 
@@ -1589,8 +1662,9 @@ class Supervisor:
             proc.wait(timeout=self._grace)
         except subprocess.TimeoutExpired:
             logger.warning(
-                "%s %s on slot=%s did not exit in %.0fs, killing process tree",
-                slot.kind, slot.id, slot.name, self._grace,
+                "%s did not exit in %.1fs; killing process tree: "
+                "%s_id=%s slot=%s pid=%d",
+                slot.kind, self._grace, slot.kind, slot.id, slot.name, proc.pid,
             )
             _kill_process_tree(proc.pid)
             try:
@@ -1622,8 +1696,8 @@ class Supervisor:
                 time.sleep(0.5)
             if proc.poll() is None:
                 logger.warning(
-                    "proc %d did not exit in %.0fs, killing process tree",
-                    proc.pid, grace,
+                    "process did not exit in %.1fs; killing process tree: pid=%d",
+                    grace, proc.pid,
                 )
                 _kill_process_tree(proc.pid)
 
@@ -1650,10 +1724,15 @@ class Supervisor:
             else:
                 proc.terminate()
         except Exception:
-            logger.exception("send terminate signal failed")
+            logger.warning(
+                "send terminate signal failed: pid=%d; falling back to force kill",
+                proc.pid, exc_info=True,
+            )
 
     @staticmethod
-    def _send_pause_signal(proc: subprocess.Popen) -> None:
+    def _send_pause_signal(
+        proc: subprocess.Popen, task_id: Optional[int] = None,
+    ) -> None:
         """Pause 软信号 — 子进程 handle_interrupt 接住保 state。
 
         Windows：`CTRL_BREAK_EVENT` 送达 CREATE_NEW_PROCESS_GROUP 子进程组，
@@ -1668,7 +1747,10 @@ class Supervisor:
             else:
                 proc.send_signal(signal.SIGINT)
         except Exception:
-            logger.exception("send pause signal failed")
+            logger.warning(
+                "send pause signal failed: pid=%d task_id=%s; the task keeps running",
+                proc.pid, task_id, exc_info=True,
+            )
 
     def _signal_pause_async(self, slot: _Slot) -> None:
         """非阻塞：发暂停信号，不带 grace 强杀。
@@ -1681,7 +1763,7 @@ class Supervisor:
         if not slot.proc:
             return
         slot.pause_pending = True
-        self._send_pause_signal(slot.proc)
+        self._send_pause_signal(slot.proc, slot.id)
 
     def _persist_last_state(self, task_id: int, payload: dict[str, Any]) -> None:
         """把 auto_epoch_backup_written 的恢复点信息写进 tasks 行（ADR Addendum 2）。
@@ -1702,7 +1784,10 @@ class Supervisor:
                     last_state_step=payload.get("step"),
                 )
         except Exception:
-            logger.exception("task %s last_state persist failed", task_id)
+            logger.warning(
+                "resume state persist failed: task_id=%s; this task cannot be "
+                "resumed later", task_id, exc_info=True,
+            )
 
     def _clear_pause_fields(self, task_id: int) -> None:
         """清 db `paused_*` 字段（ADR §5.5 / Addendum 2 修订）。

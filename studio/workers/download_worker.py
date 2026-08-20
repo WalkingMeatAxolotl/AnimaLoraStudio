@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 
+from studio.infrastructure.log_messages import msg
 from studio.infrastructure.task_log import TaskLog
 from studio import db, secrets
 
@@ -31,10 +32,13 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        logger.error("job %s not found", job_id)
+        logger.error("Download job %s not found in the database; nothing to run", job_id)
         return 1
     if job["kind"] != "download":
-        logger.error("wrong kind: %s", job["kind"])
+        logger.error(
+            "Internal error: job %s has kind=%s, not a download job; aborting",
+            job_id, job["kind"],
+        )
         return 1
 
     params = job.get("params_decoded") or {}
@@ -45,7 +49,9 @@ def run(job_id: int) -> int:
         with db.connection_for() as conn:
             project = projects.get_project(conn, job["project_id"])
         if not project:
-            progress(f"[error] project {job['project_id']} missing")
+            progress.error(
+                "Project %s no longer exists; download aborted", job["project_id"]
+            )
             return 1
         dest = projects.project_dir(project["id"], project["slug"]) / "download"
         sec = secrets.load()
@@ -70,24 +76,25 @@ def run(job_id: int) -> int:
             api_key=api_key,
             exclude_tags=list(sec.download.exclude_tags),
         )
-        progress(
-            f"[start] tag={opts.tag!r} count={opts.count} "
-            f"source={opts.api_source} "
-            f"exclude={','.join(opts.exclude_tags) or '(none)'}"
-        )
+        progress.info(msg(
+            "worker.download.start",
+            tag=opts.tag,
+            count=opts.count,
+            source=opts.api_source,
+            exclude=",".join(opts.exclude_tags) or "(none)",
+        ))
         saved = downloader.download(
             opts,
             dest,
             on_progress=progress,
             cancel_event=threading.Event(),  # supervisor 走 SIGTERM
         )
-        progress(f"[done] saved={saved}")
+        progress.info(msg("worker.download.done", saved=saved))
         return 0
-    except Exception as exc:
-        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
-        # progress 给人读短摘要。
-        logger.exception("download worker crashed (job_id=%s)", job_id)
-        progress(f"[error] {exc}")
+    except Exception:
+        # PR-1 C7: logger.exception 带 trace_id 进 stderr；异常摘要由 traceback
+        # 提供，不再另发一条 progress（C6：{e} 与 traceback 二选一）。
+        logger.exception("Download worker crashed: job=%s", job_id)
         return 1
 
 

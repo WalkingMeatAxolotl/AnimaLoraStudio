@@ -31,7 +31,7 @@ from typing import Any, Callable, Optional
 import torch
 from PIL import Image
 
-from studio.infrastructure.task_log import TaskLogLike, NULL_LOG
+from studio.infrastructure.task_log import TaskLogLike, NULL_LOG, as_task_log
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,10 @@ def resolve_device(device: str = "auto") -> torch.device:
     if device == "cuda":
         if torch.cuda.is_available():
             return torch.device("cuda")
-        logger.warning("requested cuda but cuda not available; falling back to cpu")
+        logger.warning(
+            "cuda was requested but is not available; falling back to cpu "
+            "(upscaling will be slow)"
+        )
         return torch.device("cpu")
     # auto
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -278,6 +281,8 @@ def upscale_file(
 
     `device='cuda'` 但 GPU 不可用时静默降级 cpu。
     """
+    # 对外仍接受历史的单参回调（worker / 测试传 lambda）；内部按级别分派
+    on_log = as_task_log(on_log)
     t_start = time.monotonic()
 
     # 1) 先读图判断走哪条路（避免无谓的模型加载）
@@ -344,7 +349,9 @@ def upscale_file(
             from ..dataset import thumb_cache
             thumb_cache.prewarm_from_image(dst, out_img, prewarm_thumb_sizes)
         except Exception as exc:  # noqa: BLE001 — 缩略图预热失败不影响放大本体
-            on_log(f"   ⚠ thumb prewarm failed: {exc}")
+            on_log.debug(
+                "thumbnail prewarm failed: name=%s err=%s", dst.name, exc,
+            )
 
     elapsed = time.monotonic() - t_start
 
@@ -363,9 +370,9 @@ def upscale_file(
         "elapsed_seconds": round(elapsed, 3),
         "mtime": time.time(),
     }
-    on_log(
-        f"   ✓ [{action}] {src.name} → {dst.name}  "
-        f"{src_size[0]}×{src_size[1]} → {out_img.size[0]}×{out_img.size[1]}  "
-        f"({elapsed:.1f}s)"
+    on_log.debug(
+        "upscaled: action=%s src=%s dst=%s from=%dx%d to=%dx%d elapsed=%.1fs",
+        action, src.name, dst.name,
+        src_size[0], src_size[1], out_img.size[0], out_img.size[1], elapsed,
     )
     return meta

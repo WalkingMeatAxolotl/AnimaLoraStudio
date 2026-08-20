@@ -77,7 +77,7 @@ def get_sample(
                 resolved = p
                 break
         if resolved is None:
-            logger.info(
+            logger.debug(
                 "sample 404: task_id=%s file=%s tried=%s",
                 task_id, filename, [str(p) for p in candidates],
             )

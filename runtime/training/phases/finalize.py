@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.observability import render_loss_curve
 from training.snapshot import emit_event
@@ -43,9 +44,13 @@ def _release_block_swap(ctx: TrainingContext) -> None:
 
         gc.collect()
         release_pinned_host_cache()
-        logger.info("block swap 已释放：归还 pinned 内存 %.2fGB", freed / 1024**3)
-    except Exception:  # noqa: BLE001
-        logger.debug("block swap 释放失败（不影响训练结果）", exc_info=True)
+        logger.debug("block_swap: released pinned=%.2f GB", freed / 1024**3)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Block swap teardown failed: %s — %.2f GB of pinned memory stays locked "
+            "until this process exits, the post-training evaluation may run short "
+            "of RAM", e, freed / 1024**3, exc_info=True,
+        )
 
 
 def run(ctx: TrainingContext) -> None:
@@ -76,6 +81,12 @@ def run(ctx: TrainingContext) -> None:
 
     _release_block_swap(ctx)
 
+    # mask 问题的收尾汇总（明细在训练期按图去重 + 配额封顶，见 dataset.py）。
+    # 只有主训练集会加载 mask，正则集恒不带。
+    _mask_summary = getattr(ctx.base_dataset, "log_mask_warning_summary", None)
+    if callable(_mask_summary):
+        _mask_summary()
+
     # 清理进度显示
     if ctx.live:
         ctx.live.stop()
@@ -85,9 +96,10 @@ def run(ctx: TrainingContext) -> None:
     # 显示最终 loss 曲线
     if args.loss_curve_steps and ctx.loss_history:
         chart = render_loss_curve(ctx.loss_history, width=min(80, len(ctx.loss_history)), height=10)
-        ctx.emit(f"Loss curve (first {len(ctx.loss_history)} steps):\n{chart}")
+        # 首行入字典，ASCII 图表本体作为续行原样输出（不翻译）
+        ctx.emit(msg("train.loss_curve", n=len(ctx.loss_history)) + f"\n{chart}")
 
-    ctx.emit(f"Saved final LoRA: {final_path}")
     ctx.wandb_monitor.upload_model(final_path)
     ctx.wandb_monitor.finish()
-    logger.info("训练完成!")
+    # 「最终 LoRA 已存」与「训练完成」是相邻同语义两行，合并成一条收尾行。
+    logger.info(msg("train.finished", path=final_path))

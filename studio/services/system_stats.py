@@ -42,7 +42,7 @@ def _ensure_nvml() -> bool:
             _nvml_state["ok"] = True
         except Exception as e:
             _nvml_state["ok"] = False
-            logger.info("pynvml unavailable; GPU stats disabled (%s)", e)
+            logger.info("pynvml unavailable; GPU stats disabled: %s", e)
         return _nvml_state["ok"]
 
 
@@ -80,7 +80,10 @@ def _torch_pci_bus_id() -> Optional[str]:
                         f"{domain:08X}:{bus:02X}:{device:02X}.0"
                     )
         except Exception:  # noqa: BLE001
-            logger.info("torch PCI bus id 查询失败；GPU active 标记停用")
+            logger.warning(
+                "torch PCI bus id lookup failed; the active-GPU marker is disabled "
+                "(on multi-GPU hosts the highlighted card may be wrong)"
+            )
         return _torch_pci_state["bus_id"]
 
 

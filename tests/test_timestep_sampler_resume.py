@@ -181,7 +181,7 @@ def test_infonoise_load_state_dict_K_mismatch_falls_back_cold(caplog):
     s_load = _new_info_sched(K=16)  # K 不一致
     with caplog.at_level("WARNING"):
         s_load.load_state_dict(sd)
-    assert any("shape mismatch" in r.message for r in caplog.records)
+    assert any("saved bin layout" in r.message for r in caplog.records)
     # 加载失败但不抛 —— 状态保持初始
     assert s_load._internal_step == 0
     assert s_load._cdf_values is None
@@ -351,6 +351,6 @@ def test_load_corrupted_sampler_state_logs_and_continues(tmp_path, caplog):
     sched2 = _new_info_sched()
     with caplog.at_level("WARNING"):
         load_training_state(state_path, injector2, opt2, timestep_sampler=sched2)
-    assert any("timestep_sampler 状态恢复失败" in r.message for r in caplog.records)
+    assert any("Timestep sampler state failed to restore" in r.message for r in caplog.records)
     # 训练状态本身仍正常返回
     assert sched2._cdf_values is None  # 没装上，保持冷启动

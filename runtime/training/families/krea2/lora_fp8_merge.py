@@ -45,6 +45,7 @@ import zlib
 import torch
 from torch import Tensor
 
+from studio.infrastructure.log_messages import msg
 from training.families.krea2.quant_fp8 import _FP8_TORCH_DTYPES
 
 
@@ -365,7 +366,8 @@ def merge_loras_into_fp8_model(
         raise ValueError(f"LoRA 全部层都无法对应到当前模型：{missing[:5]} ...")
     if missing:
         logger.warning(
-            "fp8 merge：%d 个 LoRA 层在模型中无对应 Linear，跳过（comfy 同款行为）：%s%s",
+            "fp8 merge: %d LoRA layer(s) have no matching layer in the model and "
+            "were skipped (%s%s) — those LoRA layers do not affect the output",
             len(missing), missing[:5], " ..." if len(missing) > 5 else "",
         )
 
@@ -440,10 +442,13 @@ def merge_loras_into_fp8_model(
         ):
             torch.cuda.empty_cache()
 
-    logger.info(
-        "Krea2 fp8 merge：%d 份 LoRA 烘进 %d 个 Linear（delta=%s；chunk_rows=%s；%s）",
-        len(sources), len(per_layer), str(compute_dtype).removeprefix("torch."),
+    logger.info(msg(
+        "train.fp8_merge_done", loras=len(sources), layers=len(per_layer),
+    ))
+    logger.debug(
+        "fp8_merge: delta=%s chunk_rows=%s backup=%s",
+        str(compute_dtype).removeprefix("torch."),
         normalized_chunk_rows or "off",
-        "含备份，可 detach 还原" if keep_backup else "无备份，换 LoRA 走重载兜底",
+        "kept (detach can restore)" if keep_backup else "none (reload to swap LoRA)",
     )
     return Fp8LoraMergeAdapter(model, backup, can_restore=keep_backup)

@@ -50,7 +50,8 @@ def test_release_reports_through_progress() -> None:
     pool.get("a", lambda: object())
     lines: list[str] = []
     pool.release(lines.append)
-    assert any("释放" in line for line in lines)
+    # 显存编排内部动作 → DEBUG 英文排障行（不进 msg_id 字典）
+    assert any("model released" in line for line in lines)
     # 没加载过时不该刷无意义的日志
     lines.clear()
     eval_model_pool.ModelPool("clip").release(lines.append)

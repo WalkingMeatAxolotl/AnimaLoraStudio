@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.log_messages import msg
 from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_tag"
@@ -84,14 +86,14 @@ def run_tag_job(
         eval_root=eval_root,
     )
     try:
-        progress(f"[eval-tag] scoring run={run['run_id']} (WD14 tag-recall)")
+        progress(msg("eval.tag_start", run_id=run["run_id"]))
         scored = (scorer or _default_scorer)(run, version_dir, model, progress)
         result = _result_from_scores(scored, model)
         saved = eval_metrics.save_result(
             version_dir, str(run["run_id"]), result, eval_root=eval_root,
         )
         state = saved["metric_states"][METRIC_KEY]
-        progress(f"[eval-tag] done tag_recall={state['status']}")
+        progress(msg("eval.tag_done", status=state["status"]))
         return saved
     except Exception as exc:
         _save_failed(version_dir, str(run["run_id"]), model, str(exc), eval_root)
@@ -246,10 +248,10 @@ def _load_tagger(progress: TaskLogLike):
     from studio.services.tagging.wd14 import WD14Tagger
 
     tagger = WD14Tagger()
-    ok, msg = tagger.is_available()
+    ok, reason = tagger.is_available()
     if not ok:
-        raise EvalTagError(f"WD14 模型不可用：{msg}")
-    progress("[eval-tag] loading WD14")
+        raise EvalTagError(f"WD14 模型不可用：{reason}")
+    progress(msg("eval.tag_loading"))
     tagger.prepare()
     return tagger, {_norm_tag(t) for t in tagger.known_tags()}
 
@@ -279,11 +281,18 @@ def _default_scorer(
             "tag_recall_reason": "no in-vocabulary booru-tag prompts",
         }
 
-    progress(f"[eval-tag] tagging {len(scored_items)} generated images with WD14")
+    progress(msg("eval.tag_tagging", n=len(scored_items)))
     paths = [it["_image_path"] for it, _ in scored_items]
-    preds = list(tagger.tag(
-        paths, on_progress=lambda d, t: progress(f"[eval-tag] {d}/{t}"),
-    ))
+    # 40 图 × 3 组接近 R9 预算上限 —— 每 2s 或最后一张各记一次
+    _tag_progress_at = [0.0]
+
+    def _on_tag_progress(done: int, total: int) -> None:
+        now = time.monotonic()
+        if done >= total or now - _tag_progress_at[0] >= 2.0:
+            _tag_progress_at[0] = now
+            progress(msg("eval.tag_progress", done=done, total=total))
+
+    preds = list(tagger.tag(paths, on_progress=_on_tag_progress))
 
     recalls: list[float] = []
     for (_item, prompt_tags), pred in zip(scored_items, preds):

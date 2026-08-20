@@ -127,7 +127,7 @@ def patch_fp8_linears(
         module.forward = MethodType(_fp8_linear_forward, module)
         patched += 1
     if patched:
-        logger.info("Krea2 fp8 推理：%d 个 Linear 挂 dequant 前向", patched)
+        logger.debug("fp8: dequant forward attached module=dit layers=%d", patched)
     return patched
 
 

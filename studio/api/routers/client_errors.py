@@ -45,6 +45,30 @@ _RATE_LIMIT_MAX_PER_WINDOW = 10
 _ip_buckets: Dict[str, Deque[float]] = {}
 _bucket_lock = Lock()
 
+# 限流丢弃的窗口汇总（T5）：前端错误风暴时 server 端不跟着放大 —— 逐条不记，
+# 每 60s 至多一条 DEBUG 计数汇总。
+_DROP_SUMMARY_WINDOW_SECONDS = 60.0
+_drop_counts: Dict[str, int] = {}
+_drop_last_report = 0.0
+
+
+def _note_rate_limit_drop(ip: str) -> None:
+    """累加丢弃计数；每窗口至多输出一条汇总（不记单条）。"""
+    global _drop_last_report
+    now = time.monotonic()
+    with _bucket_lock:
+        _drop_counts[ip] = _drop_counts.get(ip, 0) + 1
+        if now - _drop_last_report < _DROP_SUMMARY_WINDOW_SECONDS:
+            return
+        _drop_last_report = now
+        snapshot = sorted(_drop_counts.items(), key=lambda kv: -kv[1])
+        _drop_counts.clear()
+    for ip_, dropped in snapshot:
+        logger.debug(
+            "client_errors rate-limited: dropped=%d ip=%s window=%ds",
+            dropped, ip_, int(_RATE_LIMIT_WINDOW_SECONDS),
+        )
+
 
 def _rate_limit_ok(ip: str, *, now: float | None = None) -> bool:
     """True = 在限额内可上报；False = 超 10/min 拒收（silently 204）。
@@ -85,15 +109,15 @@ async def report_client_error(request: Request) -> Response:
     """前端上报。**永远 204** — 不让上报失败级联前端 UI。"""
     ip = _client_ip(request)
     if not _rate_limit_ok(ip):
-        # 超限 silently drop；偶尔记一行 INFO 防完全失明
-        logger.info("client_errors rate-limit drop ip=%s", ip)
+        # 超限 silently drop；只按窗口汇总，防前端错误风暴在 server 端二次放大
+        _note_rate_limit_drop(ip)
         return Response(status_code=204)
 
     try:
         body: Dict[str, Any] = await request.json()
     except Exception:
         # 非 JSON body — 不上报
-        logger.warning("client_errors malformed body from ip=%s", ip)
+        logger.warning("client_errors malformed body: ip=%s", ip)
         return Response(status_code=204)
 
     if not isinstance(body, dict):
@@ -130,5 +154,8 @@ async def report_client_error(request: Request) -> Response:
 
 def _reset_rate_limit_for_tests() -> None:
     """测试钩子 — 清 ip_buckets 让每个测试独立。"""
+    global _drop_last_report
     with _bucket_lock:
         _ip_buckets.clear()
+        _drop_counts.clear()
+        _drop_last_report = 0.0

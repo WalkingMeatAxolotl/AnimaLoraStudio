@@ -27,6 +27,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
+from studio.infrastructure.log_messages import msg
+
 # 相对导入：本模块被 studio server 以 `runtime.training.dataset` 复用（bucket
 # 分布预览），那边 sys.path 只有仓库根，`training.*` 绝对导入会 ModuleNotFoundError。
 from .families.anima import ANIMA_SPEC
@@ -282,8 +284,9 @@ class ImageDataset(Dataset):
         self.native_align = int(native_align or _ANIMA_LATENT.align_px)
         if self.native_resolution and len(self.resolutions) > 1:
             logger.warning(
-                "[navit-native] navit_native_resolution 下多分辨率 fan-out 无意义"
-                "（同图各档产同一原生尺寸）：已忽略额外分辨率档 %s，按原生单份处理。",
+                "[navit] Extra resolutions ignored: %s — native resolution mode "
+                "trains each image at its own size, so the extra buckets would only "
+                "duplicate identical samples",
                 self.resolutions[1:],
             )
             # 真正收拢 fan-out（_scan 之前）：不收的话同图仍按每档复制样本、每档各
@@ -299,6 +302,8 @@ class ImageDataset(Dataset):
         # 几何变换后 area 下采样到 latent 分辨率，作为 loss 空间权重。
         self.load_masks = bool(load_masks)
         self._mask_warned: set = set()
+        #: mask 问题分路计数（unreadable / size_mismatch），供收尾汇总。
+        self._mask_problem_counts: dict = {}
         
         # 尝试导入 caption_utils（直接导入避开 __init__.py）
         self.caption_utils = None
@@ -323,17 +328,27 @@ class ImageDataset(Dataset):
                         "normalize": caption_module.normalize_caption_json,
                         "build": caption_module.build_caption_from_json,
                     }
-                    logger.info("JSON caption 模式已启用（分类 shuffle）")
+                    logger.info(msg("train.caption_json_mode"))
                 else:
-                    logger.warning(f"caption_utils.py 未找到: {utils_path}")
+                    logger.warning(
+                        "Caption JSON helper not found: %s — falling back to TXT "
+                        "captions", utils_path,
+                    )
             except Exception as e:
-                logger.warning(f"caption_utils 加载失败: {e}，回退到 TXT 模式")
+                logger.warning(
+                    "Caption JSON helper failed to load: %s — falling back to TXT "
+                    "captions", e,
+                )
         
         self.samples = self._scan()
         json_count = sum(1 for s in self.samples if s.get("json_path"))
         txt_count = len(self.samples) - json_count
         unique_count = len(set(id(s) for s in self.samples))
-        logger.info(f"数据集: {unique_count} 张图 → {len(self.samples)} 样本（含 repeat）(JSON: {json_count}, TXT: {txt_count})")
+        logger.info(msg(
+            "train.dataset_summary",
+            images=unique_count, samples=len(self.samples),
+            json_count=json_count, txt_count=txt_count,
+        ))
         self._preflight_json_captions()
         self.bucket_for_index = self._build_bucket_for_index()
 
@@ -523,10 +538,11 @@ class ImageDataset(Dataset):
         # 日志：每个文件夹的 repeat × 分辨率
         for name, rep, resos, cnt in folder_info:
             reso_str = "/".join(str(r) for r in resos)
-            logger.info(
-                f"  文件夹 {name}: {cnt} 张 × repeat {rep} × 分辨率[{reso_str}] "
-                f"= {cnt * rep * len(resos)} 样本"
-            )
+            logger.info(msg(
+                "train.dataset_folder",
+                name=name, images=cnt, repeat=rep, resolutions=reso_str,
+                samples=cnt * rep * len(resos),
+            ))
 
         return samples
 
@@ -658,20 +674,50 @@ class ImageDataset(Dataset):
                 raw.load()
                 mask = raw.convert("L") if raw.mode != "L" else raw.copy()
         except Exception as e:  # noqa: BLE001
-            if str(mp) not in self._mask_warned:
-                self._mask_warned.add(str(mp))
-                logger.warning(f"[masked-loss] mask 不可读，按无 mask 处理: {mp} ({e})")
+            if self._note_mask_problem(mp, "unreadable"):
+                logger.warning(
+                    "[masked-loss] Mask unreadable: %s (%s) — this image trains "
+                    "without a mask; same warning is not repeated", mp, e,
+                )
             return None
         if mask.size != tuple(size):
-            if str(mp) not in self._mask_warned:
-                self._mask_warned.add(str(mp))
+            if self._note_mask_problem(mp, "size_mismatch"):
                 logger.warning(
-                    "[masked-loss] mask 尺寸 %sx%s 与图片 %sx%s 不匹配，按无 mask 处理"
-                    "（外部改图后请重画 mask）: %s",
+                    "[masked-loss] Mask size %sx%s does not match image %sx%s: %s — "
+                    "this image trains without a mask; redraw the mask after editing "
+                    "the image; same warning is not repeated",
                     mask.size[0], mask.size[1], size[0], size[1], mp,
                 )
             return None
         return mask
+
+    #: 两路 mask 问题共用的全文配额（R8）：超出后只计数，收尾一条汇总。
+    _MASK_WARN_FULL_TEXT_QUOTA = 5
+
+    def _note_mask_problem(self, mask_path, kind: str) -> bool:
+        """登记一条 mask 问题，返回是否该打全文 WARNING。
+
+        按路径去重（同一张图每 epoch 都会重进），再按全局配额封顶——1000 张图
+        mask 全坏时首条之外只计数，总量由 ``log_mask_warning_summary`` 收口。
+        """
+        key = str(mask_path)
+        if key in self._mask_warned:
+            return False
+        self._mask_warned.add(key)
+        self._mask_problem_counts[kind] = self._mask_problem_counts.get(kind, 0) + 1
+        return len(self._mask_warned) <= self._MASK_WARN_FULL_TEXT_QUOTA
+
+    def log_mask_warning_summary(self) -> None:
+        """收尾汇总（由 finalize phase 调用）：一共多少张图没用上 mask。"""
+        unreadable = self._mask_problem_counts.get("unreadable", 0)
+        mismatch = self._mask_problem_counts.get("size_mismatch", 0)
+        if not (unreadable or mismatch):
+            return
+        logger.warning(
+            "[masked-loss] %d image(s) have no usable mask: unreadable=%d "
+            "size_mismatch=%d — those images trained on the full image",
+            unreadable + mismatch, unreadable, mismatch,
+        )
 
     def caption_for_sample(self, sample) -> str:
         """解析一个 sample 的最终 caption，不打开图片。
@@ -1054,7 +1100,10 @@ class CachedLatentDataset(Dataset):
             with self.np.load(npz_path) as data:
                 if "latent" not in data.files:
                     npz_path.unlink()
-                    logger.debug(f"已删除不兼容缓存: {npz_path.name}")
+                    logger.debug(
+                        "latent_cache: dropped incompatible entry file=%s",
+                        npz_path.name,
+                    )
                     return False
                 cache_fp = (
                     str(data["latent_fingerprint"].item())
@@ -1070,9 +1119,10 @@ class CachedLatentDataset(Dataset):
                         or cache_ver != LATENT_CACHE_LAYOUT_VERSION):
                     npz_path.unlink()
                     logger.debug(
-                        f"已删除指纹失配缓存: {npz_path.name} "
-                        f"({cache_fp} v{cache_ver} != "
-                        f"{self.latent_spec.fingerprint} v{LATENT_CACHE_LAYOUT_VERSION})"
+                        "latent_cache: dropped stale entry file=%s cache_fp=%s "
+                        "cache_ver=%s want_fp=%s want_ver=%s",
+                        npz_path.name, cache_fp, cache_ver,
+                        self.latent_spec.fingerprint, LATENT_CACHE_LAYOUT_VERSION,
                     )
                     return False
                 if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
@@ -1113,8 +1163,8 @@ class CachedLatentDataset(Dataset):
         分辨率的图用 `img.r{reso}.npz` 分文件。按 npz_path 去重，每个 (图, reso) 最多
         encode 一次；否则同 npz 会被反复覆盖写 N 次（flip_augment 模式下再乘 2）。
         """
-        tag = f"（{self.label}）" if self.label else ""
-        logger.info(f"检查 VAE latent 缓存{tag}...")
+        dataset_label = msg(self.label) if self.label else msg("train.label_training_set")
+        logger.info(msg("train.vae_cache_check", dataset=dataset_label))
         to_encode = []
         seen_npz = set()
         unique_total = 0
@@ -1130,10 +1180,15 @@ class CachedLatentDataset(Dataset):
                 to_encode.append(i)
 
         if to_encode:
-            logger.info(f"需要编码 {len(to_encode)}/{unique_total} 张图像{tag}...")
+            logger.info(msg(
+                "train.vae_cache_encode_todo",
+                dataset=dataset_label, todo=len(to_encode), total=unique_total,
+            ))
             self._encode_and_save(to_encode, vae, device, dtype)
         else:
-            logger.info(f"所有 {unique_total} 张图像已缓存{tag}")
+            logger.info(msg(
+                "train.vae_cache_all_hit", dataset=dataset_label, total=unique_total,
+            ))
 
         self._fill_bucket_for_index()
 
@@ -1174,6 +1229,19 @@ class CachedLatentDataset(Dataset):
         want_flip = self.flip_augment and base_img is not None
         pending = {}
         encoded_count = 0
+        tiled_count = 0
+        total_to_encode = len(indices)
+        # 进度步长自适应（Q3）：固定每 10 张在 1000 张数据集上是 100 行；按总数
+        # 取十分之一封顶在 ~11 条/次。
+        progress_stride = max(10, total_to_encode // 10)
+
+        def _report_encode_progress():
+            """两条编码路径（分块 / 批量）共用的进度行。"""
+            if encoded_count % progress_stride == 0 or encoded_count == total_to_encode:
+                logger.info(msg(
+                    "train.vae_cache_progress",
+                    done=encoded_count, total=total_to_encode,
+                ))
 
         def _encode_pixels(pixel_tensors):
             pixels = torch.stack(pixel_tensors, dim=0).to(device, dtype=dtype)
@@ -1194,7 +1262,7 @@ class CachedLatentDataset(Dataset):
             return lat.detach().cpu().float()[0]
 
         def _flush(bucket_key):
-            nonlocal encoded_count
+            nonlocal encoded_count, tiled_count
             batch = pending.pop(bucket_key, [])
             if not batch:
                 return
@@ -1217,10 +1285,12 @@ class CachedLatentDataset(Dataset):
                 return out
 
             if use_tiled:
-                logger.info(
-                    "[cache-tiled] %dx%d 超像素预算，分块 encode（tile=%d overlap=%d）",
-                    w, h, self.encode_tile_px, self.encode_tile_overlap,
+                logger.debug(
+                    "vae_cache: tiled encode size=%dx%d budget=%dpx tile=%dpx overlap=%dpx",
+                    w, h, self.encode_max_pixels,
+                    self.encode_tile_px, self.encode_tile_overlap,
                 )
+                tiled_count += len(batch)
                 for entry in batch:
                     lat = _encode_tiled_single(entry["pixels"])
                     lat_f = _encode_tiled_single(entry["pixels_flipped"]) if want_flip else None
@@ -1240,8 +1310,7 @@ class CachedLatentDataset(Dataset):
                         **npz_kwargs,
                     )
                     encoded_count += 1
-                    if encoded_count % 10 == 0 or encoded_count == len(indices):
-                        logger.info(f"  编码进度: {encoded_count}/{len(indices)}")
+                    _report_encode_progress()
                 return
 
             latents = _encode_pixels([entry["pixels"] for entry in batch])
@@ -1268,10 +1337,9 @@ class CachedLatentDataset(Dataset):
                     **npz_kwargs,
                 )
                 encoded_count += 1
-                if encoded_count % 10 == 0 or encoded_count == len(indices):
-                    logger.info(f"  编码进度: {encoded_count}/{len(indices)}")
+                _report_encode_progress()
 
-        logger.info(f"VAE cache batch size: {self.cache_batch_size}")
+        logger.debug("vae_cache: batch_size=%d", self.cache_batch_size)
         for i in indices:
             if base_img is not None:
                 # 显式控制 flip，避免随机性 baked 进 npz
@@ -1304,6 +1372,10 @@ class CachedLatentDataset(Dataset):
 
         for bucket_key in list(pending):
             _flush(bucket_key)
+
+        # 分块明细降 DEBUG 后，保留一条汇总解释「为什么缓存这么慢」。
+        if tiled_count:
+            logger.info(msg("train.vae_cache_tiled_summary", n=tiled_count))
 
     def __len__(self):
         return len(self.samples)
@@ -1591,22 +1663,24 @@ class NavitPackBatchSampler:
         mx = max(self.token_counts) if self.token_counts else 0
         if self.token_counts and self.token_budget < mx:
             logger.warning(
-                "[NavitPack] token_budget=%d < 最大单图 token=%d：该图将单独成包，"
-                "可能超出预算并 OOM。建议 token_budget >= 最大单图 token。",
-                self.token_budget, mx,
+                "[navit] token_budget=%d is below the largest single image (%d "
+                "tokens): that image is packed alone and may exceed the budget and "
+                "OOM — raise token_budget to at least %d",
+                self.token_budget, mx, mx,
             )
-        logger.info(
-            "[NavitPack] dataset_len=%d token_budget=%d max_images_per_pack=%s "
-            "strategy=%s ffd_window=%s (token 数范围 %d..%d)",
+        logger.debug(
+            "navit_pack: dataset_len=%d token_budget=%d max_images_per_pack=%s "
+            "strategy=%s ffd_window=%s tokens_per_image=%d..%d",
             len(self.token_counts), self.token_budget,
-            self.max_images_per_pack or "∞", self.strategy,
-            (self.ffd_window or "全局") if self.strategy == "ffd" else "-",
+            self.max_images_per_pack or "unlimited", self.strategy,
+            (self.ffd_window or "global") if self.strategy == "ffd" else "-",
             min(self.token_counts) if self.token_counts else 0, mx,
         )
         if self.strategy == "ffd" and self.ffd_window <= 0:
             logger.warning(
-                "[NavitPack] strategy=ffd 且 ffd_window<=0（全局 FFD）：每 epoch 的包将完全相同"
-                "（按尺寸排序固定），削弱小数据 SGD 的 batch 多样性。多 epoch 训练建议设正窗口。"
+                "[navit] strategy=ffd with ffd_window<=0: every epoch packs images "
+                "in the same fixed size order, so batches never vary — set a "
+                "positive ffd_window for multi-epoch training"
             )
 
     def set_epoch(self, epoch):

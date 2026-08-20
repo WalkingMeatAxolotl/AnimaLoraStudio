@@ -17,20 +17,30 @@ from pathlib import Path
 
 import torch
 
+from studio.infrastructure.log_messages import msg
+
 
 logger = logging.getLogger(__name__)
+
+# warn-once（R8）：state_dict() hook 缺失是**持久**原因，每次周期 save 都会
+# 重触发（10 epoch auto backup + 用户周期 save ≈ 20 行/任务）。首条全文后闭嘴。
+_sra_state_dict_warned = False
+_sampler_state_dict_warned = False
 
 
 def save_training_state(
     path, injector, optimizer, epoch, global_step,
     loss_history=None, rng_state=None, monitor_state=None,
     scheduler=None, timestep_sampler=None, sra_aligner=None,
-    scaler=None, model_family=None,
+    scaler=None, model_family=None, internal=False,
 ):
     """保存完整训练状态，支持断点续训。
 
     timestep_sampler（ADR 0006 Addendum 1）：自适应采样器（InfoNoise）的 EMA / CDF / FIFO buffer。
     无状态采样器（baseline）的 state_dict() 是 {}，跳过不存，避免 ckpt 文件无谓增大。
+
+    ``internal``：True = 系统内部的每 epoch auto backup（ADR 0006 Addendum 1 方案 Δ），
+    不是用户产物 → 收尾行走 DEBUG；False = 用户开的周期 save → INFO 叙事行。
     """
     state = {
         "lora_state_dict": injector.state_dict(),
@@ -53,14 +63,28 @@ def save_training_state(
         try:
             state["sra_aligner_state"] = sra_aligner.state_dict()
         except Exception as e:
-            logger.warning(f"sra_aligner.state_dict() 失败（跳过）: {e}")
+            global _sra_state_dict_warned
+            if not _sra_state_dict_warned:
+                _sra_state_dict_warned = True
+                logger.warning(
+                    "SRA aligner state_dict() failed: %s — the resume state is saved "
+                    "without SRA state, resuming will cold-start the projection layer; "
+                    "same warning is not repeated", e,
+                )
     if timestep_sampler is not None and hasattr(timestep_sampler, "state_dict"):
         # hasattr 防御：Protocol 不提供 default dispatch，未来新加的 sampler 若忘记
         # 实现这两个 hook，要静默跳过而非崩溃（训练 8 小时不能因 resume hook 缺失废）
         try:
             sampler_state = timestep_sampler.state_dict()
         except Exception as e:
-            logger.warning(f"timestep_sampler.state_dict() 失败（跳过）: {e}")
+            global _sampler_state_dict_warned
+            if not _sampler_state_dict_warned:
+                _sampler_state_dict_warned = True
+                logger.warning(
+                    "Timestep sampler state_dict() failed: %s — the resume state is "
+                    "saved without sampler state, resuming will repeat its warmup; "
+                    "same warning is not repeated", e,
+                )
             sampler_state = None
         if sampler_state:  # 空 dict（baseline）不存
             state["timestep_sampler_state"] = sampler_state
@@ -79,7 +103,15 @@ def save_training_state(
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)
-    logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
+    if internal:
+        logger.debug(
+            "resume_state: auto epoch backup saved path=%s epoch=%s step=%s",
+            path, epoch, global_step,
+        )
+    else:
+        logger.info(msg(
+            "train.resume_state_saved", path=path, epoch=epoch, step=global_step,
+        ))
 
 
 def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None, expected_family=None):
@@ -88,7 +120,7 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
     实现了 load_state_dict，把 EMA / CDF / FIFO 灌回去；否则保持冷启动（warning 提示）。
     """
-    logger.info(f"加载训练状态: {path}")
+    logger.info(msg("train.resume_state_loading", path=path))
     state = torch.load(path, map_location="cpu", weights_only=False)
 
     # 多模型 D13：跨族 resume fail-fast。无标记的存量 state grandfather 为 anima。
@@ -105,11 +137,19 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
     # 走默认初始化路径而非崩溃；用户应当从头训练新格式 ckpt。
     lora_sd = state["lora_state_dict"]
     result = injector.load_state_dict(lora_sd, strict=False)
-    missing = len(getattr(result, "missing_keys", [])) if hasattr(result, "missing_keys") else 0
-    unexpected = len(getattr(result, "unexpected_keys", [])) if hasattr(result, "unexpected_keys") else 0
+    missing_keys = list(getattr(result, "missing_keys", []) or [])
+    unexpected_keys = list(getattr(result, "unexpected_keys", []) or [])
+    missing = len(missing_keys)
+    unexpected = len(unexpected_keys)
     if missing or unexpected:
+        # T2：只报数量，排障者判断不了严重性 —— 各带一个样例 key。
         logger.warning(
-            f"resume LoRA: missing={missing}, unexpected={unexpected}（旧格式 ckpt？）"
+            'Resume LoRA state incomplete: missing=%d unexpected=%d '
+            '(e.g. missing "%s", unexpected "%s") — unmatched layers start from '
+            'scratch; the checkpoint may come from an older LoRA format',
+            missing, unexpected,
+            missing_keys[0] if missing_keys else "-",
+            unexpected_keys[0] if unexpected_keys else "-",
         )
 
     # 恢复 SRA v2 projection MLP（如启用）。必须在 optimizer state 恢复前完成，
@@ -118,11 +158,18 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
         if "sra_aligner_state" in state and hasattr(sra_aligner, "load_state_dict"):
             try:
                 sra_aligner.load_state_dict(state["sra_aligner_state"])
-                logger.info("SRA v2 projection MLP 状态已恢复")
+                logger.debug("sra: projection layer state restored")
             except Exception as e:
-                logger.warning(f"SRA v2 projection MLP 状态恢复失败（冷启动）: {e}")
+                logger.warning(
+                    "SRA projection layer state failed to restore: %s — the layer "
+                    "cold-starts, alignment quality drops for the first steps after "
+                    "resume", e,
+                )
         else:
-            logger.warning("checkpoint 不含 SRA v2 状态；projection MLP 将冷启动")
+            logger.warning(
+                "Resume state has no SRA state: the projection layer cold-starts, "
+                "alignment quality drops for the first steps after resume"
+            )
 
     # 加载优化器状态
     optimizer.load_state_dict(state["optimizer_state_dict"])
@@ -132,15 +179,23 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
         try:
             scheduler.load_state_dict(state["scheduler_state_dict"])
         except Exception as e:
-            logger.warning(f"调度器状态恢复失败（将从头开始）: {e}")
+            logger.warning(
+                "LR scheduler state failed to restore: %s — the schedule restarts "
+                "from step 0, the learning rate will not continue the previous "
+                "curve", e,
+            )
 
     # 恢复 GradScaler（fp16）。老 ckpt / bf16·fp32 run 无此 key → 保持默认 scale 冷启动。
     if scaler is not None and "scaler_state" in state:
         try:
             scaler.load_state_dict(state["scaler_state"])
-            logger.info("GradScaler 状态已恢复")
+            logger.debug("amp: fp16 loss scaler state restored")
         except Exception as e:
-            logger.warning(f"GradScaler 状态恢复失败（按默认 scale 冷启动）: {e}")
+            logger.warning(
+                "fp16 loss scaler state failed to restore: %s — scaling restarts "
+                "from the default value, the first steps after resume may be "
+                "skipped", e,
+            )
 
     # 恢复随机数状态
     if "rng_state" in state:
@@ -160,9 +215,12 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
     ):
         try:
             timestep_sampler.load_state_dict(state["timestep_sampler_state"])
-            logger.info("timestep_sampler 状态已恢复（自适应 schedule 接力）")
+            logger.debug("timestep_sampler: adaptive schedule state restored")
         except Exception as e:
-            logger.warning(f"timestep_sampler 状态恢复失败（冷启动重 warmup）: {e}")
+            logger.warning(
+                "Timestep sampler state failed to restore: %s — the adaptive "
+                "schedule cold-starts and repeats its warmup", e,
+            )
 
     # ADR 0006 Addendum 1 第 7 条：Schedule-Free 系优化器（PPSF 等）resume 守护。
     # PPSF 内部维护 group['train_mode'] flag + Polyak averaged x/y/z 三组权重；
@@ -175,12 +233,15 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
         try:
             optimizer.train()
         except Exception as e:
-            logger.warning(f"optimizer.train() 调用失败（PPSF 可能 broken）: {e}")
+            logger.warning(
+                "optimizer.train() failed after resume: %s — the schedule-free "
+                "optimizer may stay in eval mode and stop updating weights", e,
+            )
 
     epoch = state.get("epoch", 0)
     global_step = state.get("global_step", 0)
     loss_history = state.get("loss_history", [])
     monitor_state = state.get("monitor_state", None)  # 恢复监控数据
 
-    logger.info(f"训练状态已恢复: epoch={epoch}, step={global_step}")
+    logger.info(msg("train.resume_done", epoch=epoch, step=global_step))
     return epoch, global_step, loss_history, monitor_state

@@ -131,7 +131,8 @@ class OnnxTaggerBase:
                 raise
             err = str(exc)
             logger.warning(
-                "%s %s session 创建失败，降级 CPU 重试: %s", self.name, gpu_ep, err
+                "%s: creating the %s session failed; retrying on CPU: %s",
+                self.name, gpu_ep, err,
             )
             if gpu_ep == "CUDAExecutionProvider":
                 onnxruntime_setup.record_cuda_load_error(err)
@@ -150,7 +151,13 @@ class OnnxTaggerBase:
                         f"但 get_providers={actual}）。常见原因：驱动版本不够 / "
                         f"runtime so/DLL 缺失 / cuDNN ABI 错位 / DX12 不支持。"
                     )
-                    logger.warning("%s %s", self.name, msg)
+                    # 固定句式留在模板里（否则整句都在变量里，按文本 grep 不到）
+                    logger.warning(
+                        "%s: %s silently fell back to CPU (InferenceSession did "
+                        "not raise, get_providers=%s); common causes: driver too "
+                        "old, missing runtime DLL, cuDNN ABI mismatch, no DX12 "
+                        "support", self.name, gpu_ep, actual,
+                    )
                     if gpu_ep == "CUDAExecutionProvider":
                         onnxruntime_setup.record_cuda_load_error(msg)
                 elif gpu_ep == "CUDAExecutionProvider":
@@ -174,8 +181,9 @@ class OnnxTaggerBase:
         except ImportError:
             return False
         try:
-            logger.warning(
-                "%s CUDA 推理失败，降级 CPU InferenceSession（后续批次同样走 CPU）",
+            # 尝试行只记 DEBUG —— 这行跑在 try 的第一句，此刻还没降级成功
+            logger.debug(
+                "%s: CUDA inference failed; falling back to a CPU session",
                 self.name,
             )
             self._session = ort.InferenceSession(
@@ -186,9 +194,17 @@ class OnnxTaggerBase:
             onnxruntime_setup.record_cuda_load_error(
                 "CUDA 推理时发生 cuBLAS / CUDA 错误，已自动降级 CPU 运行"
             )
+            # 降级**成功之后**才是 WARNING，与下面的失败分支不再自相矛盾
+            logger.warning(
+                "%s: fell back to a CPU session; all later batches run on CPU "
+                "(slower)", self.name,
+            )
             return True
-        except Exception as exc:  # noqa: BLE001
-            logger.error("%s CPU session 降级失败: %s", self.name, exc)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "%s: the CPU session fallback failed; tagging cannot run",
+                self.name,
+            )
             return False
 
     @staticmethod

@@ -130,8 +130,7 @@ class BooruClient:
         self.cfg = cfg or BooruPoolConfig()
         self._session = session or requests.Session()
         patch_requests_session(self._session)
-        # 外部传入的 session 不一定是 requests.Session（测试里有最小 FakeSession 只实现 .get）
-        logger.info("BooruClient session proxies: %s", getattr(self._session, "proxies", {}))
+        # proxy patch 的结果由 proxy_manager 自己记一条 DEBUG，这里不再打第二遍
         self._owns_session = session is None
         self._api_bucket = TokenBucket(self.cfg.api_rate_per_sec)
         self._cdn_bucket = TokenBucket(self.cfg.cdn_rate_per_sec)
@@ -201,14 +200,15 @@ class BooruClient:
 
         if log_new_window:
             logger.warning(
-                "[booru_pool] %s 收到 %d，sticky backoff %.0fs",
+                "[booru_pool] %s returned %d; sticky backoff %.1fs",
                 kind, status_code, backoff,
             )
         if do_halve:
             self._api_bucket.set_rate(self.cfg.api_rate_per_sec)
             self._cdn_bucket.set_rate(self.cfg.cdn_rate_per_sec)
             logger.warning(
-                "[booru_pool] 429 触发速率永久减半（API %.2f / CDN %.2f req/s）",
+                "[booru_pool] 429 received; request rate halved for the rest "
+                "of this run (api=%.2f cdn=%.2f req/s)",
                 self.cfg.api_rate_per_sec,
                 self.cfg.cdn_rate_per_sec,
             )

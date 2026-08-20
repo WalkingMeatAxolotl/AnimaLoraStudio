@@ -53,6 +53,8 @@ from studio.services.reg.builder import (  # noqa: E402
     read_meta,
     write_meta,
 )
+from studio.infrastructure.log_messages import msg  # noqa: E402
+from utils.log_throttle import ProgressThrottle, RepeatThrottle  # noqa: E402
 from studio.services.tagging.caption_format import (  # noqa: E402
     caption_json_to_tags,
     caption_json_to_text,
@@ -63,6 +65,11 @@ from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E4
 
 setup_logging(os.environ.get(PROCESS_ENV) or "anima_reg_ai", file=False, console=True)
 logger = logging.getLogger("anima_reg_ai")
+
+# 循环内同因重复告警的节流器（方案 A）：首条全文 WARNING、2..N 条 DEBUG、
+# 收尾 `_REPEAT.drain()` 补一条计数汇总。典型任务 1000 张图，故障时每条告警
+# 都是数据集规模，不收会把 run.log 冲成噪音。
+_REPEAT = RepeatThrottle(logger)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
@@ -150,7 +157,15 @@ def _caption_path_for_image(img_path: Path) -> Path | None:
             _read_tags_from_caption(p)
             return p
         except Exception as e:
-            logger.warning("caption 读取失败 %s: %s", p, e)
+            _REPEAT.hit(
+                "caption_unparsable",
+                "%d caption files could not be parsed (first: %s); those images "
+                "fell back to another caption or were skipped",
+                "Caption file could not be parsed: path=%s (%s); trying the next "
+                "caption file for this image",
+                p, e,
+                first=p,
+            )
     return None
 
 
@@ -374,7 +389,10 @@ def main() -> None:
     args = parse_args()
     cfg_path = Path(args.config)
     if not cfg_path.exists():
-        logger.error(f"配置文件不存在: {cfg_path}")
+        logger.error(
+            "Config file not found: %s; regularization image generation aborted",
+            cfg_path,
+        )
         sys.exit(1)
 
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -410,18 +428,24 @@ def main() -> None:
         update_monitor(config={"type": "reg_ai"})
         _update_monitor = update_monitor
     except Exception as e:
-        logger.warning(f"monitor 初始化失败: {e}")
+        logger.warning(
+            "Progress monitor failed to start: %s; generation continues but "
+            "progress may not update", e,
+        )
 
     if not train_dir.exists():
-        logger.error(f"train 目录不存在: {train_dir}")
+        logger.error(
+            "Train folder not found: %s; there is nothing to build "
+            "regularization images from", train_dir,
+        )
         sys.exit(1)
 
     entries = _scan_train(train_dir)
     if not entries:
-        logger.error("train 目录没有任何图片")
+        logger.error("No images found in the train folder: %s", train_dir)
         sys.exit(1)
 
-    logger.info(f"train 共 {len(entries)} 张图")
+    logger.info(msg("regai.train_scanned", n=len(entries)))
 
     if incremental:
         to_generate = [
@@ -431,12 +455,14 @@ def main() -> None:
                 e["stem"],
             )
         ]
-        logger.info(f"incremental 模式：需生成 {len(to_generate)}/{len(entries)} 张")
+        logger.info(msg(
+            "regai.incremental_plan", todo=len(to_generate), total=len(entries),
+        ))
     else:
         to_generate = entries
 
     if not to_generate:
-        logger.info("所有图片已有对应正则图，无需生成")
+        logger.info(msg("regai.nothing_to_do"))
         _write_meta_final(reg_dir, entries, excluded_tags, incremental, 0)
         return
 
@@ -465,11 +491,11 @@ def main() -> None:
         stage="正则生成模型加载",
         settings_hint="设置 → 训练 → 训练参数",
     )
-    logger.info("加载 VAE...")
+    logger.info(msg("model.load_vae"))
     vae = family.load_vae(vae_path, device, dtype,
                           tiling=str(cfg.get("vae_tiling", "auto")))
 
-    logger.info("加载文本编码器...")
+    logger.info(msg("model.load_text_encoder", path=text_encoder_path))
     # 族 opaque 文本栈不拆包；ad-hoc prompt 关缓存（cached_varlen 族 TE 常驻）
     text_stack = family.load_text(
         text_encoder_path, device, dtype,
@@ -494,7 +520,14 @@ def main() -> None:
             # TE 上卡需求上界（bf16 ~11GB；fp8 更小）——不足时跳过，
             # 由 sample_image 内部的逐图路径兜底
             if free is not None and free < 12 * 1024**3:
-                logger.info("显存余量不足，本批跳过预编码（回退逐图编码）")
+                _REPEAT.hit(
+                    "precache_no_vram",
+                    "Batch pre-encoding was skipped %d times for lack of VRAM; "
+                    "those images used per-image encoding",
+                    "Skipping batch pre-encoding: only %.1f GB VRAM free, "
+                    "%.1f GB needed; falling back to per-image encoding (slower)",
+                    free / 1024**3, 12.0,
+                )
                 return
         prompts = [
             p for p in (
@@ -512,14 +545,31 @@ def main() -> None:
             if callable(release):
                 release()
             if encoded:
-                logger.info("本批预编码 %d 条 caption；TE 已释放", encoded)
+                if first:
+                    logger.info(msg(
+                        "regai.precache_strategy", batch=_PRECACHE_BATCH,
+                    ))
+                logger.debug(
+                    "caption precache: batch=%d encoded=%d, text encoder released",
+                    _PRECACHE_BATCH, encoded,
+                )
         except Exception:
-            logger.exception("批预编码失败；回退逐图惰性编码")
+            _REPEAT.hit(
+                "precache_failed",
+                "Batch caption pre-encoding failed %d times; those batches used "
+                "per-image encoding",
+                "Batch caption pre-encoding failed; falling back to per-image "
+                "encoding (slower, output unchanged)",
+                exc_info=True,
+            )
 
     if to_generate:
         _precache_batch(to_generate[:_PRECACHE_BATCH], first=True)
 
-    logger.info("加载 Transformer...")
+    logger.info(msg(
+        "model.load_transformer",
+        family=family.spec.family_id, path=transformer_path,
+    ))
     model = family.load_dit(
         transformer_path, device, dtype,
         attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
@@ -531,12 +581,16 @@ def main() -> None:
     model.eval()
 
     if not incremental:
-        logger.info("full 模式：清空旧 reg 内容")
         clear_reg_dir(reg_dir)
+        logger.info(msg("regai.full_mode_clear"))
 
     # 生成循环
     total = len(to_generate)
     actual_count = 0
+    skipped_count = 0
+    failed_count = 0
+    # 逐图行降 DEBUG，可见进度由节流后的计数 INFO 承担（Q3 三件套）
+    throttle = ProgressThrottle(total)
 
     for idx, entry in enumerate(to_generate):
         if idx and idx % _PRECACHE_BATCH == 0:
@@ -555,24 +609,41 @@ def main() -> None:
         out_path = reg_sub / out_name
         caption_path = _copy_caption_for_reg(entry["img"], out_path)
         if caption_path is None:
-            logger.warning(f"[{idx + 1}/{total}] {entry['img'].name} 无 tag 文件，跳过")
+            skipped_count += 1
+            _REPEAT.hit(
+                "no_caption",
+                "%d images skipped: no caption file (first: %s)",
+                "Image %d/%d skipped: %s has no caption file",
+                idx + 1, total, entry["img"].name,
+                first=entry["img"].name,
+            )
             continue
 
         try:
             prompt = _rewrite_caption_for_prompt(caption_path, excluded_tags)
         except Exception as e:
-            logger.warning(f"[{idx + 1}/{total}] {caption_path.name} 读取失败，跳过: {e}")
+            skipped_count += 1
+            _REPEAT.hit(
+                "caption_unreadable",
+                "%d images skipped: caption unreadable (first: %s)",
+                "Image %d/%d skipped: caption %s could not be read (%s)",
+                idx + 1, total, caption_path.name, e,
+                first=caption_path.name,
+            )
             caption_path.unlink(missing_ok=True)
             continue
 
         if not prompt:
-            logger.warning(f"[{idx + 1}/{total}] {entry['img'].name} 过滤后无 tag，跳过")
+            skipped_count += 1
+            _REPEAT.hit(
+                "no_tags_left",
+                "%d images skipped: no tags left after filtering (first: %s)",
+                "Image %d/%d skipped: no tags left after the exclude filter (%s)",
+                idx + 1, total, entry["img"].name,
+                first=entry["img"].name,
+            )
             caption_path.unlink(missing_ok=True)
             continue
-
-        logger.info(f"[{idx + 1}/{total}] {entry['img'].name} -> {out_name}")
-        logger.info(f"  caption: {caption_path.name}")
-        logger.info(f"  prompt: {prompt[:80]}")
 
         try:
             img = family.sample_image(
@@ -591,16 +662,37 @@ def main() -> None:
             )
             img.save(out_path)
             actual_count += 1
-            logger.info(f"  已保存: {out_path}")
+            logger.debug(
+                "reg image: %d/%d src=%s out=%s seed=%d prompt=%.80s",
+                idx + 1, total, entry["img"].name, out_name, seed, prompt,
+            )
+            if throttle.should_emit(idx + 1):
+                logger.info(msg("regai.progress", done=idx + 1, total=total))
             if _update_monitor:
                 _update_monitor(sample_path=str(out_path), step=idx + 1)
-        except Exception as e:
-            logger.exception(f"  生成失败: {e}")
+        except Exception:
+            failed_count += 1
+            _REPEAT.hit(
+                "generate_failed",
+                "%d images failed during generation (first: %s)",
+                "Image %d/%d failed: %s; skipped and continuing",
+                idx + 1, total, entry["img"].name,
+                first=entry["img"].name,
+                exc_info=True,
+            )
             if not out_path.exists():
                 caption_path.unlink(missing_ok=True)
 
+    _REPEAT.drain()
     _write_meta_final(reg_dir, entries, excluded_tags, incremental, actual_count)
-    logger.info(f"完成: {actual_count}/{total} 张")
+    if skipped_count or failed_count:
+        logger.warning(
+            "Regularization images finished with gaps: generated=%d/%d "
+            "skipped=%d failed=%d",
+            actual_count, total, skipped_count, failed_count,
+        )
+    else:
+        logger.info(msg("regai.done", ok=actual_count, total=total))
 
 
 if __name__ == "__main__":
