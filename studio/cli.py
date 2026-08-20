@@ -599,9 +599,11 @@ def _apply_update_pending() -> None:
     """
     try:
         from studio.services.runtime import updater  # noqa: PLC0415
+        from studio.infrastructure.task_log import TaskLog  # noqa: PLC0415
         if not updater.has_pending():
             return
-        updater.apply_pending(emit=_say)
+        # 与 _say 同一个 logger，updater 内部升级到级别方法时黄/红行自动落对
+        updater.apply_pending(emit=TaskLog(_log))
     except Exception as exc:  # noqa: BLE001
         _say(f"apply update pending 时异常（{exc}），跳过", "warning")
 

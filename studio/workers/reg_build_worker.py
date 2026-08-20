@@ -40,6 +40,7 @@ logger = logging.getLogger("studio.workers.reg_build_worker")
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
 # subprocess，必须自己 import；否则 CUDA EP 静默降级到 CPU，用户看不到任何信号。
+from studio.infrastructure.task_log import TaskLog
 from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
 
 from studio import db, secrets
@@ -153,8 +154,7 @@ def run(job_id: int) -> int:
 
     cancel_event = threading.Event()  # supervisor 走 SIGTERM；这里只为 API 完整性
 
-    def progress(line: str) -> None:
-        logger.info(line)
+    progress = TaskLog(logger)
 
     try:
         version_id = int(params["version_id"])

@@ -31,6 +31,8 @@ from typing import Any, Callable, Optional
 import torch
 from PIL import Image
 
+from studio.infrastructure.task_log import TaskLogLike, NULL_LOG
+
 logger = logging.getLogger(__name__)
 
 # spandrel `ImageModelDescriptor` 的最小协议：我们只用到 `.model` 和 `.scale`。
@@ -255,7 +257,7 @@ def upscale_file(
     device: str = "auto",
     precision: str = "auto",
     target_area: Optional[int] = None,
-    on_log: Callable[[str], None] = lambda _l: None,
+    on_log: TaskLogLike = NULL_LOG,
     prewarm_thumb_sizes: Optional[list[int]] = None,
     save_kwargs: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:

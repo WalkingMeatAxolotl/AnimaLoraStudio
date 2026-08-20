@@ -36,6 +36,8 @@ from studio.domain.common import supports_capability
 from studio.services import version_config
 from studio.services.inference.daemon import InferenceDaemon
 
+from studio.infrastructure.task_log import TaskLogLike
+
 logger = logging.getLogger(__name__)
 
 # 一个候选的出图上限。daemon 单 task 串行跑 prompts，验证集再大也不该无限等。
@@ -177,7 +179,7 @@ class DaemonSampleGenerator:
 
     def __init__(
         self,
-        progress: Callable[[str], None],
+        progress: TaskLogLike,
         *,
         task_id: int = 0,
         daemon: Optional[InferenceDaemon] = None,
@@ -211,7 +213,7 @@ class DaemonSampleGenerator:
         self,
         run: dict[str, Any],
         version_dir: Path,
-        progress: Callable[[str], None],
+        progress: TaskLogLike,
     ) -> None:
         from studio.services import eval_samples
 

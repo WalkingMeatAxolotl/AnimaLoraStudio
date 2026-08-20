@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 
+from studio.infrastructure.task_log import TaskLog
 from studio import db, secrets
 
 # 固定名：worker 经 `python -m studio.workers.download_worker` 拉起时 __name__ 是 __main__，
@@ -38,8 +39,7 @@ def run(job_id: int) -> int:
 
     params = job.get("params_decoded") or {}
 
-    def progress(line: str) -> None:
-        logger.info(line)
+    progress = TaskLog(logger)
 
     try:
         with db.connection_for() as conn:

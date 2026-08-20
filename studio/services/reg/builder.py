@@ -49,9 +49,10 @@ from .analysis import (
     collect_source_image_ids,
     find_best_match,
 )
+from studio.infrastructure.task_log import TaskLogLike
 
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 
 VIDEO_EXTS = {
     "mp4", "webm", "avi", "mov", "mkv", "flv", "wmv", "mpg", "mpeg", "m4v",

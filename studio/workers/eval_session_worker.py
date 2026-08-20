@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from studio.infrastructure.task_log import TaskLog
 from studio import db, secrets
 from studio.services import (
     eval_ccip,
@@ -74,8 +75,7 @@ _RUNNERS: dict[
 
 
 def run(task_id: int) -> int:
-    def progress(line: str) -> None:
-        logger.info(line)
+    progress = TaskLog(logger)
 
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)

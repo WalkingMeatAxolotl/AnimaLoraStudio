@@ -8,11 +8,18 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Callable, Optional
 
 from ... import secrets
+from studio.infrastructure.task_log import TaskLogLike, TaskLog
+
+logger = logging.getLogger(__name__)
+
+#: 手跑 / 无人传 on_log 时的兜底：走本模块 logger（终端 INFO 可见，不再裸 print）。
+_DEFAULT_LOG = TaskLog(logger)
 
 # ---------------------------------------------------------------------------
 # ModelScope 镜像源映射
@@ -171,7 +178,7 @@ def download_flat_ms(
     repo_subpath: str,
     target: Path,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """用 modelscope Python API 下载单个文件到 target。
 
@@ -231,7 +238,7 @@ def download_flat(
     repo_subpath: str,
     target: Path,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """从 HF 下载 repo_subpath，扁平落到 target；返回 True = 已就绪。
 
@@ -297,7 +304,7 @@ def download_snapshot(
     target_dir: Path,
     *,
     allow_patterns: Optional[list[str]] = None,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """从 HF 把整个 repo 下到 target_dir（多文件 transformers 模型用）。
 
@@ -340,7 +347,7 @@ def download_snapshot_ms(
     ms_repo_id: str,
     target_dir: Path,
     *,
-    on_log: Callable[[str], None] = print,
+    on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """从 ModelScope 把整个 repo 下到 target_dir（多文件模型用）。
 

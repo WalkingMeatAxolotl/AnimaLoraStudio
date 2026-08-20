@@ -25,6 +25,8 @@ import gc
 import logging
 from typing import Any, Callable, Optional
 
+from studio.infrastructure.task_log import TaskLogLike
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ class ModelPool:
         self._key = key
         return self._value
 
-    def release(self, progress: Optional[Callable[[str], None]] = None) -> None:
+    def release(self, progress: Optional[TaskLogLike] = None) -> None:
         """丢掉模型引用并把显存还给 caching allocator。未加载时是 no-op。"""
         if self._value is None:
             return

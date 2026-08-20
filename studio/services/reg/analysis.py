@@ -37,9 +37,10 @@ from PIL import Image
 from ...services.dataset.scan import IMAGE_EXTS
 from ..booru import api as booru_api, pool as booru_pool
 from ..dataset import tagedit
+from studio.infrastructure.task_log import TaskLogLike
 
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 
 # IMAGE_EXTS 在 datasets.py 用 ".xxx" 形式；这里需要不带点的形式（与 file_ext 比对）
 _IMAGE_EXT_NODOT = {e.lstrip(".") for e in IMAGE_EXTS}
