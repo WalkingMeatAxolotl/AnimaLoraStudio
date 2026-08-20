@@ -604,9 +604,10 @@ class GenerateConfig(BaseModel):
       （开启时显存检查可拦多进程叠加）。**v0.23.1 起默认关**（按文件
       大小的估算偏保守，误拒率高）；关闭时资源不足会继续加载，可能
       触发整机换页卡顿。
-    - `task_timeout_minutes`：出图任务超时兜底。任务开始后超 N 分钟未
-      完成 → 强制终止 daemon 进程（卡死场景协议级取消无效，只能进程级
-      kill；下次任务自动重启）。0（默认）= 关闭。
+    - `task_timeout_minutes`：出图卡死兜底，按单张图计时。超 N 分钟无
+      图片进展 → 强制终止 daemon 进程（多图/XY 任务每张图重新计时；卡死
+      场景协议级取消无效，只能进程级 kill；下次任务自动重启）。0（默认）
+      = 关闭。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"

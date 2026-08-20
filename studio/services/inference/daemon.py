@@ -123,12 +123,18 @@ class InferenceDaemon:
         # PUT /api/secrets 后 router 也会调一次同步。
         self._idle_timeout_seconds: float = 0.0
         self._idle_timer: Optional[threading.Timer] = None
-        # 任务超时兜底（用户反馈：generate 卡死整机只能重启）：任务开始后
-        # 超 N 秒未完成 → 硬杀 daemon 进程（卡死场景协议级 cancel 无效）。
+        # 任务超时兜底（用户反馈：generate 卡死整机只能重启）：**按单张图**
+        # 计时——submit 起表，每个 image_started/image_done 事件重置倒计时，
+        # 超 N 秒无图片进展 → 硬杀 daemon 进程（卡死场景协议级 cancel 无效）。
+        # 按整任务计时会误杀健康推进的大 XY 网格（fp8+block swap 每格全模型
+        # 重载 ~24s，总时长轻松破任意阈值）。
         # reader 线程 EOF → _handle_proc_exit 自动标 error + 状态复位。
         # 0 = 关闭（默认）。
         self._task_timeout_seconds: float = 0.0
         self._task_timer: Optional[threading.Timer] = None
+        # timer 代际：每次 cancel/重置 +1，到期回调核对代际再杀——堵住
+        # 「回调已过 cancel 点、图片事件刚重置完」窗口里误杀健康任务的竞态
+        self._task_timer_gen = 0
 
     # ---------------------------------------------------------------- 状态
     @property
@@ -217,6 +223,7 @@ class InferenceDaemon:
 
     def _cancel_task_timer_locked(self) -> None:
         """取消任务超时 timer。**必须持 self._lock 调用。**"""
+        self._task_timer_gen += 1
         if self._task_timer is not None:
             try:
                 self._task_timer.cancel()
@@ -224,25 +231,45 @@ class InferenceDaemon:
                 pass
             self._task_timer = None
 
-    def _on_task_timeout(self, req_id: str) -> None:
-        """任务超时兜底：仍在跑同一任务 → 硬杀 daemon 进程。
+    def _restart_task_timer_locked(self, req_id: str) -> None:
+        """重置任务超时倒计时（按单张图计时）。**必须持 self._lock 调用。**
+
+        submit 时起表，之后每个图片边界事件（image_started/image_done）
+        重置；timeout=0（关闭）时只 cancel 不重启。
+        """
+        self._cancel_task_timer_locked()
+        if self._task_timeout_seconds <= 0:
+            return
+        timer = threading.Timer(
+            self._task_timeout_seconds, self._on_task_timeout,
+            args=[req_id, self._task_timer_gen],
+        )
+        timer.daemon = True
+        timer.name = "inference-daemon-task-timer"
+        self._task_timer = timer
+        timer.start()
+
+    def _on_task_timeout(self, req_id: str, gen: int) -> None:
+        """任务超时兜底：同一任务超 N 秒无图片进展 → 硬杀 daemon 进程。
 
         卡死场景（整机换页 / GPU hang）协议级 cancel 无效，只能进程级
         kill；reader 线程随后 EOF → _handle_proc_exit 标 error + 状态
-        复位，下次任务自动重新 spawn。触发瞬间任务可能刚完成——按
-        request_id 复核后再杀。
+        复位，下次任务自动重新 spawn。触发瞬间可能刚出完一张图/刚完成
+        ——按 request_id + timer 代际复核后再杀。
         """
         with self._lock:
             active = self._active
             proc = self._proc
             timeout = self._task_timeout_seconds
             if (
-                active is None or active.request_id != req_id
+                gen != self._task_timer_gen
+                or active is None or active.request_id != req_id
                 or self._state != STATE_BUSY or proc is None
             ):
                 return
         logger.warning(
-            "generate task %s exceeded timeout (%.0fs); killing daemon process",
+            "generate task %s made no image progress within timeout (%.0fs); "
+            "killing daemon process",
             active.task_id, timeout,
         )
         try:
@@ -417,16 +444,8 @@ class InferenceDaemon:
             )
             self._state = STATE_BUSY
             self._reschedule_idle_timer_locked()
-            # 任务超时兜底 timer（0=关闭）
-            self._cancel_task_timer_locked()
-            if self._task_timeout_seconds > 0:
-                timer = threading.Timer(
-                    self._task_timeout_seconds, self._on_task_timeout, args=[req_id],
-                )
-                timer.daemon = True
-                timer.name = "inference-daemon-task-timer"
-                self._task_timer = timer
-                timer.start()
+            # 任务超时兜底 timer（0=关闭；按单张图计时，图片边界事件里重置）
+            self._restart_task_timer_locked(req_id)
             assert self._proc is not None and self._proc.stdin is not None
             stdin = self._proc.stdin
 
@@ -629,6 +648,13 @@ class InferenceDaemon:
         if active is None or active.request_id != msg_id:
             logger.warning("event for unknown request: %s", msg_id)
             return
+
+        # 任务超时按单张图计时：图片边界事件重置倒计时。语义是「一张图 N 分钟
+        # 无进展才算卡死」，不是整任务限时——否则健康推进的大 XY 网格必被误杀。
+        if kind in ("image_started", "image_done"):
+            with self._lock:
+                if self._active is active and self._state == STATE_BUSY:
+                    self._restart_task_timer_locked(active.request_id)
 
         # commit 10：image_done 含 base64 PNG → 入 cache，转发瘦身版（无 b64）
         # commit 14：preview_step 含 base64 JPEG → 直接透传给 callback（不入 cache，
