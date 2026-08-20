@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isLineVisible, levelClass, parseLogLines } from './logLines'
+import { isLineVisible, lastVisibleLine, levelClass, parseLogLines } from './logLines'
 
 const H = (lvl: string, logger: string, msg: string, t = '14:03:22.417') =>
   `2026-08-19 ${t} ${lvl.padEnd(5)} ${logger}: ${msg}`
@@ -59,5 +59,33 @@ describe('过滤与着色', () => {
     expect(levelClass('WARNING')).toBe('text-warn')
     expect(levelClass('DEBUG')).toBe('text-fg-tertiary')
     expect(levelClass('INFO')).toBe(levelClass(null))
+  })
+})
+
+describe('lastVisibleLine（抽屉收起态预览）', () => {
+  it('跳过尾部的 DEBUG 行与续行，取最后一条 INFO+ 记录原文', () => {
+    const lines = [
+      H('INFO', 'w.tag', 'tagged 43/43'),
+      H('DEBUG', 'w.tag', 'internal detail'),
+      '  continuation of debug',
+    ]
+    expect(lastVisibleLine(lines)).toBe(lines[0])
+  })
+
+  it('WARNING/ERROR 不被跳过', () => {
+    const lines = [H('INFO', 'a', 'x'), H('ERROR', 'a', 'boom')]
+    expect(lastVisibleLine(lines)).toBe(lines[1])
+  })
+
+  it('全 plain（前端合成日志）退回最后一行原文', () => {
+    expect(lastVisibleLine(['a', 'b'])).toBe('b')
+  })
+
+  it('有行头但全 DEBUG → 空串（预览留白，不显示调试行）', () => {
+    expect(lastVisibleLine([H('DEBUG', 'a', 'x')])).toBe('')
+  })
+
+  it('空输入 → 空串', () => {
+    expect(lastVisibleLine([])).toBe('')
   })
 })
