@@ -94,7 +94,10 @@ def delete_project_files(
                 try:
                     m.unlink()
                 except OSError as exc:
-                    logger.warning("删 metadata 失败 %s: %s", m, exc)
+                    logger.warning(
+                        "delete metadata failed: path=%s err=%s; "
+                        "a stale metadata file may remain", m, exc,
+                    )
         deleted.append(name)
     return {"deleted": deleted, "missing": missing}
 
@@ -198,7 +201,7 @@ def project_thumb(
             f = pdir / "preprocess" / name
 
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
-        logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
+        logger.debug("thumb 404: pid=%s bucket=%s name=%s tried=%s", pid, bucket, name, f)
         raise NotFoundError(
             "Thumbnail not found", code="dataset.thumbnail_not_found",
         )

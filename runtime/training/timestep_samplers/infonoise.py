@@ -38,6 +38,8 @@ from typing import Optional
 import numpy as np
 import torch
 
+from studio.infrastructure.log_messages import msg
+
 logger = logging.getLogger(__name__)
 
 
@@ -153,11 +155,10 @@ class InfoNoiseScheduler:
         # 静默走 baseline，logger.warning 一次性提醒用户避免"花算力没效果"。
         if self._cdf_values is None and not self._warned_cold_start:
             logger.warning(
-                "InfoNoise: warmup 已过且各 bin 样本充足，但首次 schedule "
-                "刷新仍未产生有效 CDF（原因：%s）。当前继续使用 logit-normal "
-                "baseline 采样；若该状态持续到训练后期，说明你的 loss 分布在 "
-                "log-σ 空间过于均匀（如已收敛模型），InfoNoise 无加速效果，"
-                "建议关闭 infonoise_enabled。",
+                "InfoNoise produced no usable schedule after warmup: %s — sampling "
+                "stays on the logit-normal baseline, so InfoNoise costs compute "
+                "without changing anything; turn infonoise off if this keeps "
+                "happening (same warning is not repeated)",
                 self._last_refresh_status,
             )
             self._warned_cold_start = True
@@ -201,9 +202,9 @@ class InfoNoiseScheduler:
         if saved_version != self._STATE_VERSION:
             # v1 用 σ³ 公式 + buggy pivot，跟 v2 数学语义不兼容；丢 mse_ema/cdf 走冷启动
             logger.warning(
-                "InfoNoise resume: state_dict version %d (current=%d) — 算法已变更"
-                "（σ³→σ² entropy rate + paper-aligned gate pivot），丢弃 mse_ema/cdf "
-                "走冷启动 warmup。",
+                "InfoNoise resume: saved state version %d does not match current "
+                "%d — the algorithm changed, the saved statistics are discarded "
+                "and warmup starts over",
                 saved_version, self._STATE_VERSION,
             )
             return
@@ -212,8 +213,9 @@ class InfoNoiseScheduler:
         if saved_K != self.K or saved_B != self.B:
             # 已经跑了几小时，配置改了不要崩 —— 退回冷启动让 warmup 重走。
             logger.warning(
-                "InfoNoise resume: shape mismatch (saved K=%d B=%d, current K=%d B=%d) "
-                "—— 跳过 sampler state 加载，从冷启动重 warmup。",
+                "InfoNoise resume: saved bin layout (K=%d B=%d) does not match "
+                "current (K=%d B=%d) — the saved sampler state is skipped and "
+                "warmup starts over",
                 saved_K, saved_B, self.K, self.B,
             )
             return
@@ -293,8 +295,20 @@ def build(args, total_steps: Optional[int]) -> InfoNoiseScheduler:
     """
     n_warm_cfg = int(getattr(args, "infonoise_N_warm", 0) or 0)
     if n_warm_cfg <= 0:
-        n_warm_cfg = max(200, int((total_steps or 5000) * 0.2))
-        logger.info(f"InfoNoise N_warm 自动设置为 {n_warm_cfg} 步（总步数 {total_steps} × 20%）")
+        # 三种分支说法不同：20% 生效 / 200 步下限生效 / total_steps 未知（走
+        # 5000 兜底）。共用一句会打出「总步数 None × 20%」这种对不上的文案。
+        _pct = int((total_steps or 5000) * 0.2)
+        n_warm_cfg = max(200, _pct)
+        if total_steps is None:
+            logger.info(msg("train.infonoise_warmup_unknown_total", steps=n_warm_cfg))
+        elif n_warm_cfg > _pct:
+            logger.info(msg(
+                "train.infonoise_warmup_floor", steps=n_warm_cfg, total=total_steps,
+            ))
+        else:
+            logger.info(msg(
+                "train.infonoise_warmup_auto", steps=n_warm_cfg, total=total_steps,
+            ))
 
     scheduler = InfoNoiseScheduler(
         K=int(getattr(args, "infonoise_K", 64) or 64),
@@ -309,12 +323,13 @@ def build(args, total_steps: Optional[int]) -> InfoNoiseScheduler:
         baseline_mix_low_prob=float(getattr(args, "timestep_mix_low_prob", 0.0) or 0.0),
         baseline_timestep_schedule_shift=float(getattr(args, "timestep_schedule_shift", 1.0) or 1.0),
     )
-    logger.info(
-        f"InfoNoise 已启用：K={scheduler.K}, N_warm={scheduler.N_warm}, "
-        f"M={scheduler.M}, B={scheduler.B}, beta={scheduler.beta}, "
-        f"gate_pivot_c={scheduler.gate_pivot_c}, "
-        f"baseline={scheduler.baseline_mode}(shift={scheduler.baseline_shift}, "
-        f"mix_low_prob={scheduler.baseline_mix_low_prob}, "
-        f"timestep_schedule_shift={scheduler.baseline_timestep_schedule_shift})"
+    logger.info(msg("train.infonoise_enabled"))
+    logger.debug(
+        "infonoise: K=%s N_warm=%s M=%s B=%s beta=%s gate_pivot_c=%s baseline=%s "
+        "shift=%s mix_low_prob=%s timestep_schedule_shift=%s",
+        scheduler.K, scheduler.N_warm, scheduler.M, scheduler.B, scheduler.beta,
+        scheduler.gate_pivot_c, scheduler.baseline_mode, scheduler.baseline_shift,
+        scheduler.baseline_mix_low_prob,
+        scheduler.baseline_timestep_schedule_shift,
     )
     return scheduler

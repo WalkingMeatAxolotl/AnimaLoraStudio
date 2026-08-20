@@ -35,7 +35,9 @@ def register_torch_reinstall(target: str) -> None:
         json.dumps({"kind": "torch", "target": target}, ensure_ascii=False),
         encoding="utf-8",
     )
-    logger.info("[pending_install] 已注册 torch reinstall: target=%s", target)
+    logger.info(
+        "[pending_install] torch reinstall registered: target=%s", target,
+    )
 
 
 def read_pending() -> Optional[dict[str, Any]]:
@@ -45,7 +47,9 @@ def read_pending() -> Optional[dict[str, Any]]:
     try:
         return json.loads(PENDING_MARKER.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("[pending_install] marker 解析失败: %s", exc)
+        logger.warning(
+            "[pending_install] marker file could not be parsed: %s; ignored", exc,
+        )
         return None
 
 
@@ -54,7 +58,10 @@ def clear_pending() -> None:
         try:
             PENDING_MARKER.unlink()
         except OSError as exc:
-            logger.warning("[pending_install] 删除 marker 失败: %s", exc)
+            logger.warning(
+                "[pending_install] deleting the marker failed: %s; the install "
+                "is retried on the next start", exc,
+            )
 
 
 def apply_pending() -> None:
@@ -71,24 +78,43 @@ def apply_pending() -> None:
     kind = pending.get("kind")
     if kind == "torch":
         target = pending.get("target", "auto")
-        logger.info("检测到 pending torch 重装请求 (target=%s)，开始安装...", target)
-        logger.info("提示：按 Ctrl+C 可跳过本次安装（marker 保留，下次启动重试）")
-        logger.info("若希望永久跳过，删除 marker 文件：%s", PENDING_MARKER)
+        # 一段提示 = 一条多行记录（续行 2 空格），不是三条独立记录
+        logger.info(
+            "[pending_install] pending torch reinstall detected: target=%s; "
+            "installing now\n"
+            "  press Ctrl+C to skip this run (the marker is kept and retried "
+            "on the next start)\n"
+            "  to skip permanently, delete the marker file: %s",
+            target, PENDING_MARKER,
+        )
         # 延迟 import：torch_setup -> onnxruntime_setup 链触发的副作用全留到此刻
         from . import torch as torch_setup  # noqa: PLC0415
         try:
             res = torch_setup.reinstall(target, stream=True)
         except KeyboardInterrupt:
-            logger.warning("用户中断 torch 重装，跳过。marker 保留，下次启动会重试。")
-            logger.warning("若希望永久跳过，删除 marker 文件：%s", PENDING_MARKER)
+            logger.warning(
+                "[pending_install] torch reinstall interrupted by user; the "
+                "marker is kept and retried on the next start\n"
+                "  to skip permanently, delete the marker file: %s",
+                PENDING_MARKER,
+            )
             return  # 不 clear_pending，下次启动继续尝试
         except RuntimeError as exc:
-            logger.error("torch 重装失败: %s", exc)
-            logger.error("marker 保留，下次启动会重试")
-            logger.error("若装包持续失败想永久跳过，删除 marker 文件：%s", PENDING_MARKER)
+            logger.exception(
+                "[pending_install] torch reinstall failed: %s\n"
+                "  the marker is kept and retried on the next start\n"
+                "  to skip permanently, delete the marker file: %s",
+                exc, PENDING_MARKER,
+            )
             return
-        logger.info("torch 重装完成: %s (%s)", res.get("version"), res.get("tag"))
+        logger.info(
+            "[pending_install] torch reinstall done: version=%s tag=%s",
+            res.get("version"), res.get("tag"),
+        )
     else:
-        logger.warning("未知 pending install kind %r，忽略并清除", kind)
+        logger.warning(
+            "[pending_install] unknown pending install kind %r; ignored and "
+            "cleared", kind,
+        )
 
     clear_pending()

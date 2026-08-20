@@ -44,7 +44,8 @@ from PIL import Image
 from sklearn.cluster import KMeans
 
 from ...services.dataset.scan import IMAGE_EXTS
-from studio.infrastructure.task_log import TaskLogLike
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import NULL_LOG, TaskLogLike, as_task_log
 
 ProgressFn = TaskLogLike
 
@@ -352,7 +353,7 @@ def postprocess(
     *,
     method: str = "smart",
     max_crop_ratio: float = 0.1,
-    on_progress: ProgressFn = print,
+    on_progress: ProgressFn = NULL_LOG,
     cancel_event: Optional[threading.Event] = None,
 ) -> dict[str, Any]:
     """对 reg_dir 下所有图做分辨率聚类后处理（inplace 永远 True）。
@@ -369,8 +370,13 @@ def postprocess(
 
     异常都不抛 — 失败时 clusters=None / processed=0。
     """
+    # 对外仍接受历史的单参回调（tools / 测试传 lambda）；内部按级别分派
+    on_progress = as_task_log(on_progress)
     if method not in VALID_METHODS:
-        on_progress(f"[postprocess] 非法 method: {method}，跳过")
+        on_progress.warning(
+            "postprocess: unknown method=%s; skipped, the images are left "
+            "unchanged", method,
+        )
         return {
             "clusters": None, "processed": 0, "skipped": 0,
             "method": method, "max_crop_ratio": max_crop_ratio,
@@ -378,28 +384,33 @@ def postprocess(
         }
 
     if not reg_dir.exists():
-        on_progress(f"[postprocess] {reg_dir} 不存在，跳过")
+        on_progress.warning(
+            "postprocess: %s does not exist; skipped", reg_dir,
+        )
         return {
             "clusters": None, "processed": 0, "skipped": 0,
             "method": method, "max_crop_ratio": max_crop_ratio,
             "target_resolutions": [],
         }
 
-    on_progress(f"[postprocess] 收集图片 (method={method}, max_crop={max_crop_ratio})")
+    on_progress(msg(
+        "reg.pp_collect", method=method, max_crop=max_crop_ratio,
+    ))
     images = _collect_images(reg_dir)
     if not images:
-        on_progress("[postprocess] 没有图片，跳过")
+        on_progress(msg("reg.pp_no_images"))
         return {
             "clusters": None, "processed": 0, "skipped": 0,
             "method": method, "max_crop_ratio": max_crop_ratio,
             "target_resolutions": [],
         }
-    on_progress(f"[postprocess] 共 {len(images)} 张图片")
+    on_progress(msg("reg.pp_image_count", n=len(images)))
 
     clusters = cluster_by_resolution(images, max_crop_ratio, method)
     if clusters is None:
-        on_progress(
-            f"[postprocess] 无 K 满足 max_crop ≤ {max_crop_ratio}，保持原样不修改"
+        on_progress.warning(
+            "postprocess: no cluster count satisfies max_crop <= %s; the "
+            "images are left unchanged", max_crop_ratio,
         )
         return {
             "clusters": None, "processed": 0, "skipped": len(images),
@@ -407,8 +418,9 @@ def postprocess(
             "target_resolutions": [],
         }
 
-    on_progress(f"[postprocess] 聚类 {len(clusters)} 个 — 详情：")
-    # 每个 cluster 详细信息（与源脚本日志对齐）
+    on_progress(msg("reg.pp_clusters", n=len(clusters)))
+    # 每簇 6 行缩进明细 → 一条 DEBUG 多行记录（续行 2 空格）
+    detail_lines = ["postprocess cluster detail:"]
     for cid in sorted(clusters.keys()):
         cluster = clusters[cid]
         tw, th, tar = _adjusted_target_for_cluster(cluster)
@@ -418,34 +430,36 @@ def postprocess(
         max_crop = max(
             calculate_crop_ratio(i.width, i.height, tw, th, method) for i in cluster
         )
-        on_progress(f"  聚类 {cid}: {len(cluster)} 张")
-        on_progress(f"    目标分辨率: {tw}x{th} (长宽比: {tar:.3f})")
-        on_progress(
-            f"    平均分辨率: {int(np.mean(widths))}x{int(np.mean(heights))}"
+        detail_lines.append(
+            "  cluster=%d images=%d target=%dx%d ar=%.3f avg=%dx%d "
+            "ar_range=%.3f-%.3f max_crop=%.1f%% res_range=%dx%d to %dx%d"
+            % (
+                cid, len(cluster), tw, th, tar,
+                int(np.mean(widths)), int(np.mean(heights)),
+                min(ars), max(ars), max_crop * 100,
+                min(widths), min(heights), max(widths), max(heights),
+            )
         )
-        on_progress(
-            f"    长宽比范围: {min(ars):.3f} - {max(ars):.3f} "
-            f"(平均: {np.mean(ars):.3f})"
-        )
-        on_progress(f"    最大裁剪比例: {max_crop * 100:.1f}%")
-        on_progress(
-            f"    分辨率范围: {min(widths)}x{min(heights)} 到 "
-            f"{max(widths)}x{max(heights)}"
-        )
+    on_progress.debug("%s", "\n".join(detail_lines))
 
     processed = 0
     skipped = 0
+    resize_failed = 0
+    first_resize_error = ""
     targets: list[tuple[int, int, int]] = []
     for cid in sorted(clusters.keys()):
         if cancel_event and cancel_event.is_set():
-            on_progress("[postprocess] [cancel] 用户中止")
+            on_progress(msg("reg.pp_canceled"))
             break
         cluster = clusters[cid]
         tw, th, target_ar = _adjusted_target_for_cluster(cluster)
-        on_progress(
-            f"[postprocess] 处理聚类 {cid} ({len(cluster)} 张) → "
-            f"{'ar=' + format(target_ar, '.3f') if method == 'smart' else f'{tw}x{th}'}"
-        )
+        on_progress(msg(
+            "reg.pp_cluster_start", cid=cid, n=len(cluster),
+            target=(
+                "ar=" + format(target_ar, ".3f") if method == "smart"
+                else f"{tw}x{th}"
+            ),
+        ))
         targets.append((tw, th, len(cluster)))
         for info in cluster:
             if cancel_event and cancel_event.is_set():
@@ -460,17 +474,44 @@ def postprocess(
                 if info.width == tw and info.height == th:
                     skipped += 1
                     continue
-            ok = resize_and_crop_image(info.path, tw, th, info.path, method)
+            try:
+                ok = resize_and_crop_image(info.path, tw, th, info.path, method)
+                resize_err = ""
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                resize_err = f"{type(exc).__name__}: {exc}"
             if ok:
                 processed += 1
             else:
                 skipped += 1
-                on_progress(f"  ✗ resize 失败: {info.path.name}")
+                # T6 节流：逐图失败首条全文，之后 DEBUG，收尾一条汇总
+                resize_failed += 1
+                if resize_failed == 1:
+                    first_resize_error = resize_err or "resize returned false"
+                    on_progress.warning(
+                        "postprocess resize failed: name=%s err=%s",
+                        info.path.name, first_resize_error,
+                    )
+                else:
+                    on_progress.debug(
+                        "postprocess resize failed: name=%s err=%s",
+                        info.path.name, resize_err or "resize returned false",
+                    )
 
-    on_progress(
-        f"[postprocess] 完成: processed={processed}, skipped={skipped}, "
-        f"clusters={len(clusters)}"
-    )
+    if resize_failed:
+        on_progress.warning(
+            "postprocess resize failed for %d/%d images; first error: %s",
+            resize_failed, len(images), first_resize_error,
+        )
+    if skipped:
+        on_progress.warning(
+            "postprocess finished with skips: processed=%d skipped=%d "
+            "clusters=%d", processed, skipped, len(clusters),
+        )
+    else:
+        on_progress(msg(
+            "reg.pp_done", processed=processed, clusters=len(clusters),
+        ))
     return {
         "clusters": len(clusters),
         "processed": processed,

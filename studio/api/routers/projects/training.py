@@ -926,8 +926,8 @@ def version_thumb(
     else:
         f = _safe_join_or_400(vdir, name)
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
-        logger.info(
-            "version thumb 404: pid=%s vid=%s bucket=%s folder=%s name=%s -> %s",
+        logger.debug(
+            "version thumb 404: pid=%s vid=%s bucket=%s folder=%s name=%s tried=%s",
             pid, vid, bucket, folder, name, f,
         )
         raise NotFoundError("Image not found", code="image.not_found")

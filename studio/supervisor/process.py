@@ -28,7 +28,10 @@ def _kill_process_tree_psutil(pid: int) -> None:
     except psutil.NoSuchProcess:
         return
     except Exception:
-        logger.exception("psutil enumerate process tree failed for pid %d", pid)
+        logger.warning(
+            "psutil enumerate process tree failed: pid=%d; falling back to "
+            "taskkill/killpg", pid, exc_info=True,
+        )
         descendants = []
         try:
             root = psutil.Process(pid)
@@ -41,13 +44,18 @@ def _kill_process_tree_psutil(pid: int) -> None:
         except psutil.NoSuchProcess:
             pass
         except Exception:
-            logger.exception("psutil kill failed for child pid %d", proc.pid)
+            logger.warning(
+                "psutil kill failed: child_pid=%d; the root process is still killed",
+                proc.pid, exc_info=True,
+            )
     try:
         root.kill()
     except psutil.NoSuchProcess:
         pass
     except Exception:
-        logger.exception("psutil kill failed for root pid %d", pid)
+        logger.exception(
+            "psutil kill failed: root_pid=%d; the process may stay alive", pid,
+        )
 
 
 def _kill_process_tree_windows(pid: int) -> None:
@@ -63,11 +71,13 @@ def _kill_process_tree_windows(pid: int) -> None:
             errors="replace"
         ).strip()
         logger.warning(
-            "taskkill failed for pid %d (rc=%d): %s; falling back to psutil",
+            "taskkill failed: pid=%d rc=%d err=%s; falling back to psutil",
             pid, result.returncode, detail or "no output",
         )
     except Exception:
-        logger.exception("taskkill /T /F failed for pid %d", pid)
+        logger.warning(
+            "taskkill /T /F failed: pid=%d; falling back to psutil", pid, exc_info=True,
+        )
     _kill_process_tree_psutil(pid)
 
 
@@ -84,4 +94,6 @@ def _kill_process_tree(pid: int) -> None:
         try:
             os.killpg(os.getpgid(pid), signal.SIGKILL)
         except Exception:
-            logger.exception("killpg failed for pid %d", pid)
+            logger.exception(
+                "killpg failed: pid=%d; the process group may stay alive", pid,
+            )

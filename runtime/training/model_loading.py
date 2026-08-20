@@ -21,6 +21,8 @@ from pathlib import Path
 
 import torch
 
+from studio.infrastructure.log_messages import msg
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,10 @@ def enable_xformers(model):
     try:
         from xformers.ops import memory_efficient_attention  # noqa: F401
     except ImportError:
-        logger.warning("xformers 未安装，跳过启用")
+        logger.warning(
+            "xformers is not installed: attention runs on PyTorch SDPA instead — "
+            "speed and VRAM use will differ from what the xformers setting implies"
+        )
         return False
 
     enabled_count = 0
@@ -60,7 +65,10 @@ def enable_xformers(model):
             if fn(True):
                 module_switches += 1
         except Exception as exc:  # noqa: BLE001
-            logger.warning("xformers 模组开关启用失败 (%s): %s", module_name, exc)
+            logger.warning(
+                "xformers switch failed for %s: %s — that module keeps PyTorch "
+                "SDPA attention", module_name, exc,
+            )
 
     for name, module in model.named_modules():
         # 查找 attention 模块并替换
@@ -72,14 +80,17 @@ def enable_xformers(model):
             enabled_count += 1
 
     if module_switches > 0 or enabled_count > 0:
-        logger.info(
-            "xformers 已启用: module_switches=%d, module_hooks=%d",
-            module_switches,
-            enabled_count,
+        logger.info(msg("train.xformers_enabled"))
+        logger.debug(
+            "xformers: module_switches=%d module_hooks=%d",
+            module_switches, enabled_count,
         )
         return True
 
-    logger.warning("xformers 已安装，但当前模型没有可启用的 xformers attention hook")
+    logger.warning(
+        "xformers is installed but no attention hook matched this model: "
+        "attention runs on PyTorch SDPA"
+    )
     return False
 
 
@@ -100,7 +111,8 @@ def find_diffusion_pipe_root():
     """
     if os.environ.get("DIFFUSION_PIPE_ROOT"):
         logger.warning(
-            "DIFFUSION_PIPE_ROOT 已不支持（模型代码随仓库发布，走正常 import），忽略该变量"
+            "DIFFUSION_PIPE_ROOT is no longer supported and was ignored: model "
+            "code now ships with the repository"
         )
     repo_root = Path(__file__).resolve().parent.parent.parent
     return repo_root / "modeling" / "anima"
@@ -243,9 +255,15 @@ def _load_weights_best_effort(model: torch.nn.Module, sd: dict, label: str) -> d
     coverage = matched_after / max(1, len(model_keys))
     remap_name = "+".join(prefixes) if prefixes else "none"
 
-    logger.info(
-        f"{label} 权重加载: remap={remap_name}, 匹配 {matched_after}/{len(model_keys)} ({coverage:.1%}), "
-        f"missing={len(missing)}, unexpected={len(unexpected)}"
+    logger.info(msg(
+        "train.weights_loaded",
+        label=label, matched=matched_after, total=len(model_keys),
+        coverage=f"{coverage:.1%}",
+    ))
+    logger.debug(
+        "weights: label=%s remap=%s matched=%d/%d missing=%d unexpected=%d",
+        label, remap_name, matched_after, len(model_keys),
+        len(missing), len(unexpected),
     )
 
     # 关键层缺失会直接导致输出接近 0，采样就是纯噪点

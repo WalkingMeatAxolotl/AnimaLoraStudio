@@ -39,7 +39,10 @@ def put_secrets(body: dict[str, Any]) -> dict[str, Any]:
         from ...services.inference.daemon import get_daemon
         get_daemon().sync_idle_timeout_from_secrets()
     except Exception:
-        logger.warning("failed to sync idle_timeout to daemon", exc_info=True)
+        logger.warning(
+            "failed to sync idle_timeout to daemon; the daemon keeps the previous value",
+            exc_info=True,
+        )
     return secrets.to_masked_dict(new)
 
 

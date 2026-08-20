@@ -13,6 +13,7 @@ from pathlib import Path
 
 import torch
 
+from studio.infrastructure.log_messages import msg
 from training.bootstrap import apply_yaml_config, ensure_dependencies, load_yaml_config
 from training.cli import prompt_for_args
 from training.context import TrainingContext
@@ -44,13 +45,17 @@ def _maybe_apply_pause_snapshot(args, resume_state_path: Path) -> None:
         snapshot = json.loads(raw)
     except Exception as exc:
         logger.warning(
-            f"读取 pause snapshot 失败，沿用现有 args: {snapshot_path} ({exc})"
+            "Pause snapshot could not be read: %s (%s) — continuing with the "
+            "current training settings", snapshot_path, exc,
         )
         return
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("args"), dict):
-        logger.warning(f"pause snapshot schema 不识别，沿用现有 args: {snapshot_path}")
+        logger.warning(
+            "Pause snapshot format not recognized: %s — continuing with the "
+            "current training settings", snapshot_path,
+        )
         return
-    logger.info(f"加载 pause snapshot 覆盖训练参数: {snapshot_path}")
+    logger.info(msg("train.pause_snapshot_applied", path=snapshot_path))
     snap_args: dict = snapshot["args"]
     skipped = {"resume_state", "config"}
     for k, v in snap_args.items():
@@ -76,7 +81,7 @@ def _resolve_sample_seed(args) -> None:
     if int(getattr(args, "sample_seed", 0) or 0):
         return
     args.sample_seed = random.randint(1, 2**31 - 1)
-    logger.info(f"sample_seed=0 → 训练用随机种子: {args.sample_seed}")
+    logger.info(msg("train.sample_seed_random", seed=args.sample_seed))
 
 
 def run(ctx: TrainingContext) -> None:
@@ -105,7 +110,7 @@ def run(ctx: TrainingContext) -> None:
     # apply_yaml_config 经 pydantic 构造统一补齐（迁移 / 族 overlay / 校验一并生效）
     config = {}
     if args.config:
-        logger.info(f"加载配置文件: {args.config}")
+        logger.info(msg("train.config_loaded", path=args.config))
         ctx.config_path = Path(args.config).resolve()
         ctx.config_dir = ctx.config_path.parent
         config = load_yaml_config(args.config)
@@ -145,8 +150,9 @@ def run(ctx: TrainingContext) -> None:
     # 误伤想跑小 batch 的用户），启动期显式提示
     if getattr(args, "lora_type", "") == "tlora" and int(getattr(args, "batch_size", 1)) > 1:
         logger.warning(
-            "T-LoRA 与 batch_size=%s 同用：rank mask 按 batch 均值 timestep 生成，"
-            "per-sample 掩码退化为批均值近似；要获得论文行为请用 batch_size=1",
+            "T-LoRA with batch_size=%s: the rank mask is built from the batch-mean "
+            "timestep, so per-image masking degrades to a batch average — set "
+            "batch_size=1 for the behavior described in the paper",
             args.batch_size,
         )
 
@@ -201,7 +207,10 @@ def run(ctx: TrainingContext) -> None:
         try:
             ctx.lora_task_id = int(_env_tid)
         except ValueError:
-            logger.warning(f"LORA_TASK_ID={_env_tid!r} 不是 int，按 unknown 处理")
+            logger.debug(
+                'env: LORA_TASK_ID=%r is not an int, using "unknown" '
+                '(state dir falls back to task_unknown/)', _env_tid,
+            )
     ctx.wandb_monitor = init_wandb_monitor(args, ctx.output_dir, ctx.config_path)
 
     # Loss 函数（mse / huber；通过 losses/ plugin registry 派发）
@@ -236,7 +245,10 @@ def run(ctx: TrainingContext) -> None:
                 "data_dir": str(args.data_dir),
             },
         )
-        logger.info(f"📊 训练监控状态文件: {state_path}")
+        logger.debug("monitor: state file path=%s", state_path)
     except Exception as e:
-        logger.warning(f"监控状态写入初始化失败: {e}")
+        logger.warning(
+            "Monitor state file could not be initialized: %s — the training "
+            "dashboard will show no data for this task", e,
+        )
         ctx.monitor_server = None

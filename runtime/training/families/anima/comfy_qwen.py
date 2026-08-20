@@ -307,8 +307,8 @@ def select_encoder_state_dict(expected_keys, state_dict, *, source: str = "") ->
         )
     extra = provided - expected
     if extra:
-        logging.getLogger(__name__).info(
-            "comfy_qwen3 encoder ignoring %d unexpected checkpoint keys (e.g. %s)",
+        logging.getLogger(__name__).debug(
+            "comfy_qwen3: ignoring %d unexpected checkpoint keys (e.g. %s)",
             len(extra), sorted(extra)[:4],
         )
     return {k: state_dict[k] for k in expected}

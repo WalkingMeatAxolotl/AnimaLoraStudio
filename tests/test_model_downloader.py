@@ -331,7 +331,8 @@ def test_download_flat_ms_skips_existing(tmp_path: "Path") -> None:
         "some/repo", "split_files/foo.safetensors", target, on_log=logs.append
     )
     assert ok
-    assert any("已存在" in l for l in logs)
+    # 逐文件「已存在，跳过」判 DEBUG（英文排障行），收尾另有计数 INFO 汇总
+    assert any("already present" in l for l in logs)
 
 
 def test_download_flat_ms_rename_and_cleanup(
@@ -543,7 +544,9 @@ def test_download_upscaler_unknown_label_returns_false() -> None:
     logs: list[str] = []
     ok = model_downloader.download_upscaler("nope", on_log=logs.append)
     assert not ok
-    assert any("未知放大器" in l for l in logs)
+    assert any("unknown upscaler" in l for l in logs)
+    # 「下载完全没发生 + 不自愈」→ ERROR，且必须给出下一步动作（S6）
+    assert any("pick an upscaler from the model list" in l for l in logs)
 
 
 def test_download_upscaler_delegates_to_download_flat(
@@ -712,7 +715,9 @@ def test_download_upscaler_custom_rejects_bad_ext(
         "hf", "foo/bar", "evil.sh", tmp_path, on_log=logs.append
     )
     assert not ok
-    assert any("扩展名" in l for l in logs)
+    assert any("unsupported file extension" in l for l in logs)
+    # 支持的扩展名要逐个列出来，不能把 tuple 的 repr 甩给用户（T1）
+    assert any(".pth" in l and ".safetensors" in l for l in logs)
 
 
 def test_download_upscaler_custom_rejects_bad_source(
@@ -723,7 +728,7 @@ def test_download_upscaler_custom_rejects_bad_source(
         "ftp", "foo/bar", "a.pth", tmp_path, on_log=logs.append
     )
     assert not ok
-    assert any("未知下载源" in l for l in logs)
+    assert any("unknown download source" in l for l in logs)
 
 
 def test_upscaler_target_accepts_custom_filename(tmp_path: "Path") -> None:
@@ -893,25 +898,55 @@ def test_trigger_cltagger_v2_uses_dedicated_repo_and_target(
 
 
 def test_failure_summary_surfaces_gated_hint() -> None:
-    """下载失败 message 必须给出可操作原因（token / 授权），而非通用串。"""
+    """下载失败 message 必须给出可操作原因（token / 授权），而非通用串。
+
+    G7：选行判据是**级别**（最后一条 ERROR 记录的全文），不再按 ✗ / ↳ 字符
+    前缀 grep —— 那两个伪级别前缀已随文案改写删除。gated 提示是那条 ERROR
+    记录的续行，所以「错误 + 怎么办」自然一起带出来。
+    """
     from studio.services.models import downloader as dl
 
-    log = [
-        "📥 CLTagger → /models/cltagger",
-        "   ✗ model.onnx: 401 Client Error: Cannot access gated repo",
-        "   ↳ 该仓库可能是 gated/private：请到 设置→密钥 填 HuggingFace token 后重试。",
+    leveled = [
+        ("info", "Downloading CLTagger → /models/cltagger"),
+        (
+            "error",
+            "download failed: name=model.onnx source=hf err=401 Client Error: "
+            "Cannot access gated repo; the model is incomplete and the download "
+            "is marked failed\n"
+            "  the repository may be gated or private: request access on "
+            "huggingface.co, then set a HuggingFace token in Settings → Secrets "
+            "(or the HF_TOKEN environment variable) and retry",
+        ),
     ]
-    msg = dl._failure_summary(log)
-    assert "↳" in msg
+    msg = dl._failure_summary(leveled)
     assert "token" in msg.lower()
-    assert "✗" in msg  # 同时带上原始错误
+    assert "gated" in msg.lower()
+    assert "model.onnx" in msg  # 同时带上原始错误
+    assert "\n" not in msg  # 单行 message（前端 toast 用）
 
 
 def test_failure_summary_falls_back_to_last_error() -> None:
     from studio.services.models import downloader as dl
 
-    log = ["📥 ...", "   ✗ model.onnx: connection reset"]
-    assert dl._failure_summary(log) == "✗ model.onnx: connection reset"
+    leveled = [
+        ("info", "Downloading CLTagger → /models/cltagger"),
+        ("debug", "file already present; skipped: name=x source=hf"),
+        ("error", "download failed: name=model.onnx source=hf err=connection reset"),
+    ]
+    assert dl._failure_summary(leveled) == (
+        "download failed: name=model.onnx source=hf err=connection reset"
+    )
+
+
+def test_failure_summary_ignores_non_error_levels() -> None:
+    """WARNING / INFO 行不该被当成失败原因（回退到通用串）。"""
+    from studio.services.models import downloader as dl
+
+    leveled = [
+        ("info", "Downloading CLTagger → /models/cltagger"),
+        ("warning", "WD14 x has no ModelScope mirror; falling back to HuggingFace"),
+    ]
+    assert dl._failure_summary(leveled) == "下载失败，详见下载日志"
 
 
 def test_failure_summary_generic_when_no_error_line() -> None:

@@ -99,10 +99,9 @@ class SRAAligner:
             self._hook_fn
         )
         n_params = sum(p.numel() for p in self.proj.parameters())
-        logger.info(
-            f"SRA v2: hook on block[{block_idx}], "
-            f"proj {model_channels} → {out_per_token}, "
-            f"{n_params / 1e6:.1f}M params, normalize={normalize}"
+        logger.debug(
+            "sra: hook block=%d proj=%d->%d params=%.1fM normalize=%s",
+            block_idx, model_channels, out_per_token, n_params / 1e6, normalize,
         )
 
     def _hook_fn(self, module, input, output):

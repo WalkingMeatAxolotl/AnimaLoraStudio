@@ -96,13 +96,16 @@ describe('useTaskLog', () => {
     expect(getLog.mock.calls.length).toBe(calls)
   })
 
-  it('event_malformed 合成 WARNING 行；超出 maxLines 从头裁并标记可回翻', async () => {
+  it('event_malformed 合成完整行契约的 WARNING 行；超出 maxLines 从头裁并标记可回翻', async () => {
     const getLog = vi.spyOn(api, 'getLog')
     getLog.mockResolvedValueOnce(page([[0, 'a'], [2, 'b']]))
     const { result } = renderHook(() => useTaskLog(7, { maxLines: 3 }))
     await waitFor(() => expect(result.current.status).toBe('ready'))
     emit({ type: 'event_malformed', task_id: 7, raw_preview: '__EVENT__:x:{' })
-    expect(result.current.lines[2]).toMatch(/^WARNING: /)
+    // 行契约（后端 LOG_LINE_RE 同构）：ts + 级别 + logger 名，不再是裸 `WARNING: `
+    expect(result.current.lines[2]).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} WARNING web\.logview: /,
+    )
     expect(result.current.lines[2]).toContain('__EVENT__:x:{')
     emit({ type: 'task_log_appended', task_id: 7, text: 'c', seq: 1, end_offset: 6 })
     expect(result.current.lines).toHaveLength(3)

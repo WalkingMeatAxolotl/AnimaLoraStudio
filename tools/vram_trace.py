@@ -181,21 +181,32 @@ def target_pids(root_pid: int | None, include_children: bool) -> set[int]:
 
 
 def classify_stage(line: str) -> str | None:
-    """Extract coarse model-lifecycle markers from a Studio task log line."""
+    """Extract coarse model-lifecycle markers from a Studio task log line.
+
+    用户可见的 INFO 叙事行按 UI 语言输出（``studio.infrastructure.log_messages``），
+    所以每个标记要同时列中英两版；排障行（WARNING/ERROR/DEBUG）恒英文，只列一版。
+    """
     lowered = line.lower()
     checks = (
-        (("prompt 预编码失败",), "precache_failed"),
-        (("预编码", "te 已释放"), "te_released"),
-        (("loading text encoders",), "load_te"),
-        (("加载 krea2 qwen",), "load_te"),
+        (("prompt pre-encoding failed",), "precache_failed"),
+        (("text encoder released",), "te_released"),
+        (("文本编码器已释放",), "te_released"),
+        (("loading text encoder",), "load_te"),
+        (("加载文本编码器",), "load_te"),
         (("loading transformer",), "load_dit"),
-        (("loading vae",), "load_vae"),
+        (("加载 transformer",), "load_dit"),
         (("采样完成", "加载 vae"), "load_vae_after_sample"),
+        (("loading vae",), "load_vae"),
+        (("加载 vae",), "load_vae"),
         (("vae 加载完成",), "vae_ready"),
-        (("fp8 merge",), "lora_merge"),
-        (("显存编排", "dit 让位"), "dit_yield_cpu"),
-        (("unloading model",), "unload_all"),
-        (("generate failed",), "failed"),
+        (("merged into the fp8 base model",), "lora_merge"),
+        (("已合并进 fp8 底模",), "lora_merge"),
+        (("decision=yield_dit",), "dit_yield_cpu"),
+        (("moved the transformer to ram",), "dit_yield_cpu"),
+        (("移到内存腾显存",), "dit_yield_cpu"),
+        (("model unloaded",), "unload_all"),
+        (("已卸载模型",), "unload_all"),
+        (("generation task failed",), "failed"),
     )
     for needles, stage in checks:
         if all(needle in lowered for needle in needles):

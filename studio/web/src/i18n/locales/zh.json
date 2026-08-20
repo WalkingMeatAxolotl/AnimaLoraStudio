@@ -201,7 +201,7 @@
     "loading": "（加载中…）",
     "waiting": "（等待日志…）",
     "empty": "（没有日志）",
-    "eventMalformed": "事件解析失败:"
+    "eventMalformed": "事件流中有一行无法解析："
   },
   "jobProgress": {
     "waitingLogs": "(等待日志...)"

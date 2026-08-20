@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.text_cache import TextCacheEntry
 
@@ -85,9 +86,7 @@ def run(ctx: TrainingContext) -> None:
         raise ValueError(f"未知文本策略: {strategy!r}")
 
     if not bool(getattr(ctx.args, "text_encoder_cache", True)):
-        logger.info(
-            "[text-cache] 缓存已关闭：不扫描/读写 sidecar，文本编码器常驻并逐 batch 编码"
-        )
+        logger.info(msg("train.text_cache_off"))
         ctx.family.prepare_text_cache(
             [],
             [],
@@ -104,10 +103,7 @@ def run(ctx: TrainingContext) -> None:
     # train/：放那里会被数据集扫描当成 concept 文件夹误触。纯 CLI（无 task
     # 档案）退回 output_dir，同样在数据集扫描范围之外。
     cache_root = ctx.task_archive_dir or ctx.output_dir
-    logger.info(
-        "[text-cache] 预缓存 %d 张图片 caption + %d 条采样/负面 prompt（varlen）",
-        len(entries), len(extras),
-    )
+    logger.info(msg("train.text_cache_plan", images=len(entries), prompts=len(extras)))
     ctx.family.prepare_text_cache(
         captions,
         extras,

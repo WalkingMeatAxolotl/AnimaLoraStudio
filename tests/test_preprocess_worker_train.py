@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from studio.infrastructure.task_log import NULL_LOG
 from studio.services.projects import projects
 from studio.services.preprocess import manifest as pm
 from studio.workers import preprocess_worker as worker
@@ -34,6 +35,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     }
 
 
+# worker 的 log 通道已是 TaskLogLike（带级别方法）；emit_event 仍是裸回调。
 def _silence(*_args, **_kwargs) -> None:
     pass
 
@@ -83,7 +85,7 @@ def test_crop_train_single_rect_overwrites_source(env) -> None:
     rc = worker._run_crop_train(
         env["project"], env["version"],
         {"crops": {"1_data/X.png": [{"x": 0.2, "y": 0.0, "w": 0.5, "h": 1.0}]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     assert rc == 0
     # 覆盖在原 path
@@ -105,7 +107,7 @@ def test_crop_train_single_rect_replaces_jpg_without_doubling(env) -> None:
     rc = worker._run_crop_train(
         env["project"], env["version"],
         {"crops": {"1_data/X.jpg": [{"x": 0.2, "y": 0.0, "w": 0.5, "h": 1.0}]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     assert rc == 0
     assert not (sub / "X.jpg").exists()
@@ -131,7 +133,7 @@ def test_crop_train_fan_out_writes_multiple(env) -> None:
             {"x": 0.0, "y": 0.0, "w": 0.4, "h": 1.0},
             {"x": 0.5, "y": 0.0, "w": 0.4, "h": 1.0},
         ]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     assert rc == 0
     # fan-out 派生 c0 / c1
@@ -161,7 +163,7 @@ def test_crop_train_fan_out_removes_source_sidecars(env) -> None:
             {"x": 0.0, "y": 0.0, "w": 0.4, "h": 1.0},
             {"x": 0.5, "y": 0.0, "w": 0.4, "h": 1.0},
         ]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     assert rc == 0
     assert not (sub / "Z.jpg").exists()
@@ -179,7 +181,7 @@ def test_crop_train_skips_when_source_missing(env) -> None:
     rc = worker._run_crop_train(
         env["project"], env["version"],
         {"crops": {"1_data/ghost.png": [{"x": 0, "y": 0, "w": 0.5, "h": 0.5}]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     assert rc == 0  # job 仍完成；单图 skip
 
@@ -193,7 +195,7 @@ def test_crop_train_rejects_invalid_rel_name(env) -> None:
     rc = worker._run_crop_train(
         env["project"], env["version"],
         {"crops": {"../escape/X.png": [{"x": 0, "y": 0, "w": 0.5, "h": 0.5}]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     # 路径校验 fail → skip 该项；job 仍 return 0
     assert rc == 0
@@ -219,7 +221,7 @@ def test_crop_train_origin_inherited_from_existing_entry(env) -> None:
             {"x": 0.0, "y": 0.0, "w": 0.5, "h": 1.0},
             {"x": 0.5, "y": 0.0, "w": 0.5, "h": 1.0},
         ]}},
-        _silence, _silence,
+        NULL_LOG, _silence,
     )
     m = pm.train_load(env["pdir"], "v1")
     assert m["images"]["1_data/X_c0_c0.png"]["origin"] == "X.jpg"
@@ -263,7 +265,7 @@ def test_upscale_train_in_place_overwrites_jpg(env, monkeypatch) -> None:
     )
 
     rc = worker._run_upscale_train(
-        env["project"], env["version"], {"mode": "all"}, _silence, _silence,
+        env["project"], env["version"], {"mode": "all"}, NULL_LOG, _silence,
     )
     assert rc == 0
     # src == dst：in-place 覆盖
@@ -304,7 +306,7 @@ def test_upscale_train_in_place_overwrites_png(env, monkeypatch) -> None:
     monkeypatch.setattr(worker.model_downloader, "upscaler_target", lambda label: fake_model)
 
     rc = worker._run_upscale_train(
-        env["project"], env["version"], {"mode": "all"}, _silence, _silence,
+        env["project"], env["version"], {"mode": "all"}, NULL_LOG, _silence,
     )
     assert rc == 0
     assert called["save_kwargs"]["format"] == "PNG"

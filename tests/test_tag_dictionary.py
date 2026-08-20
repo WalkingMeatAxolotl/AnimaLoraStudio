@@ -89,7 +89,11 @@ def test_parse_truncates_at_max_entries(
     with caplog.at_level("WARNING"):
         entries = td.parse_csv(text)
     assert len(entries) == 3
-    assert any("超过" in r.message or "上限" in r.message for r in caplog.records)
+    # studio.log 面统一英文；前缀 `tag_dictionary:` 与 logger 名冗余，已删
+    assert any(
+        "exceeds the" in r.message and "entry limit" in r.message
+        for r in caplog.records
+    )
 
 
 def test_parse_first_comma_only() -> None:

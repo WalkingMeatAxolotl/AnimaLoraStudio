@@ -120,7 +120,7 @@ def test_rate_limit_kicks_in_after_10_per_ip(client: TestClient,
     from studio.api.routers.client_errors import _reset_rate_limit_for_tests
     _reset_rate_limit_for_tests()
 
-    with caplog.at_level(logging.INFO, logger="studio.client"):
+    with caplog.at_level(logging.DEBUG, logger="studio.client"):
         # 前 10 个都 200 + ERROR record
         for i in range(10):
             resp = client.post("/api/client-errors", json={"message": f"err {i}"})
@@ -129,16 +129,38 @@ def test_rate_limit_kicks_in_after_10_per_ip(client: TestClient,
                          if r.name == "studio.client" and r.levelname == "ERROR"]
         assert len(error_records) == 10
 
-        # 第 11 个仍 204 但不进 ERROR；进 INFO "rate-limit drop"
+        # 第 11 个仍 204 但不进 ERROR；丢弃只按窗口汇总一条 DEBUG（T5：前端错误
+        # 风暴时 server 端不跟着放大）
         caplog.clear()
         resp = client.post("/api/client-errors", json={"message": "over the limit"})
         assert resp.status_code == 204
         error_after = [r for r in caplog.records
                        if r.name == "studio.client" and r.levelname == "ERROR"]
         assert error_after == [], "rate-limit 后不应产生 ERROR record"
-        info_records = [r for r in caplog.records
-                        if r.name == "studio.client" and r.levelname == "INFO"]
-        assert any("rate-limit drop" in r.getMessage() for r in info_records)
+        debug_records = [r for r in caplog.records
+                         if r.name == "studio.client" and r.levelname == "DEBUG"]
+        assert any("client_errors rate-limited" in r.getMessage()
+                   for r in debug_records)
+        assert any("dropped=1" in r.getMessage() for r in debug_records)
+
+
+def test_rate_limit_drops_are_summarized_not_per_request(
+    client: TestClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T5：超限的 N 次请求只出一条窗口汇总，而不是 N 条日志。"""
+    from studio.api.routers.client_errors import _reset_rate_limit_for_tests
+    _reset_rate_limit_for_tests()
+
+    for i in range(10):
+        client.post("/api/client-errors", json={"message": f"err {i}"})
+    with caplog.at_level(logging.DEBUG, logger="studio.client"):
+        for i in range(20):
+            assert client.post(
+                "/api/client-errors", json={"message": f"over {i}"},
+            ).status_code == 204
+        drops = [r for r in caplog.records
+                 if "client_errors rate-limited" in r.getMessage()]
+        assert len(drops) == 1, "同一窗口内的丢弃只应汇总一条"
 
 
 def test_rate_limit_per_ip_isolated(client: TestClient) -> None:

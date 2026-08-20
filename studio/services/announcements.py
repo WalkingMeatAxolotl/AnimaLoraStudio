@@ -93,10 +93,15 @@ def list_posts(directory: Optional[Path] = None) -> list[AnnouncementPost]:
         tag = str(meta.get("tag", "")).strip()
         title_zh = str(meta.get("title", "")).strip()
         if not (date and tag and title_zh):
-            logger.warning("announcement %s 缺 date/tag/title，跳过", zh_path.name)
+            logger.warning(
+                "announcement %s is missing date/tag/title; skipped", zh_path.name,
+            )
             continue
         if tag not in VALID_TAGS:
-            logger.warning("announcement %s tag=%r 不在白名单，跳过", zh_path.name, tag)
+            logger.warning(
+                "announcement %s has tag=%r outside the allowed list; skipped",
+                zh_path.name, tag,
+            )
             continue
 
         # en 配对：缺文件 / 缺字段时 fallback 中文

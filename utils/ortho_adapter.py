@@ -33,6 +33,8 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
+
+from studio.infrastructure.log_messages import msg
 import torch.nn.functional as F
 from safetensors import safe_open
 from safetensors.torch import save_file
@@ -256,11 +258,12 @@ class OrthoLoRAAdapter:
             setattr(parent, child_name, layer)
             self.loras.append(layer)
 
-        logger.info(
-            "注入 %s 到 %s 层（OrthoLoRA, save=baked LoRA）",
-            "T-LORA+ORTHO" if self.use_timestep_mask else "ORTHO",
-            len(self.loras),
-        )
+        logger.info(msg(
+            "lora.injected",
+            algo="T-LORA+ORTHO" if self.use_timestep_mask else "ORTHO",
+            n=len(self.loras),
+            detail="save=baked LoRA",
+        ))
         return {layer.lora_name: layer for layer in self.loras}
 
     def _set_timestep_mask(self, sigma_t: torch.Tensor) -> None:
@@ -353,9 +356,11 @@ class OrthoLoRAAdapter:
 
         if projected_layers:
             logger.warning(
-                "OrthoLoRA: %s 层从 plain LoRA 投影恢复（仅取冻结 SVD 基上的对角分量，"
-                "旋转信息丢失）—— 这是近似续训，非完整恢复。无损断点续训请用训练 state "
-                "(.pt) 而非蒸馏后的 LoRA 文件。", projected_layers,
+                "OrthoLoRA restored %s layers by projecting a plain LoRA onto the "
+                "frozen SVD basis: only the diagonal component survives, the "
+                "rotation is lost — this is an approximate resume, not a full one; "
+                "resume from the training state (.pt) instead of a distilled LoRA "
+                "file for a lossless resume", projected_layers,
             )
 
         if strict and (missing or unexpected):
@@ -384,7 +389,7 @@ class OrthoLoRAAdapter:
             "ss_network_args": json.dumps(ss_args),
         }
         save_file(sd, str(path), metadata=meta)
-        logger.info("OrthoLoRA 保存到: %s (baked as plain LoRA)", path)
+        logger.info(msg("lora.saved_baked", path=path))
 
     def load(self, path: str | Path) -> None:
         sd: dict[str, torch.Tensor] = {}

@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date
@@ -254,7 +255,7 @@ def _build_external_metadata_safe(
         )
     except Exception:
         logger.warning(
-            "build external metadata failed for task %s", task_id, exc_info=True,
+            "build external metadata failed: task_id=%s", task_id, exc_info=True,
         )
         return {}
 
@@ -408,6 +409,38 @@ def xy_folder_for_task(task_id: int) -> Optional[Path]:
 # daemon 入口:image_done 处置
 # ---------------------------------------------------------------------------
 
+# 落盘失败节流（T6）：磁盘满 / 目录被占用时 XY 一格一条黄行 = 几十上百条。
+# 首条全文 WARNING（带文件名 + 原因）→ 同任务后续逐条 DEBUG → 收尾一条计数
+# 汇总。executor 是单线程（max_workers=1），这份状态只被那一个线程碰。
+_disk_store_failures: dict[int, dict[str, Any]] = {}
+
+
+def _note_disk_store_failure(task_id: int, filename: str) -> None:
+    st = _disk_store_failures.setdefault(task_id, {"n": 0, "first": ""})
+    st["n"] += 1
+    if st["n"] == 1:
+        exc = sys.exc_info()[1]
+        st["first"] = f"{type(exc).__name__}: {exc}" if exc is not None else "?"
+        logger.warning(
+            "disk store failed: task_id=%s file=%s; the image stays in the "
+            "session cache only", task_id, filename, exc_info=True,
+        )
+    else:
+        logger.debug(
+            "disk store failed: task_id=%s file=%s", task_id, filename, exc_info=True,
+        )
+
+
+def flush_disk_store_summary(task_id: int, total: Optional[int] = None) -> None:
+    """task 收尾：把该 task 的落盘失败计数收成一条 WARNING（没失败就 noop）。"""
+    st = _disk_store_failures.pop(int(task_id), None)
+    if not st or not st["n"]:
+        return
+    logger.warning(
+        "disk store failed for %d/%s images: task_id=%s; first error: %s",
+        st["n"], total if total is not None else "?", task_id, st["first"],
+    )
+
 
 def handle_image_done(
     task_id: int,
@@ -453,10 +486,7 @@ def _store_to_disk_safe(
         else:
             target = _write_single(task_id, filename, data, snapshot)
     except Exception:
-        logger.warning(
-            "generate_storage: disk store failed for task %s %s (image stays in "
-            "session cache only)", task_id, filename, exc_info=True,
-        )
+        _note_disk_store_failure(task_id, filename)
         return
     # 落盘成功 → cache 中转副本没有存在意义了(列表/回看走磁盘;live 显示
     # 与 composite 拼图靠 sample 端点的 disk fallback 按 src 反查)
@@ -464,7 +494,10 @@ def _store_to_disk_safe(
         from .inference import disk_cache as generate_cache
         generate_cache.drop_image(task_id, filename)
     except Exception:
-        logger.warning("generate_storage: drop cache copy failed", exc_info=True)
+        logger.warning(
+            "drop cache copy failed: task_id=%s file=%s",
+            task_id, filename, exc_info=True,
+        )
 
 
 def _write_single(

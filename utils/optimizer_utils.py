@@ -32,6 +32,9 @@ import torch
 from torch import nn
 from torch.optim import Optimizer, AdamW
 
+from studio.infrastructure.log_messages import msg
+from utils.log_throttle import BackoffThrottle
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入 bitsandbytes
@@ -108,13 +111,51 @@ def _filter_kwargs_by_signature(cls_or_fn, kwargs: Dict[str, Any]) -> Dict[str, 
                 f"升级/降级依赖，或在 yaml 关掉对应字段。"
             )
         logger.warning(
-            f"[optimizer] Dropped unsupported kwargs for "
-            f"{getattr(cls_or_fn, '__name__', cls_or_fn)}: {dropped}"
+            "Dropped unsupported options for %s: %s; they have no effect on this run",
+            getattr(cls_or_fn, "__name__", cls_or_fn), dropped,
         )
     return filtered
 
 
 def create_optimizer(
+    optimizer_type: str,
+    params: Iterator[nn.Parameter],
+    learning_rate: float,
+    betas: tuple = (0.9, 0.999),
+    weight_decay: float = 0.01,
+    eps: float = 1e-8,
+    **kwargs
+) -> Optimizer:
+    """创建优化器（工厂出口）。
+
+    各分支的构造逻辑在 :func:`_dispatch_optimizer`；本函数只是加一层出口，
+    把「可训练参数统计」收成唯一一条 INFO —— 原来 Automagic2 / ProdigyPlus /
+    参数分组三处各打一遍同一个数（rewrite-b §1.7）。
+    """
+    optimizer = _dispatch_optimizer(
+        optimizer_type,
+        params,
+        learning_rate,
+        betas=betas,
+        weight_decay=weight_decay,
+        eps=eps,
+        **kwargs,
+    )
+    tensors = 0
+    elements = 0
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if p.requires_grad:
+                tensors += 1
+                elements += p.numel()
+    logger.info(msg(
+        "optim.trainable_params",
+        tensors=f"{tensors:,}", elements=f"{elements:,}",
+    ))
+    return optimizer
+
+
+def _dispatch_optimizer(
     optimizer_type: str,
     params: Iterator[nn.Parameter],
     learning_rate: float,
@@ -295,11 +336,6 @@ def create_8bit_adamw(
             "Install with: pip install bitsandbytes"
         )
     
-    logger.info(
-        f"Creating 8-bit AdamW optimizer (lr={lr}, weight_decay={weight_decay}, "
-        f"min_8bit_size={min_8bit_size})"
-    )
-
     # 将参数转换为列表（bitsandbytes 需要可索引的参数）
     param_list = list(params)
     
@@ -314,13 +350,10 @@ def create_8bit_adamw(
         **kwargs
     )
     
-    # 计算内存节省
-    total_params = sum(p.numel() for p in param_list)
-    # 8-bit 优化器状态：约 2 bytes per parameter (vs 8 bytes for 32-bit)
-    # 节省约 75% 的优化器状态内存
-    estimated_savings_gb = (total_params * 6) / (1024 ** 3)  # 节省 6 bytes per param
-    logger.info(f"8-bit AdamW created (estimated memory savings: {estimated_savings_gb:.2f} GB)")
-    
+    logger.info(msg(
+        "optim.created", name="AdamW 8-bit",
+        params=f"lr={lr} weight_decay={weight_decay} min_8bit_size={min_8bit_size}",
+    ))
     return optimizer
 
 
@@ -353,8 +386,6 @@ def create_standard_adamw(
     Returns:
         AdamW: 标准 AdamW 优化器
     """
-    logger.info(f"Creating standard AdamW optimizer (lr={lr}, weight_decay={weight_decay})")
-
     # 将参数转换为列表
     param_list = list(params)
     
@@ -367,8 +398,10 @@ def create_standard_adamw(
         **kwargs
     )
     
-    logger.info("AdamW optimizer created")
-
+    logger.info(msg(
+        "optim.created", name="AdamW",
+        params=f"lr={lr} weight_decay={weight_decay}",
+    ))
     return optimizer
 
 
@@ -494,7 +527,10 @@ class Automagic(Optimizer):
 
         self.lr = min(lr, max_lr)
         if lr > 1e-3:
-            logger.warning("Automagic start lr %s is high; clamping to 1e-6", lr)
+            logger.warning(
+                "Automagic start lr=%.2e is too high and was forced to 1e-6; "
+                "per-parameter lr then adapts within [min_lr, max_lr]", lr,
+            )
             self.lr = 1e-6
         self.min_lr = min_lr
         self.max_lr = max_lr
@@ -718,10 +754,12 @@ def create_automagic(
     # Automagic 上游推荐 init lr=1e-6（每参数自适应起点）；> 1e-5 量级是 AdamW
     # 风格 lr 误用，sign-agreement 调度需要很多 step 才能从过高起点收敛回工作区间。
     # UI 切换 optimizer_type 时会自动改写 lr=1e-6；这里兜底 saved config / CLI 路径。
-    if lr > 1e-5:
+    # 上界收窄到 1e-3：> 1e-3 由 Automagic.__init__ 强制改写并自报，避免双报。
+    if 1e-5 < lr <= 1e-3:
         logger.warning(
-            "Automagic 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
-            "收敛慢，建议设为 1e-6（per-param lr 由 [min_lr, max_lr] 自动调）",
+            "Automagic start lr=%.2e is far above the recommended 1e-6; "
+            "sign-agreement adaptation converges slowly from a high start, the "
+            "recommended start is lr=1e-6",
             lr,
         )
     param_list = params if _is_param_groups(params) else list(params)
@@ -737,11 +775,13 @@ def create_automagic(
         weight_decay=weight_decay,
         **kwargs,
     )
-    logger.info(
-        f"Creating Automagic optimizer (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
-        f"lr_bump={lr_bump}, beta2={beta2}, weight_decay={weight_decay})"
-    )
-    logger.info("Automagic optimizer created")
+    logger.info(msg(
+        "optim.created", name="Automagic",
+        params=(
+            f"lr={lr} min_lr={min_lr} max_lr={max_lr} lr_bump={lr_bump} "
+            f"beta2={beta2} weight_decay={weight_decay}"
+        ),
+    ))
     return optimizer
 
 
@@ -772,7 +812,10 @@ class Automagic2(Optimizer):
         agreement_threshold: float = 0.5,
     ) -> None:
         if lr > 1e-3:
-            logger.warning("Automagic2 start lr %s is high; forcing to 1e-6.", lr)
+            logger.warning(
+                "Automagic2 start lr=%.2e is too high and was forced to 1e-6; "
+                "per-parameter lr then adapts within [min_lr, max_lr]", lr,
+            )
             lr = 1e-6
         defaults = dict(
             lr=lr, min_lr=min_lr, max_lr=max_lr, lr_bump=lr_bump,
@@ -790,8 +833,8 @@ class Automagic2(Optimizer):
                     )
                     self._hook_handles.append(handle)
 
-        total = sum(p.numel() for g in self.param_groups for p in g["params"])
-        logger.info(f"Automagic2 total training params: {total:,}")
+        # 可训练参数统计统一由 create_optimizer 出口打一条（optim.trainable_params）
+        self._nonfinite = BackoffThrottle()
 
     @staticmethod
     def _rms(t: torch.Tensor) -> torch.Tensor:
@@ -838,10 +881,24 @@ class Automagic2(Optimizer):
         # fused 路径绕过了训练循环的 step 边界 NaN 梯度检查（hook 跑完 p.grad
         # 已是 None），必须在这里自卫 —— 否则一个坏 micro-batch 直接毒化权重。
         if not torch.isfinite(grad).all():
-            logger.warning(
-                "Automagic2: param %s 梯度含 NaN/Inf，跳过本次 fused update",
-                tuple(p.shape),
-            )
+            # 〔R9 十万量级〕指数退避：首条全文，第 10/100/1000… 次报累计，其余 DEBUG
+            count, kind = self._nonfinite.tick()
+            if kind == "first":
+                logger.warning(
+                    "Gradient contains NaN/Inf; skipped the fused update for "
+                    "parameter shape=%s", tuple(p.shape),
+                )
+            elif kind == "milestone":
+                logger.warning(
+                    "Gradient NaN/Inf has skipped %d fused updates so far (latest "
+                    "shape=%s); the affected parameters are not learning",
+                    count, tuple(p.shape),
+                )
+            else:
+                logger.debug(
+                    "Gradient NaN/Inf: skipped fused update, shape=%s",
+                    tuple(p.shape),
+                )
             p.grad = None
             return
 
@@ -963,10 +1020,12 @@ def create_automagic_v2(
     agreement_threshold: float = 0.5,
     **kwargs,
 ) -> Optimizer:
-    if lr > 1e-5:
+    # 上界收窄到 1e-3：> 1e-3 由 Automagic2.__init__ 强制改写并自报，避免双报。
+    if 1e-5 < lr <= 1e-3:
         logger.warning(
-            "Automagic2 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
-            "收敛慢，建议设为 1e-6", lr,
+            "Automagic2 start lr=%.2e is far above the recommended 1e-6; "
+            "sign-agreement adaptation converges slowly from a high start, the "
+            "recommended start is lr=1e-6", lr,
         )
     param_list = params if _is_param_groups(params) else list(params)
     optimizer = Automagic2(
@@ -974,11 +1033,14 @@ def create_automagic_v2(
         eps=eps, clip_threshold=clip_threshold, beta2=beta2, weight_decay=weight_decay,
         agreement_threshold=agreement_threshold,
     )
-    logger.info(
-        f"Creating Automagic v2 (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
-        f"lr_bump={lr_bump}, beta2={beta2}, wd={weight_decay}, "
-        f"agreement_threshold={agreement_threshold})"
-    )
+    logger.info(msg(
+        "optim.created", name="Automagic v2",
+        params=(
+            f"lr={lr} min_lr={min_lr} max_lr={max_lr} lr_bump={lr_bump} "
+            f"beta2={beta2} weight_decay={weight_decay} "
+            f"agreement_threshold={agreement_threshold}"
+        ),
+    ))
     return optimizer
 
 
@@ -1058,15 +1120,17 @@ def create_lion(
     # lr 落在 AdamW 量级（1e-4 及以上）时提示一下。详细见 docs/user-guide/optimizers.md。
     if lr >= 1e-4:
         logger.warning(
-            "Lion lr=%.2e 接近/高于 AdamW 量级；论文推荐 lr ≈ AdamW lr / 3 "
-            "（如 AdamW 1e-4 → Lion ~3e-5）。继续训练但可能发散，详见 "
-            "docs/user-guide/optimizers.md",
+            "Lion lr=%.2e is at AdamW magnitude; the paper recommends about "
+            "AdamW lr / 3 (AdamW 1e-4 → Lion ~3e-5), training continues but may "
+            "diverge — see docs/user-guide/optimizers.md",
             lr,
         )
     param_list = params if _is_param_groups(params) else list(params)
     optimizer = Lion(param_list, lr=lr, betas=betas, weight_decay=weight_decay, **kwargs)
-    logger.info(f"Creating Lion optimizer (lr={lr}, betas={betas}, weight_decay={weight_decay})")
-    logger.info("Lion optimizer created")
+    logger.info(msg(
+        "optim.created", name="Lion",
+        params=f"lr={lr} betas={betas} weight_decay={weight_decay}",
+    ))
     return optimizer
 
 
@@ -1286,10 +1350,13 @@ def create_came(
         weight_decay=weight_decay,
         **kwargs,
     )
-    logger.info(
-        f"Creating CAME optimizer (lr={lr}, betas={betas}, eps={tuple(eps)}, "
-        f"clip_threshold={clip_threshold}, weight_decay={weight_decay})"
-    )
+    logger.info(msg(
+        "optim.created", name="CAME",
+        params=(
+            f"lr={lr} betas={betas} eps={tuple(eps)} "
+            f"clip_threshold={clip_threshold} weight_decay={weight_decay}"
+        ),
+    ))
     return optimizer
 
 
@@ -1336,15 +1403,10 @@ def create_prodigy(
 
     if abs(lr - 1.0) > 1e-9:
         logger.warning(
-            f"Prodigy requires lr=1.0 (received {lr}); forcing lr=1.0. "
-            f"Tune d_coef/weight_decay instead of lr."
+            "Prodigy requires lr=1.0 (got %s) and it was forced to 1.0; tune "
+            "d_coef/weight_decay instead of lr", lr,
         )
         lr = 1.0
-
-    logger.info(
-        f"Creating Prodigy optimizer (lr={lr}, weight_decay={weight_decay}, "
-        f"d_coef={d_coef}, safeguard_warmup={safeguard_warmup})"
-    )
 
     param_list = list(params)
 
@@ -1360,8 +1422,13 @@ def create_prodigy(
         **kwargs,
     )
 
-    logger.info("Prodigy optimizer created")
-
+    logger.info(msg(
+        "optim.created", name="Prodigy",
+        params=(
+            f"lr={lr} weight_decay={weight_decay} d_coef={d_coef} "
+            f"safeguard_warmup={safeguard_warmup}"
+        ),
+    ))
     return optimizer
 
 
@@ -1428,13 +1495,15 @@ def create_prodigy_plus_schedulefree(
 
     if abs(lr - 1.0) > 1e-9:
         logger.warning(
-            f"[ProdigyPlus] Forcing lr=1.0 (got {lr}); "
-            f"Prodigy adapts step size internally via d."
+            "Prodigy requires lr=1.0 (got %s) and it was forced to 1.0; tune "
+            "d_coef/weight_decay instead of lr", lr,
         )
     lr = 1.0
 
     if isinstance(eps, (int, float)) and eps <= 0:
-        logger.warning(f"[ProdigyPlus] eps={eps} non-positive, falling back to None (Adam-atan2).")
+        logger.warning(
+            "eps=%s is not positive; falling back to Adam-atan2 (eps disabled)", eps,
+        )
         eps = None
 
     # 上层 create_optimizer 默认 betas=(0.9, 0.999)（适合 AdamW），但 PPSF 推荐
@@ -1460,17 +1529,17 @@ def create_prodigy_plus_schedulefree(
 
     param_list = params if _is_param_groups(params) else list(params)
 
-    logger.info(
-        f"Creating ProdigyPlusScheduleFree "
-        f"(d_coef={d_coef}, betas={tuple(betas)}, wd={weight_decay}, "
-        f"eps={eps}, stableadamw={use_stableadamw})"
-    )
-    logger.info(f"[ProdigyPlus] Effective kwargs: {list(safe_kwargs.keys())}")
+    logger.debug("prodigy_plus effective kwargs: %s", list(safe_kwargs.keys()))
 
     optimizer = ProdigyPlusScheduleFree(param_list, **safe_kwargs)
 
-    total = sum(p.numel() for g in optimizer.param_groups for p in g["params"] if p.requires_grad)
-    logger.info(f"[ProdigyPlus] Trainable params: {total:,}")
+    logger.info(msg(
+        "optim.created", name="ProdigyPlusScheduleFree",
+        params=(
+            f"d_coef={d_coef} betas={tuple(betas)} weight_decay={weight_decay} "
+            f"eps={eps} use_stableadamw={use_stableadamw}"
+        ),
+    ))
     return optimizer
 
 
@@ -1518,10 +1587,14 @@ def create_soap(
         precond_in_state=precond_in_state,
         **kwargs,
     )
-    logger.info(
-        f"Creating SOAP optimizer (lr={lr}, betas={tuple(betas)}, wd={weight_decay}, "
-        f"precond_freq={precondition_frequency}, max_precond_dim={max_precond_dim})"
-    )
+    logger.info(msg(
+        "optim.created", name="SOAP",
+        params=(
+            f"lr={lr} betas={tuple(betas)} weight_decay={weight_decay} "
+            f"precondition_frequency={precondition_frequency} "
+            f"max_precond_dim={max_precond_dim}"
+        ),
+    ))
     return optimizer
 
 
@@ -1578,11 +1651,15 @@ def create_soap_sf(
         warmup_steps=warmup_steps,
         **kwargs,
     )
-    logger.info(
-        f"Creating Schedule-Free SOAP optimizer (lr={lr}, betas={tuple(betas)}, "
-        f"wd={weight_decay}, precond_freq={precondition_frequency}, "
-        f"max_precond_dim={max_precond_dim}, weight_lr_power={weight_lr_power}, r={r})"
-    )
+    logger.info(msg(
+        "optim.created", name="SOAP schedule-free",
+        params=(
+            f"lr={lr} betas={tuple(betas)} weight_decay={weight_decay} "
+            f"precondition_frequency={precondition_frequency} "
+            f"max_precond_dim={max_precond_dim} "
+            f"weight_lr_power={weight_lr_power} r={r}"
+        ),
+    ))
     return optimizer
 
 
@@ -1678,10 +1755,11 @@ def create_optimizer_grouped_parameters(
     # 打印统计信息
     num_decay_params = sum(p.numel() for p in decay_params)
     num_no_decay_params = sum(p.numel() for p in no_decay_params)
-    logger.info(
-        f"Parameter groups: with weight decay: {len(decay_params)} params, "
-        f"{num_decay_params:,} elements; without weight decay: "
-        f"{len(no_decay_params)} params, {num_no_decay_params:,} elements"
+    logger.debug(
+        "param groups: decay=%d tensors/%d elements, "
+        "no_decay=%d tensors/%d elements",
+        len(decay_params), num_decay_params,
+        len(no_decay_params), num_no_decay_params,
     )
     
     return optimizer_grouped_parameters

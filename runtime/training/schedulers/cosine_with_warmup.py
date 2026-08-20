@@ -6,13 +6,18 @@ import logging
 import math
 from typing import Optional
 
+from studio.infrastructure.log_messages import msg
+
 
 logger = logging.getLogger(__name__)
 
 
 def build(args, optimizer, total_steps: Optional[int]):
     if total_steps is None:
-        logger.warning("cosine_with_warmup 调度器需要已知 total_steps，回退到 none")
+        logger.warning(
+            "cosine_with_warmup schedule needs a known total step count: falling "
+            "back to a constant learning rate"
+        )
         return None
 
     import torch
@@ -21,13 +26,17 @@ def build(args, optimizer, total_steps: Optional[int]):
     warmup_steps = int(getattr(args, "lr_scheduler_warmup_steps", 100) or 0)
     eta_min = max(0.0, float(getattr(args, "lr_scheduler_eta_min", 0.0) or 0.0))
     if total_steps <= 0:
-        logger.warning("cosine_with_warmup 调度器 total_steps<=0，回退到 none")
+        logger.warning(
+            "cosine_with_warmup schedule got total_steps<=0: falling back to a "
+            "constant learning rate"
+        )
         return None
     warmup_steps = max(0, min(warmup_steps, total_steps))
     if total_steps <= warmup_steps:
         logger.warning(
-            "cosine_with_warmup: total_steps(%s) <= warmup_steps(%s)，"
-            "整个训练只跑 warmup，没有 cosine 衰减段",
+            "cosine_with_warmup: total_steps=%s <= warmup_steps=%s — the whole run "
+            "stays in warmup and never reaches the cosine decay; lower "
+            "warmup_steps or train longer",
             total_steps, warmup_steps,
         )
 
@@ -50,10 +59,11 @@ def build(args, optimizer, total_steps: Optional[int]):
         optimizer,
         lr_lambda=[make_lambda(group["lr"]) for group in optimizer.param_groups],
     )
-    logger.info(
-        "学习率调度: cosine_with_warmup (total_steps=%s, warmup_steps=%s, eta_min=%s)",
-        total_steps,
-        warmup_steps,
-        eta_min,
-    )
+    logger.info(msg(
+        "train.lr_schedule",
+        detail=(
+            f"cosine_with_warmup (total_steps={total_steps}, "
+            f"warmup_steps={warmup_steps}, eta_min={eta_min})"
+        ),
+    ))
     return scheduler

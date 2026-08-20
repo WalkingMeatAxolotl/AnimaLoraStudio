@@ -17,6 +17,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.loss_weighting import compute_loss_weight
 from training.noise import make_noise, noise_params_from_args
@@ -37,6 +38,27 @@ logger = logging.getLogger(__name__)
 # 训练进度行（step/loss/lr/speed）专用 logger：与本模块其它日志分名，方便
 # 显示端按名折叠/过滤高频行（docs/design/logging-target-state.md §7 open question 2）。
 _progress_logger = logging.getLogger("training.progress")
+
+
+def _progress_line(
+    *, epoch: int, epochs: Any, step: int, loss: float,
+    denoise: float, sra_align: Any, sra_weighted: Any,
+    lr: float, speed: float,
+) -> str:
+    """训练进度行的**唯一**格式来源（tty `\\r` 行与 pipe 日志行共用）。
+
+    `{sra}` 是纯 ASCII 的 key=value 片段（denoise / sra / sra_w），带尾空格，
+    不进字典 —— 字典模板只在它前后留位。
+    """
+    if sra_align is not None and sra_weighted is not None:
+        sra = f"denoise={denoise:.6f} sra={sra_align:.6f} sra_w={sra_weighted:.6f} "
+    else:
+        sra = f"denoise={denoise:.6f} "
+    return msg(
+        "train.progress",
+        epoch=epoch, epochs=epochs, step=step,
+        loss=f"{loss:.6f}", sra=sra, lr=f"{lr:.2e}", speed=f"{speed:.2f}",
+    )
 
 
 def _resolve_sra_weight(args: Any) -> float:
@@ -221,12 +243,12 @@ class _BucketSwitchCacheRelease:
             return
         after = _cuda_reserved_gb(self._device)
         detail = (
-            f"（torch 保留 {before:.2f}GB→{after:.2f}GB）"
+            f", reserved {before:.2f} GB -> {after:.2f} GB"
             if before is not None and after is not None
             else ""
         )
         logger.debug(
-            "[显存] ARB 切桶 %sx%s→%sx%s：已归还上一个桶的 allocator 缓存%s",
+            "[vram] ARB bucket switch %sx%s -> %sx%s: allocator cache returned%s",
             prev[0], prev[1], hw[0], hw[1], detail,
         )
 
@@ -255,11 +277,7 @@ def run(ctx: TrainingContext) -> None:
         _r = getattr(args, "resolution", 1024)
         _base_reso = int(_r[0] if isinstance(_r, (list, tuple)) else _r)
         res_shift_base_tokens = max(1, (_base_reso // 16) ** 2)
-        logger.info(
-            "[res-shift] timestep shift 分辨率修正已启用：s_i=sqrt(token_i/%d)"
-            "（基准档 %dpx），作用于采样后的 t。",
-            res_shift_base_tokens, _base_reso,
-        )
+        logger.info(msg("train.res_shift_enabled", base=_base_reso))
         if getattr(ctx.timestep_sampler, "applies_resolution_shift", False):
             raise ValueError(
                 "timestep_shift_resolution_aware 不能与自带分辨率 shift 的 timestep sampler 同时启用"
@@ -772,35 +790,35 @@ def run(ctx: TrainingContext) -> None:
                                 from rich.console import Group
                                 ctx.live.update(Group(ctx.progress, panel))
                     elif ctx.use_plain:
-                        sra_suffix = (
-                            f" denoise={denoise_loss_val:.6f}"
-                            f" sra={sra_align_loss_val:.6f}"
-                            f" sra_w={sra_weighted_loss_val:.6f}"
-                            if sra_align_loss_val is not None and sra_weighted_loss_val is not None
-                            else f" denoise={denoise_loss_val:.6f}"
+                        print(
+                            _progress_line(
+                                epoch=epoch + 1, epochs=args.epochs,
+                                step=ctx.global_step, loss=loss_val,
+                                denoise=denoise_loss_val,
+                                sra_align=sra_align_loss_val,
+                                sra_weighted=sra_weighted_loss_val,
+                                lr=lr, speed=ctx.speed_ema,
+                            ),
+                            end="\r", flush=True,
                         )
-                        print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
                     elif args.log_every and ctx.global_step % args.log_every == 0:
-                        sra_suffix = (
-                            f" denoise={denoise_loss_val:.6f}"
-                            f" sra={sra_align_loss_val:.6f}"
-                            f" sra_w={sra_weighted_loss_val:.6f}"
-                            if sra_align_loss_val is not None and sra_weighted_loss_val is not None
-                            else f" denoise={denoise_loss_val:.6f}"
-                        )
                         # pipe 模式（studio spawn）：进度行也是日志（设计 D3），走
                         # 独立 logger 名 training.progress，与其它行同契约、前端可
                         # 单独折叠。StreamHandler 每条 flush，不会滞留 8KB 缓冲。
-                        _progress_logger.info(
-                            "epoch=%d step=%d loss=%.6f%s lr=%.2e speed=%.2f it/s",
-                            epoch, ctx.global_step, loss_val, sra_suffix, lr, steps_per_sec,
-                        )
+                        _progress_logger.info(_progress_line(
+                            epoch=epoch + 1, epochs=args.epochs,
+                            step=ctx.global_step, loss=loss_val,
+                            denoise=denoise_loss_val,
+                            sra_align=sra_align_loss_val,
+                            sra_weighted=sra_weighted_loss_val,
+                            lr=lr, speed=steps_per_sec,
+                        ))
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
                     prompt = ctx.get_next_sample_prompt()
                     prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
-                    ctx.emit(f"采样中 (step {ctx.global_step}): {prompt_short}")
+                    ctx.emit(msg("train.sampling_step", step=ctx.global_step, prompt=prompt_short))
                     run_sample(
                         ctx,
                         prompt=prompt,
@@ -817,7 +835,7 @@ def run(ctx: TrainingContext) -> None:
                     # PPSF：保存 averaged weights 的 LoRA
                     with optimizer_eval_mode(ctx.optimizer):
                         ctx.injector.save(lora_path)
-                    ctx.emit(f"Saved LoRA: {lora_path}")
+                    ctx.emit(msg("train.lora_saved_step", step=ctx.global_step, path=lora_path))
                     ctx.wandb_monitor.upload_model(lora_path)
 
                 # 定期保存训练状态（断点续训）
@@ -845,7 +863,8 @@ def run(ctx: TrainingContext) -> None:
                         # 同时保存 LoRA 权重
                         lora_path = ctx.output_dir / f"{args.output_name}_step{ctx.global_step}.safetensors"
                         ctx.injector.save(lora_path)
-                    ctx.emit(f"Saved training state (step {ctx.global_step}): {state_path.name}")
+                    # 保存的叙事行由 save_training_state 打（state.py）——这里再
+                    # emit 一次是同一次保存的第二条记录。
                     ctx.wandb_monitor.upload_state_manual(state_path)
 
                 # 检查 max_steps
@@ -880,14 +899,14 @@ def run(ctx: TrainingContext) -> None:
                 # PPSF：保存 averaged weights 的 LoRA
                 with optimizer_eval_mode(ctx.optimizer):
                     ctx.injector.save(save_path)
-                ctx.emit(f"Saved LoRA: {save_path}")
+                ctx.emit(msg("train.lora_saved_epoch", epoch=ctx.current_epoch, path=save_path))
                 ctx.wandb_monitor.upload_model(save_path)
 
             # 采样（轮换提示词）
             if args.sample_every > 0 and ctx.current_epoch % args.sample_every == 0:
                 prompt = ctx.get_next_sample_prompt()
                 prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
-                ctx.emit(f"采样中 (epoch {ctx.current_epoch}): {prompt_short}")
+                ctx.emit(msg("train.sampling_epoch", epoch=ctx.current_epoch, prompt=prompt_short))
                 run_sample(
                     ctx,
                     prompt=prompt,
@@ -923,7 +942,7 @@ def run(ctx: TrainingContext) -> None:
                     lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                     if not lora_path.exists():
                         ctx.injector.save(lora_path)
-                ctx.emit(f"Saved training state (epoch {ctx.current_epoch}): {state_path.name}")
+                # 保存的叙事行由 save_training_state 打（state.py），不重复 emit。
                 ctx.wandb_monitor.upload_state_manual(state_path)
 
             # ADR 0006 Addendum 1 方案 Δ：每 epoch 末尾**强制**写 auto_epoch_state.pt（覆盖式）。
@@ -952,6 +971,7 @@ def run(ctx: TrainingContext) -> None:
                     sra_aligner=ctx.sra_aligner,
                     scaler=ctx.scaler,
                     model_family=ctx.family.spec.family_id,
+                    internal=True,  # 系统级恢复点，不是用户产物 → DEBUG
                 )
             ctx.wandb_monitor.upload_state_auto(auto_state_path)
             # 更新 ctx 字段供 handle_interrupt emit pause_state 用

@@ -25,6 +25,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import torch
 from torch import Tensor
 
+from studio.infrastructure.log_messages import msg
 from ...text_cache import TextCacheEntry, TextCacheStore
 
 
@@ -154,8 +155,9 @@ def patch_manual_cast(model: torch.nn.Module, compute_dtype: torch.dtype) -> int
             module.forward = MethodType(_cast_embedding_forward, module)
             patched += 1
     if patched:
-        logger.info(
-            "Krea2 TE manual_cast：%d 个模块以 %s 计算（权重常驻存储 dtype）",
+        logger.debug(
+            "krea2_te: manual cast modules=%d compute_dtype=%s "
+            "(weights kept in storage dtype)",
             patched, compute_dtype,
         )
     return patched
@@ -198,7 +200,7 @@ def _load_comfy_single_file_te(
         patch_fp8_linears,
     )
 
-    logger.info("加载 Krea2 Qwen3-VL（comfy 单文件形态）：%s", weights_file)
+    logger.info(msg("train.loading_text_encoder_file", path=weights_file))
     config = AutoConfig.from_pretrained(str(model_path), local_files_only=True)
     try:
         from accelerate import init_empty_weights
@@ -266,7 +268,9 @@ def _load_comfy_single_file_te(
     model.to(device)
     if scales:
         patch_fp8_linears(model, scales)
-        logger.info("Qwen3-VL fp8_scaled：%d 层挂 dequant 前向", len(scales))
+        logger.debug(
+            "fp8: dequant forward attached module=text_encoder layers=%d", len(scales),
+        )
     return model.eval().requires_grad_(False)
 
 
@@ -288,7 +292,7 @@ def _default_model_loader(
     single = _comfy_te_single_file(model_path)
     if single is not None:
         return _load_comfy_single_file_te(model_path, single, device, dtype)
-    logger.info("加载 Krea2 Qwen3-VL 文本编码器：%s", model_path)
+    logger.info(msg("train.loading_text_encoder_file", path=model_path))
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(model_path),
         dtype=dtype,
@@ -572,7 +576,9 @@ class Krea2TextStack:
         # 训练中 miss repair 走的也是本函数，那边一两条不刷屏。
         encoded: dict[str, Tensor] = {}
         unique = list(dict.fromkeys(str(caption) for caption in captions))
-        next_mark = 10
+        # 进度步长自适应（Q3）：固定每 10 条在 1000 条数据集上是 100 行。
+        stride = max(10, len(unique) // 10)
+        next_mark = stride
         for start in range(0, len(unique), self.cache_batch_size):
             chunk = unique[start:start + self.cache_batch_size]
             contexts = self._encode_many(chunk)
@@ -581,9 +587,11 @@ class Krea2TextStack:
             if log_progress:
                 done = len(encoded)
                 if done >= next_mark or done == len(unique):
-                    logger.info("  文本编码进度: %d/%d", done, len(unique))
+                    logger.info(msg(
+                        "train.text_cache_progress", done=done, total=len(unique),
+                    ))
                     while next_mark <= done:
-                        next_mark += 10
+                        next_mark += stride
         return encoded
 
     def _validate_context(self, context: object, *, source: str) -> Tensor:
@@ -634,15 +642,15 @@ class Krea2TextStack:
         ]
         if self._caption_entries:
             if to_encode:
-                logger.info(
-                    "[text-cache] caption sidecar 命中 %d/%d，需编码 %d 条...",
-                    len(contexts), len(self._caption_entries), len(to_encode),
-                )
+                logger.info(msg(
+                    "train.text_cache_hits",
+                    hit=len(contexts), total=len(self._caption_entries),
+                    todo=len(to_encode),
+                ))
             else:
-                logger.info(
-                    "[text-cache] caption sidecar 全部命中（%d 条），跳过编码",
-                    len(self._caption_entries),
-                )
+                logger.info(msg(
+                    "train.text_cache_all_hit", n=len(self._caption_entries),
+                ))
         contexts.update(self._encode_in_chunks(to_encode, log_progress=True))
         for caption, entries in missing_entries.items():
             for entry in entries:

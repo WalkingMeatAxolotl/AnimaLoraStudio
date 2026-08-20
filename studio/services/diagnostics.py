@@ -134,7 +134,10 @@ def studio_log_slice(start: float, end: float, *, max_bytes: int = STUDIO_LOG_SL
                         chunks.append(f"... truncated at {max_bytes} bytes ...\n")
                         return "".join(chunks)
         except OSError:
-            logger.exception("read %s failed", p)
+            logger.warning(
+                "diagnostics bundle: read failed for %s; the entry is omitted from "
+                "the bundle", p, exc_info=True,
+            )
     return "".join(chunks)
 
 

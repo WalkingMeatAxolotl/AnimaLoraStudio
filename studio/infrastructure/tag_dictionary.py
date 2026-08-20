@@ -85,7 +85,8 @@ def parse_csv(text: str) -> dict[str, list[str]]:
         entries[tag] = aliases
     if truncated:
         logger.warning(
-            "tag_dictionary: 超过 %d 条上限，截断；丢弃了后续行", MAX_ENTRIES
+            "tag dictionary exceeds the %d entry limit; truncated, "
+            "the remaining lines are dropped", MAX_ENTRIES
         )
     return entries
 
@@ -112,7 +113,8 @@ def parse_sqlite(path: Path) -> dict[str, list[str]]:
         conn.close()
     if total > MAX_ENTRIES:
         logger.info(
-            "tag_dictionary: 源共 %d 条，按 post_count 取前 %d 条", total, MAX_ENTRIES
+            "tag dictionary imported: source=%d kept=%d (top by post_count)",
+            total, MAX_ENTRIES,
         )
     entries: dict[str, list[str]] = {}
     for name, cn_name in rows:
@@ -155,7 +157,10 @@ def load_active() -> Optional[tuple[dict[str, list[str]], dict[str, Any]]]:
             return None
         return entries, meta
     except Exception:
-        logger.exception("tag_dictionary: active.json 损坏，视作未加载")
+        logger.warning(
+            "active.json is corrupt; the tag dictionary is treated as not loaded "
+            "(re-download it from Settings)", exc_info=True,
+        )
         return None
 
 
@@ -200,7 +205,7 @@ def download_default() -> dict[str, Any]:
     SOURCE_FILE.unlink(missing_ok=True)  # 留底只保留当前 active 的源文件
     meta = _meta(DEFAULT_SOURCE_NAME, DEFAULT_URL, "default", len(entries))
     _write_active(entries, meta)
-    logger.info("tag_dictionary: 默认词典已下载 (%d 条)", len(entries))
+    logger.info("default tag dictionary downloaded: entries=%d", len(entries))
     return meta
 
 
@@ -225,7 +230,9 @@ def apply_uploaded(content: bytes, filename: str) -> dict[str, Any]:
     SOURCE_SQLITE.unlink(missing_ok=True)  # 留底只保留当前 active 的源文件
     meta = _meta(filename or "user-upload", "", "user", len(entries))
     _write_active(entries, meta)
-    logger.info("tag_dictionary: 用户上传词典已加载 (%d 条, %s)", len(entries), filename)
+    logger.info(
+        "user tag dictionary loaded: entries=%d name=%s", len(entries), filename,
+    )
     return meta
 
 

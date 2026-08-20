@@ -27,7 +27,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from studio.infrastructure.task_log import TaskLog
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLog, TaskLogLike
 from studio import db, secrets
 from studio.services import (
     eval_ccip,
@@ -80,16 +81,21 @@ def run(task_id: int) -> int:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
         if not task:
-            logger.error("task %s not found", task_id)
+            logger.error(
+                "Evaluation task %s not found in the database; nothing to run", task_id
+            )
             return 1
         params = task.get("params_decoded") or {}
         session_id = int(params.get("session_id") or 0)
         if not session_id:
-            logger.error("task %s has no session_id", task_id)
+            logger.error(
+                "Evaluation task %s does not point at an evaluation session; aborting",
+                task_id,
+            )
             return 1
         session = eval_session.get_session(conn, session_id)
         if session is None:
-            logger.error("eval session %s not found", session_id)
+            logger.error("Evaluation session %s not found; aborting", session_id)
             return 1
         project = projects.get_project(conn, int(session["project_id"] or 0))
         version = versions.get_version(conn, int(session["version_id"] or 0))
@@ -97,7 +103,10 @@ def run(task_id: int) -> int:
     if not project or not version:
         with db.connection_for() as conn:
             _fail(conn, session_id, "project / version 不存在")
-        logger.error("project or version missing")
+        logger.error(
+            "Project %s or version %s no longer exists; evaluation session %s aborted",
+            session.get("project_id"), session.get("version_id"), session_id,
+        )
         return 1
 
     vdir = versions.version_dir(
@@ -118,10 +127,12 @@ def run(task_id: int) -> int:
             error=None,
         )
 
-    progress(
-        f"[start] eval session={session_id} candidates="
-        f"{len(plan.get('candidates') or [])}+baseline stages=1+{len(runners)}"
-    )
+    progress.info(msg(
+        "worker.eval.start",
+        session=session_id,
+        n=len(plan.get("candidates") or []) + 1,
+        stages=1 + len(runners),
+    ))
 
     try:
         _stage_generate(session_id, task_id, project, version, vdir, progress)
@@ -129,10 +140,9 @@ def run(task_id: int) -> int:
             _stage_metric(session_id, runner, project, version, vdir, progress)
         return _stage_aggregate(session_id, progress)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("eval session worker crashed (session=%s)", session_id)
+        logger.exception("Evaluation session worker crashed: session=%s", session_id)
         with db.connection_for() as conn:
             _fail(conn, session_id, str(exc))
-        progress(f"[error] {exc}")
         return 1
 
 
@@ -146,7 +156,7 @@ def _stage_generate(
     project: dict[str, Any],
     version: dict[str, Any],
     vdir: Path,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
 ) -> None:
     eval_root = eval_session.samples_root(session_id)
     with db.connection_for() as conn:
@@ -155,7 +165,7 @@ def _stage_generate(
 
     pending = [c for c in candidates if not _generation_complete(c, vdir, eval_root)]
     if not pending:
-        progress("[generate] 全部候选已完成，跳过出图阶段")
+        progress.info(msg("worker.eval.generate_all_done"))
         return
 
     # daemon 的生命周期是**整个出图阶段**，不是单个候选 —— 底模常驻的收益全在这里。
@@ -174,13 +184,13 @@ def _generate_candidates(
     version: dict[str, Any],
     vdir: Path,
     eval_root: Path,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
 ) -> None:
     for cand in candidates:
         cid = int(cand["id"])
         label = f"{cand['role']}#{cand['ordinal']}"
         if _generation_complete(cand, vdir, eval_root):
-            progress(f"[generate] {label} 已完成，跳过")
+            progress.info(msg("worker.eval.candidate_skipped", label=label))
             continue
 
         with db.connection_for() as conn:
@@ -192,7 +202,10 @@ def _generate_candidates(
             if run_id and _load_run(vdir, run_id, eval_root) is None:
                 # run 文件没了（被清理 / 磁盘问题），DB 里的 id 已经失效。不丢弃它就会
                 # 拿着这个 id 反复调 run_sample_job 撞「run 不存在」，永远恢复不了。
-                progress(f"[generate] {label} run={run_id} 已丢失，重新出图")
+                progress.warning(
+                    "Sample run %s for candidate %s is missing; generating it again",
+                    run_id, label,
+                )
                 run_id = ""
             if not run_id:
                 stored = str(cand.get("checkpoint_path") or "")
@@ -217,7 +230,9 @@ def _generate_candidates(
                         conn, cid, run_id=run_id,
                         samples_total=int(run["summary"]["total"]),
                     )
-            progress(f"[generate] {label} run={run_id}")
+            progress.info(msg(
+                "worker.eval.candidate_start", label=label, run_id=run_id,
+            ))
             result = eval_samples.run_sample_job(
                 project, version, vdir, run_id,
                 generator=generate,
@@ -233,18 +248,30 @@ def _generate_candidates(
                     samples_done=done,
                     error=None if ok else str(result.get("error") or "出图未完成"),
                 )
-            progress(
-                f"[generate] {label} status={result.get('status')} "
-                f"done={done}/{summary.get('total')}"
-            )
+            if ok:
+                progress.info(msg(
+                    "worker.eval.candidate_done",
+                    label=label, done=done, total=summary.get("total"),
+                ))
+            else:
+                progress.warning(
+                    "Candidate %s finished with status=%s (%d/%d images); its "
+                    "metrics may be incomplete",
+                    label, result.get("status"), done, summary.get("total"),
+                )
         except Exception as exc:  # noqa: BLE001
-            # 单个候选失败不中断整个 Session —— 其余候选仍然值得跑完
-            logger.exception("candidate generation failed (candidate=%s)", cid)
+            # 单个候选失败不中断整个 Session —— 其余候选仍然值得跑完；
+            # 整体仍可能 partial 成功，因此是 WARNING 不是 ERROR。
+            # 异常摘要由 traceback 提供，正文不再拼 {exc}（C6）。
+            progress.warning(
+                "Candidate %s (id=%s) failed during generation; continuing with "
+                "the remaining candidates",
+                label, cid, exc_info=True,
+            )
             with db.connection_for() as conn:
                 eval_session.update_candidate(
                     conn, cid, status=eval_session.STATUS_FAILED, error=str(exc)
                 )
-            progress(f"[generate] {label} 失败：{exc}")
 
 
 def _load_run(vdir: Path, run_id: str, eval_root: Path) -> dict[str, Any] | None:
@@ -282,11 +309,14 @@ def _stage_metric(
     project: dict[str, Any],
     version: dict[str, Any],
     vdir: Path,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
 ) -> None:
     spec = _RUNNERS.get(runner)
     if spec is None:
-        progress(f"[metric:{runner}] 未知 runner，跳过")
+        progress.warning(
+            "Unknown metric runner %r in the session plan; skipped, its metrics "
+            "will be missing", runner,
+        )
         return
     run_fn, model_getter, shared_scorer = spec
     model_name = model_getter(secrets.load().eval_metrics)
@@ -322,7 +352,7 @@ def _score_candidates(
     model_name: str,
     metric_keys: list[str],
     stage: str,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
 ) -> None:
     for cand in candidates:
         cid = int(cand["id"])
@@ -334,17 +364,19 @@ def _score_candidates(
             _skip_metrics(
                 cid, metric_keys, model_name, reason="出图未完成，跳过指标",
             )
-            progress(f"[{stage}] {label} 无可用出图，跳过")
+            progress.debug("metric %s: %s has no usable samples, skipped", stage, label)
             continue
         if all(
             by_key.get(k, {}).get("status") == eval_session.STATUS_DONE
             for k in metric_keys
         ):
-            progress(f"[{stage}] {label} 已算过，跳过")
+            progress.debug("metric %s: %s already scored, skipped", stage, label)
             continue
 
         try:
-            progress(f"[{stage}] {label} run={run_id}")
+            progress.info(msg(
+                "worker.eval.metric_start", stage=stage, label=label, run_id=run_id,
+            ))
             saved = run_fn(
                 project, version, vdir, run_id,
                 scorer=scorer,
@@ -352,9 +384,11 @@ def _score_candidates(
             )
             _record_metrics(cid, metric_keys, saved, model_name)
         except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "metric runner failed (session=%s candidate=%s runner=%s)",
-                session_id, cid, runner,
+            # 指标失败写 DB FAILED、session 仍可 partial 成功 → WARNING 不是 ERROR。
+            progress.warning(
+                "Metric runner %s failed for candidate %s (session %s); its "
+                "metrics are recorded as failed and the session continues",
+                runner, label, session_id, exc_info=True,
             )
             with db.connection_for() as conn:
                 for key in metric_keys:
@@ -363,7 +397,6 @@ def _score_candidates(
                         status=eval_session.STATUS_FAILED,
                         model_ref=model_name, reason=str(exc),
                     )
-            progress(f"[{stage}] {label} 失败：{exc}")
 
 
 def _record_metrics(
@@ -426,7 +459,7 @@ def _int_or_none(raw: Any) -> int | None:
 # Stage 3：聚合
 # ---------------------------------------------------------------------------
 
-def _stage_aggregate(session_id: int, progress: Callable[[str], None]) -> int:
+def _stage_aggregate(session_id: int, progress: TaskLogLike) -> int:
     with db.connection_for() as conn:
         eval_session.update_session(conn, session_id, stage=eval_session.STAGE_AGGREGATE)
         candidates = eval_session.list_candidates(conn, session_id)
@@ -441,12 +474,22 @@ def _stage_aggregate(session_id: int, progress: Callable[[str], None]) -> int:
         1 for rows in results.values()
         for r in rows if r.get("status") == eval_session.STATUS_DONE
     )
-    progress(
-        f"[done] session={session_id} status={status} "
-        f"candidates={len(candidates)} metrics_done={n_metrics}"
-    )
+    if status in (eval_session.STATUS_PARTIAL, eval_session.STATUS_FAILED):
+        progress.warning(
+            "Evaluation finished with status=%s: session=%s candidates=%d "
+            "metrics_done=%d; some results are missing",
+            status, session_id, len(candidates), n_metrics,
+        )
+    else:
+        progress.info(msg(
+            "worker.eval.done",
+            session=session_id, n=len(candidates), m=n_metrics,
+        ))
     if report is None:
-        progress("[warn] report 生成失败（结果仍在数据库里）")
+        progress.warning(
+            "Writing the evaluation report failed; the results are still in the "
+            "database and visible in the app"
+        )
     # partial 仍算作业成功：有结果可看，队列不该标红
     return 0 if status in (eval_session.STATUS_DONE, eval_session.STATUS_PARTIAL) else 1
 

@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.log_messages import msg
 from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_dino"
@@ -56,7 +57,7 @@ def run_dino_job(
     )
 
     try:
-        progress(f"[eval-dino] scoring run={run['run_id']} model={model}")
+        progress(msg("eval.dino_start", run_id=run["run_id"], model=model))
         scored = (scorer or _default_scorer)(run, version_dir, model, progress)
         result = _result_from_scores(scored, model)
         saved = eval_metrics.save_result(
@@ -66,7 +67,7 @@ def run_dino_job(
             eval_root=eval_root,
         )
         state = saved["metric_states"]["dino_i"]
-        progress(f"[eval-dino] done dino_i={state['status']}")
+        progress(msg("eval.dino_done", status=state["status"]))
         return saved
     except Exception as exc:
         _save_failed(version_dir, str(run["run_id"]), model, str(exc), eval_root)
@@ -254,7 +255,7 @@ def _load_dino(model_name: str, progress: TaskLogLike):
     from studio.services.models.downloader import ensure_eval_model
 
     local_dir = ensure_eval_model("dino", model_name, on_log=progress)
-    progress(f"[eval-dino] loading DINO on {device}")
+    progress(msg("eval.dino_loading", device=device))
     processor = AutoImageProcessor.from_pretrained(str(local_dir))
     model = AutoModel.from_pretrained(str(local_dir)).to(device)
     model.eval()
@@ -349,7 +350,9 @@ def _encode_images(
     for start in range(0, len(paths), batch_size):
         batch_paths = paths[start:start + batch_size]
         end = start + len(batch_paths)
-        progress(f"[eval-dino] encoding {label} images {start + 1}-{end}")
+        progress(msg(
+            "eval.dino_encoding", label=label, start=start + 1, end=end,
+        ))
         images = []
         for path in batch_paths:
             with Image.open(path) as img:
