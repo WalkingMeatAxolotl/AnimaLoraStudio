@@ -127,11 +127,24 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
     }
     commitSecrets({ llm_tagger: { presets: [...presets, next] } } as SecretsPatch)
     setEditingId(id)
+    toast(t('llmPreset.savedAsCopy', { label }), 'success')
+  }
+
+  // 导出 json 下载直链（后端已抹掉 api_key/base_url/model_ids）；编辑走 instant-apply
+  // 已落盘，服务端状态即所见状态。
+  const exportPreset = () => {
+    const a = document.createElement('a')
+    a.href = api.llmPresetExportUrl(editingId)
+    a.download = `llm-preset-${editingId}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   const deletePreset = async () => {
     if (preset.builtin || presets.length <= 1) return
-    if (!(await confirm(t('settings.confirmDeletePreset', { label: preset.label }), { tone: 'danger' }))) return
+    const label = preset.label
+    if (!(await confirm(t('settings.confirmDeletePreset', { label }), { tone: 'danger' }))) return
     const next = presets.filter((p) => p.id !== editingId)
     // 删的是全局默认时把默认转给列表第一个；一次 commit 避免两个 patch 竞态。
     commitSecrets({
@@ -142,6 +155,7 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
           : {}),
       },
     } as SecretsPatch)
+    toast(t('llmPreset.deleted', { label }), 'success')
     onClose()
   }
 
@@ -374,6 +388,9 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
           )}
           <button type="button" onClick={saveAsCopy} className="btn btn-ghost btn-sm">
             {t('llmPreset.saveAsCopy')}
+          </button>
+          <button type="button" onClick={exportPreset} title={t('llmPreset.exportTitle')} className="btn btn-ghost btn-sm">
+            {t('llmPreset.export')}
           </button>
           <span className="flex-1" />
           {!preset.builtin && presets.length > 1 && (

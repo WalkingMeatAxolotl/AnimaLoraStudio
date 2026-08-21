@@ -1,13 +1,16 @@
 """全局凭证 / 服务配置（PR-6 commit 2 从 server.py 抽出）。
 
-4 routes：
+6 routes：
     GET /api/secrets    masked secrets snapshot（API key 等敏感字段 masked）
     PUT /api/secrets    更新 secrets，返回新 masked snapshot
     GET /api/secrets/wandb/presets/{id}/export   下载 wandb preset yaml（含真实 api_key）
     POST /api/secrets/wandb/presets/import       导入 wandb preset（yaml/json 上传）
+    GET /api/secrets/llm/presets/{id}/export     下载 llm preset json（不含 API 信息）
+    POST /api/secrets/llm/presets/import         导入 llm preset（json/yaml 上传）
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -90,6 +93,57 @@ async def import_wandb_preset(file: UploadFile = File(...)) -> dict[str, Any]:
         raise DomainError(
             f"WandB preset is invalid: {exc}",
             code="secrets.wandb_preset_invalid",
+            http_status=400,
+        ) from exc
+    return {
+        "id": preset.id,
+        "label": preset.label,
+        "secrets": secrets.to_masked_dict(new),
+    }
+
+
+@router.get("/api/secrets/llm/presets/{preset_id}/export")
+def export_llm_preset(preset_id: str) -> Response:
+    """下载单个 LLM tagger preset 的 json。**不含 API 信息**（api_key / base_url /
+    model_ids 已置空）——预设文件用于分享提示词配方，连接信息接收方自己填。"""
+    data = secrets.export_llm_preset(preset_id)
+    if data is None:
+        raise DomainError(
+            f"LLM preset {preset_id!r} not found",
+            code="secrets.llm_preset_not_found",
+            details={"id": preset_id},
+            http_status=404,
+        )
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    # preset.id 经 validator 归一为 alnum/_/-，直接进 filename 安全
+    return Response(
+        content=text,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="llm-preset-{data["id"]}.json"'
+        },
+    )
+
+
+@router.post("/api/secrets/llm/presets/import")
+async def import_llm_preset(file: UploadFile = File(...)) -> dict[str, Any]:
+    """上传 json/yaml 导入 LLM tagger preset；撞名自动加后缀，不改全局默认。"""
+    raw = await file.read()
+    try:
+        data = yaml.safe_load(raw.decode("utf-8"))  # yaml 是 json 的 superset
+    except Exception as exc:
+        raise DomainError(
+            f"LLM preset file could not be parsed: {exc}",
+            code="secrets.llm_preset_invalid",
+            http_status=400,
+        ) from exc
+    stem = re.sub(r"\.(ya?ml|json)$", "", file.filename or "", flags=re.I)
+    try:
+        new, preset = secrets.import_llm_preset(data, fallback_label=stem)
+    except (ValueError, ValidationError) as exc:
+        raise DomainError(
+            f"LLM preset is invalid: {exc}",
+            code="secrets.llm_preset_invalid",
             http_status=400,
         ) from exc
     return {
