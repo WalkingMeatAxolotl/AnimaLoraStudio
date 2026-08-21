@@ -647,3 +647,42 @@ def test_image_data_url_respects_payload_cap(tmp_path: Path) -> None:
 
     encoded = data_url.split(",", 1)[1].encode("ascii")
     assert len(encoded) <= int(0.25 * 1024 * 1024)
+
+
+@pytest.mark.parametrize(
+    "base_url,kind,expected",
+    [
+        # 标准 OpenAI 风格 /v1 结尾
+        ("http://x/v1", "chat/completions", "http://x/v1/chat/completions"),
+        # 智谱等非 v1 版本段结尾：不能再补 /v1（issue：/v4/v1/... 404）
+        (
+            "https://open.bigmodel.cn/api/paas/v4",
+            "chat/completions",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        ),
+        (
+            "https://open.bigmodel.cn/api/paas/v4/",
+            "models",
+            "https://open.bigmodel.cn/api/paas/v4/models",
+        ),
+        # 带字母后缀的版本段（如 Google /v1beta）同样视为版本号
+        ("http://x/v1beta", "chat/completions", "http://x/v1beta/chat/completions"),
+        # 无版本段时才补 /v1
+        (
+            "http://localhost:11434",
+            "chat/completions",
+            "http://localhost:11434/v1/chat/completions",
+        ),
+        ("http://x/api", "chat/completions", "http://x/api/v1/chat/completions"),
+        # 用户粘了完整 endpoint：剥掉末段再拼目标 kind
+        (
+            "http://x/api/paas/v4/chat/completions",
+            "models",
+            "http://x/api/paas/v4/models",
+        ),
+    ],
+)
+def test_openai_compatible_endpoint_versioned_bases(
+    base_url: str, kind: str, expected: str
+) -> None:
+    assert llm_tagger._openai_compatible_endpoint(base_url, kind=kind) == expected

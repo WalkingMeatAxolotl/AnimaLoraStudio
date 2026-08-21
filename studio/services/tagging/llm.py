@@ -113,10 +113,10 @@ def _openai_compatible_endpoint(base_url: str, *, kind: str) -> str:
         if path.endswith(suffix):
             root = base[: -len(suffix)]
             return f"{root}/{kind}"
-    if path.endswith("/v1"):
+    # 末段已是版本号（/v1、/v4、/v1beta 等）就直接拼；只有无版本段时才补 /v1，
+    # 避免把智谱等 /v4 结尾的 base_url 拼成 /v4/v1/... 导致 404。
+    if re.search(r"/v\d+[a-z0-9]*$", path):
         return f"{base}/{kind}"
-    if path:
-        return f"{base}/v1/{kind}"
     return f"{base}/v1/{kind}"
 
 
