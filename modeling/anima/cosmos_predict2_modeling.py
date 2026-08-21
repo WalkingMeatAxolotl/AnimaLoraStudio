@@ -134,7 +134,8 @@ def warn_flash_fallback(stage: str, shape: tuple, reason: str) -> None:
         return
     _FLASH_FALLBACK_WARNED.add(key)
     _logger.warning(
-        "flash_attn fallback at %s shape=%s: %s（同 shape 只警告这一次）",
+        "flash_attn fallback at %s shape=%s: %s — this shape runs on PyTorch SDPA "
+        "(same shape warns only once)",
         stage,
         shape,
         reason,
@@ -148,7 +149,8 @@ def warn_xformers_fallback(stage: str, shape: tuple, reason: str) -> None:
         return
     _XFORMERS_FALLBACK_WARNED.add(key)
     _logger.warning(
-        "xformers fallback at %s shape=%s: %s（同 shape 只警告这一次）",
+        "xformers fallback at %s shape=%s: %s — this shape runs on PyTorch SDPA "
+        "(same shape warns only once)",
         stage,
         shape,
         reason,

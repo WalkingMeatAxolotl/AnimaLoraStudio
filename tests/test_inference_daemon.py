@@ -55,11 +55,21 @@ _MOCK_DAEMON = textwrap.dedent(
             tid = msg.get("task_id", 0)
             sys.stdout.write(json.dumps({"id":rid,"kind":"started","task_id":tid}) + "\\n")
             sys.stdout.flush()
-            if msg.get("config", {}).get("wait_for_cancel"):
+            cfg = msg.get("config", {})
+            if cfg.get("wait_for_cancel"):
                 continue
-            # 出 1 张图：bytes 走协议 b64 字段（commit 10），不写磁盘
-            sys.stdout.write(json.dumps({"id":rid,"kind":"image_done","task_id":tid,"filename":"fake.png","path":"/anima_gen_%d/fake.png" % tid,"step":1,"total":1,"image_b64":fake_b64,"byte_size":8}) + "\\n")
-            sys.stdout.flush()
+            # 出 image_count 张图（默认 1）：bytes 走协议 b64 字段（commit 10），
+            # 不写磁盘；image_delay 模拟每张的耗时，hang_after_images 模拟
+            # 出完图后卡死（不回 done）——按图超时测试用
+            n = int(cfg.get("image_count", 1))
+            delay = float(cfg.get("image_delay", 0))
+            for i in range(n):
+                if delay:
+                    time.sleep(delay)
+                sys.stdout.write(json.dumps({"id":rid,"kind":"image_done","task_id":tid,"filename":"fake.png","path":"/anima_gen_%d/fake.png" % tid,"step":i+1,"total":n,"image_b64":fake_b64,"byte_size":8}) + "\\n")
+                sys.stdout.flush()
+            if cfg.get("hang_after_images"):
+                continue
             sys.stdout.write(json.dumps({"id":rid,"kind":"done","task_id":tid}) + "\\n")
             sys.stdout.flush()
         elif action == "cancel":
@@ -463,6 +473,55 @@ def test_task_timeout_kills_daemon_and_emits_error(
     assert _wait_for(
         lambda: any(e.get("kind") == "error" for e in events), timeout=6.0,
     )
+    assert not d.is_alive
+    assert d.state == "stopped"
+
+
+def test_task_timeout_resets_per_image(
+    mock_daemon_script: Path, tmp_path: Path,
+) -> None:
+    """超时按单张图计时：每个图片事件重置倒计时。3 张图总时长（~1.5s）
+    超过阈值（1.0s）但每张间隔（0.5s）没超 → 任务健康完成不被杀。
+    按整任务计时的旧语义会在这里误杀（大 XY 网格同款）。"""
+    d = InferenceDaemon(script_path=mock_daemon_script)
+    d.start()
+    assert _wait_for(lambda: d.state == "idle")
+    with d._lock:
+        d._task_timeout_seconds = 1.0
+
+    events: list[dict] = []
+    d.submit_task(
+        task_id=101, config={"image_count": 3, "image_delay": 0.5},
+        output_dir=str(tmp_path), on_event=events.append,
+    )
+    assert _wait_for(
+        lambda: any(e.get("kind") == "done" for e in events), timeout=8.0,
+    )
+    assert not any(e.get("kind") == "error" for e in events)
+    assert d.is_alive
+    d.stop()
+
+
+def test_task_timeout_fires_when_stalled_between_images(
+    mock_daemon_script: Path, tmp_path: Path,
+) -> None:
+    """出完一张图后卡死：从最后一个图片事件起重新计时，到时仍硬杀
+    （重置不能把兜底本身重置没）。"""
+    d = InferenceDaemon(script_path=mock_daemon_script)
+    d.start()
+    assert _wait_for(lambda: d.state == "idle")
+    with d._lock:
+        d._task_timeout_seconds = 0.5
+
+    events: list[dict] = []
+    d.submit_task(
+        task_id=102, config={"image_count": 1, "hang_after_images": True},
+        output_dir=str(tmp_path), on_event=events.append,
+    )
+    assert _wait_for(
+        lambda: any(e.get("kind") == "error" for e in events), timeout=6.0,
+    )
+    assert any(e.get("kind") == "image_done" for e in events)
     assert not d.is_alive
     assert d.state == "stopped"
 

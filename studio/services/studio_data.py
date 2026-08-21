@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..infrastructure.event_bus import bus
+from ..infrastructure.logging import log_file_vanished_during_migration
 from ..infrastructure.paths import DEFAULT_STUDIO_DATA, STUDIO_DATA, STUDIO_DATA_POINTER
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ def _run_migration(src: Path, dst: Path, publish: Publish, pointer_file: Path) -
                     shutil.copy2(f, out)
             except FileNotFoundError:
                 # 扫描后被删（如临时文件）—— 跳过，进度可能停在 <100%，无碍
-                logger.info("迁移期间文件消失，跳过: %s", rel)
+                log_file_vanished_during_migration(logger, rel)
                 continue
             done_files += 1
             done_bytes += size
@@ -259,9 +260,12 @@ def _run_migration(src: Path, dst: Path, publish: Publish, pointer_file: Path) -
             "done_files": done_files,
             "done_bytes": done_bytes,
         })
-        logger.info("studio_data 迁移完成: %s → %s（%d 文件），重启后生效", src, dst, done_files)
+        logger.info(
+            "studio_data migrated: from=%s to=%s files=%d; effective after restart",
+            src, dst, done_files,
+        )
     except Exception as exc:
-        logger.exception("studio_data 迁移失败: %s → %s", src, dst)
+        logger.exception("studio_data migration failed: from=%s to=%s", src, dst)
         # dst 是 target/studio_data 落地目录，开始前为空 / 不存在
         # （validate_target 保证），整树清掉等于回到迁移前；用户的 target 父目录不动
         shutil.rmtree(dst, ignore_errors=True)

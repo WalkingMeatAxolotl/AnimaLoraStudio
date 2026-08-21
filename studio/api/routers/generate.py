@@ -170,9 +170,12 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         # （"model_family=X 不支持 block swap"），整个出图直接崩。用户并没有为这个
         # 模型要求 block swap，所以忽略而不是报错。
         if blocks_to_swap and not supports_capability(body.model_family, "block_swap"):
-            logger.info(
-                "model_family=%s 不支持 block swap，本次出图忽略全局设置的 "
-                "blocks_to_swap=%s", body.model_family, blocks_to_swap,
+            # 与评估出图共用同一条记录点（含按族去重），两处不再各打一句
+            from ...services.eval_generation import (  # noqa: PLC0415 — 惰性避免 import 环
+                note_block_swap_unsupported,
+            )
+            note_block_swap_unsupported(
+                body.model_family, blocks_to_swap, scope="generate",
             )
             blocks_to_swap = 0
 

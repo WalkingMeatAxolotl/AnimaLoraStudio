@@ -72,11 +72,17 @@ def _error_envelope(
 
 
 async def _domain_error_handler(req: Request, exc: DomainError) -> JSONResponse:
-    # 4xx 业务异常用 info（非异常路径，是契约的一部分）；5xx 才 exception。
+    # 4xx 业务异常走 DEBUG（非异常路径，是契约的一部分）；5xx 才 exception。
     if exc.http_status >= 500:
-        logger.exception("domain error %s: %s", exc.code, exc.message)
+        logger.exception(
+            "domain error: code=%s method=%s path=%s msg=%s",
+            exc.code, req.method, req.url.path, exc.message,
+        )
     else:
-        logger.info("domain error %s: %s", exc.code, exc.message)
+        logger.debug(
+            "domain error (4xx): code=%s method=%s path=%s msg=%s",
+            exc.code, req.method, req.url.path, exc.message,
+        )
     return JSONResponse(
         status_code=exc.http_status,
         content=_error_envelope(
@@ -129,7 +135,7 @@ async def _fallback_handler(req: Request, exc: Exception) -> JSONResponse:
     # 未捕获异常 — 进 logger.exception 带完整 traceback + trace_id 给开发查；
     # response body 脱敏不含 traceback 防 leak。
     logger.exception(
-        "unhandled exception in %s %s", req.method, req.url.path,
+        "unhandled exception: method=%s path=%s", req.method, req.url.path,
     )
     return JSONResponse(
         status_code=500,

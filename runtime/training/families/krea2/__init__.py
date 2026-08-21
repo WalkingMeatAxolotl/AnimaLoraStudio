@@ -37,6 +37,7 @@ from ..spec import (
     TextSpec,
 )
 # 单源数据（刀 1 / R3）：见 anima/__init__.py 同位注释的依赖方向说明
+from studio.infrastructure.log_messages import msg
 from studio.domain.common import (
     FAMILY_CAPABILITIES,
     FAMILY_CONFIG_DEFAULTS,
@@ -145,10 +146,7 @@ class Krea2Family:
         from training.families.krea2.loader import load_krea2_model
 
         if attention_backend != "none":
-            logger.info(
-                "Krea2 当前固定使用 PyTorch SDPA；忽略 attention_backend=%s",
-                attention_backend,
-            )
+            logger.info(msg("train.krea2_sdpa_only", backend=attention_backend))
         return load_krea2_model(
             path, device, dtype, purpose=purpose, blocks_to_swap=blocks_to_swap,
         )
@@ -263,7 +261,7 @@ class Krea2Family:
                 else _TE_LOAD_NEED_BYTES
             )
             if need_te_move and _should_yield_dit(vram_policy, device, te_need):
-                logger.info("krea2 显存编排：编码前 DiT 让位到 CPU")
+                logger.debug("krea2: moving the Transformer to CPU before text encoding")
                 model.to("cpu")
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -287,6 +285,7 @@ class Krea2Family:
                 offload()
         if dit_yielded:
             model.to(torch.device(device))
+            logger.debug("krea2: Transformer moved back to GPU after text encoding")
         return sample_image(
             model,
             vae,

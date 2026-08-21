@@ -27,9 +27,10 @@ def worker_main(run_fn: Callable[[int], int]) -> None:
             from ._base import worker_main
             worker_main(run)
 
-    PR-1 C4: 装 setup_logging (ADR-0009)。file=False — worker 走 stdout 进
-    supervisor 重定向 jobs/<id>.log 单写（C round2 §1.2 决策；0.13.x ADR-0009
-    §还的债"演进双写"后改 True）。process 名格式 "worker:<module>/<job_id>"，
+    PR-1 C4: 装 setup_logging (ADR-0009)。file=False — worker 的 stderr（logger）
+    与 stdout（`__EVENT__:` 协议行）由 supervisor 合流到 tasks/<id>/run.log，
+    子进程不落 studio.log（docs/design/logging-target-state.md D2）；console 级别
+    读 supervisor 注入的 ANIMA_LOG_LEVEL=DEBUG。process 名格式 "worker:<module>/<job_id>"，
     便于 jq 按 process 过滤；module 取 sys.argv[0] basename（download_worker.py
     → download_worker → 去掉 _worker 后缀 = download）。
 

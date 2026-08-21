@@ -14,13 +14,15 @@ from typing import Any, Callable
 
 from . import eval_metrics, eval_model_pool, eval_samples
 from .projects import jobs as project_jobs
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLogLike
 
 JOB_KIND = "eval_dino"
 DEFAULT_MODEL_NAME = "facebook/dinov2-small"
 CACHE_KEY = "dino"
 
 DinoScorer = Callable[
-    [dict[str, Any], Path, str, Callable[[str], None]],
+    [dict[str, Any], Path, str, TaskLogLike],
     dict[str, Any],
 ]
 
@@ -37,7 +39,7 @@ def run_dino_job(
     *,
     scorer: DinoScorer | None = None,
     model_name: str | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: TaskLogLike | None = None,
     eval_root: Path | None = None,
 ) -> dict[str, Any]:
     """Compute DINO-I for one completed eval sample run."""
@@ -55,7 +57,7 @@ def run_dino_job(
     )
 
     try:
-        progress(f"[eval-dino] scoring run={run['run_id']} model={model}")
+        progress(msg("eval.dino_start", run_id=run["run_id"], model=model))
         scored = (scorer or _default_scorer)(run, version_dir, model, progress)
         result = _result_from_scores(scored, model)
         saved = eval_metrics.save_result(
@@ -65,7 +67,7 @@ def run_dino_job(
             eval_root=eval_root,
         )
         state = saved["metric_states"]["dino_i"]
-        progress(f"[eval-dino] done dino_i={state['status']}")
+        progress(msg("eval.dino_done", status=state["status"]))
         return saved
     except Exception as exc:
         _save_failed(version_dir, str(run["run_id"]), model, str(exc), eval_root)
@@ -244,7 +246,7 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _load_dino(model_name: str, progress: Callable[[str], None]):
+def _load_dino(model_name: str, progress: TaskLogLike):
     import torch
     from transformers import AutoImageProcessor, AutoModel
 
@@ -253,7 +255,7 @@ def _load_dino(model_name: str, progress: Callable[[str], None]):
     from studio.services.models.downloader import ensure_eval_model
 
     local_dir = ensure_eval_model("dino", model_name, on_log=progress)
-    progress(f"[eval-dino] loading DINO on {device}")
+    progress(msg("eval.dino_loading", device=device))
     processor = AutoImageProcessor.from_pretrained(str(local_dir))
     model = AutoModel.from_pretrained(str(local_dir)).to(device)
     model.eval()
@@ -264,7 +266,7 @@ def _default_scorer(
     run: dict[str, Any],
     version_dir: Path,
     model_name: str,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
     pool: eval_model_pool.ModelPool | None = None,
 ) -> dict[str, Any]:
     import numpy as np
@@ -335,7 +337,7 @@ def _encode_images(
     processor,
     paths: list[Path],
     device: str,
-    progress: Callable[[str], None],
+    progress: TaskLogLike,
     *,
     label: str = "generated",
 ):
@@ -348,7 +350,9 @@ def _encode_images(
     for start in range(0, len(paths), batch_size):
         batch_paths = paths[start:start + batch_size]
         end = start + len(batch_paths)
-        progress(f"[eval-dino] encoding {label} images {start + 1}-{end}")
+        progress(msg(
+            "eval.dino_encoding", label=label, start=start + 1, end=end,
+        ))
         images = []
         for path in batch_paths:
             with Image.open(path) as img:
@@ -472,7 +476,7 @@ def _rel_to_version(version_dir: Path, path: Path) -> str:
 
 
 @contextlib.contextmanager
-def shared_scorer(progress: Callable[[str], None] | None = None):
+def shared_scorer(progress: TaskLogLike | None = None):
     """阶段级共享的 scorer：DINO 只加载一次，跑完全部候选后释放。
 
     `_stage_metric` 本来就是「一个指标跑完所有候选再换下一个」，但

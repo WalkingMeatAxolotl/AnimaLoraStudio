@@ -647,6 +647,66 @@ def test_system_update_channel_round_trip(secrets_file: Path) -> None:
     assert secrets.load().system.update_channel == "stable"
 
 
+# ---------------------------------------------------------------------------
+# tag_dictionary — 标签词典全站 UI 偏好（原 localStorage 开关迁入）
+# ---------------------------------------------------------------------------
+
+
+def test_tag_dictionary_defaults_unset(secrets_file: Path) -> None:
+    """新装 / 旧盘无此组：两开关都是 None（= 从未设过，前端据此一次性 seed）。"""
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is None
+    assert s.tag_dictionary.autocomplete is None
+    secrets_file.write_text(
+        json.dumps({"gelbooru": {"user_id": "alice"}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is None
+    assert s.tag_dictionary.autocomplete is None
+
+
+def test_tag_dictionary_unset_survives_full_dump(secrets_file: Path) -> None:
+    """save() 全量落盘：别的组写盘不能把 None 哨兵变成显式值（否则前端 seed
+    判据失效，旧 localStorage 值迁不过来）。"""
+    secrets.update({"gelbooru": {"user_id": "alice"}})
+    raw = json.loads(secrets_file.read_text(encoding="utf-8"))
+    assert raw["tag_dictionary"] == {"show_translation": None, "autocomplete": None}
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is None
+    assert s.tag_dictionary.autocomplete is None
+
+
+def test_tag_dictionary_round_trip_per_field(secrets_file: Path) -> None:
+    """单字段 PUT 只动该字段（另一字段保持 None / 既有值），false 也要持久化。"""
+    secrets.update({"tag_dictionary": {"show_translation": True}})
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is True
+    assert s.tag_dictionary.autocomplete is None
+    secrets.update({"tag_dictionary": {"autocomplete": False}})
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is True
+    assert s.tag_dictionary.autocomplete is False
+    secrets.update({"tag_dictionary": {"show_translation": False}})
+    s = secrets.load()
+    assert s.tag_dictionary.show_translation is False
+    assert s.tag_dictionary.autocomplete is False
+
+
+def test_tag_dictionary_http_round_trip(client: TestClient) -> None:
+    """GET 暴露 tag_dictionary；PUT 部分 patch 后 GET 回显。"""
+    got = client.get("/api/secrets").json()
+    assert got["tag_dictionary"] == {"show_translation": None, "autocomplete": None}
+    r = client.put(
+        "/api/secrets",
+        json={"tag_dictionary": {"show_translation": False, "autocomplete": True}},
+    )
+    assert r.status_code == 200
+    assert r.json()["tag_dictionary"] == {"show_translation": False, "autocomplete": True}
+    got = client.get("/api/secrets").json()
+    assert got["tag_dictionary"] == {"show_translation": False, "autocomplete": True}
+
+
 def test_system_legacy_file_without_system_field(secrets_file: Path) -> None:
     """老 secrets.json 没有 system 字段时，加载用默认值 stable。"""
     secrets_file.write_text(
@@ -781,6 +841,91 @@ def test_wandb_import_preset_unwraps_wrapper_and_uniquifies_id(secrets_file: Pat
 def test_wandb_import_preset_rejects_non_mapping(secrets_file: Path) -> None:
     with pytest.raises(ValueError):
         secrets.import_wandb_preset(["not", "a", "dict"])
+
+
+def test_llm_export_preset_strips_api_info(secrets_file: Path) -> None:
+    """导出抹掉 API 信息（api_key / base_url / model_ids），其余字段原样。"""
+    secrets.update({
+        "llm_tagger": {
+            "presets": [{
+                "id": "style_json",
+                "api_key": "sk-real",
+                "base_url": "https://relay.example/v1",
+                "model": "gpt-4o",
+            }]
+        }
+    })
+    data = secrets.export_llm_preset("style_json")
+    assert data is not None
+    assert data["api_key"] == ""
+    assert data["base_url"] == ""
+    assert data["model_ids"] == []  # validator 会把 model 前插进 model_ids，导出必须清掉
+    assert data["model"] == "gpt-4o"
+    assert secrets.export_llm_preset("nonexistent") is None
+
+
+def test_llm_import_preset_appends_without_switching_default(secrets_file: Path) -> None:
+    """导入追加到列表、MASK 哨兵按空；与 wandb 版不同，不抢全局默认。"""
+    before = secrets.load().llm_tagger.current_preset
+    new, preset = secrets.import_llm_preset({
+        "label": "Shared Recipe",
+        "api_key": secrets.MASK,
+        "temperature": 0.7,
+    })
+    assert preset.id == "Shared_Recipe"
+    assert preset.api_key == ""
+    assert preset.temperature == pytest.approx(0.7)
+    assert preset.builtin is False
+    assert new.llm_tagger.current_preset == before
+    assert any(p.id == preset.id for p in secrets.load().llm_tagger.presets)
+
+
+def test_llm_import_preset_uniquifies_id_and_drops_builtin_flag(secrets_file: Path) -> None:
+    """label 撞 builtin id 时加后缀；文件里的 builtin 标记丢弃。"""
+    new, preset = secrets.import_llm_preset(
+        {"id": "whatever", "label": "style_json", "builtin": True}
+    )
+    assert preset.id == "style_json_2"
+    assert preset.builtin is False
+    assert any(p.id == "style_json_2" for p in new.llm_tagger.presets)
+
+
+def test_llm_import_preset_rejects_non_mapping(secrets_file: Path) -> None:
+    with pytest.raises(ValueError):
+        secrets.import_llm_preset(["not", "a", "dict"])
+
+
+def test_llm_preset_export_endpoint(client: TestClient) -> None:
+    """导出端点：json attachment、API 信息已抹掉；未知 id 404。"""
+    client.put("/api/secrets", json={
+        "llm_tagger": {"presets": [{"id": "style_json", "api_key": "sk-real", "base_url": "https://x/v1"}]}
+    })
+    resp = client.get("/api/secrets/llm/presets/style_json/export")
+    assert resp.status_code == 200
+    assert "llm-preset-style_json.json" in resp.headers["content-disposition"]
+    data = json.loads(resp.text)
+    assert data["id"] == "style_json"
+    assert data["api_key"] == ""
+    assert data["base_url"] == ""
+    assert client.get("/api/secrets/llm/presets/nope/export").status_code == 404
+
+
+def test_llm_preset_import_endpoint(client: TestClient) -> None:
+    """导入端点：json 上传落盘并返回 masked snapshot；坏文件 400。"""
+    payload = json.dumps({"label": "Team Recipe", "temperature": 0.9})
+    resp = client.post(
+        "/api/secrets/llm/presets/import",
+        files={"file": ("team-recipe.json", payload, "application/json")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["label"] == "Team Recipe"
+    assert any(p["id"] == body["id"] for p in body["secrets"]["llm_tagger"]["presets"])
+    bad = client.post(
+        "/api/secrets/llm/presets/import",
+        files={"file": ("bad.json", "[1, 2, 3]", "application/json")},
+    )
+    assert bad.status_code == 400
 
 
 def test_wandb_current_preset_falls_back_when_missing(secrets_file: Path) -> None:
@@ -943,3 +1088,12 @@ def test_model_sources_round_trip_persistence(secrets_file: Path) -> None:
     assert cands[0].filename == "4x-UltraSharp.pth"
     assert cands[1].kind == "local"
     assert cands[1].path == "D:/up/x.pth"
+
+
+def test_system_log_debug_default_false_and_roundtrip(client: TestClient, secrets_file: Path) -> None:
+    """日志目标态 D1：全局「默认显示调试日志」是后端字段，默认关，PUT 局部更新可存可读。"""
+    assert secrets.load().system.log_debug_default is False
+    r = client.put("/api/secrets", json={"system": {"log_debug_default": True}})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/secrets").json()["system"]["log_debug_default"] is True
+    assert json.loads(secrets_file.read_text(encoding="utf-8"))["system"]["log_debug_default"] is True

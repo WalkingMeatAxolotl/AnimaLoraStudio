@@ -26,6 +26,9 @@ warnings.filterwarnings(
     module="torchsde",
 )
 
+# torchsde 缺失回退告警只出一次（R8 warn-once）
+_torchsde_warned = False
+
 
 class _BrownianTreeNoiseSampler:
     """对齐 ComfyUI BrownianTreeNoiseSampler + BatchedBrownianTree。
@@ -100,10 +103,16 @@ def _build_noise_sampler(
             raise RuntimeError(
                 "Comfy parity dpmpp_3m_sde requires torchsde BrownianTree noise"
             ) from exc
-        import logging
-        logging.getLogger(__name__).warning(
-            "torchsde 未安装，dpmpp_3m_sde 回退独立 Gaussian 噪声（与 ComfyUI / er_sde 差异变化）"
-        )
+        global _torchsde_warned
+        if not _torchsde_warned:
+            _torchsde_warned = True
+            import logging
+            logging.getLogger(__name__).warning(
+                "torchsde is not installed: dpmpp_3m_sde falls back to independent "
+                "Gaussian noise — images will differ from ComfyUI output at the same "
+                "seed; install torchsde for matching results (same warning is not "
+                "repeated)"
+            )
         return _gaussian_noise_sampler(x, seed=seed)
 
 

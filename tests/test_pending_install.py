@@ -4,11 +4,23 @@
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from studio.services.runtime import pending_install
+
+_LOGGER = "studio.services.runtime.pending_install"
+
+
+def _msgs(caplog: pytest.LogCaptureFixture, *, min_level: int) -> str:
+    """pending_install 的输出走模块 logger（不再 print）：INFO=原 stdout、
+    WARNING+=原 stderr。"""
+    return "\n".join(
+        r.getMessage() for r in caplog.records
+        if r.name == _LOGGER and r.levelno >= min_level
+    )
 
 
 @pytest.fixture
@@ -67,7 +79,7 @@ def test_apply_pending_no_marker_is_noop(
 
 
 def test_apply_pending_runs_torch_reinstall_and_clears(
-    isolated_marker: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    isolated_marker: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """有 pending=torch → 调 reinstall + 清 marker。"""
     pending_install.register_torch_reinstall("cu128")
@@ -85,15 +97,16 @@ def test_apply_pending_runs_torch_reinstall_and_clears(
         }
 
     monkeypatch.setattr(torch_setup, "reinstall", fake_reinstall)
-    pending_install.apply_pending()
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        pending_install.apply_pending()
     assert captured == ["cu128"]
     assert not isolated_marker.exists()  # 成功后清掉
-    out = capsys.readouterr().out
-    assert "torch 重装完成" in out
+    assert "torch 重装完成" in _msgs(caplog, min_level=logging.INFO)
+    assert _msgs(caplog, min_level=logging.WARNING) == ""  # 成功路径无 warning/error
 
 
 def test_apply_pending_keeps_marker_on_failure(
-    isolated_marker: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    isolated_marker: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """reinstall 抛 RuntimeError → marker 保留，下次启动重试。"""
     pending_install.register_torch_reinstall("cu128")
@@ -103,23 +116,28 @@ def test_apply_pending_keeps_marker_on_failure(
         raise RuntimeError("network failed")
 
     monkeypatch.setattr(torch_setup, "reinstall", fake_reinstall)
-    pending_install.apply_pending()
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        pending_install.apply_pending()
     # marker 保留
     assert isolated_marker.exists()
     assert pending_install.read_pending()["target"] == "cu128"
-    err = capsys.readouterr().err
-    assert "torch 重装失败" in err
+    err = _msgs(caplog, min_level=logging.ERROR)
+    assert "torch reinstall failed" in err
     assert "network failed" in err
 
 
 def test_apply_pending_unknown_kind_clears_marker(
-    isolated_marker: Path, capsys
+    isolated_marker: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """未知 kind → warn + 清 marker（防止永久卡住）。"""
     isolated_marker.write_text(
         '{"kind": "modelscope", "target": "auto"}', encoding="utf-8"
     )
-    pending_install.apply_pending()
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        pending_install.apply_pending()
     assert not isolated_marker.exists()
-    err = capsys.readouterr().err
-    assert "未知" in err
+    warn = [
+        r for r in caplog.records
+        if r.name == _LOGGER and r.levelno == logging.WARNING
+    ]
+    assert warn and "unknown pending install kind" in warn[0].getMessage()

@@ -77,11 +77,13 @@ class DeferredVAE:
 
     def _ready(self) -> Any:
         if self._value is None:
-            logger.info("采样完成，开始加载 %s", self._label)
+            logger.info("sampling done; loading %s", self._label)
             self._value = self._loader()
             self._resident_device = self._device
         elif self._resident_device != self._device:
-            logger.info("将 %s 从 CPU 移回 %s 用于 decode", self._label, self._device)
+            logger.debug(
+                "moved %s back from CPU to %s for decode", self._label, self._device,
+            )
             self._move(self._value, self._device)
             self._resident_device = self._device
         return self._value
@@ -94,7 +96,10 @@ class DeferredVAE:
             return
         self._move(self._value, "cpu")
         self._resident_device = "cpu"
-        logger.info("%s decode 完成，已按 %s 策略移到 CPU RAM", self._label, vram_policy)
+        logger.debug(
+            "%s decode done; offloaded to CPU RAM by policy=%s",
+            self._label, vram_policy,
+        )
         try:
             import gc
             import torch
@@ -103,7 +108,9 @@ class DeferredVAE:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:
-            logger.warning("VAE decode 后释放 CUDA cache 失败", exc_info=True)
+            logger.warning(
+                "releasing the CUDA cache after VAE decode failed", exc_info=True,
+            )
 
     def __getattr__(self, name: str) -> Any:
         # Only called after normal proxy attributes fail, so the loader itself
@@ -175,7 +182,10 @@ def read_lora_meta(path: str) -> LoRAMeta:
         with safe_open(str(path), framework="pt", device="cpu") as f:
             meta = f.metadata() or {}
     except Exception as e:
-        logger.warning(f"读 LoRA metadata 失败 {path}: {e}; 用默认参数")
+        logger.warning(
+            "read LoRA metadata failed: path=%s err=%s; using default parameters",
+            path, e,
+        )
         return LoRAMeta(_DEFAULT_RANK, _DEFAULT_ALPHA, _DEFAULT_ALGO, _DEFAULT_FACTOR)
 
     try:
@@ -221,7 +231,9 @@ def read_lora_meta(path: str) -> LoRAMeta:
             try:
                 parsed[str(k)] = int(v)
             except (ValueError, TypeError):
-                logger.warning(f"lora_reg_dims 条目跳过（rank 非整数）: {k!r}={v!r}")
+                logger.debug(
+                    "lora_reg_dims entry skipped (rank is not an integer): %r=%r", k, v,
+                )
         if parsed:
             lora_reg_dims = parsed
 
@@ -348,7 +360,10 @@ def apply_loras(
     for spec in specs:
         path = spec.path or ""
         if not path or not Path(path).exists():
-            logger.warning(f"LoRA 路径不存在，跳过: {path!r}")
+            logger.warning(
+                "LoRA file not found; skipped: path=%s "
+                "(this LoRA has no effect on the output)", path,
+            )
             continue
 
         meta = read_lora_meta(path)
@@ -429,9 +444,9 @@ def apply_loras(
                 f"（可能属于其他模型族，或是本路径尚不支持的键格式）。"
             )
         logger.info(
-            f"已加载 LoRA: {Path(path).name} "
-            f"(algo={algo}, rank={rank}, alpha={alpha}, "
-            f"scale={spec.scale}; missing={missing}, unexpected={unexpected})"
+            "loaded LoRA: name=%s algo=%s rank=%s alpha=%s scale=%s "
+            "missing=%d unexpected=%d",
+            Path(path).name, algo, rank, alpha, spec.scale, missing, unexpected,
         )
         adapters.append(adapter)
 
@@ -473,7 +488,9 @@ def apply_loras(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:
-            logger.warning("failed to trim CUDA cache after fp8 LoRA merge", exc_info=True)
+            logger.warning(
+                "trimming the CUDA cache after the fp8 LoRA merge failed", exc_info=True,
+            )
         return [merged]
     return adapters
 
@@ -498,9 +515,9 @@ def cleanup_generate_tempdir(task_id: int) -> None:
         return
     try:
         shutil.rmtree(d)
-        logger.info(f"cleaned generate tempdir: {d}")
+        logger.debug("cleaned generate tempdir: %s", d)
     except OSError as e:
-        logger.warning(f"failed to clean {d}: {e}")
+        logger.debug("clean generate tempdir failed: path=%s", d, exc_info=True)
 
 
 def cleanup_stale_generate_tempdirs() -> None:
@@ -513,6 +530,8 @@ def cleanup_stale_generate_tempdirs() -> None:
             continue
         try:
             shutil.rmtree(d)
-            logger.info(f"cleaned stale generate tempdir: {d}")
+            logger.debug("cleaned stale generate tempdir: %s", d)
         except OSError as e:
-            logger.warning(f"failed to clean stale {d}: {e}")
+            logger.debug(
+                "clean stale generate tempdir failed: path=%s", d, exc_info=True,
+            )

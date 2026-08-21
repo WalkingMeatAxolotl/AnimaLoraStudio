@@ -32,7 +32,7 @@ def trim_working_set() -> bool:
         handle = ctypes.windll.kernel32.GetCurrentProcess()
         ok = bool(ctypes.windll.psapi.EmptyWorkingSet(handle))
         if ok:
-            logger.info("working set 已 trim（mmap 文件缓存页归还系统）")
+            logger.debug("sysmem: working set trimmed, mmap file cache pages returned to the OS")
         return ok
     except Exception:
         return False
@@ -205,11 +205,14 @@ def check_pinned_budget(need_bytes: int, *, blocks: int) -> None:
         )
 
 
-def log_vram(stage: str, device=None) -> None:
+def log_vram(stage_id: str, device=None) -> None:
     """在关键节点打一行显存/内存快照，方便判断 block swap 等旋钮的实际效果。
 
     刻意同时打 torch 已分配量与**全卡**已用量：WDDM 下两者可能差很多（驱动
     侧开销 + 其他进程），只看 torch 的数会低估真实占用。查询失败静默跳过。
+
+    ``stage_id``：阶段标签的 msg_id（``train.vram_stage_*``），由本函数按当前
+    UI 语言渲染 —— 调用点传中文串会让整行的语言随调用点漂移。
     """
     try:
         import torch
@@ -225,12 +228,17 @@ def log_vram(stage: str, device=None) -> None:
         used = (total - free) / 1024**3
     except Exception:  # noqa: BLE001
         return
+    from studio.infrastructure.log_messages import msg
+
     ram = available_ram_bytes()
-    ram_note = f"，可用内存 {ram / 1024**3:.1f}GB" if ram else ""
-    logger.info(
-        "[显存] %s：torch 已分配 %.2fGB / 保留 %.2fGB，全卡已用 %.2fGB / %.1fGB%s",
-        stage, allocated, reserved, used, total / 1024**3, ram_note,
-    )
+    ram_note = msg("train.vram_ram_suffix", ram=f"{ram / 1024**3:.1f}") if ram else ""
+    logger.info(msg(
+        "train.vram_snapshot",
+        stage=msg(stage_id),
+        alloc=f"{allocated:.2f}", reserved=f"{reserved:.2f}",
+        used=f"{used:.2f}", total=f"{total / 1024**3:.1f}",
+        ram=ram_note,
+    ))
 
 
 def torch_device_pci_bus_id() -> str | None:

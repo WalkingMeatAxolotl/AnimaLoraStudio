@@ -104,7 +104,7 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     # PR-1 C4: 统一日志体系入口 (ADR-0009)。第一行调，让 ensure_dirs / db.init_db
     # 自己 emit 的 log 也能进 studio.log。setup_logging 自身 mkdir LOGS_DIR
     # 不需要等 ensure_dirs。env ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
-    setup_logging("webui", level=os.environ.get("ANIMA_LOG_LEVEL", "INFO"))
+    setup_logging("webui")  # console 级别读 ANIMA_LOG_LEVEL（setup_logging 内部）
 
     # 装 Windows ProactorEventLoop 的 ConnectionResetError 过滤器（详见 helper docstring）
     _install_proactor_disconnect_filter(asyncio.get_running_loop())
@@ -151,12 +151,18 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         try:
             if _md.taeflux_available():
                 return
-            logger.info("background-downloading TAEFlux (~1.6MB)…")
-            ok = _md.download_taeflux(on_log=lambda m: logger.info("[taeflux] %s", m))
+            logger.info("[taeflux] downloading in background: size=~1.6 MB")
+            ok = _md.download_taeflux(on_log=lambda m: logger.debug("[taeflux] %s", m))
             if not ok:
-                logger.warning("taeflux background download failed; preview disabled until manual install")
+                logger.warning(
+                    "[taeflux] background download failed; latent preview stays "
+                    "disabled until TAEFlux is installed manually"
+                )
         except Exception:
-            logger.exception("taeflux background download crashed")
+            logger.warning(
+                "[taeflux] background download thread crashed; latent preview stays disabled",
+                exc_info=True,
+            )
     threading.Thread(target=_bg_download_taeflux, name="taeflux-bg-download", daemon=True).start()
 
     # Tag 翻译词典（约 30MB SQLite）后台下载：仅当 active.json 不存在时拉取；失败只
@@ -166,12 +172,12 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         try:
             if _td.ACTIVE_JSON.exists():
                 return
-            logger.info("background-downloading tag dictionary (~30MB)…")
+            logger.info("downloading tag dictionary in background: size=~30 MB")
             _td.download_default()
         except Exception as exc:
             logger.warning(
-                "tag dictionary background download failed (%s); "
-                "user can retry from Settings → Tag dictionary",
+                "tag dictionary background download failed: %s; "
+                "retry from Settings → Tag dictionary",
                 exc,
             )
     threading.Thread(target=_bg_download_tag_dict, name="tag-dict-bg-download", daemon=True).start()
@@ -185,7 +191,9 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
             with db.connection_for() as conn:
                 eval_cleanup.cleanup_legacy_eval_on_startup(conn)
         except Exception:
-            logger.exception("legacy eval cleanup failed (harmless; will retry next start)")
+            logger.warning(
+                "legacy eval cleanup failed; will retry on the next start", exc_info=True,
+            )
     threading.Thread(
         target=_bg_cleanup_legacy_eval, name="legacy-eval-cleanup", daemon=True
     ).start()
@@ -215,7 +223,7 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         n = generate_cache.total_count()
         if n:
             generate_cache.clear_all()
-            logger.info("flushed generate disk cache (%d images) after SSE idle", n)
+            logger.info("flushed generate disk cache: images=%d reason=sse_idle", n)
         _disconnect_timer["t"] = None
 
     bus.set_connection_callbacks(

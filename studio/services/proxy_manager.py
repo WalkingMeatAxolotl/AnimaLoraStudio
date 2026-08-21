@@ -42,10 +42,12 @@ def get_proxy_dict() -> Optional[Dict[str, str]]:
         if https_p:
             proxies["https"] = https_p
 
-        logger.info(f"Using proxies: {proxies}")
+        logger.debug("using proxies: %s", proxies)
         return proxies if proxies else None
     except Exception as e:
-        logger.error(f"Failed to get proxy: {e}")
+        logger.warning(
+            "read proxy settings failed; continuing without a proxy", exc_info=True,
+        )
         return None
 
 
@@ -65,7 +67,6 @@ def patch_requests_session(session):
     proxies = get_proxy_dict()
     if proxies:
         session.proxies.update(proxies)
-        logger.info(f"Patched session proxies: {session.proxies}")
-    else:
-        logger.info("No proxy configured, session unchanged")
+        logger.debug("patched session proxies: %s", session.proxies)
+    # 没配代理 = 什么都没发生，不记日志（答不出受众）
     return session

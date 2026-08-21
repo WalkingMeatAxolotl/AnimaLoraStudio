@@ -6,8 +6,9 @@
   - stage='upscale' (默认)：串行调 `studio.services.upscaler.upscale_file()`
   - stage='crop'：用 PIL 把 preprocess/ 下的图按归一化 rect 切成 N 张产物
 
-日志规范：只走 stdout（supervisor 重定向到 log 文件），不要再 open 同一个
-log 文件，避免 LogTailer 读两次。
+日志规范：只走 logger（supervisor 把 stdout/stderr 合流重定向到 log 文件），
+不要再 open 同一个 log 文件，避免 LogTailer 读两次。唯一裸 print 是
+`emit_event` 的 `__EVENT__:` stdout 协议行。
 
 取消：worker 主体在每张图前检测 SIGTERM/CTRL_BREAK 信号（Python 解释器
 默认对 SIGTERM 抛 KeyboardInterrupt 在 main thread 里）；当前轮的图处理完
@@ -25,8 +26,12 @@ from typing import Any, Callable
 
 from PIL import Image
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.preprocess_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.preprocess_worker")
 
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLog, TaskLogLike
 from studio import db
 from studio.domain.errors import DomainError
 from studio.services.preprocess import core as preprocess
@@ -35,6 +40,8 @@ from studio.services import models as model_downloader
 from studio.services.preprocess import manifest as preprocess_manifest
 from studio.services.preprocess import masks as train_masks
 from studio.services.inference import upscaler
+
+from utils.log_throttle import ProgressThrottle, RepeatThrottle
 
 
 _stop_requested = False
@@ -67,22 +74,27 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("Preprocess job %s not found in the database; nothing to run", job_id)
         return 1
     if job["kind"] != preprocess.PREPROCESS_KIND:
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error(
+            "Internal error: job %s has kind=%s, not a preprocess job; aborting",
+            job_id, job["kind"],
+        )
         return 1
 
     params = job.get("params_decoded") or {}
     # 缺 stage 字段视为老 upscale job（向后兼容）
     stage = params.get("stage", preprocess.STAGE_UPSCALE)
 
-    def log(line: str) -> None:
-        print(line, flush=True)
+    log = TaskLog(logger)
 
     def emit_event(evt_type: str, **payload) -> None:
         """通过 stdout 标记行 → supervisor 解析 → SSE。供前端实时更新用，
-        不会进 job 日志。supervisor 端常量见 `studio/supervisor.py:_EVENT_MARKER`。"""
+        不会进 job 日志。supervisor 端常量见 `studio/supervisor.py:_EVENT_MARKER`。
+
+        这里**必须**是裸 print（stdout 协议行白名单）：走 logger 会被 Human
+        formatter 加前缀，supervisor 就认不出 `__EVENT__:` 行头了。"""
         try:
             print(f"__EVENT__:{evt_type}:{json.dumps(payload, ensure_ascii=False)}", flush=True)
         except Exception:  # noqa: BLE001 — 推事件失败不影响主流程
@@ -92,17 +104,23 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
         with db.connection_for() as conn:
             project = projects.get_project(conn, job["project_id"])
         if not project:
-            log(f"[error] project {job['project_id']} missing")
+            log.error(
+                "Project %s no longer exists; preprocessing aborted",
+                job["project_id"],
+            )
             return 1
 
         version_id = job.get("version_id")
         if version_id is None:
-            log("[error] preprocess job 缺 version_id（ADR 0010 train scope）")
+            log.error(
+                "Internal error: the preprocess job does not say which version "
+                "to work on; aborting"
+            )
             return 1
         with db.connection_for() as conn:
             version = versions.get_version(conn, version_id)
         if not version:
-            log(f"[error] version {version_id} missing")
+            log.error("Version %s no longer exists; preprocessing aborted", version_id)
             return 1
         if stage == preprocess.STAGE_CROP:
             return _run_crop_train(project, version, params, log, emit_event)
@@ -110,13 +128,12 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
             return _run_upscale_train(
                 project, version, params, log, emit_event,
             )
-        log(f"[error] 未知 stage: {stage!r}")
+        log.error("Internal error: unknown preprocess stage %r; aborting", stage)
         return 1
-    except Exception as exc:  # noqa: BLE001
-        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
-        # log 给人读短摘要。
-        logger.exception("preprocess worker crashed (job_id=%s)", job_id)
-        log(f"[error] {exc}")
+    except Exception:  # noqa: BLE001
+        # PR-1 C7: logger.exception 带 trace_id 进 stderr；异常摘要由 traceback
+        # 提供，不再另发一条 log 行（C6）。
+        logger.exception("Preprocess worker crashed: job=%s", job_id)
         return 1
 
 
@@ -124,7 +141,7 @@ def _run_upscale_train(
     project: dict[str, Any],
     version: dict[str, Any],
     params: dict[str, Any],
-    log: Callable[[str], None],
+    log: TaskLogLike,
     emit_event: Callable[..., None],
 ) -> int:
     """ADR 0010 train-scope upscale。
@@ -151,8 +168,9 @@ def _run_upscale_train(
 
     model_path = model_downloader.upscaler_target(model_label)
     if not model_path.exists():
-        log(
-            f"[error] 模型权重不存在：{model_path}（请先在设置页下载 {model_label}）"
+        log.error(
+            "Upscaler weights not found: %s; download %s on the settings page first",
+            model_path, model_label,
         )
         return 1
 
@@ -161,52 +179,80 @@ def _run_upscale_train(
             project, version["label"], mode=mode, names=names
         )
     except DomainError as exc:
-        log(f"[error] 解析目标失败: {exc}")
+        log.error(
+            "Resolving which images to process failed: %s; preprocessing aborted",
+            exc,
+        )
         return 1
 
     total = len(sources)
     if total == 0:
-        log("[done] 没有需要处理的图")
+        log.info(msg("worker.preprocess.no_images"))
         return 0
 
     target_desc = (
         f"{int(math.sqrt(target_area))}²={target_area}px"
         if target_area else "off (直接 4×)"
     )
-    log(
-        f"[start] mode={mode} model={model_label} tile={tile_size}+{tile_pad} "
-        f"device={device} target={target_desc} total={total} scope=train"
-    )
+    log.info(msg(
+        "worker.preprocess.upscale_start",
+        mode=mode, model=model_label, tile=tile_size, pad=tile_pad,
+        device=device, target=target_desc, total=total,
+    ))
 
     try:
         import torch
         resolved_dev = upscaler.resolve_device(device)
         resolved_dtype = upscaler.resolve_dtype("auto", resolved_dev)
+        cuda_available = torch.cuda.is_available()
         gpu_name = (
             torch.cuda.get_device_name(0)
-            if resolved_dev.type == "cuda" and torch.cuda.is_available()
+            if resolved_dev.type == "cuda" and cuda_available
             else "—"
         )
-        log(
-            f"[device] resolved={resolved_dev} dtype={str(resolved_dtype).replace('torch.', '')} "
-            f"gpu={gpu_name} cuda_available={torch.cuda.is_available()}"
+        log.debug(
+            "device: resolved=%s dtype=%s gpu=%s cuda_available=%s",
+            resolved_dev, str(resolved_dtype).replace("torch.", ""),
+            gpu_name, cuda_available,
         )
+        if str(device).startswith("cuda") and not cuda_available:
+            log.warning(
+                "CUDA was requested but is not available; upscaling runs on the "
+                "CPU and will be roughly 10× slower"
+            )
         upscaler.load_model(model_path, device=resolved_dev, dtype=resolved_dtype)
-        log(f"[model] {model_label} loaded → {resolved_dev}")
+        log.info(msg(
+            "worker.preprocess.model_ready", model=model_label, device=resolved_dev,
+        ))
     except Exception as exc:  # noqa: BLE001
-        log(f"[device] diagnostic failed: {exc}（继续，但可能跑在 CPU 上）")
+        log.warning(
+            "Device diagnostics failed: %s; upscaling continues but may run on "
+            "the CPU (roughly 10× slower)", exc,
+        )
 
     succeeded = 0
     failed = 0
     skipped = 0
+    repeat = RepeatThrottle(log)
+    # 逐图行降 DEBUG，可见进度由节流后的计数 INFO 承担（Q3 三件套）。
+    throttle = ProgressThrottle(total)
 
     for idx, src_rel in enumerate(sources, start=1):
         if _stop_requested:
-            log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
+            log.warning(
+                "Canceled by the user after %d/%d images; the rest were left "
+                "unprocessed", idx - 1, total,
+            )
             break
         src_path = train_dir / src_rel
         if not src_path.exists():
-            log(f"[skip] ({idx}/{total}) {src_rel}: 源已不存在")
+            repeat.hit(
+                "source_gone",
+                "%d images skipped: the source file was gone (first: %s)",
+                "Image %d/%d skipped: %s no longer exists",
+                idx, total, src_rel,
+                first=src_rel,
+            )
             skipped += 1
             emit_event(
                 "preprocess_progress",
@@ -238,7 +284,7 @@ def _run_upscale_train(
         else:
             save_kwargs = {"format": "PNG", "optimize": False}
 
-        log(f"[upscale] ({idx}/{total}) {src_rel}")
+        log.debug("upscale: %d/%d %s", idx, total, src_rel)
         try:
             meta = upscaler.upscale_file(
                 src_path,
@@ -263,8 +309,18 @@ def _run_upscale_train(
                 with Image.open(dst_path) as up_img:
                     train_masks.resize_mask_like(train_dir, src_rel, up_img.size)
             except Exception as exc:  # noqa: BLE001
-                log(f"   ⚠ mask 跟随放大失败: {exc}")
+                repeat.hit(
+                    "mask_resize_failed",
+                    "%d masks could not be resized (first: %s); those images are "
+                    "upscaled but their masks are stale",
+                    "Resizing the mask for %s failed: %s; the image was upscaled "
+                    "but its mask still has the old size",
+                    src_rel, exc,
+                    first=src_rel,
+                )
             succeeded += 1
+            if throttle.should_emit(idx):
+                log.info(msg("worker.preprocess.progress", done=idx, total=total))
             emit_event(
                 "preprocess_progress",
                 idx=idx, total=total, name=src_rel, status="done",
@@ -272,7 +328,13 @@ def _run_upscale_train(
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
         except Exception as exc:  # noqa: BLE001
-            log(f"[fail] {src_rel}: {exc}")
+            repeat.hit(
+                "upscale_failed",
+                "%d images failed to upscale (first: %s)",
+                "Upscaling %s failed: %s; image left unchanged",
+                src_rel, exc,
+                first=src_rel,
+            )
             failed += 1
             emit_event(
                 "preprocess_progress",
@@ -281,7 +343,17 @@ def _run_upscale_train(
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
 
-    log(f"[done] succeeded={succeeded} failed={failed} skipped={skipped}")
+    repeat.drain()
+    if failed:
+        log.warning(
+            "Upscaling finished with failures: succeeded=%d failed=%d skipped=%d",
+            succeeded, failed, skipped,
+        )
+    else:
+        log.info(msg(
+            "worker.preprocess.upscale_done",
+            succeeded=succeeded, failed=failed, skipped=skipped,
+        ))
     return 0
 
 
@@ -289,7 +361,7 @@ def _run_crop_train(
     project: dict[str, Any],
     version: dict[str, Any],
     params: dict[str, Any],
-    log: Callable[[str], None],
+    log: TaskLogLike,
     emit_event: Callable[..., None],
 ) -> int:
     """ADR 0010 train-scope crop。
@@ -305,7 +377,7 @@ def _run_crop_train(
 
     crops_param = params.get("crops") or {}
     if not crops_param:
-        log("[done] crops 为空，无事可做")
+        log.info(msg("worker.preprocess.no_crops"))
         return 0
     sources = sorted(crops_param.keys())
 
@@ -319,21 +391,33 @@ def _run_crop_train(
         emit_event("crop_progress", **payload)
 
     total = len(sources)
-    log(f"[start] stage=crop total={total} scope=train")
+    log.info(msg("worker.preprocess.crop_start", total=total))
 
     succeeded = 0
     failed = 0
     skipped = 0
+    repeat = RepeatThrottle(log)
+    # 逐图行降 DEBUG，可见进度由节流后的计数 INFO 承担（Q3 三件套）。
+    throttle = ProgressThrottle(total)
 
     for idx, src_rel in enumerate(sources, start=1):
         if _stop_requested:
-            log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
+            log.warning(
+                "Canceled by the user after %d/%d images; the rest were left "
+                "unprocessed", idx - 1, total,
+            )
             break
         is_last = idx == total
         try:
             preprocess._validate_rel_name(src_rel)
         except DomainError as exc:
-            log(f"[skip] {src_rel}: {exc}")
+            repeat.hit(
+                "invalid_name",
+                "%d images skipped: invalid file name (first: %s)",
+                "Image %s skipped: invalid file name (%s)",
+                src_rel, exc,
+                first=src_rel,
+            )
             skipped += 1
             emit_throttled(
                 force=True,
@@ -344,7 +428,13 @@ def _run_crop_train(
 
         src_path = train_dir / src_rel
         if not src_path.is_file():
-            log(f"[skip] ({idx}/{total}) {src_rel}: 源不存在")
+            repeat.hit(
+                "source_gone",
+                "%d images skipped: the source file was gone (first: %s)",
+                "Image %d/%d skipped: %s no longer exists",
+                idx, total, src_rel,
+                first=src_rel,
+            )
             skipped += 1
             emit_throttled(
                 force=True,
@@ -372,7 +462,6 @@ def _run_crop_train(
             else [f"{folder}/{src_stem}_c{i}.png" for i in range(n)]
         )
 
-        log(f"[crop] ({idx}/{total}) {src_rel} → {n} 个产物")
         try:
             t0 = time.monotonic()
             with Image.open(src_path) as raw:
@@ -428,7 +517,15 @@ def _run_crop_train(
                             keep_sidecars=Path(stale_rel).stem in output_stems,
                         )
                     except OSError as exc:
-                        log(f"   ⚠ 删旧 {stale_rel} 失败: {exc}")
+                        repeat.hit(
+                            "stale_unlink_failed",
+                            "%d superseded files could not be removed (first: %s); "
+                            "they stay in the train folder",
+                            "Removing the superseded file %s failed: %s; it stays "
+                            "in the train folder",
+                            stale_rel, exc,
+                            first=stale_rel,
+                        )
 
             # mask sidecar 跟随：同 box 裁剪 + fan-out（源无 mask 时 no-op）
             try:
@@ -436,7 +533,14 @@ def _run_crop_train(
                     train_dir, src_rel, crop_boxes, out_rels,
                 )
             except Exception as exc:  # noqa: BLE001
-                log(f"   ⚠ mask 跟随裁剪失败: {exc}")
+                repeat.hit(
+                    "mask_crop_failed",
+                    "%d masks could not be cropped (first: %s); those crops have "
+                    "no mask",
+                    "Cropping the mask for %s failed: %s; the crops have no mask",
+                    src_rel, exc,
+                    first=src_rel,
+                )
 
             preprocess_manifest.train_replace_with_crops(
                 project_dir, version["label"],
@@ -452,14 +556,16 @@ def _run_crop_train(
                         piece.load()
                         thumb_cache.prewarm_from_image(out_path, piece, [256, 768])
             except Exception as exc:  # noqa: BLE001
-                log(f"   ⚠ thumb prewarm failed: {exc}")
+                log.debug("thumb prewarm failed for %s: %s", src_rel, exc)
 
             elapsed = time.monotonic() - t0
             succeeded += 1
-            log(
-                f"   ✓ {src_rel} → {', '.join(out_rels)}  "
-                f"({sw}×{sh} → {n} 块, {elapsed:.2f}s)"
+            log.debug(
+                "crop: %d/%d %s → %s (%dx%d, %d pieces, %.1fs)",
+                idx, total, src_rel, ", ".join(out_rels), sw, sh, n, elapsed,
             )
+            if throttle.should_emit(idx):
+                log.info(msg("worker.preprocess.progress", done=idx, total=total))
             emit_throttled(
                 force=(idx == 1 or is_last),
                 idx=idx, total=total, name=src_rel, status="done",
@@ -467,7 +573,13 @@ def _run_crop_train(
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
         except Exception as exc:  # noqa: BLE001
-            log(f"[fail] {src_rel}: {exc}")
+            repeat.hit(
+                "crop_failed",
+                "%d images failed to crop (first: %s)",
+                "Cropping %s failed: %s; image left unchanged",
+                src_rel, exc,
+                first=src_rel,
+            )
             failed += 1
             emit_throttled(
                 force=True,
@@ -476,7 +588,17 @@ def _run_crop_train(
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
 
-    log(f"[done] succeeded={succeeded} failed={failed} skipped={skipped}")
+    repeat.drain()
+    if failed:
+        log.warning(
+            "Cropping finished with failures: succeeded=%d failed=%d skipped=%d",
+            succeeded, failed, skipped,
+        )
+    else:
+        log.info(msg(
+            "worker.preprocess.crop_done",
+            succeeded=succeeded, failed=failed, skipped=skipped,
+        ))
     return 0
 
 

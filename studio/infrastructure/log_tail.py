@@ -21,8 +21,20 @@ from typing import Any, Callable
 _ANSI_CSI_RE = re.compile(r"\x1b\[[\d;?]*[A-Za-z]")
 
 
+def clean_log_line(raw: bytes) -> str:
+    """一行 run.log 原始字节 → 干净文本：utf-8/replace 解码、剥 ANSI CSI 与 NUL、
+    去行尾 \\r。LogTailer（SSE 增量）与 /api/logs 分页读取共用，保证两条路
+    给前端的同一行文本一致。"""
+    text = raw.decode("utf-8", errors="replace")
+    return _ANSI_CSI_RE.sub("", text).replace("\x00", "").rstrip("\r")
+
+
 class LogTailer:
-    """轮询 log 文件，把新增字节按行送给 `on_line(line)`。
+    """轮询 log 文件，把新增字节按行送给 `on_line(line, end_offset)`。
+
+    `end_offset` = 该行结束（含换行符）后的文件字节偏移，是前端断线补拉的游标
+    （`GET /api/logs/{id}?after=<end_offset>`）。按**字节**切行再逐行解码，
+    偏移才与文件真实位置一致（docs/design/logging-target-state.md §3.4）。
 
     线程安全；start/stop 各调一次；不抛错（IO 失败静默重试）。
     """
@@ -30,7 +42,7 @@ class LogTailer:
     def __init__(
         self,
         path: Path,
-        on_line: Callable[[str], None],
+        on_line: Callable[[str, int], None],
         *,
         poll_interval: float = 0.3,
     ) -> None:
@@ -39,8 +51,8 @@ class LogTailer:
         self._poll = poll_interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._offset = 0
-        self._buffer = ""
+        self._offset = 0          # 已从文件读走的字节数
+        self._buffer = b""        # 末尾不完整的一行（无换行）
 
     def start(self) -> None:
         if self._thread:
@@ -55,12 +67,12 @@ class LogTailer:
         if self._thread:
             self._thread.join(timeout=timeout)
             self._thread = None
-        # 收尾：flush 残余 buffer 作为最后一行
+        # 收尾：flush 残余 buffer 作为最后一行（游标 = 已读到的文件末尾）
         if self._buffer.strip():
             try:
-                self._on_line(self._buffer.rstrip("\r\n"))
+                self._on_line(clean_log_line(self._buffer), self._offset)
             finally:
-                self._buffer = ""
+                self._buffer = b""
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -85,15 +97,15 @@ class LogTailer:
             if not chunk:
                 return
             self._offset += len(chunk)
-        raw = chunk.decode("utf-8", errors="replace")
-        # 剥 ANSI CSI 转义 + NUL 字节（onnxruntime 等 C++ 库直写 fd 2 的副产物）
-        cleaned = _ANSI_CSI_RE.sub("", raw).replace("\x00", "")
-        text = self._buffer + cleaned
-        # 拆行；最后一段不完整就留在 buffer 里下次拼
-        lines = text.split("\n")
-        self._buffer = lines.pop()
-        for line in lines:
-            self._on_line(line.rstrip("\r"))
+        buf = self._buffer + chunk
+        # 按字节拆行；最后一段不完整就留在 buffer 里下次拼
+        parts = buf.split(b"\n")
+        self._buffer = parts.pop()
+        # 第一行的起点 = 已读末尾 - 残段 - 全部完整行（含各自换行符）
+        pos = self._offset - len(self._buffer) - sum(len(p) + 1 for p in parts)
+        for p in parts:
+            pos += len(p) + 1
+            self._on_line(clean_log_line(p), pos)
 
 
 class MonitorStatePoller:

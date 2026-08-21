@@ -308,7 +308,8 @@ def create_session(
 
     _write_plan_file(session_id, plan)
     logger.info(
-        "created eval session=%s task=%s trigger=%s candidates=%s metrics=%s",
+        "created eval session: session=%s task_id=%s trigger=%s candidates=%s "
+        "metrics=%s",
         session_id, task_id, trigger, len(rows), metric_keys_planned,
     )
     return get_session(conn, session_id) or {}
@@ -323,7 +324,10 @@ def _write_plan_file(session_id: int, plan: dict[str, Any]) -> None:
         tmp.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
     except OSError:
-        logger.warning("failed writing plan.json for session=%s", session_id, exc_info=True)
+        logger.warning(
+            "write plan.json failed: session=%s; the session runs without a "
+            "persisted plan", session_id, exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +808,10 @@ def write_report(conn: sqlite3.Connection, session_id: int) -> Optional[dict[str
         tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
     except OSError:
-        logger.warning("failed writing report.json for session=%s", session_id, exc_info=True)
+        logger.warning(
+            "write report.json failed: session=%s; metrics stay in the database "
+            "only", session_id, exc_info=True,
+        )
     return report
 
 
@@ -858,7 +865,10 @@ def reconcile_with_task(
         status=status, stage=None, finished_at=time.time(),
         error=(message or None) if status != STATUS_DONE else None,
     )
-    logger.info("reconciled eval session=%s → %s (task=%s)", session_id, status, task_id)
+    logger.debug(
+        "reconciled eval session: session=%s status=%s task_id=%s",
+        session_id, status, task_id,
+    )
     return get_session(conn, session_id) or session
 
 
@@ -912,7 +922,7 @@ def retry_session(conn: sqlite3.Connection, session_id: int) -> dict[str, Any]:
         task_id=int(task_id), status=STATUS_PENDING, stage=None,
         started_at=None, finished_at=None, error=None,
     )
-    logger.info("retry eval session=%s → task=%s", session_id, task_id)
+    logger.info("retry eval session: session=%s task_id=%s", session_id, task_id)
     return get_session(conn, session_id) or {}
 
 

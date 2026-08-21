@@ -25,6 +25,7 @@ import base64
 import io
 import json
 import logging
+import os
 import random
 import sys
 import threading
@@ -64,14 +65,25 @@ try:
 except Exception:
     pass
 
-# 日志走 stderr，stdout 留给协议
-logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stderr,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+# 日志走 stderr（setup_logging 的 console handler 即 stderr），stdout 留给协议
+from studio.infrastructure.log_messages import msg  # noqa: E402
+from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E402
+
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_daemon", file=False, console=True)
 logger = logging.getLogger("anima_daemon")
+
+#: 中间预览解码失败计数（节流方案 D）：首条带 traceback，之后静默计数，
+#: 任务收尾 :func:`_drain_preview_failures` 补一条汇总。预览失败不阻塞出图，
+#: 一旦失败会按预览频率刷屏（25 步 × N 图 = 数百条）。
+_PREVIEW_FAILS = [0]
+
+
+def _drain_preview_failures() -> None:
+    if _PREVIEW_FAILS[0] > 1:
+        logger.debug(
+            "preview decode failed %d times during this task", _PREVIEW_FAILS[0],
+        )
+    _PREVIEW_FAILS[0] = 0
 
 
 # 会往 stdout 写日志的第三方 logger。stdout 是本进程的协议流，它们必须掰到 stderr。
@@ -98,12 +110,12 @@ def _keep_third_party_logs_off_stdout(
             if getattr(handler, "stream", None) is sys.stdout:
                 third.removeHandler(handler)
         if not third.handlers:
+            # formatter 必须走行契约（HumanConsoleFormatter）：自拼格式的行头
+            # 匹配不上 LOG_LINE_RE，会被 ring/LogView 解析器当成上一条的续行、
+            # 继承别人的级别（tmp/log-text-audit 刀 1 机制修复）。
+            from studio.infrastructure.logging import HumanConsoleFormatter
             stderr_handler = logging.StreamHandler(sys.stderr)
-            stderr_handler.setFormatter(
-                logging.Formatter(
-                    "%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S",
-                )
-            )
+            stderr_handler.setFormatter(HumanConsoleFormatter())
             third.addHandler(stderr_handler)
 
 
@@ -120,9 +132,9 @@ _TE_ENCODE_FALLBACK = 2 * _GIB
 # ---------------------------------------------------------------------------
 
 
-def _emit(msg: dict[str, Any]) -> None:
+def _emit(message: dict[str, Any]) -> None:
     """写一条协议消息到 stdout（line-delimited JSON）。"""
-    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.write(json.dumps(message) + "\n")
     sys.stdout.flush()
 
 
@@ -167,10 +179,17 @@ def _reload_adapter_weights(adapter: Any, spec: LoRASpec, device: str, dtype: An
     )
     missing = len(getattr(result, "missing_keys", []) or [])
     unexpected = len(getattr(result, "unexpected_keys", []) or [])
-    logger.info(
-        f"已热换 LoRA 权重: {Path(spec.path).name} "
-        f"(scale={spec.scale}; missing={missing}, unexpected={unexpected})"
+    name = Path(spec.path).name
+    logger.debug(
+        "lora hot reload: name=%s scale=%s missing=%d unexpected=%d",
+        name, spec.scale, missing, unexpected,
     )
+    if missing or unexpected:
+        logger.warning(
+            "LoRA hot reload left keys unmatched: name=%s missing=%d "
+            "unexpected=%d; this image may not reflect the full LoRA",
+            name, missing, unexpected,
+        )
 
 
 def _move_module_to_device(module: Any, device: str) -> None:
@@ -267,8 +286,8 @@ def _sample_with_cuda_oom_retry(
         if torch.device(device).type != "cuda" or not _is_cuda_oom(exc):
             raise
         logger.warning(
-            "transient CUDA OOM during generation; clearing allocator state "
-            "and retrying once with seed=%d",
+            "Transient VRAM shortage during sampling; freed cached blocks and "
+            "retried the same seed (seed=%d)",
             seed,
         )
 
@@ -451,7 +470,7 @@ class ModelCache:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _torch_dtype_from_precision(cfg.get("mixed_precision", "bf16"))
         family = _T.get_family(family_id)
-        logger.info("loading text encoders (TE 先行) %s", text_encoder_path)
+        logger.info(msg("model.load_text_encoder_ahead", path=text_encoder_path))
         self.text_stack = family.load_text(
             text_encoder_path, device, dtype,
             purpose="generate",
@@ -564,7 +583,9 @@ class ModelCache:
         use_xformers = backend == "xformers"
 
         family = _T.get_family(family_id)
-        logger.info("loading transformer [%s] %s", family_id, transformer_path)
+        logger.info(msg(
+            "model.load_transformer", family=family_id, path=transformer_path,
+        ))
         swap_extra: dict[str, Any] = {}
         if blocks_to_swap > 0:
             if "block_swap" not in family.spec.capabilities:
@@ -574,7 +595,7 @@ class ModelCache:
                 )
             # 换出层由 loader 直接落 CPU pinned，不经显存
             swap_extra["blocks_to_swap"] = blocks_to_swap
-            logger.info("block swap: last %d blocks stay in RAM", blocks_to_swap)
+            logger.info(msg("model.block_swap_enabled", n=blocks_to_swap))
         model = family.load_dit(
             transformer_path, device, dtype,
             attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
@@ -607,7 +628,7 @@ class ModelCache:
         ):
             text_stack = self.text_stack
         else:
-            logger.info("loading text encoders %s", text_encoder_path)
+            logger.info(msg("model.load_text_encoder", path=text_encoder_path))
             text_stack = family.load_text(
                 text_encoder_path, device, dtype,
                 t5_tokenizer_path=t5_tokenizer_path or None,
@@ -703,7 +724,10 @@ class ModelCache:
                         break
                     current_metas.append(read_lora_meta(spec.path))
             except Exception:
-                logger.exception("read LoRA metadata failed")
+                logger.warning(
+                    "Reading LoRA metadata failed: path=%s; falling back to a "
+                    "full adapter re-injection", spec.path, exc_info=True,
+                )
                 current_metas = []
 
         can_hot_reload = (
@@ -721,7 +745,10 @@ class ModelCache:
                 for adapter, spec in zip(self.adapters, specs):
                     _reload_adapter_weights(adapter, spec, self.device, self.lora_dtype)
             except Exception:
-                logger.exception("LoRA hot reload failed; reinjecting adapters")
+                logger.warning(
+                    "LoRA hot reload failed; re-injecting adapters instead "
+                    "(this run takes longer)", exc_info=True,
+                )
             else:
                 self.last_lora_specs = specs
                 self.last_lora_metas = current_metas
@@ -730,17 +757,25 @@ class ModelCache:
                 return self.adapters
 
         all_detached = True
-        for adapter in self.adapters:
+        adapter_total = len(self.adapters)
+        for adapter_idx, adapter in enumerate(self.adapters, start=1):
             try:
                 if not adapter.detach():
                     all_detached = False
             except Exception:
-                logger.exception("adapter detach failed")
+                logger.warning(
+                    "Adapter detach failed (adapter %d/%d); its LoRA hooks may "
+                    "still be attached", adapter_idx, adapter_total,
+                    exc_info=True,
+                )
                 all_detached = False
         self.adapters = []
 
         if not all_detached and self.last_lora_specs:
-            logger.warning("detach failed, reloading model to ensure clean state")
+            logger.warning(
+                "Reloading the base model to drop leftover LoRA hooks; this adds "
+                "one full model load to this task"
+            )
             saved_paths = (
                 self.transformer_path, self.vae_path,
                 self.text_encoder_path, self.t5_tokenizer_path,
@@ -835,11 +870,11 @@ class ModelCache:
             # 否则按钮空转（实测 20GB 纹丝不动）。
             _reclaim_cuda_leftovers()
             return
-        logger.info("unloading model")
+        # 秒级动作只记结果（S3）——开场行删掉，卸载完成时打 model.unloaded。
         # 埋点必须在**丢引用之前**取基线，否则丢引用那一步的回收量测不到
         from training.sysmem import available_ram_bytes, trim_working_set
 
-        _ram_marks: list[tuple[str, int | None]] = [("起点", available_ram_bytes())]
+        _ram_marks: list[tuple[str, int | None]] = [("start", available_ram_bytes())]
         had_block_swap = self.block_swap is not None
         if had_block_swap:
             # 摘钩子并丢弃管理对象。注意**丢引用不等于还内存**：pinned 走
@@ -862,7 +897,7 @@ class ModelCache:
         self.last_lora_specs = []
         self.last_lora_metas = []
         self.last_lora_merge_precision = None
-        _ram_marks.append(("丢引用", available_ram_bytes()))
+        _ram_marks.append(("drop refs", available_ram_bytes()))
 
         try:
             import gc
@@ -885,7 +920,7 @@ class ModelCache:
             # 静默，无 CUDA 环境下是安全 no-op。
             if had_block_swap:
                 _release_pinned_host_cache()
-                _ram_marks.append(("pinned 归还", available_ram_bytes()))
+                _ram_marks.append(("pinned release", available_ram_bytes()))
             # 大权重的 mmap 文件缓存页（DiT 13-26GB + TE）在 working set 里赖着
             # 不走 —— 加载后 trim 过一次，卸载后同样要 trim（此前漏了）
             trim_working_set()
@@ -903,9 +938,9 @@ class ModelCache:
                 prev = value
             tail = _ram_marks[-1][1]
             if tail is not None:
-                logger.info(
-                    "[卸载] 可用内存 %.1fGB（%s）",
-                    tail / 1024**3, "，".join(parts) or "无变化",
+                logger.info(msg("model.unloaded", ram=f"{tail / 1024**3:.1f}"))
+                logger.debug(
+                    "unload reclaim: %s", ", ".join(parts) or "no change",
                 )
         except Exception:  # noqa: BLE001
             pass
@@ -938,7 +973,10 @@ def _reclaim_cuda_leftovers() -> None:
             torch.cuda.empty_cache()
         _release_pinned_host_cache()
     except Exception:
-        logger.exception("CUDA leftovers reclaim failed")
+        logger.warning(
+            "Reclaiming leftover VRAM failed; some VRAM stays reserved until "
+            "the daemon restarts", exc_info=True,
+        )
 
 
 CACHE = ModelCache()
@@ -1002,17 +1040,19 @@ def _precache_prompts_and_release(
             vram_policy, CACHE.device, te_increment,
         )
         if budget is not None:
-            logger.info(
-                "TE/DiT auto 预算：free=%.1fGiB, TE=%s %.1fGiB, "
-                "margin=%.1fGiB → %s",
+            logger.debug(
+                "te_dit_budget: free=%.1fGiB te=%.1fGiB source=%s "
+                "margin=%.1fGiB decision=%s",
                 budget["free"] / _GIB,
-                estimate_source,
                 budget["te_increment"] / _GIB,
+                estimate_source,
                 budget["margin"] / _GIB,
-                "DiT 让位" if yielded_dit else "允许同驻",
+                "yield_dit" if yielded_dit else "coresident",
             )
         elif yielded_dit:
-            logger.info("TE 预编码：%s 策略先将 DiT 移到 CPU", vram_policy)
+            logger.info(msg(
+                "daemon.dit_yields_for_text_encoder", policy=vram_policy,
+            ))
         if yielded_dit:
             CACHE._move_dit_and_adapters("cpu")
 
@@ -1052,13 +1092,16 @@ def _precache_prompts_and_release(
                 max(previous[0], peak_delta),
                 max(previous[1], encode_delta),
             )
-            logger.info(
-                "TE 峰值校准：load+encode=%.1fGiB，resident encode=%.1fGiB",
+            logger.debug(
+                "te_peak_calibration: load_encode=%.1fGiB resident_encode=%.1fGiB",
                 peak_delta / _GIB,
                 encode_delta / _GIB,
             )
     except Exception:
-        logger.exception("prompt 预编码失败；退回逐格惰性编码")
+        logger.warning(
+            "Prompt pre-encoding failed; falling back to lazy per-image "
+            "encoding (slower, output unchanged)", exc_info=True,
+        )
     finally:
         if vram_policy != "performance" and success:
             release = getattr(CACHE.text_stack, "release_model", None)
@@ -1077,9 +1120,9 @@ def _precache_prompts_and_release(
         return
     if encoded:
         if vram_policy == "performance":
-            logger.info("krea2 预编码 %d 条 prompt；performance 保持 TE 驻留", encoded)
+            logger.info(msg("generate.prompts_precached_resident", n=encoded))
         else:
-            logger.info("krea2 预编码 %d 条 prompt；TE 已释放，采样期零占用", encoded)
+            logger.info(msg("generate.prompts_precached_released", n=encoded))
 
 
 def _begin_initial_te_peak_calibration(cfg: dict[str, Any]) -> int | None:
@@ -1097,7 +1140,10 @@ def _begin_initial_te_peak_calibration(cfg: dict[str, Any]) -> int | None:
         torch.cuda.reset_peak_memory_stats("cuda")
         return start_allocated
     except Exception:
-        logger.exception("failed to start initial TE peak calibration")
+        logger.debug(
+            "te_peak_calibration: start failed, this measurement is skipped",
+            exc_info=True,
+        )
         return None
 
 
@@ -1116,9 +1162,14 @@ def _finish_initial_te_peak_calibration(start_allocated: int | None) -> None:
             max(previous[0], peak_delta),
             previous[1],
         )
-        logger.info("initial TE peak calibrated: load+encode=%.1fGiB", peak_delta / _GIB)
+        logger.debug(
+            "te_peak_calibration: initial load_encode=%.1fGiB", peak_delta / _GIB,
+        )
     except Exception:
-        logger.exception("failed to finish initial TE peak calibration")
+        logger.debug(
+            "te_peak_calibration: finish failed, measurement discarded",
+            exc_info=True,
+        )
 
 
 def _set_lora_multiplier(adapter: Any, scale: float) -> None:
@@ -1240,7 +1291,10 @@ def _setup_monitor(cfg: dict[str, Any]) -> Any:
         })
         return update_monitor
     except Exception as e:
-        logger.warning("monitor 初始化失败: %s", e)
+        logger.warning(
+            "Progress monitor failed to start: %s; the task runs normally but "
+            "progress and previews may not update", e,
+        )
         return None
 
 
@@ -1348,7 +1402,14 @@ def _decode_latent2rgb_preview(latent: Any) -> Optional[Any]:
                 )
             return img
     except Exception:
-        logger.exception("latent2rgb preview decode failed")
+        # 方案 D：首条带 traceback，之后只累加计数，任务收尾 drain 一条汇总。
+        # 预览失败不阻塞出图，用户无动作可做 → 全程 DEBUG。
+        _PREVIEW_FAILS[0] += 1
+        if _PREVIEW_FAILS[0] == 1:
+            logger.debug(
+                "preview decode failed; further failures in this task are "
+                "counted only", exc_info=True,
+            )
         return None
 
 
@@ -1505,7 +1566,10 @@ def _run_generate(
             except GenerationCanceled:
                 raise
             except Exception as e:
-                logger.exception("generate failed")
+                logger.warning(
+                    "Image %d/%d failed: seed=%d; continuing with the remaining "
+                    "images", img_idx + 1, total, seed, exc_info=True,
+                )
                 image_errors.append(str(e))
                 _emit_for(req_id, "image_error", step=img_idx + 1, message=str(e))
             img_idx += 1
@@ -1555,7 +1619,7 @@ def _run_xy(
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
-        logger.info("XY 共享种子（cfg.seed=0 随机化）: %d", base_seed)
+        logger.info(msg("generate.xy_shared_seed", seed=base_seed))
 
     base_scales = [float(s.scale) for s in CACHE.last_lora_specs]
     base_lora_paths = [str(s.path) for s in CACHE.last_lora_specs]
@@ -1663,7 +1727,10 @@ def _run_xy(
             except GenerationCanceled:
                 raise
             except Exception as e:
-                logger.exception("XY [%d,%d] failed", xi, yi)
+                logger.warning(
+                    "XY cell %d,%d failed: seed=%d; continuing with the "
+                    "remaining cells", xi, yi, cur_seed, exc_info=True,
+                )
                 image_errors.append(str(e))
                 _emit_for(
                     req_id, "image_error",
@@ -1688,13 +1755,14 @@ def _run_generate_worker(
         _run_generate(req_id, task_id, cfg, output_dir, cancel_event)
         _emit_for(req_id, "done", task_id=task_id)
     except GenerationCanceled:
-        logger.info("generate canceled: task_id=%s", task_id)
+        logger.info(msg("generate.canceled", task_id=task_id))
         _emit_for(req_id, "canceled", task_id=task_id)
     except Exception as e:
-        logger.exception("generate failed")
+        logger.exception("Generation task failed: task=%s", task_id)
         _emit_for(req_id, "error", task_id=task_id, message=str(e))
         failed = True
     finally:
+        _drain_preview_failures()
         if failed:
             # 必须在 except 块结束（异常对象被隐式 del）之后清扫，traceback
             # 钉住的 frame locals（如 OOM 时半上卡的 state_dict）才收得掉
@@ -1727,9 +1795,9 @@ def _start_generate_worker(req_id: str, task_id: int, cfg: dict[str, Any], outpu
 # ---------------------------------------------------------------------------
 
 
-def _handle_message(msg: dict[str, Any]) -> None:
-    action = msg.get("action")
-    req_id = msg.get("id", "")
+def _handle_message(message: dict[str, Any]) -> None:
+    action = message.get("action")
+    req_id = message.get("id", "")
 
     if action == "ping":
         _emit_for(req_id, "pong")
@@ -1741,41 +1809,48 @@ def _handle_message(msg: dict[str, Any]) -> None:
         return
 
     if action == "cancel":
-        if _request_cancel(str(msg.get("target_id") or req_id)):
+        if _request_cancel(str(message.get("target_id") or req_id)):
             _emit_for(req_id, "cancel_ack")
         else:
             _emit_for(req_id, "cancel_missed")
         return
 
     if action == "generate":
-        task_id = int(msg.get("task_id", 0))
-        cfg = msg.get("config") or {}
-        output_dir = Path(msg.get("output_dir") or ".")
+        task_id = int(message.get("task_id", 0))
+        cfg = message.get("config") or {}
+        output_dir = Path(message.get("output_dir") or ".")
         if not _start_generate_worker(req_id, task_id, cfg, output_dir):
             _emit_for(req_id, "error", task_id=task_id, message="daemon is already running a task")
         return
 
-    logger.warning("unknown action: %r", action)
+    logger.warning("Unknown command from the server: action=%r; ignored", action)
     _emit_for(req_id, "error", message=f"unknown action: {action!r}")
 
 
 def main() -> int:
     _emit_evt("ready")
-    logger.info("anima daemon ready, waiting for stdin commands")
+    logger.info(msg("daemon.ready"))
     try:
         for raw_line in sys.stdin:
             line = raw_line.strip()
             if not line:
                 continue
             try:
-                msg = json.loads(line)
+                message = json.loads(line)
             except json.JSONDecodeError as e:
-                logger.warning("non-JSON stdin line: %r (%s)", line[:200], e)
+                logger.warning(
+                    "Malformed command from the server (not JSON): %r (%s); "
+                    "ignored", line[:200], e,
+                )
                 continue
             try:
-                _handle_message(msg)
+                _handle_message(message)
             except Exception:
-                logger.exception("message handler crashed")
+                logger.exception(
+                    "Daemon message handler crashed: action=%s; the daemon "
+                    "stays up for the next task",
+                    (message or {}).get("action") if isinstance(message, dict) else "?",
+                )
     except KeyboardInterrupt:
         pass
     finally:

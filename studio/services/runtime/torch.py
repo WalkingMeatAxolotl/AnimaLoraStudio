@@ -223,9 +223,14 @@ def _cleanup_zombie_dirs() -> list[str]:
                 entry.unlink()
             cleaned.append(entry.name)
         except OSError as exc:
-            logger.warning("[torch_setup] 清理僵尸目录 %s 失败: %s", entry, exc)
+            logger.warning(
+                "[torch_setup] removing the stale pip dir failed: path=%s err=%s",
+                entry, exc,
+            )
     if cleaned:
-        logger.info("[torch_setup] 清理 pip 僵尸目录: %s", ", ".join(cleaned))
+        logger.debug(
+            "[torch_setup] removed stale pip dir: %s", ", ".join(cleaned),
+        )
     return cleaned
 
 

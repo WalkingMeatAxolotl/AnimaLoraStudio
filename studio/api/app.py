@@ -23,6 +23,7 @@ from .routers import (
     browse,
     client_errors,
     data_exports,
+    diagnostics,
     events_sse,
     generate,
     health,
@@ -90,6 +91,7 @@ app.include_router(installs.router)
 app.include_router(studio_data.router)
 app.include_router(models_storage.router)
 app.include_router(system.router)
+app.include_router(diagnostics.router)
 # PR-6 commit 5: generate router（8 routes: 出图 + daemon 状态 + TAEFlux）
 app.include_router(generate.router)
 # PR-6 commit 6: queue 子包 3 文件（lifecycle 12 + io 3 + outputs 5 = 20 routes）

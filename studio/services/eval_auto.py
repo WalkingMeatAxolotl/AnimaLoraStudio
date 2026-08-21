@@ -22,9 +22,11 @@ from typing import Any, Callable, Optional
 from studio.services import eval_session
 from studio.services.projects import projects, versions
 
+from studio.infrastructure.task_log import TaskLogLike
+
 logger = logging.getLogger(__name__)
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 
 
 def _version_eval_config(
@@ -127,13 +129,13 @@ def queue_training_finished_eval(
     selected = select_checkpoints(all_ckpts, skip_count=skip_count)
     if not selected:
         logger.info(
-            "after-training eval skipped for task=%s: no checkpoint in output/",
+            "after-training eval skipped: task_id=%s reason=no_checkpoint_in_output",
             task.get("id"),
         )
         return None
     if len(selected) != len(all_ckpts):
         logger.info(
-            "eval checkpoint sampling skip=%s: %s/%s checkpoints selected",
+            "eval checkpoint sampling: keeping 1 of every %s, selected=%s/%s",
             skip_count, len(selected), len(all_ckpts),
         )
 
@@ -146,8 +148,10 @@ def queue_training_finished_eval(
             skip_count=skip_count,
         )
     except Exception:
-        logger.exception(
-            "after-training eval session creation failed for task=%s", task.get("id")
+        logger.warning(
+            "after-training eval session creation failed: task_id=%s; training "
+            "finished and was saved, no evaluation was created",
+            task.get("id"), exc_info=True,
         )
         return None
 
@@ -279,6 +283,8 @@ def _checkpoint_relative_to_output(
     try:
         rel = path.resolve().relative_to(output_dir)
     except ValueError:
-        logger.warning("eval checkpoint outside output dir: %s", raw_path)
+        logger.warning(
+            "eval checkpoint is outside the output dir: path=%s; skipped", raw_path,
+        )
         return None
     return f"output/{rel.as_posix()}"

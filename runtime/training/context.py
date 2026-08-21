@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,9 @@ import torch
 
 if TYPE_CHECKING:
     from training.losses.protocol import LossProtocol
+
+# ctx.emit 在非 tty 下的出口：采样 / 保存 / resume / 暂停等 user-facing 提示
+_emit_logger = logging.getLogger("training.emit")
 
 
 @dataclass
@@ -144,19 +148,26 @@ class TrainingContext:
             return self.task_archive_state_dir
         return self.state_dir()
 
-    def emit(self, msg: str) -> None:
+    def emit(self, msg: str, level: str = "info") -> None:
         """打印一条 user-facing 消息，按当前进度显示模式分流。
 
-        移植自原 main() 内 emit 闭包；行为完全一致。
+        tty 交互（rich live / progress / plain）三路不变；非 tty（studio spawn 的
+        pipe）走 logger，与 run.log 其它行同契约（设计 D3：进度/提示也是日志）。
+
+        ``level``（日志改写 F2）：非 tty 出口按此级别派发到 training.emit logger
+        的对应方法。告警性质的 emit（暂停无恢复点、监控历史恢复失败等）不该以
+        INFO 混在叙事行里；tty 三路本就没有级别概念，原样打印。
         """
         if self.use_plain:
-            print()
+            print()  # 冲掉 loop 的 `\r` 进度行（tty 交互）
         if self.live:
             self.live.console.print(msg)
         elif self.use_rich:
             self.progress.console.print(msg)
-        else:
+        elif self.use_plain:
             print(msg)
+        else:
+            getattr(_emit_logger, level, _emit_logger.info)(msg)
 
     def get_next_sample_prompt(self) -> str:
         """取下一个采样提示词（轮换；sample_prompts 为空则返回默认）。"""
@@ -191,13 +202,14 @@ class TrainingContext:
         重复触发（已 interrupted 状态再来一次）= 强退。
         """
         # 延迟 import 避免循环依赖
+        from studio.infrastructure.log_messages import msg
         from training.snapshot import emit_event
 
         if self.interrupted:
-            self.emit("强制退出...")
+            self.emit(msg("train.force_exit"))
             sys.exit(1)
         self.interrupted = True
-        self.emit("\n检测到暂停信号，正在退出（保留最近一次 epoch 备份用于 resume）...")
+        self.emit(msg("train.pause_signal"))
         try:
             self.wandb_monitor.finish()
         except Exception:
@@ -209,7 +221,12 @@ class TrainingContext:
             "step": self.global_step,
         })
         if self.last_auto_epoch_state_path:
-            self.emit(f"已暂停！恢复点: {self.last_auto_epoch_state_path}")
+            self.emit(msg("train.paused_with_state", path=self.last_auto_epoch_state_path))
         else:
-            self.emit("首个 epoch 未完成，无 auto 备份可恢复 → 任务将标 canceled。")
+            self.emit(
+                "Pause without a resume state: the first epoch never finished, so no "
+                "epoch backup exists — the task is marked canceled and this run's "
+                "progress is discarded",
+                level="warning",
+            )
         sys.exit(0)

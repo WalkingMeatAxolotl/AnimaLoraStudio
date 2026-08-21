@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import os
 import shutil
 import signal
@@ -27,6 +28,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Optional
+
+from studio.infrastructure.log_messages import msg
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO_ROOT / "studio" / "web"
@@ -64,20 +67,30 @@ _NPM_MIRROR = "https://mirrors.cloud.tencent.com/npm/"
 _PIP_MIRROR = "https://mirrors.cloud.tencent.com/pypi/simple/"
 
 
-def _say(msg: str, level: str = "info") -> None:
-    """统一 CLI 用户输出入口（ADR-0009 PR-3 C4）。
+_log = logging.getLogger("studio.cli")
 
-    保 print 路径（ADR-0009 round 2 §1.3 决策 — CLI 5s 短命周期落盘价值低；
-    用户终端看 `[studio] ...` 比 logger 默认 format 清爽；capsys 测试 UX 优先）。
-    本 wrapper 给未来加 verbose 控制 / 着色留单一入口；现在等价于带前缀的 print。
+
+def _say(line: str, level: str = "info") -> None:
+    """统一 CLI 用户输出入口 —— `studio.cli` logger 的薄包装。
+
+    行契约见 docs/design/logging-target-state.md §3.2 / §3.5：CLI 不再自己
+    print，全部走 logger；`setup_logging("cli:<cmd>")` 装的 Human formatter 出
+    `ts LEVEL studio.cli: msg` 前缀，级别由 `level` 真实表达（不再手写
+    `[studio] ` / `警告：` 之类冒充级别的前缀）。终端可见级别由 ANIMA_LOG_LEVEL
+    控（默认 INFO）。多行消息（安装提示 / 重装命令）作为一条记录，续行无前缀。
 
     level:
-      - "info" / "success" → stdout，`[studio] ` 前缀
-      - "warning" / "error" → stderr，`[studio] ` 前缀
+      - "info" / "success" → logger.info
+      - "warning"          → logger.warning
+      - "error"            → logger.error
     """
-    file = sys.stderr if level in ("warning", "error") else sys.stdout
-    # 注意：不能用 f"[studio] {msg}"，否则被批量 _say 替换正则误伤。
-    print("[studio] " + str(msg), file=file, flush=True)
+    text = str(line)
+    if level == "error":
+        _log.error(text)
+    elif level == "warning":
+        _log.warning(text)
+    else:
+        _log.info(text)
 
 
 def _npm_argv(npm: str, args: list[str]) -> list[str]:
@@ -127,12 +140,15 @@ def npm_install_if_missing(npm: str) -> int:
     except ValueError:
         rel = NODE_MODULES
     if package_files_changed:
-        _say("studio/web/package.json 或 package-lock.json 比 node_modules 新，运行 npm install...")
+        _say(msg("cli.npm_install_stale"))
     else:
-        _say(f"{rel} 不完整或不存在，运行 npm install（3 分钟超时）...")
+        _say(msg("cli.npm_install_missing", rel=rel))
     rc = _npm_call(npm, ["install"], str(WEB_DIR), timeout=180)
     if rc != 0:
-        _say(f"npm install 失败或超时，切换国内源 ({_NPM_MIRROR}) 重试...")
+        _say(
+            f"npm install failed or timed out; retrying on the {_NPM_MIRROR} mirror",
+            "warning",
+        )
         rc = subprocess.call(
             _npm_argv(npm, ["install", "--registry", _NPM_MIRROR]),
             cwd=str(WEB_DIR),
@@ -144,7 +160,10 @@ def _pip_install(args: list[str]) -> int:
     """运行 pip install；失败时切换阿里云镜像重试。"""
     rc = subprocess.call([find_python(), "-m", "pip", "install"] + args)
     if rc != 0:
-        _say(f"pip install 失败，切换国内源 ({_PIP_MIRROR}) 重试...")
+        _say(
+            f"pip install failed; retrying on the {_PIP_MIRROR} mirror",
+            "warning",
+        )
         rc = subprocess.call(
             [find_python(), "-m", "pip", "install"] + args
             + ["-i", _PIP_MIRROR],
@@ -163,12 +182,12 @@ def _ensure_python_deps() -> int:
             return 0
     except Exception:
         pass
-    _say("检测到 fastapi 缺失，重新安装 Python 依赖（requirements.txt）...")
+    _say(msg("cli.reinstall_python_deps"))
     return _pip_install(["-r", str(req)])
 
 
 def npm_build(npm: str) -> int:
-    _say("构建前端 (npm run build)...")
+    _say(msg("cli.build_frontend"))
     return subprocess.call(_npm_argv(npm, ["run", "build"]), cwd=str(WEB_DIR))
 
 
@@ -204,7 +223,10 @@ class ProcGroup:
             creationflags=creationflags,
             preexec_fn=preexec_fn,
         )
-        _say(f"{label} pid={proc.pid}: {' '.join(cmd)}")
+        _say(msg(
+            "cli.process_spawned", label=label, pid=proc.pid,
+            cmd=" ".join(cmd),
+        ))
         self.procs.append((label, proc))
         return proc
 
@@ -214,7 +236,10 @@ class ProcGroup:
             for label, p in self.procs:
                 rc = p.poll()
                 if rc is not None:
-                    _say(f"{label} 退出 (rc={rc})")
+                    if rc == 0:
+                        _say(msg("cli.process_exited", label=label))
+                    else:
+                        _say(f"{label} exited with rc={rc}", "warning")
                     return rc
             try:
                 # 让 KeyboardInterrupt 有机会触发
@@ -229,7 +254,7 @@ class ProcGroup:
         for label, p in self.procs:
             if p.poll() is not None:
                 continue
-            _say(f"停止 {label}...")
+            _say(msg("cli.stopping_process", label=label))
             try:
                 if os.name == "nt":
                     p.send_signal(signal.CTRL_BREAK_EVENT)
@@ -241,7 +266,10 @@ class ProcGroup:
             try:
                 p.wait(timeout=grace)
             except subprocess.TimeoutExpired:
-                _say(f"{label} 超时未退出，强杀")
+                _say(
+                    f"{label} did not exit in {grace:.1f}s; "
+                    "killing process tree", "warning",
+                )
                 p.kill()
 
 
@@ -251,31 +279,29 @@ class ProcGroup:
 
 
 def _print_npm_install_hint() -> None:
-    """`find_npm()` 返回 None 时打印平台相关安装提示。
+    """`find_npm()` 返回 None 时输出平台相关安装提示。
 
-    放 stderr，与 `[studio] 错误：找不到 npm` 同流；root 环境去掉 sudo（直接 root 跑装包）。
+    一条 error 记录（多行，续行无前缀）；root 环境去掉 sudo（直接 root 跑装包）。
     """
-    _say("错误：找不到 npm。请安装 Node.js 18+", "error")
+    lines = ["npm not found; install Node.js 18+ to build the frontend"]
     if os.name == "nt":
-        print(
-            "  Windows：前往 https://nodejs.org 下载安装包，"
-            "或用 winget install OpenJS.NodeJS.LTS",
-            file=sys.stderr,
+        lines.append(
+            "  Windows: download the installer from https://nodejs.org, "
+            "or run winget install OpenJS.NodeJS.LTS"
         )
     else:
         sudo = "" if (hasattr(os, "getuid") and os.getuid() == 0) else "sudo "
-        print(
-            f"  Ubuntu/Debian：curl -fsSL https://deb.nodesource.com/setup_22.x "
-            f"| {sudo}bash - && {sudo}apt-get install -y nodejs",
-            file=sys.stderr,
+        lines.append(
+            f"  Ubuntu/Debian: curl -fsSL https://deb.nodesource.com/setup_22.x "
+            f"| {sudo}bash - && {sudo}apt-get install -y nodejs"
         )
-        print(
-            "  或使用 nvm（无需 sudo）："
+        lines.append(
+            "  or use nvm (no sudo): "
             "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh "
-            "| bash && nvm install --lts",
-            file=sys.stderr,
+            "| bash && nvm install --lts"
         )
-    print("  安装后重新运行本命令。", file=sys.stderr)
+    lines.append("  re-run this command after installing")
+    _say("\n".join(lines), "error")
 
 
 def cmd_build(_args: argparse.Namespace) -> int:
@@ -356,9 +382,9 @@ def _apply_pending_install() -> None:
         from studio.services.runtime import pending_install  # noqa: PLC0415
         pending_install.apply_pending()
     except Exception as exc:  # noqa: BLE001
-        print(
-            f"[studio] 警告：处理 pending 安装请求时异常（{exc}），跳过",
-            file=sys.stderr,
+        _say(
+            f"handling the pending install request failed: {exc}; skipped",
+            "warning",
         )
 
 
@@ -374,21 +400,18 @@ def _try_enable_flash_attn() -> None:
             return
         from modeling.anima.cosmos_predict2_modeling import set_flash_attn_enabled  # noqa: PLC0415
         if set_flash_attn_enabled(True):
-            _say("flash_attn 启用")
+            _say(msg("cli.flash_attn_enabled"))
         else:
             # 装了 flash_attn 但 set_flash_attn_enabled 拒绝（_FLASH_ATTN_AVAILABLE=False）
-            # 通常意味着 import 时挂了（CUDA 版本不匹配等）；不噪声只 stderr 警告
-            print(
-                "[studio] 警告：flash_attn 已安装但模型层 import 失败，"
-                "继续走 SDPA fallback",
-                file=sys.stderr,
+            # 通常意味着 import 时挂了（CUDA 版本不匹配等）；不噪声只 warning 一行
+            _say(
+                "flash_attn is installed but importing the model layer failed; "
+                "falling back to SDPA",
+                "warning",
             )
     except Exception as exc:  # noqa: BLE001
         # Studio 启动不能为这一项加速 fail；记 warn 但放行
-        print(
-            f"[studio] 警告：flash_attn 启用时异常（{exc}），跳过加速",
-            file=sys.stderr,
-        )
+        _say(f"enabling flash_attn failed: {exc}; running without it", "warning")
 
 
 def _apply_gpu_selection() -> None:
@@ -428,7 +451,7 @@ def _check_torch_cuda() -> None:
             name = torch.cuda.get_device_name(0)
         except Exception:  # noqa: BLE001
             name = "?"
-        _say(f"torch {torch.__version__}（GPU: {name}）")
+        _say(msg("cli.torch_gpu", version=torch.__version__, name=name))
         return
 
     cuda_build = getattr(torch.version, "cuda", None)
@@ -440,28 +463,27 @@ def _check_torch_cuda() -> None:
         except Exception:  # noqa: BLE001
             has_gpu = False
         if has_gpu:
-            print(
-                f"[studio] 警告：检测到 NVIDIA GPU，但当前安装的是 CPU-only 版 PyTorch "
-                f"({torch.__version__})。\n"
-                f"        训练 / 出图将跑在 CPU 上，速度极慢（单步常需数十秒）。\n"
-                f"        请卸载后重装 CUDA 版：\n"
-                f"          pip uninstall torch torchvision -y\n"
-                f"          # 按你的 CUDA 版本选；如 CUDA 12.8：\n"
-                f"          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128",
-                file=sys.stderr,
+            _say(
+                f"NVIDIA GPU detected but the installed PyTorch is a CPU-only "
+                f"build ({torch.__version__}); training and generation would run "
+                f"on the CPU and be very slow (tens of seconds per step)\n"
+                f"  pip uninstall torch torchvision -y\n"
+                f"  # pick the index for your CUDA version, e.g. CUDA 12.8:\n"
+                f"  pip install torch torchvision "
+                f"--index-url https://download.pytorch.org/whl/cu128",
+                "warning",
             )
         else:
-            print(
-                f"[studio] torch {torch.__version__}（CPU-only build，未检测到 NVIDIA GPU）"
-            )
+            _say(msg("cli.torch_cpu_only", version=torch.__version__))
         return
 
     # CUDA build 但运行时不可用：驱动 / WSL / 容器问题
-    print(
-        f"[studio] 警告：torch {torch.__version__}（CUDA {cuda_build} build），"
-        f"但 torch.cuda.is_available()=False。\n"
-        f"        可能原因：NVIDIA 驱动未安装 / 版本过低 / WSL 缺 CUDA 支持。",
-        file=sys.stderr,
+    _say(
+        f"torch {torch.__version__} is a CUDA {cuda_build} build but "
+        f"torch.cuda.is_available()=False\n"
+        f"  likely causes: the NVIDIA driver is not installed, the driver is "
+        f"too old, or WSL is missing CUDA support",
+        "warning",
     )
 
 
@@ -482,21 +504,23 @@ def _check_onnxruntime() -> None:
         installed = rt.get("installed") or "?"
         ver = rt.get("version") or "?"
         if rt.get("cuda_available"):
-            _say(f"onnxruntime: {installed}=={ver}（CUDA EP 可用）")
+            _say(msg("cli.onnxruntime_gpu", installed=installed, ver=ver))
             return
 
         cuda = onnxruntime_setup.detect_cuda()
         if cuda.get("available"):
             _say(
-                f"检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP（installed={installed}）。"
-                f"WD14 / CLTagger 打标会跑 CPU（较慢）。可在 Settings → ONNX Runtime 重装为 GPU 版。",
+                f"NVIDIA GPU detected but onnxruntime has only the CPU EP "
+                f"(installed={installed}); WD14 and CLTagger tagging will run "
+                f"on the CPU; reinstall the GPU build from "
+                f"Settings → ONNX Runtime",
                 "warning",
             )
         else:
-            _say(f"onnxruntime: {installed}=={ver}（CPU only，未检测到 NVIDIA GPU）")
+            _say(msg("cli.onnxruntime_cpu", installed=installed, ver=ver))
 
     except Exception as exc:  # noqa: BLE001
-        _say(f"onnxruntime 状态检查异常（已忽略）: {exc}", "error")
+        _say(f"onnxruntime status check failed: {exc}; ignored", "warning")
 
 
 WEB_SRC = WEB_DIR / "src"
@@ -599,14 +623,13 @@ def _apply_update_pending() -> None:
     """
     try:
         from studio.services.runtime import updater  # noqa: PLC0415
+        from studio.infrastructure.task_log import TaskLog  # noqa: PLC0415
         if not updater.has_pending():
             return
-        updater.apply_pending(emit=print)
+        # 与 _say 同一个 logger，updater 内部升级到级别方法时黄/红行自动落对
+        updater.apply_pending(emit=TaskLog(_log))
     except Exception as exc:  # noqa: BLE001
-        print(
-            f"[studio] 警告：apply update pending 时异常（{exc}），跳过",
-            file=sys.stderr,
-        )
+        _say(f"applying the pending update failed: {exc}; skipped", "warning")
 
 
 def _maybe_force_torch(args: argparse.Namespace) -> int:
@@ -619,19 +642,23 @@ def _maybe_force_torch(args: argparse.Namespace) -> int:
     current = torch_setup.detect_torch()
     current_build = current.get('cuda_build') or ('未安装' if not current.get('installed') else 'unknown')
     if current.get('installed') and current.get('cuda_build') == tag:
-        _say(f"torch 已是 {tag}，跳过重装")
+        _say(msg("cli.torch_already_tag", tag=tag))
         return 0
-    _say(f"--torch {tag} 指定（当前: {current_build}），开始重装...")
-    _say("提示：按 Ctrl+C 可跳过")
+    _say(msg(
+        "cli.torch_reinstall_start", tag=tag, current_build=current_build,
+    ))
     try:
         res = torch_setup.reinstall(tag, stream=True)
-        _say(f"torch 重装完成: {res.get('version')} ({res.get('tag')})")
+        _say(msg(
+            "cli.torch_reinstall_done",
+            version=res.get("version"), tag=res.get("tag"),
+        ))
         return 0
     except KeyboardInterrupt:
-        print("\n[studio] 用户中断，跳过 torch 重装", file=sys.stderr)
+        _say("torch reinstall interrupted by user; skipped", "warning")
         return 0
     except RuntimeError as exc:
-        _say(f"torch 重装失败: {exc}", "error")
+        _say(f"torch reinstall failed: {exc}", "error")
         return 1
 
 
@@ -672,12 +699,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         if not args.no_build:
             if not WEB_DIST.exists():
-                _say("studio/web/dist 不存在，先构建前端...")
+                _say(msg("cli.frontend_dist_missing"))
                 rc = cmd_build(args)
                 if rc != 0:
                     return rc
             elif _web_dist_is_stale():
-                _say("studio/web/dist 比 src 旧（git pull 后未重建？），重新构建前端...")
+                _say(msg("cli.frontend_dist_stale"))
                 rc = cmd_build(args)
                 if rc != 0:
                     return rc
@@ -688,7 +715,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         _try_enable_flash_attn()
         _check_onnxruntime()
         url = f"http://{args.host}:{args.port}/"
-        _say(f"启动后端 → {url}")
+        _say(msg("cli.backend_started", url=url))
         if not args.no_browser and not opened_browser:
             _spawn_browser_opener(url)
             opened_browser = True
@@ -700,7 +727,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             # 终端 Ctrl+C：CTRL_C_EVENT 同时广播给 server 子进程（它自己走
             # graceful shutdown）；父进程这边阻塞在 wait 的 KeyboardInterrupt
             # 要等子进程退干净后才抛出来。用户主动停机，不打 traceback。
-            _say("已停止（Ctrl+C）")
+            _say(msg("cli.stopped_ctrl_c"))
             return 130
 
         if not _RESTART_FLAG.exists():
@@ -711,8 +738,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # 走 exec self 路径。flag 保留是关键 —— wrapper 检测到 (exit==42 &&
         # flag exists) 才会 re-exec；只剩 flag 而 exit!=42 则走普通 restart。
         if _installer_hashes() != startup_installer:
-            _say("检测到 launcher 文件更新（cli.py / studio.sh / studio.bat），"
-                  "退出码 42 让 wrapper 重新加载...")
+            _say(msg("cli.launcher_reload"))
             return _INSTALLER_RELOAD_EXIT_CODE
 
         # 收到重启请求：删除标志 + loop 回去重新 bootstrap
@@ -720,7 +746,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             _RESTART_FLAG.unlink()
         except OSError:
             pass
-        _say("收到重启请求，重新启动...")
+        _say(msg("cli.restart_requested"))
 
 
 def cmd_dev(args: argparse.Namespace) -> int:
@@ -759,10 +785,10 @@ def cmd_dev(args: argparse.Namespace) -> int:
             ],
         )
         frontend_url = f"http://127.0.0.1:{args.fe_port}/"
-        print(
-            f"[studio] frontend → {frontend_url}  "
-            f"backend → http://{args.host}:{args.port}/"
-        )
+        _say(msg(
+            "cli.dev_urls", frontend_url=frontend_url,
+            backend_url=f"http://{args.host}:{args.port}/",
+        ))
         if not args.no_browser:
             # dev 模式打开 Vite 端口（HMR 能用），不开 backend 端口
             _spawn_browser_opener(frontend_url, delay=2.0)
@@ -774,18 +800,18 @@ def cmd_dev(args: argparse.Namespace) -> int:
 
 def cmd_test(_args: argparse.Namespace) -> int:
     """跑 pytest + vitest。任一失败 → 非零退出。"""
-    _say("pytest...")
+    _say(msg("cli.pytest_start"))
     rc = subprocess.call([find_python(), "-m", "pytest", "tests/"], cwd=str(REPO_ROOT))
     if rc != 0:
         return rc
     npm = find_npm()
     if not npm:
-        _say("跳过 vitest (未安装 npm)")
+        _say(msg("cli.vitest_skipped_no_npm"))
         return 0
     if not NODE_MODULES.exists():
-        _say("跳过 vitest (node_modules 缺失，先 npm install)")
+        _say(msg("cli.vitest_skipped_no_modules"))
         return 0
-    _say("vitest...")
+    _say(msg("cli.vitest_start"))
     return subprocess.call(_npm_argv(npm, ["run", "test"]), cwd=str(WEB_DIR))
 
 
@@ -845,10 +871,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if _first_pos not in _subcmds:
         args_list = ['run'] + args_list
     args = parser.parse_args(args_list)
-    # PR-1 C4: 统一日志体系 (ADR-0009)。file=False — CLI 是 5s 短命周期，
-    # 启动信息不进 studio.log（用户决定 — round 2 §1.3）。console=True 让
-    # logger.x 调用走人读 stderr；现有 48 处 print() 不动（PR-3 _say() wrapper
-    # 收编）。env ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
+    # 统一日志体系 (ADR-0009 / docs/design/logging-target-state.md §3.5)。
+    # file=False — CLI 是 5s 短命周期，启动信息不进 studio.log。console=True 让
+    # `_say` → studio.cli logger 走人读 stderr（Human 格式，级别读 ANIMA_LOG_LEVEL）。
+    # 必须在任何 `_say` 之前装好：所有 `_say` 都在 args.func 内，parse_args 之前
+    # 只有 argparse 自己的 usage/help 输出（不算日志）。env
+    # ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
     from .infrastructure.logging import setup_logging
     setup_logging(f"cli:{args.cmd}", file=False, console=True)
     return args.func(args)

@@ -188,7 +188,8 @@ export default function PreprocessDuplicatesPage() {
             : logs[logs.length - 1]?.status === 'error'
               ? ('failed' as const)
               : ('done' as const),
-          lines: logs.map((l) => l.text),
+          // 错误行加裸 `ERROR:` 前缀：LogView 按行契约的兼容规则识别级别着色
+          lines: logs.map((l) => (l.status === 'error' ? `ERROR: ${l.text}` : l.text)),
           startedAt: logs[0] ? logs[0].ts / 1000 : null,
           finishedAt: busy ? null : logs[logs.length - 1] ? logs[logs.length - 1].ts / 1000 : null,
         },

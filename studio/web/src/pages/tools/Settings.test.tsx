@@ -151,6 +151,7 @@ const initialServerState = {
   },
   system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   proxy: { enabled: false, http_proxy: '', https_proxy: '', no_proxy: '' },
+  tag_dictionary: { show_translation: null, autocomplete: null },
 }
 
 const emptyModelsCatalog = {
@@ -513,7 +514,9 @@ describe('SettingsPage (PP0)', () => {
     await user.click(await screen.findByRole('button', { name: '系统' }))
 
     const label = await screen.findByText('显卡', { selector: 'label' })
-    const row = label.closest('.grid') as HTMLElement
+    // 显卡行是自定义 flex 行（不是 SettingsField 的 grid）：取 label 的直接父级，
+    // 否则 closest('.grid') 会爬到整个系统 tab 的栅格，里面还有别的下拉（日志 section）
+    const row = label.parentElement as HTMLElement
     const select = within(row).getByRole('combobox') as HTMLSelectElement
     // 未显式设置时预选 torch 实际在用的卡（active），不是盲选第一张
     expect(select.value).toBe('1')

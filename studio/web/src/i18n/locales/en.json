@@ -188,6 +188,20 @@
   "infoButton": {
     "label": "More info"
   },
+  "logView": {
+    "debug": "Debug",
+    "autoScroll": "Auto-scroll",
+    "copy": "Copy",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed (blocked by browser)",
+    "download": "Download",
+    "loadEarlier": "Load earlier",
+    "loadingEarlier": "Loading…",
+    "loading": "(loading…)",
+    "waiting": "(waiting for logs…)",
+    "empty": "(no logs)",
+    "eventMalformed": "Malformed line in the event stream:"
+  },
   "jobProgress": {
     "waitingLogs": "(Waiting for logs...)"
   },
@@ -791,6 +805,8 @@
     "viewInGenerate": "View render →",
     "viewInReg": "View reg set →",
     "deleteRecord": "Delete record",
+    "diagBundle": "Diagnostics",
+    "diagBundleHint": "Download this task's run.log, config snapshot, the studio.log slice for its time window and an environment summary (redacted); attach it when filing an issue",
     "deleteTitle": "Delete task record",
     "deleteDesc": "Will permanently delete task",
     "deleteNote": "LoRA / training logs / monitor files will remain on disk.",
@@ -808,8 +824,6 @@
     "finishedAt": "Finished",
     "exitCode": "Exit code",
     "source": "Source",
-    "autoScroll": "Auto scroll",
-    "noLogs": "(No logs yet)",
     "pathCopied": "Path copied",
     "copyFailed": "Copy failed (browser denied)",
     "copyPath": "Copy path",
@@ -1104,6 +1118,15 @@
     "autoSyncPathsOn": "On · fork auto-syncs global",
     "autoSyncPathsOff": "Off · fork respects preset values",
     "gpuSection": "Environment",
+    "logs": {
+      "sectionTitle": "Logs",
+      "debugDefaultLabel": "Show debug lines by default",
+      "debugDefaultHelp": "Whether log views show DEBUG lines when opened. Logs always record debug lines; this only sets the default filter. Each log view has its own Debug toggle for temporary changes (not saved).",
+      "debugDefaultOn": "Log views show debug lines by default",
+      "debugDefaultOff": "Log views hide debug lines by default",
+      "exportBundle": "Export diagnostics bundle",
+      "exportBundleHelp": "Zips the studio.log tail and an environment summary (version / driver / CUDA / PyTorch), no secrets; attach it when filing an issue. A per-task bundle (with that task's log and config snapshot) is exported from the task detail page."
+    },
     "gpuNoneDetected": "No NVIDIA GPU detected",
     "gpuSelectLabel": "GPU",
     "gpuSelectHelp": "The GPU used for training, generation and tagging. Defaults to the card CUDA picks automatically (usually the fastest one); changes take effect after restarting Studio.",
@@ -1235,8 +1258,8 @@
       "help": "The generate daemon keeps the model in VRAM after the first run so you can quickly retry with different params. If no new generation arrives within this window, the model is auto-unloaded to free VRAM (next run reloads, ~30-60s). 0 = off, keep the model resident until you manually click \"Free VRAM\". Recommended: 10 minutes.",
       "minutesSuffix": "min",
       "offHint": "Off: model stays resident until manually freed",
-      "taskTimeoutLabel": "Task timeout force-kill (minutes)",
-      "taskTimeoutHelp": "Force-kill the generation process when a task exceeds the given duration (freeze safety net: a system-wide paging freeze or GPU hang makes normal cancellation useless — killing the process is the only way out). The task is marked failed; the next generation restarts the process and reloads models automatically. 0 = disabled.",
+      "taskTimeoutLabel": "Per-image timeout force-kill (minutes)",
+      "taskTimeoutHelp": "Force-kill the generation process when a single image makes no progress within the given duration; multi-image/XY tasks restart the countdown for every image (freeze safety net: a system-wide paging freeze or GPU hang makes normal cancellation useless — killing the process is the only way out). The task is marked failed; the next generation restarts the process and reloads models automatically. 0 = disabled.",
       "taskTimeoutOffHint": "Disabled"
     },
     "vramPolicy": {
@@ -1438,6 +1461,9 @@
     "llmPresetSetDefault": "Set as global default",
     "llmPresetEdit": "✎ Edit",
     "llmPresetNew": "+ New preset",
+    "llmPresetImport": "⇪ Import preset",
+    "llmPresetImported": "Imported preset \"{{label}}\"",
+    "llmPresetImportInvalid": "Import failed: not a valid LLM preset file",
     "torchHelpBrief": "PyTorch is the compute engine for training and generation; only CUDA builds can use the GPU — CPU builds are tens of times slower.",
     "flashAttnHelpBrief": "A faster attention implementation, usable for both training and generation; requires a prebuilt wheel exactly matching Python / PyTorch / CUDA.",
     "onnxHelpBrief": "Inference engine used by WD14 / CLTagger tagging; the CUDA or DirectML package enables GPU acceleration.",
@@ -1529,10 +1555,7 @@
     "logDrawerOpen": "Logs",
     "logDrawerClose": "Close",
     "logDrawerClear": "Clear",
-    "logDrawerCopy": "Copy",
     "logDrawerEmpty": "(no logs yet)",
-    "logDrawerAutoScroll": "Auto-scroll",
-    "logDrawerCopied": "Logs copied",
     "datasetPromptTitle": "Pick prompt from training set",
     "clearDatasetPick": "Clear",
     "clearDatasetPickTitle": "Clear the selected caption; closing the panel keeps it selected",
@@ -2200,7 +2223,6 @@
     "removeCandidate": "Mark remove",
     "restoreCandidate": "Undo remove",
     "previewHint": "←/→ Browse duplicate candidates · select before removing",
-    "logTitle": "Scan log",
     "logStarted": "Scanning duplicate candidates...",
     "statsTitle": "Review stats",
     "statsTotal": "Active workspace",
@@ -2436,7 +2458,6 @@
     "generatingBtn": "Generating…",
     "aiGenerateBtn": "Prior generation",
     "startBuildBtn": "Start generation",
-    "tabConfig": "Settings & Logs",
     "tabImages": "Images",
     "tabAi": "Prior generation",
     "tabGenerate": "Generate",
@@ -2543,7 +2564,6 @@
     "postprocessStretch": "stretch (may distort)",
     "postprocessCrop": "crop (crop then scale)",
     "maxCropTitle": "Maximum crop ratio within one cluster (default 0.1 = 10%)",
-    "aiLogTitle": "Prior generation log",
     "aiStatusDone": "Done",
     "aiStatusRunning": "Generating",
     "aiStatusFailed": "Failed",
@@ -2769,6 +2789,10 @@
       "invalid": "Invalid snapshot id",
       "id_collision": "Could not allocate a snapshot id; please retry"
     },
+    "log": {
+      "not_found": "Log file not found",
+      "query_conflict": "tail / before / after are mutually exclusive"
+    },
     "task": {
       "not_found": "Task not found",
       "already_finished": "This task has already finished",
@@ -2900,6 +2924,10 @@
     "apiKeySavedPlaceholder": "Saved (hidden); enter a new value to overwrite",
     "resetBuiltin": "↺ Reset to built-in defaults",
     "saveAsCopy": "⎘ Save as copy",
+    "savedAsCopy": "Saved as \"{{label}}\"",
+    "export": "⤓ Export",
+    "exportTitle": "Export as a json file (excludes the API key / base URL)",
+    "deleted": "Deleted preset \"{{label}}\"",
     "done": "Done",
     "presetLabels": {
       "styleJson": "Style LoRA JSON",

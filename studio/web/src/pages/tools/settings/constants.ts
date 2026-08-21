@@ -117,6 +117,7 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'version', labelKey: 'settings.version' },
     { id: 'gpu', labelKey: 'settings.gpuSection' },
     { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
+    { id: 'logs', labelKey: 'settings.logs.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
   ],
 }
@@ -242,13 +243,14 @@ export const EMPTY: Secrets = {
   queue: { light_tasks_during_train: true },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', lora_merge_precision: 'fp32', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: false, blocks_to_swap: 0, task_timeout_minutes: 0 },
   training: { ram_guard: false },
-  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
+  system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null, log_debug_default: false },
   proxy: {
     enabled: false,
     http_proxy: '',
     https_proxy: '',
     no_proxy: '',
-  }
+  },
+  tag_dictionary: { show_translation: null, autocomplete: null },
 }
 
 export const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'

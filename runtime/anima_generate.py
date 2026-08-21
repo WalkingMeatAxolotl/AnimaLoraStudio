@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import sys
 from pathlib import Path
@@ -50,11 +51,10 @@ from studio.services.inference.core import (  # noqa: E402
     release_vae_after_decode,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+from studio.infrastructure.log_messages import msg  # noqa: E402
+from studio.infrastructure.logging import PROCESS_ENV, setup_logging  # noqa: E402
+
+setup_logging(os.environ.get(PROCESS_ENV) or "anima_generate", file=False, console=True)
 logger = logging.getLogger("anima_generate")
 
 
@@ -79,7 +79,7 @@ def main() -> None:
 
     cfg_path = Path(args.config)
     if not cfg_path.exists():
-        logger.error(f"配置文件不存在: {cfg_path}")
+        logger.error("Config file not found: %s; nothing to generate", cfg_path)
         sys.exit(1)
 
     with open(cfg_path, encoding="utf-8") as f:
@@ -134,7 +134,10 @@ def main() -> None:
         })
         _update_monitor = update_monitor
     except Exception as e:
-        logger.warning(f"monitor 初始化失败: {e}")
+        logger.warning(
+            "Progress monitor failed to start: %s; generation continues but "
+            "progress and previews may not update", e,
+        )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = _torch_dtype_from_precision(mixed_precision)
@@ -161,7 +164,7 @@ def main() -> None:
         label=f"VAE {vae_path}",
     )
 
-    logger.info("加载文本编码器...")
+    logger.info(msg("model.load_text_encoder", path=text_encoder_path))
     # 族 opaque 文本栈不拆包；ad-hoc prompt 关缓存（cached_varlen 族 TE 常驻）
     text_stack = family.load_text(
         text_encoder_path, device, dtype,
@@ -181,16 +184,24 @@ def main() -> None:
         try:
             encoded = precache([*[str(p) for p in prompts], negative_prompt])
         except Exception:
-            logger.exception("prompt 预编码失败；退回逐图惰性编码")
+            logger.warning(
+                "Prompt pre-encoding failed; falling back to lazy per-image "
+                "encoding (slower, output unchanged)", exc_info=True,
+            )
         else:
             if vram_policy != "performance":
                 release = getattr(text_stack, "release_model", None)
                 if callable(release):
                     release()
             if encoded:
-                logger.info("krea2 预编码 %d 条 prompt；TE 已释放", encoded)
+                logger.info(msg(
+                    "generate.prompts_precached_released", n=encoded,
+                ))
 
-    logger.info("加载 Transformer...")
+    logger.info(msg(
+        "model.load_transformer",
+        family=family.spec.family_id, path=transformer_path,
+    ))
     model = family.load_dit(
         transformer_path, device, dtype,
         attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
@@ -217,7 +228,7 @@ def main() -> None:
     # XY 矩阵分支（schema 已校验：xy_matrix 设值时 prompts 单条 + count=1）
     xy_matrix = cfg.get("xy_matrix")
     if xy_matrix is not None:
-        _run_xy_matrix(
+        xy_ok, xy_failed, xy_total = _run_xy_matrix(
             xy_matrix=xy_matrix,
             base_specs=specs,
             adapters=_adapters,
@@ -237,21 +248,35 @@ def main() -> None:
             update_monitor=_update_monitor,
             vram_policy=vram_policy,
         )
-        logger.info("XY 矩阵生成完成")
+        if xy_failed:
+            logger.warning(
+                "XY grid finished with failures: ok=%d failed=%d total=%d",
+                xy_ok, xy_failed, xy_total,
+            )
+        else:
+            logger.info(msg("generate.xy_done", ok=xy_ok, total=xy_total))
         return
 
     # 生成循环
     total = count * len(prompts)
-    logger.info(f"开始生成：{len(prompts)} 个 prompt × {count} 次 = {total} 张")
+    logger.info(msg(
+        "generate.start", prompts=len(prompts), count=count, total=total,
+    ))
 
     img_idx = 0
+    ok_count = 0
+    failed_count = 0
     for pi, prompt in enumerate(prompts):
         for ci in range(count):
             seed = (base_seed + img_idx) if base_seed != 0 else random.randint(0, 2**31 - 1)
             torch.manual_seed(seed)
             random.seed(seed)
 
-            logger.info(f"[{img_idx + 1}/{total}] seed={seed}  prompt={prompt[:60]}...")
+            logger.info(msg(
+                "generate.image_start",
+                idx=img_idx + 1, total=total, seed=seed,
+                prompt=(prompt[:60] + "\u2026") if len(prompt) > 60 else prompt,
+            ))
             try:
                 try:
                     img = family.sample_image(
@@ -275,15 +300,26 @@ def main() -> None:
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 out_path = output_dir / fname
                 img.save(out_path)
-                logger.info(f"已保存: {out_path}")
+                logger.info(msg("generate.image_saved", path=out_path))
+                ok_count += 1
                 if _update_monitor:
                     _update_monitor(sample_path=str(out_path), step=img_idx + 1)
-            except Exception as e:
-                logger.error(f"生成失败 [{img_idx + 1}/{total}]: {e}")
+            except Exception:
+                failed_count += 1
+                logger.warning(
+                    "Image %d/%d failed: seed=%d; continuing with the remaining "
+                    "images", img_idx + 1, total, seed, exc_info=True,
+                )
 
             img_idx += 1
 
-    logger.info("生成完成")
+    if failed_count:
+        logger.warning(
+            "Generation finished with failures: ok=%d failed=%d total=%d",
+            ok_count, failed_count, total,
+        )
+    else:
+        logger.info(msg("generate.done", ok=ok_count, total=total))
 
 
 # ---------------------------------------------------------------------------
@@ -356,8 +392,8 @@ def _run_xy_matrix(
     update_monitor,
     distilled: bool = False,
     vram_policy: str = "auto",
-) -> None:
-    """循环 (yi, xi) 出 N×M 张图。
+) -> tuple[int, int, int]:
+    """循环 (yi, xi) 出 N×M 张图，返回 ``(成功数, 失败数, 总数)``。
 
     设计：
       - 每个 cell 从 base_* 派生本次参数（防上次 cell 修改泄漏到下次）；
@@ -398,13 +434,17 @@ def _run_xy_matrix(
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
-        logger.info(f"XY 共享种子（cfg.seed=0 随机化）: {base_seed}")
+        logger.info(msg("generate.xy_shared_seed", seed=base_seed))
 
     base_scales = [float(s.scale) for s in base_specs]
     total = len(x_values) * len(y_values)
-    logger.info(f"开始 XY 生成：{len(x_values)}×{len(y_values)} = {total} 张")
+    logger.info(msg(
+        "generate.xy_start", nx=len(x_values), ny=len(y_values), total=total,
+    ))
 
     img_idx = 0
+    ok_count = 0
+    failed_count = 0
     for yi, yv in enumerate(y_values):
         for xi, xv in enumerate(x_values):
             # 重置每个 LoRA 到 base scale，避免上次 cell 的 lora_scale 改动遗留
@@ -434,10 +474,12 @@ def _run_xy_matrix(
             torch.manual_seed(cur_seed)
             random.seed(cur_seed)
 
-            logger.info(
-                f"XY [{xi},{yi}] x={xv} y={yv} "
-                f"steps={cur_steps} cfg={cur_cfg_scale} seed={cur_seed} sampler={cur_sampler}"
-            )
+            logger.info(msg(
+                "generate.xy_cell",
+                xi=xi, yi=yi, xv=xv, yv=yv,
+                steps=cur_steps, cfg=cur_cfg_scale,
+                seed=cur_seed, sampler=cur_sampler,
+            ))
             try:
                 try:
                     img = family.sample_image(
@@ -461,17 +503,24 @@ def _run_xy_matrix(
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 out_path = output_dir / fname
                 img.save(out_path)
-                logger.info(f"已保存: {out_path}")
+                logger.info(msg("generate.image_saved", path=out_path))
+                ok_count += 1
                 if update_monitor:
                     update_monitor(
                         sample_path=str(out_path),
                         step=img_idx + 1,
                         xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                     )
-            except Exception as e:
-                logger.error(f"XY [{xi},{yi}] 失败: {e}")
+            except Exception:
+                failed_count += 1
+                logger.warning(
+                    "XY cell %d,%d failed: seed=%d; continuing with the "
+                    "remaining cells", xi, yi, cur_seed, exc_info=True,
+                )
 
             img_idx += 1
+
+    return ok_count, failed_count, total
 
 
 if __name__ == "__main__":

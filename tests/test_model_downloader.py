@@ -1,9 +1,11 @@
-"""PR-6 — model_downloader._on_log per-line print。
+"""PR-6 — model_downloader._on_log per-line 回显（现走 logger.debug，
+logging-target-state §3.2）。
 PR-S3 — _resolve_endpoint env > secrets > None 优先级。
 MS-1  — _get_download_source / download_flat_ms rename+cleanup 逻辑。
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
@@ -11,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from studio.services import models as model_downloader
+
+_DL_LOGGER = "studio.services.models.downloader"
 
 
 @pytest.fixture
@@ -38,9 +42,10 @@ def _wait_done(key: str, timeout: float = 2.0) -> None:
 
 
 def test_on_log_writes_to_ring_buffer_and_stdout(
-    reset_downloads, capfd: pytest.CaptureFixture
+    reset_downloads, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """on_log 同时写：(1) ring buffer ds.log，(2) stdout（print(line, flush=True)）。"""
+    """on_log 同时写：(1) ring buffer ds.log，(2) 模块 logger DEBUG（自家 logger 恒
+    DEBUG → 进 studio.log 保留完整流；终端默认 INFO 不刷屏）。"""
     lines_to_emit = ["downloading file 1", "downloading file 2", "✓ done"]
 
     def fake_fn(on_log):
@@ -48,8 +53,9 @@ def test_on_log_writes_to_ring_buffer_and_stdout(
             on_log(line)
         return True
 
-    model_downloader.start_download_async("test-key", fake_fn)
-    _wait_done("test-key")
+    with caplog.at_level(logging.DEBUG, logger=_DL_LOGGER):
+        model_downloader.start_download_async("test-key", fake_fn)
+        _wait_done("test-key")
 
     # ring buffer 完整保留
     with model_downloader._LOCK:
@@ -57,10 +63,13 @@ def test_on_log_writes_to_ring_buffer_and_stdout(
         assert ds.status == "done"
         assert ds.log == lines_to_emit
 
-    # stdout 也都拿到（用 capfd 抓 fd 级 stdout，覆盖跨线程 print）
-    out = capfd.readouterr().out
+    # logger 也都拿到（DEBUG 级，跨线程 propagate 到 root 的 caplog handler）
+    logged = [
+        r.getMessage() for r in caplog.records
+        if r.name == _DL_LOGGER and r.levelno == logging.DEBUG
+    ]
     for line in lines_to_emit:
-        assert line in out
+        assert line in logged
 
 
 # ---------------------------------------------------------------------------
@@ -144,43 +153,45 @@ def test_resolve_endpoint_env_with_whitespace_treated_empty(
 def test_on_log_does_not_hold_lock_during_print(
     reset_downloads,
 ) -> None:
-    """print 在锁外：on_log 调用本身不应让 _LOCK 在 I/O 期间被占着。
+    """日志回显在锁外：on_log 调用本身不应让 _LOCK 在 I/O 期间被占着。
 
-    检测方式：让 print 阻塞（替成 sleep 兼带计时），同时另一线程尝试拿锁；
-    若锁外执行，并发 acquire 应当能立刻成功。
+    检测方式：给模块 logger 挂一个会阻塞的 handler（模拟慢 I/O），同时另一
+    线程尝试拿锁；若锁外执行，并发 acquire 应当能立刻成功。
     """
-    import builtins
+    emit_started = threading.Event()
+    can_finish_emit = threading.Event()
 
-    print_started = threading.Event()
-    can_finish_print = threading.Event()
+    class _SlowHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            emit_started.set()
+            can_finish_emit.wait(timeout=2.0)
 
-    real_print = builtins.print
-
-    def slow_print(*args, **kwargs):
-        print_started.set()
-        can_finish_print.wait(timeout=2.0)
-        return real_print(*args, **kwargs)
-
-    def fake_fn(on_log):
-        builtins.print = slow_print
-        try:
+    dl_logger = logging.getLogger(_DL_LOGGER)
+    handler = _SlowHandler(level=logging.DEBUG)
+    prev_level = dl_logger.level
+    dl_logger.addHandler(handler)
+    dl_logger.setLevel(logging.DEBUG)
+    try:
+        def fake_fn(on_log):
             on_log("first")
-        finally:
-            builtins.print = real_print
-        return True
+            return True
 
-    model_downloader.start_download_async("test-lock", fake_fn)
+        model_downloader.start_download_async("test-lock", fake_fn)
 
-    assert print_started.wait(timeout=2.0), "fake_fn 没进 print"
+        assert emit_started.wait(timeout=2.0), "fake_fn 没进 logger emit"
 
-    # 此时 _on_log 应已离开 with _LOCK 块（先写 ring buffer 再 print），
-    # 主线程能在 100ms 内拿到锁
-    acquired = model_downloader._LOCK.acquire(timeout=0.1)
-    assert acquired, "_on_log 在 print 期间持锁，违反 PR-6 设计"
-    model_downloader._LOCK.release()
+        # 此时 _on_log 应已离开 with _LOCK 块（先写 ring buffer 再 logger），
+        # 主线程能在 100ms 内拿到锁
+        acquired = model_downloader._LOCK.acquire(timeout=0.1)
+        assert acquired, "_on_log 在日志 I/O 期间持锁，违反 PR-6 设计"
+        model_downloader._LOCK.release()
 
-    can_finish_print.set()
-    _wait_done("test-lock")
+        can_finish_emit.set()
+        _wait_done("test-lock")
+    finally:
+        can_finish_emit.set()
+        dl_logger.removeHandler(handler)
+        dl_logger.setLevel(prev_level)
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +331,8 @@ def test_download_flat_ms_skips_existing(tmp_path: "Path") -> None:
         "some/repo", "split_files/foo.safetensors", target, on_log=logs.append
     )
     assert ok
-    assert any("已存在" in l for l in logs)
+    # 逐文件「已存在，跳过」判 DEBUG（英文排障行），收尾另有计数 INFO 汇总
+    assert any("already present" in l for l in logs)
 
 
 def test_download_flat_ms_rename_and_cleanup(
@@ -532,7 +544,9 @@ def test_download_upscaler_unknown_label_returns_false() -> None:
     logs: list[str] = []
     ok = model_downloader.download_upscaler("nope", on_log=logs.append)
     assert not ok
-    assert any("未知放大器" in l for l in logs)
+    assert any("unknown upscaler" in l for l in logs)
+    # 「下载完全没发生 + 不自愈」→ ERROR，且必须给出下一步动作（S6）
+    assert any("pick an upscaler from the model list" in l for l in logs)
 
 
 def test_download_upscaler_delegates_to_download_flat(
@@ -701,7 +715,9 @@ def test_download_upscaler_custom_rejects_bad_ext(
         "hf", "foo/bar", "evil.sh", tmp_path, on_log=logs.append
     )
     assert not ok
-    assert any("扩展名" in l for l in logs)
+    assert any("unsupported file extension" in l for l in logs)
+    # 支持的扩展名要逐个列出来，不能把 tuple 的 repr 甩给用户（T1）
+    assert any(".pth" in l and ".safetensors" in l for l in logs)
 
 
 def test_download_upscaler_custom_rejects_bad_source(
@@ -712,7 +728,7 @@ def test_download_upscaler_custom_rejects_bad_source(
         "ftp", "foo/bar", "a.pth", tmp_path, on_log=logs.append
     )
     assert not ok
-    assert any("未知下载源" in l for l in logs)
+    assert any("unknown download source" in l for l in logs)
 
 
 def test_upscaler_target_accepts_custom_filename(tmp_path: "Path") -> None:
@@ -882,25 +898,55 @@ def test_trigger_cltagger_v2_uses_dedicated_repo_and_target(
 
 
 def test_failure_summary_surfaces_gated_hint() -> None:
-    """下载失败 message 必须给出可操作原因（token / 授权），而非通用串。"""
+    """下载失败 message 必须给出可操作原因（token / 授权），而非通用串。
+
+    G7：选行判据是**级别**（最后一条 ERROR 记录的全文），不再按 ✗ / ↳ 字符
+    前缀 grep —— 那两个伪级别前缀已随文案改写删除。gated 提示是那条 ERROR
+    记录的续行，所以「错误 + 怎么办」自然一起带出来。
+    """
     from studio.services.models import downloader as dl
 
-    log = [
-        "📥 CLTagger → /models/cltagger",
-        "   ✗ model.onnx: 401 Client Error: Cannot access gated repo",
-        "   ↳ 该仓库可能是 gated/private：请到 设置→密钥 填 HuggingFace token 后重试。",
+    leveled = [
+        ("info", "Downloading CLTagger → /models/cltagger"),
+        (
+            "error",
+            "download failed: name=model.onnx source=hf err=401 Client Error: "
+            "Cannot access gated repo; the model is incomplete and the download "
+            "is marked failed\n"
+            "  the repository may be gated or private: request access on "
+            "huggingface.co, then set a HuggingFace token in Settings → Secrets "
+            "(or the HF_TOKEN environment variable) and retry",
+        ),
     ]
-    msg = dl._failure_summary(log)
-    assert "↳" in msg
+    msg = dl._failure_summary(leveled)
     assert "token" in msg.lower()
-    assert "✗" in msg  # 同时带上原始错误
+    assert "gated" in msg.lower()
+    assert "model.onnx" in msg  # 同时带上原始错误
+    assert "\n" not in msg  # 单行 message（前端 toast 用）
 
 
 def test_failure_summary_falls_back_to_last_error() -> None:
     from studio.services.models import downloader as dl
 
-    log = ["📥 ...", "   ✗ model.onnx: connection reset"]
-    assert dl._failure_summary(log) == "✗ model.onnx: connection reset"
+    leveled = [
+        ("info", "Downloading CLTagger → /models/cltagger"),
+        ("debug", "file already present; skipped: name=x source=hf"),
+        ("error", "download failed: name=model.onnx source=hf err=connection reset"),
+    ]
+    assert dl._failure_summary(leveled) == (
+        "download failed: name=model.onnx source=hf err=connection reset"
+    )
+
+
+def test_failure_summary_ignores_non_error_levels() -> None:
+    """WARNING / INFO 行不该被当成失败原因（回退到通用串）。"""
+    from studio.services.models import downloader as dl
+
+    leveled = [
+        ("info", "Downloading CLTagger → /models/cltagger"),
+        ("warning", "WD14 x has no ModelScope mirror; falling back to HuggingFace"),
+    ]
+    assert dl._failure_summary(leveled) == "下载失败，详见下载日志"
 
 
 def test_failure_summary_generic_when_no_error_line() -> None:

@@ -188,6 +188,20 @@
   "infoButton": {
     "label": "更多信息"
   },
+  "logView": {
+    "debug": "调试",
+    "autoScroll": "自动滚动",
+    "copy": "复制",
+    "copied": "已复制到剪贴板",
+    "copyFailed": "复制失败（浏览器拒绝）",
+    "download": "下载",
+    "loadEarlier": "加载更早",
+    "loadingEarlier": "加载中…",
+    "loading": "（加载中…）",
+    "waiting": "（等待日志…）",
+    "empty": "（没有日志）",
+    "eventMalformed": "事件流中有一行无法解析："
+  },
   "jobProgress": {
     "waitingLogs": "(等待日志...)"
   },
@@ -791,6 +805,8 @@
     "viewInGenerate": "查看出图结果 →",
     "viewInReg": "查看正则集 →",
     "deleteRecord": "删除记录",
+    "diagBundle": "诊断包",
+    "diagBundleHint": "下载该任务的 run.log、配置快照、时间窗内的 studio.log 与环境摘要（已脱敏），报 issue 时附上",
     "deleteTitle": "删除任务记录",
     "deleteDesc": "将永久删除任务",
     "deleteNote": "LoRA / 训练日志 / 监控状态文件不会被删，仍在磁盘上。",
@@ -808,8 +824,6 @@
     "finishedAt": "结束时间",
     "exitCode": "退出码",
     "source": "来源",
-    "autoScroll": "自动滚动",
-    "noLogs": "（尚无日志）",
     "pathCopied": "路径已复制",
     "copyFailed": "复制失败（浏览器拒绝）",
     "copyPath": "复制路径",
@@ -1104,6 +1118,15 @@
     "autoSyncPathsOn": "已开启 · fork 自动同步全局",
     "autoSyncPathsOff": "已关闭 · fork 尊重预设值",
     "gpuSection": "环境",
+    "logs": {
+      "sectionTitle": "日志",
+      "debugDefaultLabel": "默认显示调试日志",
+      "debugDefaultHelp": "所有日志视图打开时是否默认显示 DEBUG 行。记录始终包含调试行，这里只管默认过滤；每个日志视图自己的「调试」开关可临时改，不会保存。",
+      "debugDefaultOn": "日志视图默认显示调试行",
+      "debugDefaultOff": "日志视图默认隐藏调试行",
+      "exportBundle": "导出诊断包",
+      "exportBundleHelp": "打包 studio.log 尾部与环境摘要（版本 / 驱动 / CUDA / PyTorch），不含密钥；报 issue 时附上。某个任务的诊断包在任务详情页导出，会多带该任务的日志与配置快照。"
+    },
     "gpuNoneDetected": "未检测到 NVIDIA 显卡",
     "gpuSelectLabel": "显卡",
     "gpuSelectHelp": "训练、出图、打标使用的显卡。默认为 CUDA 自动选择的卡（通常是最快的一张）；更改后重启 Studio 生效。",
@@ -1235,8 +1258,8 @@
       "help": "测试出图模型加载后会常驻显存，方便重复调参。超过指定时长没出图就自动卸载释放显存（下次出图重新加载约 30-60 秒）。0 = 关闭，模型常驻直到手动点\"释放缓存\"。推荐 10 分钟。",
       "minutesSuffix": "分",
       "offHint": "已关闭：模型常驻直到手动清理",
-      "taskTimeoutLabel": "任务超时强制终止（分钟）",
-      "taskTimeoutHelp": "出图任务超过指定时长仍未完成时，强制终止出图进程（卡死兜底：整机换页或 GPU 挂起时普通取消无效，只能杀进程）。任务标记失败，下次出图自动重启进程并重新加载模型。0 = 不开启。",
+      "taskTimeoutLabel": "单张图超时强制终止（分钟）",
+      "taskTimeoutHelp": "单张图超过指定时长仍无进展时，强制终止出图进程；多图/XY 任务每张图重新计时（卡死兜底：整机换页或 GPU 挂起时普通取消无效，只能杀进程）。任务标记失败，下次出图自动重启进程并重新加载模型。0 = 不开启。",
       "taskTimeoutOffHint": "不开启"
     },
     "vramPolicy": {
@@ -1438,6 +1461,9 @@
     "llmPresetSetDefault": "设为全局默认",
     "llmPresetEdit": "✎ 编辑",
     "llmPresetNew": "+ 新建预设",
+    "llmPresetImport": "⇪ 导入预设",
+    "llmPresetImported": "已导入预设「{{label}}」",
+    "llmPresetImportInvalid": "导入失败：不是有效的 LLM 预设文件",
     "torchHelpBrief": "PyTorch 是训练与出图的计算引擎；CUDA 版才能用 GPU，CPU 版会慢数十倍。",
     "flashAttnHelpBrief": "更快的 attention 实现，训练与出图均可选用；需要与 Python / PyTorch / CUDA 精确匹配的预编译 wheel。",
     "onnxHelpBrief": "WD14 / CLTagger 打标使用的推理引擎；CUDA 或 DirectML 包可启用 GPU 加速。",
@@ -1529,10 +1555,7 @@
     "logDrawerOpen": "日志",
     "logDrawerClose": "关闭",
     "logDrawerClear": "清屏",
-    "logDrawerCopy": "复制",
     "logDrawerEmpty": "（暂无日志）",
-    "logDrawerAutoScroll": "自动滚动",
-    "logDrawerCopied": "日志已复制",
     "datasetPromptTitle": "从训练集选 prompt",
     "clearDatasetPick": "清空",
     "clearDatasetPickTitle": "清除已选 caption（关闭面板会保留已选）",
@@ -2200,7 +2223,6 @@
     "removeCandidate": "标记去除",
     "restoreCandidate": "取消去除",
     "previewHint": "←/→ 浏览重复候选 · 勾选后确认去除",
-    "logTitle": "扫描日志",
     "logStarted": "开始扫描重复候选...",
     "statsTitle": "审核统计",
     "statsTotal": "有效工作集",
@@ -2436,7 +2458,6 @@
     "generatingBtn": "生成中…",
     "aiGenerateBtn": "先验生成",
     "startBuildBtn": "开始生成",
-    "tabConfig": "设置 & 日志",
     "tabImages": "图片",
     "tabAi": "先验生成",
     "tabGenerate": "生成",
@@ -2543,7 +2564,6 @@
     "postprocessStretch": "stretch（拉伸，可能变形）",
     "postprocessCrop": "crop（先裁后缩）",
     "maxCropTitle": "单聚类内最大允许裁剪比例（默认 0.1 = 10%）",
-    "aiLogTitle": "先验生成日志",
     "aiStatusDone": "已完成",
     "aiStatusRunning": "生成中",
     "aiStatusFailed": "失败",
@@ -2769,6 +2789,10 @@
       "invalid": "快照标识无效",
       "id_collision": "无法分配快照编号，请重试"
     },
+    "log": {
+      "not_found": "日志文件不存在",
+      "query_conflict": "tail / before / after 只能指定一个"
+    },
     "task": {
       "not_found": "任务不存在",
       "already_finished": "该任务已结束",
@@ -2900,6 +2924,10 @@
     "apiKeySavedPlaceholder": "已保存（不显示），输入新值才覆盖",
     "resetBuiltin": "↺ 恢复内置默认",
     "saveAsCopy": "⎘ 另存为副本",
+    "savedAsCopy": "已另存为「{{label}}」",
+    "export": "⤓ 导出",
+    "exportTitle": "导出为 json 文件（不含 API Key / Base URL）",
+    "deleted": "已删除预设「{{label}}」",
     "done": "完成",
     "presetLabels": {
       "styleJson": "画风 LoRA JSON",

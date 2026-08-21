@@ -17,6 +17,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.loss_weighting import compute_loss_weight
 from training.noise import make_noise, noise_params_from_args
@@ -34,6 +35,30 @@ from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_
 
 
 logger = logging.getLogger(__name__)
+# 训练进度行（step/loss/lr/speed）专用 logger：与本模块其它日志分名，方便
+# 显示端按名折叠/过滤高频行（docs/design/logging-target-state.md §7 open question 2）。
+_progress_logger = logging.getLogger("training.progress")
+
+
+def _progress_line(
+    *, epoch: int, epochs: Any, step: int, loss: float,
+    denoise: float, sra_align: Any, sra_weighted: Any,
+    lr: float, speed: float,
+) -> str:
+    """训练进度行的**唯一**格式来源（tty `\\r` 行与 pipe 日志行共用）。
+
+    `{sra}` 是纯 ASCII 的 key=value 片段（denoise / sra / sra_w），带尾空格，
+    不进字典 —— 字典模板只在它前后留位。
+    """
+    if sra_align is not None and sra_weighted is not None:
+        sra = f"denoise={denoise:.6f} sra={sra_align:.6f} sra_w={sra_weighted:.6f} "
+    else:
+        sra = f"denoise={denoise:.6f} "
+    return msg(
+        "train.progress",
+        epoch=epoch, epochs=epochs, step=step,
+        loss=f"{loss:.6f}", sra=sra, lr=f"{lr:.2e}", speed=f"{speed:.2f}",
+    )
 
 
 def _resolve_sra_weight(args: Any) -> float:
@@ -173,6 +198,61 @@ def _sample_timesteps(timestep_sampler, bs: int, device, latents) -> torch.Tenso
     return timestep_sampler.sample(bs, device)
 
 
+def _cuda_reserved_gb(device) -> float | None:
+    """torch allocator 在 device 上的保留量（GB）；非 CUDA 设备返回 None。"""
+    try:
+        dev = torch.device(device)
+        if dev.type != "cuda" or not torch.cuda.is_available():
+            return None
+        return torch.cuda.memory_reserved(dev) / 1024**3
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class _BucketSwitchCacheRelease:
+    """ARB 切桶时把上一个桶留下的 allocator 缓存归还给驱动（issue #505）。
+
+    BucketBatchSampler 逐桶连续产出，同桶内每步激活形状相同、cached block 完全
+    复用；切到新桶后新形状的大张量塞不进旧桶的 cached block，allocator 只能再
+    cudaMalloc → reserved ≈ 旧桶峰值 + 新桶峰值。Linux 上 cudaMalloc 撞到显存
+    上限会失败，allocator 内置「失败 → 释放缓存 → 重试」自愈；Windows WDDM 下
+    cudaMalloc 不失败而是溢到共享内存，自愈永不触发，之后每步都走 PCIe，速度
+    永久掉一半以上（5090 32GB 实测 0.78→0.3 it/s）。这里在切桶点补上那次
+    释放：此时上一步的 backward/optimizer step 已完成、激活全部释放，
+    empty_cache 正好把旧峰值 segment 整段归还。一个 epoch 只切几次桶，开销
+    可忽略；Linux 上同样调用，少一条平台分叉。
+
+    只用于 ARB 网格路径：NaViT 每个 pack 形状都不同，按形状清会变成每步
+    empty_cache + 重新 cudaMalloc，明显拖慢；且 pack 有 token 上限，reserved
+    会自行收敛到最大 pack 的峰值，无需干预。
+    """
+
+    def __init__(self, device):
+        self._device = device
+        self._prev_hw: tuple[int, ...] | None = None
+
+    def observe(self, latents) -> None:
+        hw = tuple(int(x) for x in latents.shape[-2:])
+        prev, self._prev_hw = self._prev_hw, hw
+        if prev is None or prev == hw:
+            return
+        debug = logger.isEnabledFor(logging.DEBUG)
+        before = _cuda_reserved_gb(self._device) if debug else None
+        torch.cuda.empty_cache()
+        if not debug:
+            return
+        after = _cuda_reserved_gb(self._device)
+        detail = (
+            f", reserved {before:.2f} GB -> {after:.2f} GB"
+            if before is not None and after is not None
+            else ""
+        )
+        logger.debug(
+            "[vram] ARB bucket switch %sx%s -> %sx%s: allocator cache returned%s",
+            prev[0], prev[1], hw[0], hw[1], detail,
+        )
+
+
 def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
@@ -197,14 +277,38 @@ def run(ctx: TrainingContext) -> None:
         _r = getattr(args, "resolution", 1024)
         _base_reso = int(_r[0] if isinstance(_r, (list, tuple)) else _r)
         res_shift_base_tokens = max(1, (_base_reso // 16) ** 2)
-        logger.info(
-            "[res-shift] timestep shift 分辨率修正已启用：s_i=sqrt(token_i/%d)"
-            "（基准档 %dpx），作用于采样后的 t。",
-            res_shift_base_tokens, _base_reso,
-        )
+        logger.info(msg("train.res_shift_enabled", base=_base_reso))
         if getattr(ctx.timestep_sampler, "applies_resolution_shift", False):
             raise ValueError(
                 "timestep_shift_resolution_aware 不能与自带分辨率 shift 的 timestep sampler 同时启用"
+            )
+
+    bucket_switch = _BucketSwitchCacheRelease(ctx.device)
+
+    # NaN 风暴节流（R8/R9）：loss/grad NaN 各打一条首条全文，之后只计数，
+    # epoch 末一条汇总；连续 50 个 optimizer step 无有效更新时升一条 ERROR
+    # （不改控制流，不自动停训）。逐条刷 WARNING 会在 NaN 崩溃场景灌满
+    # run.log，把最后的真 ERROR 块埋掉（error_msg 提取按 ERROR 块）。
+    nan_stats = {
+        "loss_first": True, "grad_first": True,
+        "epoch_micro_skipped": 0, "epoch_micro_total": 0,
+        "epoch_steps_skipped": 0, "epoch_steps_total": 0,
+        "consecutive_skipped": 0, "first_skipped_step": 0, "error_emitted": False,
+    }
+
+    def _note_skipped_step() -> None:
+        nan_stats["epoch_steps_skipped"] += 1
+        if nan_stats["consecutive_skipped"] == 0:
+            nan_stats["first_skipped_step"] = ctx.global_step
+        nan_stats["consecutive_skipped"] += 1
+        if nan_stats["consecutive_skipped"] >= 50 and not nan_stats["error_emitted"]:
+            nan_stats["error_emitted"] = True
+            logger.error(
+                "No effective update for %d consecutive steps: every optimizer step "
+                "since step %d was skipped on NaN/Inf — the run is burning time "
+                "without learning; stop the task and lower the learning rate or "
+                "turn off fp16",
+                nan_stats["consecutive_skipped"], nan_stats["first_skipped_step"],
             )
 
     for epoch in range(ctx.start_epoch, args.epochs):
@@ -250,6 +354,10 @@ def run(ctx: TrainingContext) -> None:
                     pixels_5d = pixels.unsqueeze(2)  # [B,C,1,H,W]
                     latents = ctx.vae.model.encode(pixels_5d, ctx.vae.scale)
                 bs = latents.shape[0]
+
+            # ARB 切桶 → 归还上一个桶的 allocator 缓存（navit 路径不适用，见类注释）
+            if navit_latents is None:
+                bucket_switch.observe(latents)
 
             # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
             # pad-to-512 / kv_trim / LLMAdapter 融合均为 Anima 私货）
@@ -524,10 +632,17 @@ def run(ctx: TrainingContext) -> None:
             # 不 zero_grad —— 同一累积组内其它 micro-batch 已积累的正常梯度要保留；
             # 也不跳过组尾结算 —— 否则组尾撞上 NaN 时整组梯度作废且 global_step 冻结。
             loss_is_finite = bool(torch.isfinite(loss))
+            nan_stats["epoch_micro_total"] += 1
             if not loss_is_finite:
-                logger.warning(
-                    f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过 backward"
-                )
+                nan_stats["epoch_micro_skipped"] += 1
+                if nan_stats["loss_first"]:
+                    nan_stats["loss_first"] = False
+                    logger.warning(
+                        "Loss is NaN/Inf at step %d micro-batch %d: loss=%.4g — "
+                        "backward skipped for this micro-batch; further NaN steps "
+                        "are counted and summarized at each epoch end",
+                        ctx.global_step, batch_idx, loss.item(),
+                    )
             else:
                 loss = loss / group_size
                 if ctx.scaler is not None:
@@ -536,10 +651,12 @@ def run(ctx: TrainingContext) -> None:
                     loss.backward()
 
             if is_group_end:
+                nan_stats["epoch_steps_total"] += 1
                 # 组内所有 micro-batch 都被跳过 → 无梯度可结算：不 step、不推进
                 # global_step（无梯度的 step 会污染 Prodigy 的 k / scheduler 进度；
                 # fp16 下 GradScaler 对空梯度组 step 会直接 assert 崩）。
                 if not any(p.grad is not None for p in ctx.trainable_params):
+                    _note_skipped_step()
                     continue
                 if ctx.scaler is not None:
                     ctx.scaler.unscale_(ctx.optimizer)
@@ -549,7 +666,15 @@ def run(ctx: TrainingContext) -> None:
                     for p in ctx.trainable_params
                 )
                 if has_nan_grad:
-                    logger.warning(f"step {ctx.global_step}: 梯度含 NaN/Inf，跳过 optimizer.step()")
+                    if nan_stats["grad_first"]:
+                        nan_stats["grad_first"] = False
+                        logger.warning(
+                            "Gradient contains NaN/Inf at step %d: optimizer step "
+                            "skipped and gradients cleared — further NaN steps are "
+                            "counted and summarized at each epoch end",
+                            ctx.global_step,
+                        )
+                    _note_skipped_step()
                     ctx.optimizer.zero_grad()
                     if ctx.scaler is not None:
                         ctx.scaler.update()
@@ -565,6 +690,9 @@ def run(ctx: TrainingContext) -> None:
                 if ctx.scheduler is not None and ctx.optimizer_type != "prodigy_plus_schedulefree":
                     ctx.scheduler.step()
                 ctx.optimizer.zero_grad()
+                # 有效更新：连续跳步计数清零，允许下一轮 NaN 段再次升 ERROR
+                nan_stats["consecutive_skipped"] = 0
+                nan_stats["error_emitted"] = False
                 ctx.global_step += 1
 
                 # 自适应采样器：刷新采样分布；baseline 是 no-op
@@ -662,37 +790,35 @@ def run(ctx: TrainingContext) -> None:
                                 from rich.console import Group
                                 ctx.live.update(Group(ctx.progress, panel))
                     elif ctx.use_plain:
-                        sra_suffix = (
-                            f" denoise={denoise_loss_val:.6f}"
-                            f" sra={sra_align_loss_val:.6f}"
-                            f" sra_w={sra_weighted_loss_val:.6f}"
-                            if sra_align_loss_val is not None and sra_weighted_loss_val is not None
-                            else f" denoise={denoise_loss_val:.6f}"
-                        )
-                        print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
-                    elif args.log_every and ctx.global_step % args.log_every == 0:
-                        sra_suffix = (
-                            f" denoise={denoise_loss_val:.6f}"
-                            f" sra={sra_align_loss_val:.6f}"
-                            f" sra_w={sra_weighted_loss_val:.6f}"
-                            if sra_align_loss_val is not None and sra_weighted_loss_val is not None
-                            else f" denoise={denoise_loss_val:.6f}"
-                        )
-                        # flush 必须开：studio spawn 的 stdout 是 pipe（全缓冲
-                        # 8KB），不 flush 时 step 行滞留缓冲——短训练/中止的
-                        # task log 里一行都看不到（曾被误判为 krea2 没打日志）
                         print(
-                            f"epoch={epoch} step={ctx.global_step} "
-                            f"loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} "
-                            f"speed={steps_per_sec:.2f} it/s",
-                            flush=True,
+                            _progress_line(
+                                epoch=epoch + 1, epochs=args.epochs,
+                                step=ctx.global_step, loss=loss_val,
+                                denoise=denoise_loss_val,
+                                sra_align=sra_align_loss_val,
+                                sra_weighted=sra_weighted_loss_val,
+                                lr=lr, speed=ctx.speed_ema,
+                            ),
+                            end="\r", flush=True,
                         )
+                    elif args.log_every and ctx.global_step % args.log_every == 0:
+                        # pipe 模式（studio spawn）：进度行也是日志（设计 D3），走
+                        # 独立 logger 名 training.progress，与其它行同契约、前端可
+                        # 单独折叠。StreamHandler 每条 flush，不会滞留 8KB 缓冲。
+                        _progress_logger.info(_progress_line(
+                            epoch=epoch + 1, epochs=args.epochs,
+                            step=ctx.global_step, loss=loss_val,
+                            denoise=denoise_loss_val,
+                            sra_align=sra_align_loss_val,
+                            sra_weighted=sra_weighted_loss_val,
+                            lr=lr, speed=steps_per_sec,
+                        ))
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
                     prompt = ctx.get_next_sample_prompt()
                     prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
-                    ctx.emit(f"采样中 (step {ctx.global_step}): {prompt_short}")
+                    ctx.emit(msg("train.sampling_step", step=ctx.global_step, prompt=prompt_short))
                     run_sample(
                         ctx,
                         prompt=prompt,
@@ -709,7 +835,7 @@ def run(ctx: TrainingContext) -> None:
                     # PPSF：保存 averaged weights 的 LoRA
                     with optimizer_eval_mode(ctx.optimizer):
                         ctx.injector.save(lora_path)
-                    ctx.emit(f"Saved LoRA: {lora_path}")
+                    ctx.emit(msg("train.lora_saved_step", step=ctx.global_step, path=lora_path))
                     ctx.wandb_monitor.upload_model(lora_path)
 
                 # 定期保存训练状态（断点续训）
@@ -737,7 +863,8 @@ def run(ctx: TrainingContext) -> None:
                         # 同时保存 LoRA 权重
                         lora_path = ctx.output_dir / f"{args.output_name}_step{ctx.global_step}.safetensors"
                         ctx.injector.save(lora_path)
-                    ctx.emit(f"Saved training state (step {ctx.global_step}): {state_path.name}")
+                    # 保存的叙事行由 save_training_state 打（state.py）——这里再
+                    # emit 一次是同一次保存的第二条记录。
                     ctx.wandb_monitor.upload_state_manual(state_path)
 
                 # 检查 max_steps
@@ -745,6 +872,17 @@ def run(ctx: TrainingContext) -> None:
                     break
 
         # epoch 结束后的操作
+        if nan_stats["epoch_micro_skipped"] or nan_stats["epoch_steps_skipped"]:
+            logger.warning(
+                "NaN summary for epoch %d: %d/%d micro-batches skipped on NaN loss, "
+                "%d/%d optimizer steps skipped on NaN gradients — those samples did "
+                "not train",
+                epoch,
+                nan_stats["epoch_micro_skipped"], nan_stats["epoch_micro_total"],
+                nan_stats["epoch_steps_skipped"], nan_stats["epoch_steps_total"],
+            )
+        nan_stats["epoch_micro_skipped"] = nan_stats["epoch_micro_total"] = 0
+        nan_stats["epoch_steps_skipped"] = nan_stats["epoch_steps_total"] = 0
         ctx.current_epoch = epoch + 1
         if epoch_step_count > 0:
             ctx.wandb_monitor.log(
@@ -761,14 +899,14 @@ def run(ctx: TrainingContext) -> None:
                 # PPSF：保存 averaged weights 的 LoRA
                 with optimizer_eval_mode(ctx.optimizer):
                     ctx.injector.save(save_path)
-                ctx.emit(f"Saved LoRA: {save_path}")
+                ctx.emit(msg("train.lora_saved_epoch", epoch=ctx.current_epoch, path=save_path))
                 ctx.wandb_monitor.upload_model(save_path)
 
             # 采样（轮换提示词）
             if args.sample_every > 0 and ctx.current_epoch % args.sample_every == 0:
                 prompt = ctx.get_next_sample_prompt()
                 prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
-                ctx.emit(f"采样中 (epoch {ctx.current_epoch}): {prompt_short}")
+                ctx.emit(msg("train.sampling_epoch", epoch=ctx.current_epoch, prompt=prompt_short))
                 run_sample(
                     ctx,
                     prompt=prompt,
@@ -804,7 +942,7 @@ def run(ctx: TrainingContext) -> None:
                     lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                     if not lora_path.exists():
                         ctx.injector.save(lora_path)
-                ctx.emit(f"Saved training state (epoch {ctx.current_epoch}): {state_path.name}")
+                # 保存的叙事行由 save_training_state 打（state.py），不重复 emit。
                 ctx.wandb_monitor.upload_state_manual(state_path)
 
             # ADR 0006 Addendum 1 方案 Δ：每 epoch 末尾**强制**写 auto_epoch_state.pt（覆盖式）。
@@ -833,6 +971,7 @@ def run(ctx: TrainingContext) -> None:
                     sra_aligner=ctx.sra_aligner,
                     scaler=ctx.scaler,
                     model_family=ctx.family.spec.family_id,
+                    internal=True,  # 系统级恢复点，不是用户产物 → DEBUG
                 )
             ctx.wandb_monitor.upload_state_auto(auto_state_path)
             # 更新 ctx 字段供 handle_interrupt emit pause_state 用

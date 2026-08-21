@@ -21,24 +21,29 @@
 
 不开子进程：把 WD14 / postprocess 直接 import 进来，progress 走同一 log_path。
 
-日志只走 stdout：见 `download_worker.py` 顶部的说明。
+日志只走 logger：见 `download_worker.py` 顶部的说明。
 """
 from __future__ import annotations
 
 import logging
 import threading
-import traceback
 from pathlib import Path
 from typing import Any
 
 # PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8。
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.reg_build_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.reg_build_worker")
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
 # subprocess，必须自己 import；否则 CUDA EP 静默降级到 CPU，用户看不到任何信号。
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLog
 from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
+
+from utils.log_throttle import ProgressThrottle, RepeatThrottle
 
 from studio import db, secrets
 from studio.services.projects import jobs as project_jobs, projects, versions
@@ -76,9 +81,12 @@ def _run_postprocess(
             on_progress=progress,
             cancel_event=cancel_event,
         )
-    except Exception as exc:
-        progress(f"[postprocess] 失败: {exc}")
-        progress(traceback.format_exc())
+    except Exception:
+        # exc_info 取代整段 format_exc 灌 INFO（traceback 作为续行归属本条 WARNING）
+        progress.warning(
+            "Regularization post-processing failed; skipped it, the "
+            "regularization set is still usable", exc_info=True,
+        )
         reg_builder.update_meta_postprocess(
             reg_dir, when=None, clusters=None, method=None, max_crop_ratio=None
         )
@@ -109,57 +117,96 @@ def _run_auto_tag(reg_dir: Path, progress, kind: str = "wd14") -> bool:
     """
     images = _collect_reg_images(reg_dir)
     if not images:
-        progress("[auto-tag] 没有图，跳过")
+        progress.info(msg("worker.regbuild.autotag_no_images"))
         return False
-    progress(f"[auto-tag] 启动 {kind}，{len(images)} 张图")
+    total = len(images)
+    progress.info(msg("worker.regbuild.autotag_start", tagger=kind, total=total))
+    repeat = RepeatThrottle(progress)
     try:
         from studio.services.tagging.base import get_tagger
         tagger = get_tagger(kind)
         tagger.prepare()
-        progress(f"[auto-tag] {kind} 模型就绪")
+        progress.info(msg("worker.regbuild.autotag_ready", tagger=kind))
+
+        # 逐图行降 DEBUG，可见进度由节流后的计数 INFO 承担（Q3 三件套）。
+        throttle = ProgressThrottle(total)
+
+        def _on_progress(done: int, tot: int) -> None:
+            if throttle.should_emit(done):
+                progress.info(msg(
+                    "worker.regbuild.autotag_progress", done=done, total=tot,
+                ))
+
         ok = 0
         errs = 0
-        for r in tagger.tag(
-            images,
-            on_progress=lambda d, t: progress(f"[auto-tag] {d}/{t}"),
-        ):
+        for r in tagger.tag(images, on_progress=_on_progress):
             if r.get("error"):
-                progress(f"[auto-tag err] {r['image'].name}: {r['error']}")
+                repeat.hit(
+                    "autotag_failed",
+                    "%d regularization images could not be tagged (first: %s)",
+                    "Tagging failed for %s: %s; image skipped",
+                    r["image"].name, r["error"],
+                    first=r["image"].name,
+                )
                 errs += 1
                 continue
             tagedit.write_tags(r["image"], r.get("tags") or [])
             ok += 1
-        progress(f"[auto-tag] done {ok}/{len(images)} (errors={errs})")
+            progress.debug("auto-tag: tagged %s", r["image"].name)
+        if errs:
+            progress.warning(
+                "Regularization set tagging finished with failures: "
+                "tagged=%d/%d failed=%d",
+                ok, total, errs,
+            )
+        else:
+            progress.info(msg(
+                "worker.regbuild.autotag_done", done=ok, total=total, errors=errs,
+            ))
         return ok > 0
-    except Exception as exc:
-        progress(f"[auto-tag] 失败: {exc}")
-        progress(traceback.format_exc())
+    except Exception:
+        progress.warning(
+            "Auto-tagging the regularization set failed; the images are kept "
+            "but left untagged", exc_info=True,
+        )
         return False
+    finally:
+        repeat.drain()
 
 
 def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error(
+            "Regularization build job %s not found in the database; nothing to run",
+            job_id,
+        )
         return 1
     if job["kind"] != "reg_build":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error(
+            "Internal error: job %s has kind=%s, not a regularization build job; "
+            "aborting",
+            job_id, job["kind"],
+        )
         return 1
 
     params: dict[str, Any] = job.get("params_decoded") or {}
 
     cancel_event = threading.Event()  # supervisor 走 SIGTERM；这里只为 API 完整性
 
-    def progress(line: str) -> None:
-        print(line, flush=True)
+    progress = TaskLog(logger)
 
     try:
         version_id = int(params["version_id"])
         with db.connection_for() as conn:
             v = versions.get_version(conn, version_id)
             if not v or v["project_id"] != job["project_id"]:
-                progress(f"[error] version {version_id} not in project {job['project_id']}")
+                progress.error(
+                    "Version %s does not belong to project %s; regularization "
+                    "build aborted",
+                    version_id, job["project_id"],
+                )
                 return 1
             p = projects.get_project(conn, v["project_id"])
         assert p is not None
@@ -216,18 +263,23 @@ def run(job_id: int) -> int:
         incremental = bool(params.get("incremental", True))
         pp_method = str(params.get("postprocess_method", "smart"))
         pp_max_crop = float(params.get("postprocess_max_crop_ratio", 0.1))
-        progress(
-            f"[start] version={v['label']} api={api_source} "
-            f"max_tags={max_search_tags} auto_tag={opts.auto_tag} "
-            f"incremental={incremental} auto_dedup={opts.auto_dedup} "
-            f"pp={pp_method}/{pp_max_crop}"
-        )
+        progress.info(msg(
+            "worker.regbuild.start",
+            version=v["label"],
+            source=api_source,
+            max_tags=max_search_tags,
+            auto_tag=opts.auto_tag,
+            incremental=incremental,
+            auto_dedup=opts.auto_dedup,
+            pp_method=pp_method,
+            pp_max_crop=pp_max_crop,
+        ))
 
         # full mode：先清掉 reg/（图、子文件夹、meta、.deleted_ids.json），
         # 用户语义是「从零开始」。incremental mode 保留所有已有内容。
         if not incremental and output_dir.exists():
-            progress("[start] full mode：清空 reg/ 已有内容")
             reg_builder.clear_reg_dir(output_dir)
+            progress.info(msg("regai.full_mode_clear"))
 
         meta = reg_builder.build(
             opts,
@@ -235,7 +287,10 @@ def run(job_id: int) -> int:
             cancel_event=cancel_event,
             incremental=incremental,
         )
-        progress(f"[reg-done] actual={meta.actual_count}/{meta.target_count}")
+        progress.info(msg(
+            "worker.regbuild.built",
+            actual=meta.actual_count, target=meta.target_count,
+        ))
 
         # A4 — auto_dedup：build 后扫重复 → 每组留 1 张其余删 → 不够则
         # incremental 补足。最多 MAX_DEDUP_ROUNDS 轮，每轮删数为 0 提前退出。
@@ -243,34 +298,44 @@ def run(job_id: int) -> int:
             MAX_DEDUP_ROUNDS = 3
             for r in range(MAX_DEDUP_ROUNDS):
                 if cancel_event.is_set():
-                    progress("[dedup] 用户中止")
+                    progress.warning(
+                        "Deduplication canceled by the user; the regularization "
+                        "set may still contain duplicates"
+                    )
                     break
-                progress(f"[dedup r{r + 1}/{MAX_DEDUP_ROUNDS}] 扫描重复…")
+                progress.info(msg(
+                    "worker.regbuild.dedup_scan",
+                    round=r + 1, rounds=MAX_DEDUP_ROUNDS,
+                ))
                 to_delete = reg_dedup.scan_for_dedup(output_dir)
                 if not to_delete:
-                    progress(f"[dedup r{r + 1}] 无可删项，结束")
+                    progress.info(msg("worker.regbuild.dedup_none", round=r + 1))
                     break
                 purged = reg_dedup.purge_paths(output_dir, to_delete)
-                progress(f"[dedup r{r + 1}] 删 {purged['count']} 张")
+                progress.info(msg(
+                    "worker.regbuild.dedup_purged",
+                    round=r + 1, count=purged["count"],
+                ))
                 if purged["count"] == 0:
                     break  # scan 给了但全部 unlink 失败 / 不存在 → 防死循环
                 meta = reg_builder.read_meta(output_dir) or meta
                 shortfall = meta.target_count - meta.actual_count
                 if shortfall <= 0:
-                    progress(f"[dedup r{r + 1}] 已达目标，结束")
+                    progress.info(msg("worker.regbuild.dedup_target_met", round=r + 1))
                     break
-                progress(
-                    f"[dedup r{r + 1}] 缺 {shortfall} 张，自动 incremental 补足"
-                )
+                progress.info(msg(
+                    "worker.regbuild.dedup_refill", round=r + 1, shortfall=shortfall,
+                ))
                 meta = reg_builder.build(
                     opts,
                     on_progress=progress,
                     cancel_event=cancel_event,
                     incremental=True,
                 )
-                progress(
-                    f"[dedup r{r + 1}] 补足后 actual={meta.actual_count}/{meta.target_count}"
-                )
+                progress.info(msg(
+                    "worker.regbuild.dedup_refilled",
+                    round=r + 1, actual=meta.actual_count, target=meta.target_count,
+                ))
 
         # PP5.5 — 分辨率聚类后处理（auto_tag 之前，因为打标基于最终图）。
         # A4 顺序：必须在 dedup 之后 —— postprocess 会 resize 图，phash 会变。
@@ -289,11 +354,10 @@ def run(job_id: int) -> int:
             )
 
         return 0 if meta.actual_count > 0 else 1
-    except Exception as exc:
-        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
-        # progress 给人读短摘要。
-        logger.exception("reg_build worker crashed (job_id=%s)", job_id)
-        progress(f"[error] {exc}")
+    except Exception:
+        # PR-1 C7: logger.exception 带 trace_id 进 stderr；异常摘要由 traceback
+        # 提供，不再另发一条 progress（C6）。
+        logger.exception("Regularization build worker crashed: job=%s", job_id)
         return 1
 
 

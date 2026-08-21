@@ -29,6 +29,7 @@ class AnimaFamily:
             path, device, dtype, repo_root,
             flash_attn=(attention_backend == "flash_attn"),
             blocks_to_swap=blocks_to_swap,
+            attention_backend=attention_backend,
         )
         if attention_backend == "xformers":
             enable_xformers(model)

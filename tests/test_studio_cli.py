@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,38 @@ from studio import cli
 # ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
+
+
+def _cli_msgs(caplog: pytest.LogCaptureFixture, *, min_level: int = logging.DEBUG) -> str:
+    """`_say` 现在走 `studio.cli` logger（logging-target-state §3.5）；把该 logger
+    在 [min_level, ∞) 的记录拼成一段文本，替代以前 capsys 的 out / err 断言：
+      - 原 stdout（info）  → min_level=INFO 且过滤掉 WARNING+
+      - 原 stderr（warn+） → min_level=WARNING
+    """
+    return "\n".join(
+        r.getMessage() for r in caplog.records
+        if r.name == "studio.cli" and r.levelno >= min_level
+    )
+
+
+def _cli_info(caplog: pytest.LogCaptureFixture) -> str:
+    """只取 INFO 级（原「stdout」流）。"""
+    return "\n".join(
+        r.getMessage() for r in caplog.records
+        if r.name == "studio.cli" and r.levelno == logging.INFO
+    )
+
+
+def _cli_warn_plus(caplog: pytest.LogCaptureFixture) -> str:
+    """WARNING 及以上（原「stderr」流）。"""
+    return _cli_msgs(caplog, min_level=logging.WARNING)
+
+
+@pytest.fixture
+def cli_log(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    """把 studio.cli logger 放到 DEBUG 抓全，测试用 _cli_info / _cli_warn_plus 分流。"""
+    caplog.set_level(logging.DEBUG, logger="studio.cli")
+    return caplog
 
 
 @pytest.fixture
@@ -325,7 +358,7 @@ def _install_fake_torch(monkeypatch: pytest.MonkeyPatch, torch_module) -> None:
 
 
 def test_check_torch_cuda_silent_when_torch_missing(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """torch 没装时静默返回，让 _ensure_python_deps 接手。"""
     import sys as _sys
@@ -340,28 +373,26 @@ def test_check_torch_cuda_silent_when_torch_missing(
 
     monkeypatch.setattr("builtins.__import__", _fake_import)
     cli._check_torch_cuda()
-    out = capsys.readouterr()
-    assert out.out == ""
-    assert out.err == ""
+    assert _cli_msgs(cli_log) == ""
 
 
 def test_check_torch_cuda_prints_ok_when_available(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
-    """CUDA 可用 → stdout 一行 OK，无 stderr 噪声。"""
+    """CUDA 可用 → 一行 INFO OK，无 WARNING/ERROR 噪声。"""
     _install_fake_torch(
         monkeypatch,
         _FakeTorch(available=True, cuda_build="12.8", version="2.5.0", device_name="RTX 5090"),
     )
     cli._check_torch_cuda()
-    out = capsys.readouterr()
-    assert "RTX 5090" in out.out
-    assert "2.5.0" in out.out
-    assert out.err == ""  # 一切正常不该写 stderr
+    info = _cli_info(cli_log)
+    assert "RTX 5090" in info
+    assert "2.5.0" in info
+    assert _cli_warn_plus(cli_log) == ""  # 一切正常不该出 warning
 
 
 def test_check_torch_cuda_warns_on_cpu_only_with_gpu(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """CPU-only torch + 检测到 NVIDIA GPU → 大警告 + 重装命令（最常见误装）。"""
     _install_fake_torch(
@@ -375,18 +406,18 @@ def test_check_torch_cuda_warns_on_cpu_only_with_gpu(
         lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
     )
     cli._check_torch_cuda()
-    out = capsys.readouterr()
-    assert out.out == ""  # 警告全走 stderr
-    assert "CPU-only" in out.err
-    assert "pip install torch" in out.err
-    assert "--index-url" in out.err
+    assert _cli_info(cli_log) == ""  # 警告全走 WARNING 级
+    warn = _cli_warn_plus(cli_log)
+    assert "CPU-only" in warn
+    assert "pip install torch" in warn
+    assert "--index-url" in warn
     # 不该再用 emoji
-    assert "✓" not in out.err
-    assert "⚠" not in out.err
+    assert "✓" not in warn
+    assert "⚠" not in warn
 
 
 def test_check_torch_cuda_info_on_cpu_only_without_gpu(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """CPU-only torch + 没 NVIDIA GPU → benign info（用户确实在 CPU 机器）。"""
     _install_fake_torch(
@@ -400,14 +431,15 @@ def test_check_torch_cuda_info_on_cpu_only_without_gpu(
         lambda: {"available": False, "driver_version": None, "gpu_name": None},
     )
     cli._check_torch_cuda()
-    out = capsys.readouterr()
-    assert "CPU-only build" in out.out
-    assert "未检测到 NVIDIA GPU" in out.out
-    assert out.err == ""
+    info = _cli_info(cli_log)
+    # INFO 叙事行走 msg_id 字典（默认 zh）：`CPU-only build` → `CPU-only 构建`
+    assert "CPU-only 构建" in info
+    assert "未检测到 NVIDIA GPU" in info
+    assert _cli_warn_plus(cli_log) == ""
 
 
 def test_check_torch_cuda_warns_on_cuda_build_but_unavailable(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """CUDA build + cuda.is_available()=False → 驱动 / WSL 警告。"""
     _install_fake_torch(
@@ -415,11 +447,11 @@ def test_check_torch_cuda_warns_on_cuda_build_but_unavailable(
         _FakeTorch(available=False, cuda_build="12.8", version="2.5.0+cu128"),
     )
     cli._check_torch_cuda()
-    out = capsys.readouterr()
-    assert "CUDA 12.8 build" in out.err
-    assert "is_available()=False" in out.err
+    warn = _cli_warn_plus(cli_log)
+    assert "CUDA 12.8 build" in warn
+    assert "is_available()=False" in warn
     # 该路径不应给出 pip install 重装建议（torch 装得没问题，是驱动 / WSL 问题）
-    assert "pip install torch" not in out.err
+    assert "pip install torch" not in warn
 
 
 # ---------------------------------------------------------------------------
@@ -427,23 +459,30 @@ def test_check_torch_cuda_warns_on_cuda_build_but_unavailable(
 # ---------------------------------------------------------------------------
 
 
-def test_npm_hint_windows(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+def test_npm_hint_windows(
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setattr(cli.os, "name", "nt")
     cli._print_npm_install_hint()
-    err = capsys.readouterr().err
+    err = _cli_warn_plus(cli_log)
     assert "Node.js 18+" in err
     assert "winget install" in err
     assert "nodejs.org" in err
     # 不应该泄漏 Linux-only 内容
     assert "nodesource" not in err
     assert "nvm" not in err
+    # 整段提示是一条 ERROR 记录（多行续行无前缀），不是拆成多条
+    errs = [r for r in cli_log.records if r.name == "studio.cli" and r.levelno >= logging.ERROR]
+    assert len(errs) == 1
 
 
-def test_npm_hint_linux_non_root(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+def test_npm_hint_linux_non_root(
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setattr(cli.os, "name", "posix")
     monkeypatch.setattr(cli.os, "getuid", lambda: 1000, raising=False)
     cli._print_npm_install_hint()
-    err = capsys.readouterr().err
+    err = _cli_warn_plus(cli_log)
     assert "nodesource.com" in err
     assert "sudo bash" in err  # 非 root → 命令带 sudo 前缀
     assert "nvm" in err
@@ -452,12 +491,12 @@ def test_npm_hint_linux_non_root(monkeypatch: pytest.MonkeyPatch, capsys) -> Non
 
 
 def test_npm_hint_linux_root_drops_sudo(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(cli.os, "name", "posix")
     monkeypatch.setattr(cli.os, "getuid", lambda: 0, raising=False)
     cli._print_npm_install_hint()
-    err = capsys.readouterr().err
+    err = _cli_warn_plus(cli_log)
     # root 环境直接跑命令，sudo 字样不应出现（避免误导：sudo 在容器里常无）
     assert " sudo " not in err
     assert "sudo bash" not in err
@@ -465,14 +504,14 @@ def test_npm_hint_linux_root_drops_sudo(
 
 
 def test_cmd_build_no_npm_prints_install_hint(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """cmd_build 找不到 npm 时应通过 _print_npm_install_hint 输出（不只是「找不到 npm」一行）。"""
     monkeypatch.setattr(cli, "find_npm", lambda: None)
     monkeypatch.setattr(cli.os, "name", "nt")
     rc = cli.main(["build"])
     assert rc == 2
-    err = capsys.readouterr().err
+    err = _cli_warn_plus(cli_log)
     assert "winget" in err
     assert "Node.js 18+" in err
 
@@ -535,7 +574,7 @@ def _stub_run_bootstrap(
 
 
 def test_cmd_run_returns_42_when_installer_changed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """server 退出 + restart flag 在 + installer hash 变了 → return 42, flag 保留。
 
@@ -561,7 +600,7 @@ def test_cmd_run_returns_42_when_installer_changed(
     rc = cli.main(["run", "--no-browser"])
     assert rc == cli._INSTALLER_RELOAD_EXIT_CODE == 42
     assert fake_flag.exists(), "flag 必须保留给 wrapper 走 exec-self 路径"
-    assert "launcher 文件更新" in capsys.readouterr().out
+    assert "launcher 文件有更新" in _cli_info(cli_log)
 
 
 def test_cmd_run_normal_restart_when_installer_unchanged(
@@ -591,7 +630,7 @@ def test_cmd_run_normal_restart_when_installer_unchanged(
 
 
 def test_cmd_run_ctrl_c_returns_130_without_traceback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli_log: pytest.LogCaptureFixture
 ) -> None:
     """终端 Ctrl+C：父进程在 subprocess.call 等 server 期间收到的
     KeyboardInterrupt 会在子进程退出后才抛出 —— 应按用户主动停机处理
@@ -606,7 +645,7 @@ def test_cmd_run_ctrl_c_returns_130_without_traceback(
 
     rc = cli.main(["run", "--no-browser"])
     assert rc == 130
-    assert "Ctrl+C" in capsys.readouterr().out
+    assert "Ctrl+C" in _cli_info(cli_log)
 
 
 def test_cmd_run_no_flag_no_dispatch(

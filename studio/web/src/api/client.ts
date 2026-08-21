@@ -640,6 +640,12 @@ export interface SystemPrefsConfig {
   /** 计算显卡（多卡机器，#491）：NVML/nvidia-smi 的 PCI 序号；null = 未设置
    *  （CUDA 自选，快卡优先）。启动期注入 CUDA env，重启生效。 */
   gpu_index?: number | null
+  /** UI 语言（zh/en）。前端显示语言以 localStorage 为准；本字段是**子进程
+   *  日志语言**的注入源（ANIMA_UI_LANG），切语言时 fire-and-forget 同步。 */
+  ui_language?: string
+  /** 日志视图默认是否显示 DEBUG 行（logging-target-state D1）。只管显示默认值：
+   *  run.log 恒记 DEBUG，每个 LogView 的「调试」开关以此为初值、不持久化。 */
+  log_debug_default?: boolean
 }
 
 export interface ProxyConfig {
@@ -675,6 +681,16 @@ export interface TrainingSecretsConfig {
   ram_guard: boolean
 }
 
+/** Tag 翻译词典的全站 UI 偏好（Settings → 标签词典）。null = 用户从未设过：
+ *  前端（tagDict/prefs.ts）据此一次性 seed（旧 localStorage 值 → 否则
+ *  show_translation 按界面语言推导、autocomplete 不写=默认开）。 */
+export interface TagDictionarySecretsConfig {
+  /** tag chip 上是否附带中文翻译（仅显示，不改 caption）。 */
+  show_translation: boolean | null
+  /** prompt / tag 输入框是否弹出补全候选（基于词典）。 */
+  autocomplete: boolean | null
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -698,6 +714,7 @@ export interface Secrets {
   training: TrainingSecretsConfig
   system: SystemPrefsConfig
   proxy: ProxyConfig
+  tag_dictionary: TagDictionarySecretsConfig
 }
 
 /** PUT /api/secrets 的 body：嵌套的 partial dict；MASK ("***") 表示「保持不变」。 */
@@ -1743,10 +1760,28 @@ export interface QueueHoldState {
   pending_waiting: number
 }
 
-export interface LogResponse {
+/** `GET /api/logs/{id}` 分页响应（docs/design/logging-target-state.md §3.4）。
+ *  `lines[].offset` = 该行起始字节；`end_offset` = 最后一行结束后的偏移，既是
+ *  「往后补拉」的 after 游标，也与 SSE task_log_appended.end_offset 同坐标系；
+ *  `start_offset` 给「加载更早」当 before。末尾半行不返回。 */
+export interface LogPage {
   task_id: number
-  content: string
+  lines: { offset: number; text: string }[]
+  start_offset: number
+  end_offset: number
   size: number
+  has_more_before: boolean
+}
+
+/** 分页查询参数：tail / before / after 三选一（都不给 = tail，服务端默认 500 行）。 */
+export type LogPageQuery =
+  | { tail?: number }
+  | { before: number; limit?: number }
+  | { after: number; limit?: number }
+
+/** 把一页日志拼回文本（刀 3 LogView 上线前的过渡：现有视图仍按字符串渲染）。 */
+export function logPageText(page: LogPage): string {
+  return page.lines.length ? page.lines.map((l) => l.text).join('\n') + '\n' : ''
 }
 
 /** /api/state — per-task monitor state written by the training process */
@@ -1911,6 +1946,10 @@ export function makeApiError(
   e.code = code
   e.detail = detail
   e.traceId = traceId
+  // 全站 91 处 `toast(String(e), 'error')`：String() 走 toString —— 去掉 `Error: `
+  // 英文前缀（中文 UI 里刺眼），并把 trace 后缀带上（用户截图给开发 jq 还原链路；
+  // logging-target-state §3.3）。`e.message` 保持干净给 toast(e.message) 与断言用。
+  e.toString = () => `${message}${formatErrorTraceSuffix(e)}`
   return e
 }
 
@@ -2141,6 +2180,24 @@ export const api = {
     const fd = new FormData()
     fd.append('file', file, file.name)
     const resp = await fetch('/api/secrets/wandb/presets/import', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { id: string; label: string; secrets: Secrets }
+  },
+
+  /** LLM preset json 下载直链（**不含 API 信息**：api_key/base_url/model_ids 置空）。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  llmPresetExportUrl: (id: string) =>
+    `/api/secrets/llm/presets/${encodeURIComponent(id)}/export`,
+  /** 上传 json/yaml 导入 LLM preset；返回新 preset 标识 + 最新 masked secrets。 */
+  importLLMPreset: async (
+    file: File,
+  ): Promise<{ id: string; label: string; secrets: Secrets }> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/secrets/llm/presets/import', { method: 'POST', body: fd })
     if (!resp.ok) {
       const body = await resp.json().catch(() => null)
       throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
@@ -3180,7 +3237,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ordered_ids: orderedIds }),
     }),
-  getLog: (id: number) => req<LogResponse>(`/api/logs/${id}`),
+  getLog: (id: number, q: LogPageQuery = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(q)) if (v != null) qs.set(k, String(v))
+    const s = qs.toString()
+    return req<LogPage>(`/api/logs/${id}${s ? `?${s}` : ''}`)
+  },
+  logRawUrl: (id: number) => `/api/logs/${id}/raw`,
+  /** 诊断包 zip（logging-target-state §3.6）：带 task_id = 该任务 run.log + 窗内 studio.log
+   *  + 快照 + env；不带 = env + studio.log 尾部。用 <a download> 直接下载。 */
+  diagnosticsBundleUrl: (taskId?: number | null) =>
+    taskId != null ? `/api/diagnostics/bundle?task_id=${taskId}` : '/api/diagnostics/bundle',
   /** 默认拉全量历史（max_points=0，server 跳过降采样）；想要降采样预览
    *  传具体数字。cold start 是一次性 HTTP，长训练（10k+ 步）下也只是 ~500KB
    *  payload，不值得为视觉损耗换网络节省。 */

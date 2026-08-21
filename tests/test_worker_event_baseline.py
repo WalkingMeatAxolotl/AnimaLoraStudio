@@ -60,7 +60,7 @@ def test_logs_router_filters_event_lines(tmp_path: Path,
     resp = client.get("/api/logs/42")
     assert resp.status_code == 200
     body = resp.json()
-    content = body["content"]
+    content = "\n".join(l["text"] for l in body["lines"])
     assert "[start] tagging 100 images" in content
     assert "tagged 50/100" in content
     assert "[done] tagged 100 images" in content
@@ -85,7 +85,7 @@ def test_logs_router_prefers_task_scoped_path(tmp_path: Path,
     db.init_db(tmp_path / "studio.db")
     client = TestClient(server.app)
     body = client.get("/api/logs/99").json()
-    assert body["content"] == "NEW\n"
+    assert [l["text"] for l in body["lines"]] == ["NEW"]
 
 
 def test_logs_router_falls_back_to_legacy_logs_dir(tmp_path: Path,
@@ -102,7 +102,7 @@ def test_logs_router_falls_back_to_legacy_logs_dir(tmp_path: Path,
     db.init_db(tmp_path / "studio.db")
     client = TestClient(server.app)
     body = client.get("/api/logs/55").json()
-    assert body["content"] == "OLD_ONLY\n"
+    assert [l["text"] for l in body["lines"]] == ["OLD_ONLY"]
 
 
 def test_event_marker_unused_task_returns_empty_not_error(tmp_path: Path,
@@ -117,4 +117,5 @@ def test_event_marker_unused_task_returns_empty_not_error(tmp_path: Path,
 
     resp = client.get("/api/logs/9999")
     assert resp.status_code == 200
-    assert resp.json() == {"task_id": 9999, "content": "", "size": 0}
+    body = resp.json()
+    assert body["task_id"] == 9999 and body["lines"] == [] and body["size"] == 0

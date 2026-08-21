@@ -49,9 +49,11 @@ from .analysis import (
     collect_source_image_ids,
     find_best_match,
 )
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import NULL_LOG, TaskLogLike, as_task_log
 
 
-ProgressFn = Callable[[str], None]
+ProgressFn = TaskLogLike
 
 VIDEO_EXTS = {
     "mp4", "webm", "avi", "mov", "mkv", "flv", "wmv", "mpg", "mpeg", "m4v",
@@ -175,15 +177,21 @@ def _build_for_subfolder(
 ) -> tuple[bool, int]:
     """单子文件夹批量循环。返回 (success_80%达成, 实际下载数)。"""
     label = subfolder_name or "<root>"
-    on_progress(f"\n===== 子文件夹 {label} =====")
+    on_progress(msg("reg.subfolder_start", label=label))
 
     target_count = subfolder_data["image_count"]
     remaining_quota = total_target_count - total_downloaded_so_far
     if remaining_quota <= 0:
-        on_progress(f"  ⚠️  已达总数量限制 {total_target_count}，跳过 {label}")
+        on_progress.warning(
+            "reg: total image limit %d reached; subfolder %s skipped",
+            total_target_count, label,
+        )
         return False, 0
     target_count = min(target_count, remaining_quota)
-    on_progress(f"  目标 {target_count} 张，批次 {opts.batch_size}，最多 {opts.max_search_tags} tag")
+    on_progress(msg(
+        "reg.subfolder_plan", target=target_count, batch=opts.batch_size,
+        max_tags=opts.max_search_tags,
+    ))
 
     if subfolder_name == "":
         out_sub = output_dir
@@ -202,9 +210,7 @@ def _build_for_subfolder(
     # 不计入 downloaded_count，因为它们已经不在盘上了。
     if deleted_ids:
         downloaded_ids.update(deleted_ids)
-        on_progress(
-            f"  [a2] 排除已删 booru ID {len(deleted_ids)} 个（来自 reg/.deleted_ids.json）"
-        )
+        on_progress(msg("reg.deleted_ids_excluded_sub", n=len(deleted_ids)))
 
     # PP5.1 — incremental：把已有图作为「已下载」计入起点 + 累加 current_weights
     if pre_existing and pre_existing.get("count"):
@@ -215,11 +221,12 @@ def _build_for_subfolder(
         for tags in pre_existing.get("tags") or []:
             for t in tags:
                 current_weights[t] += 1 / target_count
-        on_progress(
-            f"  [incremental] 沿用已有 {existing_count} 张（计入起点 {downloaded_count}/{target_count}）"
-        )
+        on_progress(msg(
+            "reg.incremental_reuse", existing=existing_count,
+            downloaded=downloaded_count, target=target_count,
+        ))
         if downloaded_count >= target_count:
-            on_progress("  [incremental] 已有图已达目标，无需补足")
+            on_progress(msg("reg.incremental_done"))
             return True, downloaded_count
 
     batch_round = 0
@@ -230,29 +237,34 @@ def _build_for_subfolder(
 
     while downloaded_count < target_count and batch_round < max_rounds:
         if cancel_event and cancel_event.is_set():
-            on_progress("  [cancel] 用户中止")
+            on_progress(msg("reg.canceled"))
             return False, downloaded_count
 
         batch_round += 1
         batch_remaining = min(opts.batch_size, target_count - downloaded_count)
-        on_progress(f"\n  ----- batch {batch_round} ({downloaded_count}/{target_count}) -----")
+        on_progress.debug(
+            "reg batch start: round=%d progress=%d/%d",
+            batch_round, downloaded_count, target_count,
+        )
 
         missing_tags = calculate_missing_tags(
             target_weights, current_weights, blacklist_tags, failed_tags
         )
         if not missing_tags:
-            on_progress("  所有标签已达目标权重")
+            on_progress(msg("reg.weights_reached"))
             break
 
         available_tags = [t for t, _ in missing_tags if t not in failed_tags]
         if not available_tags:
-            on_progress(f"  ⚠️  所有缺失标签都搜索失败：{list(failed_tags)}")
+            on_progress.warning(
+                "reg: every missing tag failed to search: %s", list(failed_tags),
+            )
             break
 
         info_preview = ", ".join(
             f"{t}(缺{w:.2f})" for t, w in missing_tags[:5]
         )
-        on_progress(f"  最缺失: {info_preview}")
+        on_progress.debug("reg most-missing tags: %s", info_preview)
 
         # 标签数递减：10 → 5 → 3 → 2 → 1
         tag_counts_seq = [10, 5, 3, 2, 1]
@@ -275,13 +287,17 @@ def _build_for_subfolder(
                 comb_key = tuple(sorted(cand_tags))
                 if comb_key in invalid_tag_combinations:
                     if offset == 0:
-                        on_progress(f"    跳过无效组合: {cand_tags}")
+                        on_progress.debug(
+                            "reg skip invalid tag combination: %s", cand_tags,
+                        )
                     continue
                 if comb_key in tried_combinations:
                     continue
                 tried_combinations.add(comb_key)
 
-                on_progress(f"    用 {tag_count} tag 搜索: {cand_tags}")
+                on_progress.debug(
+                    "reg search: tag_count=%d tags=%s", tag_count, cand_tags,
+                )
                 posts = _search_with_filters(
                     cand_tags,
                     api_source=opts.api_source,
@@ -301,12 +317,18 @@ def _build_for_subfolder(
                     break
                 if tag_count == 1:
                     failed_tags.add(cand_tags[0])
-                    on_progress(f"    ✗ tag '{cand_tags[0]}' 搜索失败，加入跳过列表")
+                    on_progress.debug(
+                        "reg tag search failed; added to the skip list: tag=%s",
+                        cand_tags[0],
+                    )
                     remaining_avail = [
                         t for t, _ in missing_tags if t not in failed_tags
                     ]
                     if not remaining_avail:
-                        on_progress(f"  ⚠️  所有缺失标签都已失败：{list(failed_tags)}")
+                        on_progress.warning(
+                            "reg: every missing tag has already failed: %s",
+                            list(failed_tags),
+                        )
                         all_tags_failed = True
                         break
             if posts or all_tags_failed:
@@ -314,8 +336,9 @@ def _build_for_subfolder(
 
         if not posts:
             consecutive_failures += 1
-            on_progress(
-                f"  ⚠️  无匹配（连续失败 {consecutive_failures}/{max_consecutive_failures}）"
+            on_progress.debug(
+                "reg no match: consecutive_failures=%d/%d",
+                consecutive_failures, max_consecutive_failures,
             )
             # 检测：所有可能组合都被标记为 invalid → 退出
             all_invalid = True
@@ -327,14 +350,20 @@ def _build_for_subfolder(
                     all_invalid = False
                     break
             if all_invalid and invalid_tag_combinations:
-                on_progress("  所有组合标记 invalid，停止搜索")
+                on_progress.warning(
+                    "reg: all tag combinations are marked invalid; stopping the "
+                    "search for subfolder=%s", label,
+                )
                 break
             if consecutive_failures >= max_consecutive_failures:
-                on_progress(f"  连续 {consecutive_failures} 次失败，停止")
+                on_progress.warning(
+                    "reg: %d consecutive failures; stopping the search for "
+                    "subfolder=%s", consecutive_failures, label,
+                )
                 break
             continue
         consecutive_failures = 0
-        on_progress(f"    候选 {len(posts)} 张")
+        on_progress.debug("reg candidates: %d", len(posts))
 
         # 从候选下载本批次
         batch_downloaded = 0
@@ -343,7 +372,7 @@ def _build_for_subfolder(
 
         while batch_downloaded < batch_remaining and attempts < max_attempts:
             if cancel_event and cancel_event.is_set():
-                on_progress("  [cancel] 用户中止")
+                on_progress(msg("reg.canceled"))
                 return False, downloaded_count
 
             attempts += 1
@@ -373,18 +402,24 @@ def _build_for_subfolder(
                 skipped += 1
                 continue
             if pid in source_image_ids:
-                on_progress(f"    跳过（源已有）: {pid}")
+                on_progress.debug(
+                    "reg skip (already in the training set): post_id=%s", pid,
+                )
                 skipped += 1
                 downloaded_ids.add(pid)
                 continue
             ext_lower = (file_ext or "").lower()
             if ext_lower in VIDEO_EXTS:
-                on_progress(f"    跳过（视频）: {pid} .{file_ext}")
+                on_progress.debug(
+                    "reg skip (video): post_id=%s ext=%s", pid, file_ext,
+                )
                 skipped += 1
                 downloaded_ids.add(pid)
                 continue
             if ext_lower not in _IMAGE_EXT_NODOT:
-                on_progress(f"    跳过（非图片）: {pid} .{file_ext}")
+                on_progress.debug(
+                    "reg skip (not an image): post_id=%s ext=%s", pid, file_ext,
+                )
                 skipped += 1
                 downloaded_ids.add(pid)
                 continue
@@ -396,7 +431,10 @@ def _build_for_subfolder(
                 max_ar=opts.max_aspect_ratio,
             ):
                 ar_v = pw / ph if pw and ph else 0
-                on_progress(f"    跳过（长宽比 {ar_v:.2f}）: {pid}")
+                on_progress.debug(
+                    "reg skip (aspect ratio %.2f out of range): post_id=%s",
+                    ar_v, pid,
+                )
                 skipped += 1
                 downloaded_ids.add(pid)
                 continue
@@ -409,7 +447,10 @@ def _build_for_subfolder(
                 try:
                     image_path.unlink()
                 except Exception as exc:
-                    on_progress(f"    警告：无法删 {image_path.name}: {exc}")
+                    on_progress.warning(
+                        "reg: deleting the partial file failed: name=%s err=%s",
+                        image_path.name, exc,
+                    )
 
             try:
                 if client is not None:
@@ -431,7 +472,9 @@ def _build_for_subfolder(
                         username=opts.username,
                     )
             except Exception as exc:
-                on_progress(f"    ✗ 下载失败: {pid} ({exc})")
+                on_progress.debug(
+                    "reg download failed: post_id=%s err=%s", pid, exc,
+                )
                 if image_path.exists():
                     try:
                         image_path.unlink()
@@ -459,28 +502,36 @@ def _build_for_subfolder(
             batch_downloaded += 1
             downloaded_ids.add(pid)
             matched = [t for t in post_tags if t in target_weights][:5]
-            on_progress(
-                f"    [{downloaded_count}/{target_count}] ✓ {pid} "
-                f"score={score:.4f} matched={matched}"
+            on_progress(msg(
+                "reg.image_saved", n=downloaded_count, target=target_count,
+                post_id=pid,
+            ))
+            # 打分明细是内部数值，进 DEBUG 而不是进用户面进度行
+            on_progress.debug(
+                "reg image scored: post_id=%s score=%.4f matched=%s",
+                pid, score, matched,
             )
 
             if (
                 total_target_count is not None
                 and total_downloaded_so_far + downloaded_count >= total_target_count
             ):
-                on_progress(f"  已达总数量限制 {total_target_count}")
+                on_progress(msg("reg.total_limit_reached", total=total_target_count))
                 break
 
             # PP9 — 删每图 0.5s 硬 sleep；速率由 BooruClient 的 token bucket 控
             if cancel_event and cancel_event.is_set():
-                on_progress("  [cancel] 用户中止")
+                on_progress(msg("reg.canceled"))
                 return False, downloaded_count
 
-        on_progress(f"  本批次下载: {batch_downloaded}")
+        on_progress.debug("reg batch downloaded: %d", batch_downloaded)
 
         if batch_downloaded == 0 and posts and search_tags:
             invalid_tag_combinations.add(tuple(sorted(search_tags)))
-            on_progress(f"  ⚠️  组合 {search_tags} 找到候选但未下载，标 invalid")
+            on_progress.debug(
+                "reg tag combination found candidates but downloaded none; "
+                "marked invalid: %s", search_tags,
+            )
             continue
         elif batch_downloaded > 0 and search_tags:
             invalid_tag_combinations.discard(tuple(sorted(search_tags)))
@@ -488,15 +539,22 @@ def _build_for_subfolder(
         if downloaded_count < target_count:
             if cancel_event:
                 if cancel_event.wait(1.0):
-                    on_progress("  [cancel] 用户中止")
+                    on_progress(msg("reg.canceled"))
                     return False, downloaded_count
             else:
                 time.sleep(1.0)
 
-    on_progress(
-        f"\n  子文件夹 {label} 完成: {downloaded_count}/{target_count} "
-        f"(skipped={skipped} failed={failed})"
-    )
+    if failed:
+        on_progress.warning(
+            "reg subfolder finished with failures: label=%s saved=%d/%d "
+            "skipped=%d failed=%d",
+            label, downloaded_count, target_count, skipped, failed,
+        )
+    else:
+        on_progress(msg(
+            "reg.subfolder_done", label=label, n=downloaded_count,
+            target=target_count, skipped=skipped,
+        ))
     success = downloaded_count >= target_count * 0.8
     return success, downloaded_count
 
@@ -504,7 +562,7 @@ def _build_for_subfolder(
 def build(
     opts: RegBuildOptions,
     *,
-    on_progress: ProgressFn = print,
+    on_progress: ProgressFn = NULL_LOG,
     cancel_event: Optional[threading.Event] = None,
     incremental: bool = False,
     client: Optional[booru_pool.BooruClient] = None,
@@ -522,7 +580,11 @@ def build(
     `current_weights` 从已有 caption 累加，仅补足缺口；旧 meta 的
     `incremental_runs + 1` 写回。
     """
-    on_progress(f"[reg] api={opts.api_source} train={opts.train_dir}")
+    # 对外仍接受历史的单参回调（tools / 测试传 lambda）；内部按级别分派
+    on_progress = as_task_log(on_progress)
+    on_progress(msg(
+        "reg.build_start", api=opts.api_source, train_dir=opts.train_dir,
+    ))
 
     if not opts.train_dir.exists():
         raise FileNotFoundError(f"train 目录不存在: {opts.train_dir}")
@@ -573,7 +635,7 @@ def _build_inner(
         raise ValueError(f"train 目录没有任何带 caption 的图片: {opts.train_dir}")
 
     source_image_ids = collect_source_image_ids(opts.train_dir)
-    on_progress(f"[reg] 源图片 ID 共 {len(source_image_ids)} 个，避免重复")
+    on_progress(msg("reg.source_ids", n=len(source_image_ids)))
 
     # 标签集合
     blacklist_tags = set(_normalize_tags(opts.blacklist_tags))
@@ -584,7 +646,7 @@ def _build_inner(
         ver_tag = opts.based_on_version.lower().strip().replace(" ", "_")
         if ver_tag and ver_tag not in blacklist_tags:
             blacklist_tags.add(ver_tag)
-            on_progress(f"[reg] 自动加入黑名单: {ver_tag}")
+            on_progress.debug("reg auto-blacklisted version tag: %s", ver_tag)
 
     failed_tags: set[str] = set()
     source_tags_used: set[str] = set()
@@ -602,15 +664,13 @@ def _build_inner(
         subfolders_plan: dict[str, dict[str, Any]] = {
             "1_data": {"image_count": total_target}
         }
-        on_progress(
-            f"[reg] flat 模式：目标 {total_target} 张，单桶 1_data/"
-        )
+        on_progress(msg("reg.mode_flat", total=total_target))
     else:
         subfolders_plan = structure["subfolders"]
-        on_progress(
-            f"[reg] mirror 模式：目标 {total_target} 张（train 总 "
-            f"{structure['total_images']}），镜像 {len(subfolders_plan)} 个子文件夹"
-        )
+        on_progress(msg(
+            "reg.mode_mirror", total=total_target,
+            train_total=structure["total_images"], n=len(subfolders_plan),
+        ))
 
     # 输出目录
     opts.output_dir.mkdir(parents=True, exist_ok=True)
@@ -622,17 +682,17 @@ def _build_inner(
         pre_existing_per_sub = collect_existing_reg_per_subfolder(opts.output_dir)
         prior_meta = read_meta(opts.output_dir)
         existing_total = sum(b["count"] for b in pre_existing_per_sub.values())
-        on_progress(
-            f"[reg] incremental 模式：已有 {existing_total} 张图、"
-            f"{len(pre_existing_per_sub)} 个子文件夹"
-        )
+        on_progress(msg(
+            "reg.mode_incremental", existing=existing_total,
+            n=len(pre_existing_per_sub),
+        ))
 
     # A2 — 用户从 UI 删除过的 booru ID（含跨子文件夹），无论 incremental 与否都
     # 应排除：fresh build 时 .deleted_ids.json 已被 DELETE /reg 清掉；
     # incremental 时这个集合才非空，避免补足把删除的图再拉回。
     deleted_ids = read_deleted_ids(opts.output_dir)
     if deleted_ids:
-        on_progress(f"[reg] 已删 booru ID 共 {len(deleted_ids)} 个（A2 排除）")
+        on_progress(msg("reg.deleted_ids_excluded_total", n=len(deleted_ids)))
 
     target_resolution = structure.get("median_resolution")
     target_aspect_ratio = structure.get("median_aspect_ratio")
@@ -667,12 +727,17 @@ def _build_inner(
                 success_subfolder_count += 1
             total_downloaded += dled
             if total_downloaded >= total_target:
-                on_progress(f"[reg] 已达总目标 {total_target}，停止剩余子文件夹")
+                on_progress(msg("reg.total_target_reached", total=total_target))
                 break
         except Exception as exc:
-            on_progress(f"[reg] 子文件夹 {sub_name} 出错: {exc}")
+            on_progress.warning(
+                "reg subfolder failed: name=%s err=%s; the build continues with "
+                "the next subfolder", sub_name, exc,
+            )
             import traceback
-            on_progress(traceback.format_exc())
+            on_progress.debug(
+                "reg subfolder traceback: %s", traceback.format_exc(),
+            )
 
     # 写 meta
     top_dist = dict(structure["global_tag_freq"].most_common(50))
@@ -704,11 +769,18 @@ def _build_inner(
     )
     write_meta(opts.output_dir, meta)
 
-    on_progress(
-        f"[reg] 完成: {total_downloaded}/{total_target}"
-        f" 张（{success_subfolder_count}/{len(subfolders_plan)} "
-        f"子文件夹达 80%）"
-    )
+    if success_subfolder_count < len(subfolders_plan):
+        on_progress.warning(
+            "reg build finished below target: images=%d/%d "
+            "subfolders_at_80pct=%d/%d",
+            total_downloaded, total_target,
+            success_subfolder_count, len(subfolders_plan),
+        )
+    else:
+        on_progress(msg(
+            "reg.build_done", n=total_downloaded, total=total_target,
+            ok=success_subfolder_count, subs=len(subfolders_plan),
+        ))
     return meta
 
 

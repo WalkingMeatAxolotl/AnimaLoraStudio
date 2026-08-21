@@ -154,7 +154,22 @@ export default function SettingsPage() {
     setEditingLlmPresetId(id)
   }
 
-  // 删除/恢复内置/另存为都住在 LLMPresetEditorModal footer 里，这里只管列表与新建。
+  // 删除/恢复内置/另存为/导出都住在 LLMPresetEditorModal footer 里，
+  // 这里只管列表 / 新建 / 导入。
+  const llmImportRef = useRef<HTMLInputElement>(null)
+  // 导入走后端端点（json/yaml 上传，后端解析 + 校验 + 落盘，不抢全局默认），
+  // 用返回的权威 masked snapshot 回写 context。导出文件不含 API 信息，
+  // 导入成功直接打开编辑 modal 让用户补全连接信息。
+  const importLlmPreset = async (file: File) => {
+    try {
+      const r = await api.importLLMPreset(file)
+      setServer(r.secrets)
+      toast(t('settings.llmPresetImported', { label: r.label }), 'success')
+      setEditingLlmPresetId(r.id)
+    } catch (e) {
+      toast(`${t('settings.llmPresetImportInvalid')}: ${e}`, 'error')
+    }
+  }
 
   // —— WandB 预设管理（0.18 预设化，复刻 llm_tagger 模式）——
   const currentWandbPreset: WandBPreset =
@@ -451,16 +466,32 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'tagging' && (<>
-      {/* LLM 预设管理：只做列表（选全局默认 + 行 action 编辑 + 右上角新建）；
-       * 字段编辑/删除/另存为集中在 LLMPresetEditorModal（打标页开同一个 modal）。
+      {/* LLM 预设管理：只做列表（选全局默认 + 行 action 编辑 + 右上角新建/导入）；
+       * 字段编辑/删除/另存为/导出集中在 LLMPresetEditorModal（打标页开同一个 modal）。
        * 列表样式对齐下面下载中心的模型列表（bg-sunken 卡 + 行高亮 + StatusLabel chip）。 */}
       <SettingsSection
         id="llm-tagger"
         title="LLM Tagger"
         headerExtras={
-          <button type="button" onClick={addLlmPreset} className="btn btn-secondary btn-sm ml-auto">
-            {t('settings.llmPresetNew')}
-          </button>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button type="button" onClick={() => llmImportRef.current?.click()} className="btn btn-secondary btn-sm">
+              {t('settings.llmPresetImport')}
+            </button>
+            <button type="button" onClick={addLlmPreset} className="btn btn-secondary btn-sm">
+              {t('settings.llmPresetNew')}
+            </button>
+            <input
+              ref={llmImportRef}
+              type="file"
+              accept=".json,.yaml,.yml"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void importLlmPreset(f)
+                if (llmImportRef.current) llmImportRef.current.value = ''
+              }}
+            />
+          </div>
         }
       >
         <p className="text-xs text-fg-tertiary m-0">{t('settings.llmPresetListHint')}</p>

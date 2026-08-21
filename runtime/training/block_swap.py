@@ -41,6 +41,148 @@ logger = logging.getLogger(__name__)
 
 _GIB = 1024 ** 3
 
+def _pow2_ceil(n: int) -> int:
+    """>= n 的最小 2 的幂（n <= 1 → 1）。与 CachingHostAllocator 的取整同口径。"""
+    return 1 if n <= 1 else 1 << (n - 1).bit_length()
+
+
+def _pow2_decomposition(total: int) -> list[int]:
+    """把 total 拆成若干**互不相同**的 2 的幂（即二进制表示），降序。"""
+    sizes: list[int] = []
+    bit = 1
+    while total:
+        if total & 1:
+            sizes.append(bit)
+        total >>= 1
+        bit <<= 1
+    sizes.reverse()
+    return sizes
+
+
+def _alloc_pinned_bytes(nbytes: int) -> torch.Tensor:
+    return torch.empty(nbytes, dtype=torch.uint8, pin_memory=True)
+
+
+class PinnedAllocationError(RuntimeError):
+    """pinned（页锁定）内存分配失败（doc §8.1 / B6：报错不静默降级）。
+
+    ``cudaHostAlloc`` 失败在 torch 里也报 ``CUDA error: out of memory``，极易被
+    误读成显存不够；这里把「是主机页锁定内存、要锁多少、Windows 上限在哪」说清楚。
+    """
+
+    def __init__(self, nbytes: int, detail: str) -> None:
+        self.nbytes = nbytes
+        self.detail = detail
+        super().__init__(
+            f"pinned（页锁定）内存分配失败：本次要锁定 {nbytes / _GIB:.2f} GB。"
+            f"这不是显存不足 —— 换出层的权重要锁在系统内存里，Windows 对可锁定"
+            f"内存有系统级上限（经验上约为物理内存的一半）。请调小 blocks_to_swap，"
+            f"或关闭其他占内存的应用后重试。底层错误：{detail}"
+        )
+
+
+class PinnedPacker:
+    """把多个张量打包进少数几块 **2 的幂大小** 的 pinned 大块里，再切 view 返回。
+
+    为什么不能逐张量 ``pin_memory()``：PyTorch 的 host caching allocator 会把**每次**
+    pinned 分配向上取整到 2 的幂（``CachingHostAllocator.h`` ``PowerOf2Ceil``），
+    而 DiT 的权重尺寸恰恰都很吃亏 —— krea2 的 16384×6144 fp8 = 96MB 占 128MB、
+    6144×6144 = 36MB 占 64MB、1536×6144 = 9MB 占 16MB，28 层 11.32GB 的权重实际
+    锁定 **16.63GB**（1.47×）。Windows 对 ``cudaHostAlloc`` 的上限约为物理内存一半，
+    32GB 内存的机器就是在这里撞死的（5080 真机案例），而护栏按 11.32GB 放行。
+
+    做法：按**总字节数**的二进制分解一次性预分配若干块（8G+2G+1G+256M+…，每块
+    恰为 2 的幂 → allocator 零取整），每个张量按 best-fit 装进某块并 256B 对齐，
+    返回的是块上的 view（``is_pinned()`` 成立、可直接 ``param.data = view``、
+    H2D 拷贝照常）。多族多配置模拟下实际锁定 = 权重字节 × 1.00–1.03。
+
+    - ``total_bytes`` 是调用方算好的**将要 pin 的精确字节数**（不是估算：高估
+      即白锁）；给 0 则不预分配，退化为按需开块。
+    - 装不进任何已有块的张量（块边界碎片）走溢出路径：单独开一块
+      ``pow2_ceil(nbytes)`` —— 与逐张量 pin 等价，永远不比旧行为差。
+    - 所有分配在**构造时**完成（B6：失败只发生在启动那一刻，fail-fast），失败抛
+      ``PinnedAllocationError``。
+    - 释放跟随张量：所有 view 丢引用后大块回到 host 缓存池，再由
+      ``release_pinned_host_cache`` 真正还给系统（§9.7 不变）。
+    """
+
+    #: 总量向上取整的粒度：太粗则小配置（anima 8 层 1GB）白锁一大截，太细则
+    #: 块数变多、边界碎片变多。64MB 在全部真实配置模拟里都在 0.3%–3% 内。
+    GRANULARITY = 64 * 1024 ** 2
+    #: 块内偏移对齐（任何 dtype 的 view 都合法，且对 DMA 友好）
+    ALIGN = 256
+
+    def __init__(
+        self,
+        total_bytes: int = 0,
+        *,
+        granularity: int = GRANULARITY,
+        align: int = ALIGN,
+        allocate=None,
+    ) -> None:
+        self._align = int(align)
+        self._allocate = allocate or _alloc_pinned_bytes
+        # [buffer(uint8 pinned), 已用字节]
+        self._chunks: list[list] = []
+        self.packed_bytes = 0
+        self.overflow_chunks = 0
+        planned = 0
+        if total_bytes > 0:
+            planned = -(-int(total_bytes) // granularity) * granularity
+        for size in _pow2_decomposition(planned):
+            self._chunks.append([self._new_chunk(size), 0])
+
+    def _new_chunk(self, nbytes: int) -> torch.Tensor:
+        try:
+            buf = self._allocate(nbytes)
+        except RuntimeError as exc:  # cudaHostAlloc 失败（torch.AcceleratorError 亦是其子类）
+            raise PinnedAllocationError(self.allocated_bytes + nbytes, str(exc)) from exc
+        if buf.numel() != nbytes or buf.dtype != torch.uint8:
+            raise RuntimeError("PinnedPacker 的 allocate 必须返回 nbytes 个 uint8")
+        return buf
+
+    @property
+    def allocated_bytes(self) -> int:
+        """实际分配（= 实际锁定）的字节数。"""
+        return sum(int(buf.numel()) for buf, _used in self._chunks)
+
+    @property
+    def num_chunks(self) -> int:
+        return len(self._chunks)
+
+    def _reserve(self, nbytes: int) -> tuple[torch.Tensor, int]:
+        """在某块里划出 ``nbytes``（best-fit + 对齐），返回 (块, 起始偏移)。"""
+        best = None  # (剩余, chunk, 起始偏移)
+        for chunk in self._chunks:
+            buf, used = chunk
+            offset = -(-used // self._align) * self._align
+            left = int(buf.numel()) - offset - nbytes
+            if left >= 0 and (best is None or left < best[0]):
+                best = (left, chunk, offset)
+        if best is None:
+            chunk = [self._new_chunk(_pow2_ceil(nbytes)), 0]
+            self._chunks.append(chunk)
+            self.overflow_chunks += 1
+            offset = 0
+        else:
+            _left, chunk, offset = best
+        chunk[1] = offset + nbytes
+        self.packed_bytes += nbytes
+        return chunk[0], offset
+
+    def pin(self, tensor: torch.Tensor, *, dtype: torch.dtype | None = None) -> torch.Tensor:
+        """把 ``tensor`` 的内容拷进 pinned 大块，返回同形状的 pinned view。
+
+        ``dtype`` 给定时顺带 cast（拷贝即转换，省一次中间副本）。``tensor`` 可在
+        任意设备（GPU 张量直接 D2H 进 pinned）。
+        """
+        target_dtype = dtype or tensor.dtype
+        nbytes = tensor.numel() * torch.empty(0, dtype=target_dtype).element_size()
+        buf, offset = self._reserve(nbytes)
+        out = buf[offset: offset + nbytes].view(target_dtype).view(tuple(tensor.shape))
+        out.copy_(tensor)
+        return out
+
 
 class PinnedBlockSwap:
     """管理一个 ``nn.ModuleList`` 中末尾 ``num_swap`` 个 block 的权重换入换出。
@@ -121,6 +263,19 @@ class PinnedBlockSwap:
         pinned 分配失败在此抛出（启动期，可 fail-fast，doc §8.1）。
         """
         try:
+            # 尚未 pinned 的基权重全部经 PinnedPacker 打包（逐张量 pin_memory 会被
+            # host allocator 按 2 的幂取整、白锁最多 1.47×，见 PinnedPacker）。
+            # 先数总量再一次性分配：失败即 fail-fast，不会搬了一半才炸。
+            to_pack = 0
+            for absolute in range(self.first_swapped, self.total):
+                for param in blocks[absolute].parameters():
+                    if param.requires_grad or (
+                        param.device.type == "cpu" and param.is_pinned()
+                    ):
+                        continue
+                    to_pack += param.numel() * param.element_size()
+            packer = PinnedPacker(to_pack) if to_pack > 0 else None
+
             for rel, absolute in enumerate(range(self.first_swapped, self.total)):
                 block = blocks[absolute]
                 cpu_w: dict[str, torch.Tensor] = {}
@@ -131,14 +286,14 @@ class PinnedBlockSwap:
                     # 相对底模极小，没有换出的价值。
                     if param.requires_grad:
                         continue
-                    # 已在 CPU 就地接管（loader 可直接把尾部层载到 CPU，让 GPU
-                    # 峰值从不经过完整模型——12/16GB 目标的前提）；已 pinned 则
-                    # 不重复拷贝。否则从 GPU 搬下来再 pin。
+                    # 已在 CPU 且已 pinned 就地接管（loader 可直接把尾部层载到 CPU
+                    # pinned，让 GPU 峰值从不经过完整模型——12/16GB 目标的前提）；
+                    # 否则（CPU 可分页 / 还在 GPU）打包进 pinned 大块。
                     src = param.detach()
-                    if src.device.type == "cpu":
-                        pinned = src if src.is_pinned() else src.pin_memory()
+                    if src.device.type == "cpu" and src.is_pinned():
+                        pinned = src
                     else:
-                        pinned = src.to("cpu").pin_memory()
+                        pinned = packer.pin(src)
                     cpu_w[name] = pinned
                     specs.append((name, param.shape, param.dtype))
                     self._pinned_bytes += pinned.numel() * pinned.element_size()
@@ -164,8 +319,8 @@ class PinnedBlockSwap:
                 self.num_swap, self.first_swapped, str(exc)
             ) from exc
 
-        logger.info(
-            "block swap 就绪：换出末尾 %d/%d block，pinned %.2f GB，%d 个 GPU 槽",
+        logger.debug(
+            "block_swap: ready swapped=%d/%d pinned=%.2f GB gpu_slots=%d",
             self.num_swap, self.total, self._pinned_bytes / _GIB, self.num_slots,
         )
 
@@ -337,7 +492,7 @@ class PinnedBlockSwap:
             self._handles.append(block.register_forward_hook(post_hook))
             self._handles.append(block.register_full_backward_pre_hook(backward_pre_hook))
             self._handles.append(block.register_full_backward_hook(backward_hook))
-        logger.info("block swap 已挂载：%d 个 block 的前向/反向钩子", self.num_swap)
+        logger.debug("block_swap: forward/backward hooks attached blocks=%d", self.num_swap)
 
     def detach(self) -> None:
         """移除 attach 注册的钩子（权重不还原，需要时自行 ensure_resident）。"""

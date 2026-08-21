@@ -5,19 +5,24 @@
 `studio.services.downloader.download()` → 写日志 → 退出码反映成败。
 状态字段（running / done / failed）由 supervisor 在子进程结束时统一回写。
 
-日志只走 stdout：supervisor 在 `subprocess.Popen(stdout=log_fp,
-stderr=STDOUT)` 把整个子进程输出重定向到 task log 文件，worker 自己**不能**
-再 open 同一个 log 直接 write —— 否则同一行会落盘两次，LogTailer 读两次，
-前端就看到每条日志重复一次。
+日志只走 logger（stderr，Human 行契约见 docs/design/logging-target-state.md
+§3.2）：supervisor 在 `subprocess.Popen(stdout=log_fp, stderr=STDOUT)` 把整个
+子进程输出重定向到 task log 文件，worker 自己**不能**再 open 同一个 log 直接
+write —— 否则同一行会落盘两次，LogTailer 读两次，前端就看到每条日志重复一次。
+裸 print 只留给 stdout 协议行（`__EVENT__:`，见 preprocess_worker）。
 """
 from __future__ import annotations
 
 import logging
 import threading
 
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLog
 from studio import db, secrets
 
-logger = logging.getLogger(__name__)
+# 固定名：worker 经 `python -m studio.workers.download_worker` 拉起时 __name__ 是 __main__，
+# 行契约里的来源列会失真、也不在 OWN_LOGGER_NAMESPACES 里。
+logger = logging.getLogger("studio.workers.download_worker")
 from studio.services.projects import jobs as project_jobs, projects
 from studio.services.booru import downloader
 
@@ -27,22 +32,26 @@ def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     if not job:
-        print(f"[error] job {job_id} not found", flush=True)
+        logger.error("Download job %s not found in the database; nothing to run", job_id)
         return 1
     if job["kind"] != "download":
-        print(f"[error] wrong kind: {job['kind']}", flush=True)
+        logger.error(
+            "Internal error: job %s has kind=%s, not a download job; aborting",
+            job_id, job["kind"],
+        )
         return 1
 
     params = job.get("params_decoded") or {}
 
-    def progress(line: str) -> None:
-        print(line, flush=True)
+    progress = TaskLog(logger)
 
     try:
         with db.connection_for() as conn:
             project = projects.get_project(conn, job["project_id"])
         if not project:
-            progress(f"[error] project {job['project_id']} missing")
+            progress.error(
+                "Project %s no longer exists; download aborted", job["project_id"]
+            )
             return 1
         dest = projects.project_dir(project["id"], project["slug"]) / "download"
         sec = secrets.load()
@@ -67,24 +76,25 @@ def run(job_id: int) -> int:
             api_key=api_key,
             exclude_tags=list(sec.download.exclude_tags),
         )
-        progress(
-            f"[start] tag={opts.tag!r} count={opts.count} "
-            f"source={opts.api_source} "
-            f"exclude={','.join(opts.exclude_tags) or '(none)'}"
-        )
+        progress.info(msg(
+            "worker.download.start",
+            tag=opts.tag,
+            count=opts.count,
+            source=opts.api_source,
+            exclude=",".join(opts.exclude_tags) or "(none)",
+        ))
         saved = downloader.download(
             opts,
             dest,
             on_progress=progress,
             cancel_event=threading.Event(),  # supervisor 走 SIGTERM
         )
-        progress(f"[done] saved={saved}")
+        progress.info(msg("worker.download.done", saved=saved))
         return 0
-    except Exception as exc:
-        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
-        # progress 给人读短摘要。
-        logger.exception("download worker crashed (job_id=%s)", job_id)
-        progress(f"[error] {exc}")
+    except Exception:
+        # PR-1 C7: logger.exception 带 trace_id 进 stderr；异常摘要由 traceback
+        # 提供，不再另发一条 progress（C6：{e} 与 traceback 二选一）。
+        logger.exception("Download worker crashed: job=%s", job_id)
         return 1
 
 

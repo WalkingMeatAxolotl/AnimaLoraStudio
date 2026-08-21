@@ -80,6 +80,9 @@ class SingleInstanceLock:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         except OSError:
             # close() 也会随句柄释放锁；这里失败不影响正确性
-            logger.warning("unlock failed for %s", self.path, exc_info=True)
+            logger.warning(
+                "unlock failed for %s; the lock is reclaimed on the next start",
+                self.path, exc_info=True,
+            )
         finally:
             handle.close()

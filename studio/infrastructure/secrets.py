@@ -604,9 +604,10 @@ class GenerateConfig(BaseModel):
       （开启时显存检查可拦多进程叠加）。**v0.23.1 起默认关**（按文件
       大小的估算偏保守，误拒率高）；关闭时资源不足会继续加载，可能
       触发整机换页卡顿。
-    - `task_timeout_minutes`：出图任务超时兜底。任务开始后超 N 分钟未
-      完成 → 强制终止 daemon 进程（卡死场景协议级取消无效，只能进程级
-      kill；下次任务自动重启）。0（默认）= 关闭。
+    - `task_timeout_minutes`：出图卡死兜底，按单张图计时。超 N 分钟无
+      图片进展 → 强制终止 daemon 进程（多图/XY 任务每张图重新计时；卡死
+      场景协议级取消无效，只能进程级 kill；下次任务自动重启）。0（默认）
+      = 关闭。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
@@ -646,12 +647,41 @@ class SystemConfig(BaseModel):
     #: 的 PCI 序号，启动期由 runtime.gpu_select 注入 CUDA_DEVICE_ORDER=PCI_BUS_ID
     #: + CUDA_VISIBLE_DEVICES 使训练/出图/打标全走这张卡；重启生效。
     gpu_index: Optional[int] = None
+    #: UI 语言（zh/en），前端切语言时同步写入。作为**子进程日志语言**的注入源：
+    #: supervisor / daemon spawn 时读它注入 ANIMA_UI_LANG，用户可见 INFO 叙事行
+    #: 按此语言输出（infrastructure/log_messages.py；排障行恒英文）。前端自身的
+    #: 显示语言仍以 localStorage 为准（首屏无闪烁），本字段只需最终一致。
+    ui_language: str = "zh"
+    #: 日志视图默认是否显示 DEBUG 行（docs/design/logging-target-state.md D1）。
+    #: 只管显示默认值：run.log / daemon ring 恒记 DEBUG，每个日志视图有自己的
+    #: 「调试」开关（不持久化）以此为初值。报错后用户可在视图里临时打开，不用重跑。
+    log_debug_default: bool = False
     # v0.23.1 「ram_guard 默认改关」一次性迁移哨兵（_migrate_legacy_schema
     # 第 10 步）。判据是**盘上键缺失**（只有 v0.23.1 之前写的旧盘没有此键）
     # → 丢弃盘上的 generate/training ram_guard 旧值让新默认（关）生效；
     # 新代码落的盘总带此键（save 全量 dump），显式开启的值不会被丢弃。
     # 默认 True：新装无旧值可迁，「迁移已完成」天然成立。
     ram_guard_default_off: bool = True
+
+
+class TagDictionaryConfig(BaseModel):
+    """Tag 翻译词典的全站 UI 偏好（Settings → 标签词典）。
+
+    两个开关原先存浏览器 localStorage（`studio.tag.showTranslation` /
+    `studio.tag.autocomplete`），与其它设置项不同源、换浏览器即丢，故迁到
+    这里随 secrets.json 落盘。字段用 Optional：**None = 用户从未设过**
+    （新装 / 旧盘无此字段）。前端据此做一次性 seed 并写回：旧 localStorage
+    值优先；`show_translation` 无旧值时按界面语言推导（zh 开、其它关）；
+    `autocomplete` 无旧值不写（生效默认开）。seed 后即为 bool，之后切换
+    界面语言不再覆盖。后端无界面语言信息（i18n lang 留在前端），故默认推导
+    只能在前端做；这里的 None 哨兵是「别覆盖用户手动设置」的判据——save()
+    全量落盘时 None 仍写成 null，不会被误判成显式值。
+
+    - `show_translation`：tag chip 上是否附带中文翻译（仅显示，不改 caption）。
+    - `autocomplete`：prompt / tag 输入框是否弹出补全候选（基于词典）。
+    """
+    show_translation: Optional[bool] = None
+    autocomplete: Optional[bool] = None
 
 
 class ProxyConfig(BaseModel):
@@ -744,6 +774,7 @@ class Secrets(BaseModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+    tag_dictionary: TagDictionaryConfig = Field(default_factory=TagDictionaryConfig)
     # 统一模型来源候选：domain → 用户添加的候选列表。domain 白名单校验在
     # API 层（families 注册表在 services 层）。内置 preset 不在此存储——
     # 候选全集 = 代码内置 + 本字段。当前选中值仍写各 domain 原字段
@@ -1041,6 +1072,65 @@ def import_wandb_preset(
     new = Secrets.model_validate(s.model_dump())  # 重跑 validator（去重/回退保底）
     save(new)
     return new, preset
+
+
+# ---------------------------------------------------------------------------
+# LLM tagger preset 导入导出
+# ---------------------------------------------------------------------------
+
+
+def export_llm_preset(preset_id: str) -> Optional[dict[str, Any]]:
+    """按 id 导出 LLM preset dict，**抹掉 API 信息**：api_key 是凭证、base_url
+    可能是私有中转地址、model_ids 是从该 API 拉回的列表缓存，全部置空。
+    预设文件用于分享提示词配方，连接信息由接收方自己填。找不到返回 None。"""
+    for preset in load().llm_tagger.presets:
+        if preset.id == preset_id:
+            data = preset.model_dump()
+            data["api_key"] = ""
+            data["base_url"] = ""
+            data["model_ids"] = []
+            return data
+    return None
+
+
+def import_llm_preset(
+    data: Any, fallback_label: str = ""
+) -> tuple[Secrets, "LLMPresetConfig"]:
+    """导入一条 LLM preset：id 从 label 生成、撞名自动加后缀，追加到列表末尾。
+
+    与 wandb 版不同，**不改全局默认**（current_preset）——LLM 预设是列表管理，
+    导入不该抢走打标页正在用的默认预设。
+
+    - ``api_key == MASK`` 哨兵按空处理（导出文件本就不含 key）
+    - ``builtin`` 字段丢弃：导入的一律是自定义预设（validator 按 id 判定）
+    - 值非法时抛 pydantic ValidationError，由 caller 翻 400
+    """
+    if not isinstance(data, dict):
+        raise ValueError("preset data must be a mapping")
+    payload = dict(data)
+    payload.pop("builtin", None)
+    if str(payload.get("api_key") or "") == MASK:
+        payload["api_key"] = ""
+
+    label = str(payload.get("label") or fallback_label or "imported").strip() or "imported"
+    slug = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
+    ).strip("_") or "imported"
+
+    s = load()
+    used = {p.id for p in s.llm_tagger.presets}
+    pid, idx = slug, 1
+    while pid in used:
+        idx += 1
+        pid = f"{slug}_{idx}"
+
+    preset = LLMPresetConfig(**{**payload, "id": pid, "label": label})
+    s.llm_tagger.presets.append(preset)
+    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（内置排序/去重）
+    save(new)
+    # validator 会按内置顺序重排列表，按 id 取回权威 preset
+    imported = next(p for p in new.llm_tagger.presets if p.id == pid)
+    return new, imported
 
 
 # ---------------------------------------------------------------------------

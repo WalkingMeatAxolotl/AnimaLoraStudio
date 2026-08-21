@@ -25,6 +25,8 @@ from typing import Any, Callable
 from . import eval_validation
 from .projects import versions
 
+from studio.infrastructure.task_log import TaskLogLike
+
 logger = logging.getLogger(__name__)
 
 EVAL_DIRNAME = "eval"
@@ -46,7 +48,7 @@ class EvalSamplesError(Exception):
     """Business error for eval sample runs."""
 
 
-SampleGenerator = Callable[[dict[str, Any], Path, Callable[[str], None]], None]
+SampleGenerator = Callable[[dict[str, Any], Path, TaskLogLike], None]
 
 
 def _eval_root(version_dir: Path, eval_root: Path | None = None) -> Path:
@@ -410,7 +412,7 @@ def run_sample_job(
     run_id: str,
     *,
     generator: SampleGenerator,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: TaskLogLike | None = None,
     eval_root: Path | None = None,
 ) -> dict[str, Any]:
     """跑一个候选的出图。

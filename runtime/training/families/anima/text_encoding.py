@@ -16,12 +16,7 @@
 
 from __future__ import annotations
 
-import logging
-
 import torch
-
-
-logger = logging.getLogger(__name__)
 
 
 def encode_qwen(model, tokenizer, texts, device, preserve_empty_text: bool = False):

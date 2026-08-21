@@ -37,7 +37,13 @@ from typing import Any, Callable, Optional
 from ... import __version__
 from ...paths import REPO_ROOT, STUDIO_DATA
 
+from studio.infrastructure.log_messages import msg
+from studio.infrastructure.task_log import TaskLogLike, TaskLog, as_task_log
+
 logger = logging.getLogger(__name__)
+
+#: 无人传 emit 时的兜底：走本模块 logger（终端 INFO 可见，不再裸 print）。
+_DEFAULT_LOG = TaskLog(logger)
 
 # ----- Flag / 缓存文件路径 ------------------------------------------------
 RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
@@ -809,7 +815,7 @@ def _backup_preserved_files(log_lines: list[str]) -> list[str]:
 
 
 def _restore_preserved_files(
-    saved: list[str], emit: Callable[[str], None], log_lines: list[str],
+    saved: list[str], emit: TaskLogLike, log_lines: list[str],
 ) -> None:
     """reset 后：把备份里"被 reset 删掉"的模型数据文件还原（更新零感知），收尾清
     备份目录。目标版本仍带该文件（如回滚到旧版）时 dst 已存在 → 不覆盖。"""
@@ -832,7 +838,7 @@ def _restore_preserved_files(
         log_lines.append(
             f"[preserve] 还原 {len(restored)} 个模型数据文件，更新不重下: {', '.join(restored)}"
         )
-        emit(f"[updater] 保留 {len(restored)} 个已下载模型文件，更新无需重下")
+        emit(msg("update.models_preserved", n=len(restored)))
 
 
 def _discard_preserved() -> None:
@@ -844,7 +850,7 @@ def _discard_preserved() -> None:
         pass
 
 
-def apply_pending(emit: Callable[[str], None] = print) -> bool:
+def apply_pending(emit: TaskLogLike = _DEFAULT_LOG) -> bool:
     """cli.py 启动期调。返回 True = 走过 pull 路径；False = 无 pending 跳过。
 
     流程：
@@ -869,9 +875,13 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
     if not has_pending():
         return False
 
+    # 对外仍接受历史的单参回调（旧 cli / 测试传 lambda）；内部按级别分派
+    emit = as_task_log(emit)
     target = UPDATE_PENDING.read_text(encoding="utf-8-sig").strip() or "origin/master"
     force = UPDATE_FORCE.exists()
-    emit(f"[updater] applying pending update → {target}{' (force)' if force else ''}")
+    emit(msg(
+        "update.applying", target=target, force=" (force)" if force else "",
+    ))
 
     started_at = time.time()
     cur = current_version()
@@ -913,18 +923,27 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
     #    覆盖；下面的 git reset --hard 会丢弃这些本地改动，不可恢复）。
     if cur.is_dirty and not force:
         log_lines.append("[abort] working tree dirty")
-        emit("[updater] working tree dirty, aborting update")
+        emit.error(
+            "[updater] the working tree has uncommitted changes; the update was "
+            "aborted — commit or discard the changes, or run the update with force"
+        )
         return _done("aborted", "working tree dirty", cur.commit, False)
     if cur.is_dirty and force:
         log_lines.append("[force] working tree dirty; reset --hard 将覆盖本地未提交改动")
-        emit("[updater] working tree dirty but force requested, discarding local changes")
+        emit.warning(
+            "[updater] the working tree has uncommitted changes and force was "
+            "requested; all uncommitted local changes are being discarded"
+        )
 
     # 2. git fetch
     log_lines.append("[git] fetch origin")
     rc, _, stderr = _git("fetch", "origin", timeout=GIT_FETCH_TIMEOUT)
     if rc != 0:
         log_lines.append(f"[git fetch] FAILED rc={rc} stderr={stderr}")
-        emit(f"[updater] git fetch failed: {stderr[:200]}")
+        emit.error(
+            "[updater] git fetch failed: %s; the update was not applied and the "
+            "current version keeps running", stderr[:200],
+        )
         return _done("failed", f"git fetch: {stderr[:120]}", cur.commit, False)
 
     # 2.5 备份「早期误入库、后转 gitignore」的模型数据文件（hardcode 清单）：
@@ -937,7 +956,11 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
     if rc != 0:
         _discard_preserved()  # reset 没成功，原文件没被动，丢弃备份即可
         log_lines.append(f"[git reset] FAILED rc={rc} stderr={stderr}")
-        emit(f"[updater] git reset failed: {stderr[:200]}")
+        emit.error(
+            "[updater] git reset failed: %s; preserved model files were already "
+            "restored but the working tree may be in a mixed state — run the "
+            "update again or fix the repository manually", stderr[:200],
+        )
         return _done("failed", f"git reset: {stderr[:120]}", cur.commit, False)
 
     # 3.5 还原被 reset 删掉的模型数据文件（见 _PRESERVE_ON_RESET）。
@@ -945,7 +968,7 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
 
     new = current_version()
     log_lines.append(f"[ok] now at {new.commit_short} ({new.tag or new.branch})")
-    emit(f"[updater] git updated → {new.commit_short}")
+    emit(msg("update.git_updated", commit=new.commit_short))
 
     deps_changed = False
     deps_failed_reason = ""
@@ -954,7 +977,7 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
     if _requirements_marker_stale():
         deps_changed = True
         log_lines.append("[pip] requirements.txt changed; pip install -r")
-        emit("[updater] requirements.txt changed, pip install (may take a few minutes)...")
+        emit(msg("update.pip_install"))
         rc = subprocess.call(
             [sys.executable, "-m", "pip", "install", "-r", str(REPO_ROOT / "requirements.txt")]
         )
@@ -969,12 +992,20 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
                 ])
         else:
             deps_failed_reason = f"pip exit {rc}"
+            # :957 说了「要等几分钟」，之后无论成败都没有 emit —— 终端上是
+            # 一句省略号后的沉默；失败必须说一句（`_done("partial")` 只有
+            # UI banner 能看到）。
+            emit.warning(
+                "[updater] pip install failed (exit code %d); the code is updated "
+                "but Python dependencies may be incomplete — run the update again "
+                "or install requirements.txt manually", rc,
+            )
 
     # 5. package.json 改了 → npm install
     if _package_json_changed():
         deps_changed = True
         log_lines.append("[npm] package.json changed; npm install")
-        emit("[updater] studio/web/package.json changed, npm install...")
+        emit(msg("update.npm_install"))
         npm = shutil.which("npm") or shutil.which("npm.cmd")
         if npm:
             rc = subprocess.call([npm, "install"], cwd=str(REPO_ROOT / "studio" / "web"))
@@ -983,8 +1014,16 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
                 deps_failed_reason = (
                     f"{deps_failed_reason + '; ' if deps_failed_reason else ''}npm exit {rc}"
                 )
+                emit.warning(
+                    "[updater] npm install failed (exit code %d); the code is "
+                    "updated but the frontend may fail to build", rc,
+                )
         else:
             log_lines.append("[npm] not found on PATH, skipping (cli.py bootstrap will retry)")
+            emit.warning(
+                "[updater] npm not found; the frontend was not rebuilt — install "
+                "Node.js 18+ and start again"
+            )
 
     if deps_failed_reason:
         log_lines.append(f"[partial] git ok 但 deps 失败: {deps_failed_reason}")
@@ -1071,7 +1110,9 @@ def _write_cache(result: UpdateCheckResult) -> None:
         tmp.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
         tmp.replace(UPDATE_CACHE)
     except OSError as e:
-        logger.warning("failed to write update cache: %s", e)
+        logger.warning(
+            "write update cache failed: %s; the next check re-queries the remote", e,
+        )
 
 
 def _finalize(log_lines: list[str]) -> None:
@@ -1097,7 +1138,10 @@ def _write_status(status: UpdateStatus) -> None:
         tmp.write_text(json.dumps(asdict(status), indent=2), encoding="utf-8")
         tmp.replace(UPDATE_STATUS)
     except OSError as e:
-        logger.warning("failed to write .update_status: %s", e)
+        logger.warning(
+            "write .update_status failed: %s; the UI cannot show the result of "
+            "this update", e,
+        )
 
 
 def _requirements_marker_stale() -> bool:

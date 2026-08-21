@@ -12,6 +12,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.dataset import (
     BucketBatchSampler,
@@ -65,11 +66,14 @@ def _native_dataset_kwargs(args, ctx) -> dict:
         native_over_budget=str(getattr(args, "navit_native_over_budget", "downscale") or "downscale"),
         native_max_side_tokens=_rope_max_side_tokens(ctx),
     )
-    logger.info(
-        "[navit-native] 原生定尺寸已启用：单图 floor 对齐 16px、零 padding，绕过 ARB 桶量化；"
-        "超预算策略=%s，token 预算=%d，RoPE 单边上限=%s tokens。",
-        kwargs["native_over_budget"], kwargs["native_token_budget"],
-        kwargs["native_max_side_tokens"] or "不限",
+    logger.info(msg(
+        "train.navit_native_enabled",
+        budget=kwargs["native_token_budget"],
+        policy=kwargs["native_over_budget"],
+    ))
+    logger.debug(
+        "navit_native: floor_align=16px padding=0 arb_bucket=bypassed rope_side_limit=%s",
+        kwargs["native_max_side_tokens"] or "none",
     )
     return kwargs
 
@@ -100,7 +104,8 @@ def run(ctx: TrainingContext) -> None:
     load_masks = bool(getattr(args, "masked_loss", False))
     if load_masks and bool(getattr(args, "navit_packing", False)):
         logger.warning(
-            "[masked-loss] NaViT 打包路径暂不支持 masked loss：本次训练忽略 mask"
+            "[masked-loss] NaViT packing does not support masked loss yet: "
+            "masks are ignored for this run"
         )
         load_masks = False
         args.masked_loss = False
@@ -128,14 +133,14 @@ def run(ctx: TrainingContext) -> None:
             if ctx.base_dataset._mask_path_for(s["image"]).is_file()
         )
         if n_masked > 0:
-            logger.info(
-                "[masked-loss] 已启用：%d/%d 张图带 mask（其余全图正常学习）",
-                n_masked, len(ctx.base_dataset.samples),
-            )
+            logger.info(msg(
+                "train.masked_loss_enabled",
+                n=n_masked, total=len(ctx.base_dataset.samples),
+            ))
         else:
-            logger.info(
-                "[masked-loss] 开关已开但训练集没有任何 mask 文件（无 .mask sidecar）"
-                "——本次训练等效于未开启"
+            logger.warning(
+                "[masked-loss] Masked loss is on but no mask file was found in the "
+                "training set: this run behaves exactly as if it were off"
             )
 
     # 正则数据集（Kohya 风格，防过拟合）
@@ -143,9 +148,14 @@ def run(ctx: TrainingContext) -> None:
     ctx.reg_dataset = None
     if reg_data_dir:
         if not Path(reg_data_dir).exists():
-            logger.warning(f"正则数据集路径不存在，已跳过: {reg_data_dir}")
+            logger.warning(
+                "Regularization set skipped: path does not exist (%s)", reg_data_dir,
+            )
         elif len(ctx.base_dataset) == 0:
-            logger.warning("主数据集为空，正则集已跳过")
+            logger.error(
+                "Training set is empty: no usable image found — training cannot "
+                "produce anything; check the dataset path and the image file formats"
+            )
         else:
             reg_caption = (getattr(args, "reg_caption", "") or "").strip()
             reg_base = ImageDataset(
@@ -163,13 +173,19 @@ def run(ctx: TrainingContext) -> None:
             if len(reg_base) == 0:
                 # 空正则集不接线：包 CachedLatentDataset 会打出"所有 0 张图像已
                 # 缓存"迷惑日志，进 MergedDataset 也是纯空转。
-                logger.info(f"正则数据集为空（无有效图片），已跳过: {reg_data_dir}")
+                logger.warning(
+                    "Regularization set skipped: no usable image in %s", reg_data_dir,
+                )
             else:
                 ctx.reg_dataset = reg_base
                 reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
                 cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
                 weight_info = f", weight={reg_weight}" if reg_weight != 1.0 else ""
-                logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
+                logger.info(msg(
+                    "train.reg_set_summary",
+                    path=reg_data_dir, samples=len(reg_base),
+                    weight=weight_info, caption=cap_preview,
+                ))
 
     # 缓存 VAE latents（在 repeat 之前）
     ctx.use_cached = getattr(args, "cache_latents", False)
@@ -185,7 +201,7 @@ def run(ctx: TrainingContext) -> None:
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
             encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
             encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
-            label="训练集",
+            label="train.label_training_set",
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
         ctx.reg_dataset = CachedLatentDataset(
@@ -195,7 +211,7 @@ def run(ctx: TrainingContext) -> None:
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
             encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
             encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
-            label="正则集",
+            label="train.label_regularization_set",
         )
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
@@ -204,7 +220,10 @@ def run(ctx: TrainingContext) -> None:
         ctx.dataset = MergedDataset(ctx.dataset, ctx.reg_dataset, reg_weight=reg_weight)
 
     if args.num_workers > 0 and os.name == "nt":
-        logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
+        logger.warning(
+            "num_workers forced to 0: worker processes crash often on Windows — "
+            "data loading runs in the main process"
+        )
         args.num_workers = 0
 
     if getattr(args, "navit_packing", False):
@@ -268,7 +287,11 @@ def run(ctx: TrainingContext) -> None:
                 recon0 = ctx.vae.decode(z0).squeeze(2)                           # [1,3,H,W]
                 recon0 = (recon0.clamp(-1, 1) + 1) / 2
             arr0 = (recon0[0].permute(1, 2, 0).detach().cpu().float().numpy() * 255).clip(0, 255).astype("uint8")
-            Image.fromarray(arr0).save(ctx.sample_dir / "vae_roundtrip.png")
-            logger.info("VAE roundtrip 自检已保存: samples/vae_roundtrip.png")
+            roundtrip_path = ctx.sample_dir / "vae_roundtrip.png"
+            Image.fromarray(arr0).save(roundtrip_path)
+            logger.info(msg("train.vae_selftest_saved", path=roundtrip_path))
     except Exception as e:
-        logger.warning(f"VAE roundtrip 自检失败（若 sample 仍是噪点，请优先修这个）: {e}")
+        logger.warning(
+            "VAE self-test failed: %s — the VAE may be broken, sample images will "
+            "likely come out as noise", e, exc_info=True,
+        )

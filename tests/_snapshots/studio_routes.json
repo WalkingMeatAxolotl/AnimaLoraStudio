@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 206,
+  "count": 210,
   "routes": [
     {
       "path": "/",
@@ -79,6 +79,14 @@
         "GET"
       ],
       "name": "get_dataset_thumbnail",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/diagnostics/bundle",
+      "methods": [
+        "GET"
+      ],
+      "name": "diagnostics_bundle",
       "type": "APIRoute"
     },
     {
@@ -263,6 +271,14 @@
         "GET"
       ],
       "name": "get_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/logs/{task_id}/raw",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_log_raw",
       "type": "APIRoute"
     },
     {
@@ -1367,6 +1383,22 @@
         "PUT"
       ],
       "name": "put_secrets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets/llm/presets/import",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets/llm/presets/{preset_id}/export",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_llm_preset",
       "type": "APIRoute"
     },
     {

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import torch
 
+from studio.infrastructure.log_messages import msg
 from training.model_loading import (
     _load_safetensors_state_dict,
     _load_weights_best_effort,
@@ -160,7 +161,8 @@ class VAEWrapper:
                 # 默认不显示，免得「已用 X > 总显存」被误读成显存不足。
                 self._log_once(
                     "auto_decode", logger.debug,
-                    "VAE decode 主动分块（tiling=auto）：已用 %.1fG + 预计峰值 %.1fG > 总显存 %.1fG×%.2f",
+                    "vae: auto tiling for decode used=%.2f GB projected_peak=%.2f GB "
+                    "limit=%.2f GB x %.2f",
                     used / 1024 ** 3, est / 1024 ** 3, total / 1024 ** 3, self._TILE_VRAM_FRACTION,
                 )
                 return self._tiled_decode(z)
@@ -172,8 +174,8 @@ class VAEWrapper:
             torch.cuda.empty_cache()
             self._log_once(
                 "oom_decode", logger.warning,
-                "VAE 整图 decode OOM，回退到 tiled decode "
-                "(tile=%dpx, overlap=%dpx)（同类后续不再重复）",
+                "VAE decode ran out of VRAM: falling back to tiled decode "
+                "(tile=%dpx, overlap=%dpx) — same warning is not repeated",
                 self._TILE_LATENT * self._UPSAMPLE,
                 (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
             )
@@ -198,7 +200,8 @@ class VAEWrapper:
                 # 默认不显示，免得「已用 X > 总显存」被误读成显存不足。
                 self._log_once(
                     "auto_encode", logger.debug,
-                    "VAE encode 主动分块（tiling=auto）：已用 %.1fG + 预计峰值 %.1fG > 总显存 %.1fG×%.2f",
+                    "vae: auto tiling for encode used=%.2f GB projected_peak=%.2f GB "
+                    "limit=%.2f GB x %.2f",
                     used / 1024 ** 3, est / 1024 ** 3, total / 1024 ** 3, self._TILE_VRAM_FRACTION,
                 )
                 return self._tiled_encode(pixels)
@@ -209,8 +212,8 @@ class VAEWrapper:
             torch.cuda.empty_cache()
             self._log_once(
                 "oom_encode", logger.warning,
-                "VAE 整图 encode OOM，回退到 tiled encode "
-                "(tile=%dpx, overlap=%dpx)（同类后续不再重复）",
+                "VAE encode ran out of VRAM: falling back to tiled encode "
+                "(tile=%dpx, overlap=%dpx) — same warning is not repeated",
                 self._TILE_LATENT * self._UPSAMPLE,
                 (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
             )
@@ -368,5 +371,14 @@ def load_vae(vae_path, device, dtype, repo_root, *, tiling: str = "auto"):
         3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
     ], dtype=dtype, device=device)
 
-    logger.info("VAE 加载完成")
+    logger.info(msg("train.vae_loaded"))
+    # scale 是加载期常量 —— 原先每张采样图打两条 DEBUG（还各带一次 GPU→CPU
+    # 同步的 .item()），这里打一次即可。
+    if logger.isEnabledFor(logging.DEBUG):
+        _std_inv = 1.0 / std
+        logger.debug(
+            "vae: scale mean_shape=%s std_inv_shape=%s mean=%.4f std_inv=%.4f",
+            tuple(mean.shape), tuple(_std_inv.shape),
+            mean.mean().item(), _std_inv.mean().item(),
+        )
     return VAEWrapper(model, mean, std, tiling=tiling)

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -183,6 +183,21 @@ def _publish_upload_log(pid: int, line: str) -> None:
     bus.publish({"type": "project_upload_log", "project_id": pid, "line": line})
 
 
+def _upload_log_factory(pid: int, source: str) -> Callable[[str], None]:
+    """两个上传端点共用的 on_log 回调工厂。
+
+    SSE 推给用户看的仍是原样一行；studio.log 侧降 DEBUG 并带 `source=` kv
+    （files = 浏览器多选上传，path = server 本地路径导入），两个端点的回显
+    行在同一份日志里仍可区分。
+    """
+
+    def _on_log(line: str) -> None:
+        logger.debug("upload source=%s: %s", source, line)
+        _publish_upload_log(pid, line)
+
+    return _on_log
+
+
 def _publish_upload_state(pid: int, status: str) -> None:
     """推 upload 状态转换（running / done / failed）给 SSE 订阅者。
 
@@ -242,9 +257,7 @@ async def upload_local_files(
         pairs.append((f.filename or "", f.file))
     sec = secrets.load()
 
-    def _on_log(line: str) -> None:
-        logger.info(line)
-        _publish_upload_log(pid, line)
+    _on_log = _upload_log_factory(pid, "files")
 
     _publish_upload_state(pid, "running")
     try:
@@ -289,9 +302,7 @@ def upload_local_file_from_path(pid: int, body: UploadFromPathBody) -> dict[str,
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
     sec = secrets.load()
 
-    def _on_log(line: str) -> None:
-        logger.info(line)
-        _publish_upload_log(pid, line)
+    _on_log = _upload_log_factory(pid, "path")
 
     _publish_upload_state(pid, "running")
     try:

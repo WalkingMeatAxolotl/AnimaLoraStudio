@@ -125,7 +125,9 @@ def file_sha256(path_value: str | Path) -> str | None:
         except OSError:
             return None
         if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
-            logger.warning("resource changed while hashing; skip metadata hash: %s", path)
+            logger.debug(
+                "resource changed while hashing; metadata hash skipped: path=%s", path,
+            )
             return None
 
         result = digest.hexdigest()
@@ -137,7 +139,10 @@ def file_sha256(path_value: str | Path) -> str | None:
         try:
             _write_hash_cache(cache)
         except OSError:
-            logger.warning("write generation resource hash cache failed", exc_info=True)
+            logger.warning(
+                "write resource hash cache failed; hashes are recomputed next time",
+                exc_info=True,
+            )
         return result
 
 
@@ -161,7 +166,7 @@ def prewarm_resource_hashes(
             try:
                 file_sha256(p)
             except Exception:
-                logger.debug("hash prewarm failed for %s", p, exc_info=True)
+                logger.debug("hash prewarm failed: path=%s", p, exc_info=True)
 
     t = threading.Thread(target=_run, daemon=True, name="hash-prewarm")
     t.start()
