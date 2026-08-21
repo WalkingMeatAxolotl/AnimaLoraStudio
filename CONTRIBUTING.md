@@ -247,8 +247,8 @@ python tools/bump_version.py bump --version 0.X.0     # 同步版本号 + 重写
 `bump` 跑前自动跑 `validate`（version 非法 / 重复 / 缺 title / 文件名不自洽会拒），
 完成后自检跨文件 version drift。`--version` 必须等于最高版本的 release post（即你已写好该篇）。
 
-**还需要手动改一处**：`README.md` 顶部 shields.io badge URL + 「## 版本」
-段「当前版本 **0.X.0**」（README 风格用户偏好强，工具暂不动）。
+**还需要手动改一处**：`README.md` + `README.en.md` 顶部 shields.io version
+badge URL（README 风格用户偏好强，工具暂不动）。
 
 > 前端 Sidebar 的版本号从 `/api/health` 拉，**不要去 Sidebar.tsx 硬编码**。
 
@@ -424,7 +424,7 @@ tests/       后端 pytest + 前端 vitest（前端测试在 studio/web/src/**/*
 **遵守的**：
 
 - 一个 PR = 一个完整 unit of work，别把不相关的改动塞一起
-- 改 version 时**四处必须同步**：`studio/__init__.py` + `studio/web/package.json` + `CHANGELOG.md` 顶部新段 + `README.md`（顶部 badge + 「## 版本」段当前版本句）
+- 改 version 时**四处必须同步**：`studio/__init__.py` + `studio/web/package.json` + `CHANGELOG.md` 顶部新段 + `README.md` / `README.en.md`（顶部 version badge）
 - 修 bug 不要顺手 refactor 别的代码（除非 maintainer 明确要求）
 - 测试覆盖：bug fix → 加 regression test；feat → 新功能 test
 - 中文 commit message 和文档没问题（仓库已有惯例），但 conventional commits 的 `type(scope):` 前缀用英文
