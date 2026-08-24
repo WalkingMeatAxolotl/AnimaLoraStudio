@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from urllib.parse import quote
 
-from fastapi.responses import FileResponse
+from fastapi import BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..services.dataset import thumb_cache
 
@@ -22,6 +24,47 @@ EMPTY_STATE: dict[str, Any] = {
     "start_time": None,
     "config": {},
 }
+
+
+def packaged_zip_response(
+    path: Path, filename: str, background: BackgroundTasks,
+) -> StreamingResponse:
+    """现场打包的 zip 一次性下载：整流发送，显式不支持 Range。
+
+    这类 zip 每次请求都重新生成，两次生成的字节不保证一致（manifest 里有
+    time.time() 时间戳，float repr 长度还会波动 ±1 字节）。FileResponse 默认
+    宣告 `Accept-Ranges: bytes` 并响应 206——多线程下载器（IDM / Ghost
+    Downloader 等，接管 localhost 一样生效）按 Range 分块并行下载时，各块
+    来自不同的打包实例，拼出来的 zip 必然损坏（真实案例：分段间错位 ±1
+    字节，导入报「文件已损坏」）。所以忽略 Range 头 + `Accept-Ranges: none`，
+    下载器退化为单连接整流下载，字节一致性由单次打包保证。
+
+    Content-Length 显式给出（打包已完成、大小固定），浏览器保留进度条。
+    """
+    size = path.stat().st_size
+
+    def _iter() -> Iterator[bytes]:
+        with path.open("rb") as fh:
+            while chunk := fh.read(1024 * 1024):
+                yield chunk
+
+    # filename 可能含非 ASCII（task/project 名），同 starlette 的编码策略
+    quoted = quote(filename)
+    disposition = (
+        f"attachment; filename*=utf-8''{quoted}"
+        if quoted != filename
+        else f'attachment; filename="{filename}"'
+    )
+    return StreamingResponse(
+        _iter(),
+        media_type="application/zip",
+        headers={
+            "Content-Length": str(size),
+            "Content-Disposition": disposition,
+            "Accept-Ranges": "none",
+        },
+        background=background,
+    )
 
 
 def _thumb_response(src: Path, size: int) -> FileResponse:

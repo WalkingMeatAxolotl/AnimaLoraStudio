@@ -310,6 +310,34 @@ def test_download_outputs_zip(
         assert zf.read("state/task_%d/training_state_epoch2.pt" % tid) == b"CC"
 
 
+def test_download_outputs_zip_ignores_range(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """现场打包的 zip 不支持 Range 分块（多线程下载器分块拼接会因两次打包
+    字节不一致得到损坏文件）——带 Range 头也要整文件 200。"""
+    import io
+    import zipfile
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "lora_final.safetensors").write_bytes(b"A" * 64)
+
+    resp = client.get(
+        f"/api/queue/{tid}/outputs.zip", headers={"Range": "bytes=0-9"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("accept-ranges") == "none"
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        assert zf.testzip() is None
+        assert zf.namelist() == ["lora_final.safetensors"]
+
+
 def test_list_task_outputs_returns_archive_basename(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:

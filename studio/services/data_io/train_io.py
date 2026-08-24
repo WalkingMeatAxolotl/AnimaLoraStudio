@@ -32,6 +32,7 @@ slug 冲突自动加 -imported-{ts}。
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -43,6 +44,8 @@ from typing import Any, Optional
 from ...services.projects import projects, versions
 from ..dataset.scan import IMAGE_EXTS
 from ...paths import safe_join
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 BUNDLE_SCHEMA_VERSION = 2
@@ -171,12 +174,20 @@ def export_train(
         },
     }
 
-    with zipfile.ZipFile(
-        dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True
-    ) as zf:
-        zf.writestr(MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2))
-        for src, arc in payload:
-            zf.write(src, arcname=arc)
+    # 先写 .part 再原子改名：打包中途进程被杀不留半截 zip（半截 zip 与正常
+    # 导出无法区分，导入必报「文件已损坏」）。export_bundle 同款。
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with zipfile.ZipFile(
+            part, "w", compression=zipfile.ZIP_STORED, allowZip64=True
+        ) as zf:
+            zf.writestr(MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2))
+            for src, arc in payload:
+                zf.write(src, arcname=arc)
+        os.replace(part, dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
 
     return {"manifest": manifest, "size_bytes": dest.stat().st_size}
 
@@ -339,9 +350,11 @@ def import_train(
             assert v is not None and p is not None
 
     except zipfile.BadZipFile as exc:
+        # reason 帮远程排查区分截断（File is not a zip file）和内容损坏（Bad CRC-32）
+        logger.warning("import_train rejected corrupt zip %s: %s", zip_path, exc)
         raise TrainIOError(
             "Import file is corrupt", code="dataset.import_corrupt",
-            http_status=400,
+            details={"reason": str(exc)}, http_status=400,
         ) from exc
 
     stats = {
@@ -599,12 +612,20 @@ def export_bundle(
         },
     }
 
-    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
-        zf.writestr(MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2))
-        for content, arc in in_memory:
-            zf.writestr(arc, content)
-        for src, arc in payload:
-            zf.write(src, arcname=arc)
+    # .part + 原子改名，同 export_train（POST export-bundle 直接写 data_exports/，
+    # 非原子写留下的半截 zip 会被用户当正常导出拿去导入/分享）
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+            zf.writestr(MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2))
+            for content, arc in in_memory:
+                zf.writestr(arc, content)
+            for src, arc in payload:
+                zf.write(src, arcname=arc)
+        os.replace(part, dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
 
     return {"manifest": manifest, "size_bytes": dest.stat().st_size}
 
@@ -938,9 +959,10 @@ def import_bundle(
             assert v is not None and p is not None
 
     except zipfile.BadZipFile as exc:
+        logger.warning("import_bundle rejected corrupt zip %s: %s", zip_path, exc)
         raise TrainIOError(
             "Import file is corrupt", code="dataset.import_corrupt",
-            http_status=400,
+            details={"reason": str(exc)}, http_status=400,
         ) from exc
 
     return {
