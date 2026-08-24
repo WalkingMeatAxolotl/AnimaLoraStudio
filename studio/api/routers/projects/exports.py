@@ -20,9 +20,10 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, File, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 from ...errors import _data_export_path, _export_result, _unique_data_export_path
+from ...responses import packaged_zip_response
 from ....domain.errors import NotFoundError, ValidationError
 from ...schemas.exports import BundleImportBody, BundleOptionsBody
 from ._shared import (
@@ -42,10 +43,11 @@ router = APIRouter()
 @router.get("/api/projects/{pid}/versions/{vid}/train.zip")
 def export_version_train_zip(
     pid: int, vid: int, background: BackgroundTasks,
-) -> FileResponse:
+) -> StreamingResponse:
     """打包 version 的 train/ + manifest.json 为 zip 一次性下载。
 
-    实现：写到临时文件再 FileResponse；响应发完后 BackgroundTasks 清理。
+    实现：写到临时文件再 packaged_zip_response（不支持 Range，见该函数注释）；
+    响应发完后 BackgroundTasks 清理。
     与 outputs.zip 一致用 ZIP_STORED（PNG/jpg 已压缩，再压只是浪费 CPU）。
 
     打包完成 / 失败 publish version_train_zip_ready / _failed —— 前端用 <a>
@@ -92,12 +94,7 @@ def export_version_train_zip(
     })
     background.add_task(lambda: tmp_path.unlink(missing_ok=True))
     archive_name = f"{p['slug']}-{v['label']}.train.zip"
-    return FileResponse(
-        tmp_path,
-        media_type="application/zip",
-        filename=archive_name,
-        background=background,
-    )
+    return packaged_zip_response(tmp_path, archive_name, background)
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/bundle.zip")
@@ -113,7 +110,7 @@ def export_version_bundle(
     train_latent_cache: bool = False,
     reg_latent_cache: bool = False,
     train_masks: bool = False,
-) -> FileResponse:
+) -> StreamingResponse:
     """按选项临时打包 bundle.zip（schema_version 2）并交给浏览器下载。"""
     opts = train_io.BundleOptions(
         train=train,
@@ -151,11 +148,8 @@ def export_version_bundle(
 
     bus.publish({"type": "version_bundle_zip_ready", "project_id": pid, "version_id": vid})
     background.add_task(lambda: tmp_path.unlink(missing_ok=True))
-    return FileResponse(
-        tmp_path,
-        media_type="application/zip",
-        filename=f"{p['slug']}-{v['label']}.bundle.zip",
-        background=background,
+    return packaged_zip_response(
+        tmp_path, f"{p['slug']}-{v['label']}.bundle.zip", background,
     )
 
 

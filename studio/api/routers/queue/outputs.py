@@ -20,9 +20,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ...errors import _export_result, _safe_join_or_400, _unique_data_export_path
+from ...responses import packaged_zip_response
 from ...schemas.queue import DeleteOutputsBody, ExportOutputsBody
 from .... import db
 from ....domain.errors import (
@@ -100,9 +101,17 @@ def _select_task_output_files(task_id: int, files: Optional[list[str]] = None) -
 
 
 def _write_outputs_zip(dest: Path, out_dir: Path, selected: list[Path]) -> None:
-    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
-        for f in selected:
-            zf.write(f, arcname=_task_output_relpath(out_dir, f))
+    # 先写 .part 再原子改名：打包中途进程被杀不给 data_exports/ 留半截 zip
+    # （半截 zip 与正常导出无法区分，导入必报「文件已损坏」）
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+            for f in selected:
+                zf.write(f, arcname=_task_output_relpath(out_dir, f))
+        os.replace(part, dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
 
 
 def _task_archive_basename(task: dict[str, Any]) -> Optional[str]:
@@ -206,7 +215,7 @@ def download_task_outputs_zip(
     task_id: int,
     background: BackgroundTasks,
     files: Optional[str] = None,
-) -> FileResponse:
+) -> StreamingResponse:
     """把 output 目录里的文件打包成 zip 一次性下载。"""
     import tempfile
     wanted = [n for n in files.split(",") if n] if files else None
@@ -240,12 +249,7 @@ def download_task_outputs_zip(
         f"{basename}_outputs_selected.zip" if partial
         else f"{basename}_outputs.zip"
     )
-    return FileResponse(
-        tmp_path,
-        media_type="application/zip",
-        filename=archive_name,
-        background=background,
-    )
+    return packaged_zip_response(tmp_path, archive_name, background)
 
 
 @router.post("/api/queue/{task_id}/export-outputs")
