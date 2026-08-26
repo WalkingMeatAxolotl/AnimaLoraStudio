@@ -48,10 +48,20 @@ git checkout -b feat/cool-thing
 ```
 type(scope): subject
 
-可选的多行 body，解释 why（不解释 what — 代码就是 what）。
+必填的多行 body（description），说明背景、关键决策、影响范围和验证结果。
 
 可选 footer（如 BREAKING CHANGE / Co-Authored-By）。
 ```
+
+**每个 commit 都必须带详细 description**，不能只有标题。正文至少覆盖：
+
+- **背景 / 原因**：为什么需要这个改动，原行为有什么问题。
+- **实现 / 决策**：关键实现与取舍；不要只机械复述文件 diff。
+- **影响 / 兼容性**：用户可见变化、接口或数据兼容性，以及明确未改变的边界。
+- **验证**：实际运行的测试、lint、类型检查或手测；未运行的项目要如实说明。
+
+小型 typo、docs、测试修正也必须写正文，但可以压缩成一段。提交前可用
+`git show -s --format=full HEAD` 检查标题与 description 是否完整。
 
 **type**：`feat` / `fix` / `refactor` / `docs` / `chore` / `test` / `perf` / `style`
 
@@ -295,12 +305,10 @@ git commit -m "chore(release): v0.X.0"
 git push origin dev
 ```
 
-**Release commit body 默认空 / 极简**。release commit 是机械的 version bump
-+ render，不是 fix 真正发生的地方。fix 的根因 / 修法已经在原 fix commit 的
-message + PR description 里；CHANGELOG.md / GitHub Release body 承担用户视角
-描述。Release commit body 重复这些信息反而模糊 git log archeology 的层次
-（commit message 给工程师、release notes 给用户、各司其职）。例：v0.9.1 /
-v0.10.0 release commit body 都是空。
+**Release commit 同样必须有 body**。release commit 是机械的 version bump + render，
+正文不重复每项 feature 的实现细节，但至少写清版本边界、版本号同步位置、release
+post / CHANGELOG 的来源和执行过的校验。功能根因与修法仍留在各 feature commit，
+CHANGELOG.md / GitHub Release body 承担用户视角描述。
 
 ### 3. 开 Release PR：dev → master
 

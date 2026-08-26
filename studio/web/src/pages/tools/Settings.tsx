@@ -34,6 +34,7 @@ import {
 } from './settings/constants'
 import { Bool, SectionIndex, SensitiveInput, SettingsField, SettingsInput, SettingsSection } from './settings/fields'
 import { HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
+import LoraSourcesSection from './settings/LoraSourcesSection'
 import {
   DisplaySection,
   IdleTimeoutSection,
@@ -809,6 +810,11 @@ export default function SettingsPage() {
         <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />
+        <LoraSourcesSection
+          modelsRoot={catalog?.models_root ?? draft.models.root ?? 'models'}
+          directories={draft.generate.lora_catalog_dirs ?? []}
+          onChange={(directories) => update('generate', 'lora_catalog_dirs', directories)}
+        />
       </>)}
 
       {tab === 'credentials' && (<>

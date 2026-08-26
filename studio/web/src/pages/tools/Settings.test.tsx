@@ -148,6 +148,7 @@ const initialServerState = {
     attention_backend: 'sdpa',
     vae_precision: 'bf16',
     lora_merge_precision: 'fp32',
+    lora_catalog_dirs: ['D:/ComfyUI/models/loras'],
   },
   system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null },
   proxy: { enabled: false, http_proxy: '', https_proxy: '', no_proxy: '' },
@@ -459,6 +460,30 @@ function renderPage() {
 }
 
 describe('SettingsPage (PP0)', () => {
+  it('测试页底部管理非项目 LoRA 来源：默认目录无移除按钮，额外目录即时保存', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '测试' }))
+
+    expect(await screen.findByRole('heading', { name: '非项目 LoRA 来源' })).toBeInTheDocument()
+    const sectionHeadings = screen.getAllByRole('heading', { level: 2 })
+    expect(sectionHeadings[sectionHeadings.length - 1]).toHaveTextContent('非项目 LoRA 来源')
+    expect(screen.getByText('/tmp/anima/loras')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /移除 \/tmp\/anima\/loras/ })).not.toBeInTheDocument()
+    expect(screen.getByText('D:/ComfyUI/models/loras')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /移除 D:\/ComfyUI\/models\/loras/ }))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        try {
+          return JSON.stringify(JSON.parse(String(init.body)).generate?.lora_catalog_dirs) === '[]'
+        } catch { return false }
+      })
+      expect(putCall).toBeDefined()
+    })
+  })
+
   it('hydrates from /api/secrets and shows masked sensitive fields as placeholder', async () => {
     const user = userEvent.setup()
     renderPage()
