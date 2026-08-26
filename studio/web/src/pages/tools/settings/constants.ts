@@ -103,6 +103,7 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
     { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
+    { id: 'lora-sources', labelKey: 'settings.loraSources.title' },
   ],
   credentials: [
     { id: 'cred-huggingface', labelKey: 'settings.credHuggingface' },
@@ -241,7 +242,7 @@ export const EMPTY: Secrets = {
   },
   models: { root: null, selected: { anima: '1.0', krea2: 'raw' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { light_tasks_during_train: true },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', lora_merge_precision: 'fp32', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: false, blocks_to_swap: 0, task_timeout_minutes: 0 },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', lora_merge_precision: 'fp32', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: false, blocks_to_swap: 0, task_timeout_minutes: 0, lora_catalog_dirs: [] },
   training: { ram_guard: false },
   system: { update_channel: 'stable', show_dev_channel: false, gpu_index: null, log_debug_default: false },
   proxy: {

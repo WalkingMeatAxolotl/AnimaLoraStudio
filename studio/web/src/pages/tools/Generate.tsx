@@ -41,6 +41,13 @@ import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
 import SampleGallery from './generate/SampleGallery'
 import SidebarLoras from './generate/SidebarLoras'
+import LoraCatalogDrawer from './generate/LoraCatalogDrawer'
+import {
+  createLoraUiState,
+  enabledLoras,
+  normalizeLoraUi,
+  type LoraUiState,
+} from './generate/loraSelection'
 import SidebarSectionTabs, { type SidebarTab } from './generate/SidebarSectionTabs'
 import SidebarXYAxes from './generate/SidebarXYAxes'
 import StatusBadge from './generate/StatusBadge'
@@ -75,6 +82,7 @@ const DEFAULT_GENERATE_PREFS = {
   // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
   // compare 是 xy 的子视图，跟 xy 共用 xyLoras。
   singleLoras: [] as LoraEntry[],
+  singleLoraUi: [] as LoraUiState[],
   xyLoras: [] as LoraEntry[],
   xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
   yDraft: null as XYAxisDraft | null,
@@ -98,6 +106,7 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[]; count?: number }
   const legacy = Array.isArray(anyP.loras) ? anyP.loras : []
   const singleLoras = Array.isArray(anyP.singleLoras) ? anyP.singleLoras : legacy
+  const singleLoraUi = normalizeLoraUi(singleLoras, anyP.singleLoraUi)
   const xyLoras = Array.isArray(anyP.xyLoras) ? anyP.xyLoras : legacy
   const clampIdx = (d: XYAxisDraft | null): XYAxisDraft | null => {
     if (!d || d.loraIndex == null || d.loraIndex < xyLoras.length) return d
@@ -108,6 +117,7 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
     ...DEFAULT_GENERATE_PREFS,
     ...rest,
     singleLoras,
+    singleLoraUi,
     xyLoras,
     xDraft: clampIdx(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
     yDraft: clampIdx(rest.yDraft ?? null),
@@ -150,7 +160,7 @@ export default function GeneratePage() {
   // 之后读到的就是干净的 singleLoras/xyLoras 双桶 shape。
   useEffect(() => {
     const raw = rawPrefs as Partial<GeneratePrefs> & { loras?: unknown }
-    if ('loras' in raw || !('singleLoras' in raw) || !('xyLoras' in raw)) {
+    if ('loras' in raw || !('singleLoras' in raw) || !('singleLoraUi' in raw) || !('xyLoras' in raw)) {
       setRawPrefs(normalizePrefs(rawPrefs))
     }
     // 仅 mount 跑一次：迁移是幂等的，rawPrefs 后续变化不需要重跑
@@ -162,7 +172,11 @@ export default function GeneratePage() {
   // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
   const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
   const setLoras = (loras: LoraEntry[]) =>
-    setPrefs((p) => (p.mode === 'single' ? { ...p, singleLoras: loras } : { ...p, xyLoras: loras }))
+    setPrefs((p) => (p.mode === 'single'
+      ? { ...p, singleLoras: loras, singleLoraUi: normalizeLoraUi(loras, p.singleLoraUi) }
+      : { ...p, xyLoras: loras }))
+  const setSingleSelection = (singleLoras: LoraEntry[], singleLoraUi: LoraUiState[]) =>
+    setPrefs((p) => ({ ...p, singleLoras, singleLoraUi }))
   const setMode = (mode: ViewMode) => setPrefs((p) => ({ ...p, mode }))
   const setPrompts = (prompts: string[]) => setPrefs((p) => ({ ...p, prompts }))
   const setNegPrompt = (negPrompt: string) => setPrefs((p) => ({ ...p, negPrompt }))
@@ -210,7 +224,12 @@ export default function GeneratePage() {
         project_id: projectId ? Number(projectId) : null,
         version_id: versionId ? Number(versionId) : null,
       }]
-      return { ...p, mode: 'single', singleLoras: newLoras }
+      return {
+        ...p,
+        mode: 'single',
+        singleLoras: newLoras,
+        singleLoraUi: [createLoraUiState(true)],
+      }
     })
     const url = new URL(window.location.href)
     url.searchParams.delete('lora')
@@ -284,6 +303,10 @@ export default function GeneratePage() {
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
   const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>('studio:generate:sidebarTab', 'lora')
+  const [catalogDrawerOpen, setCatalogDrawerOpen] = useState(false)
+  useEffect(() => {
+    if (mode !== 'single' || sidebarTab !== 'lora') setCatalogDrawerOpen(false)
+  }, [mode, sidebarTab])
   const [logOpen, setLogOpen] = useState(false)
   // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
   // 3D / Copy engine 触发图像渲染卡顿，甚至训练进程 OOM）。listQueue 默认
@@ -591,7 +614,11 @@ export default function GeneratePage() {
         // 0.17 P-I：batch size 是瞬态值，点历史图**不回填**（用户设的值保持不变）。
       }
       if (applied.mode === 'single') {
-        return { ...base, singleLoras: applied.loras }
+        return {
+          ...base,
+          singleLoras: applied.loras,
+          singleLoraUi: applied.loras.map(() => createLoraUiState(true)),
+        }
       }
       return {
         ...base,
@@ -639,7 +666,9 @@ export default function GeneratePage() {
     // single：base LoRA = singleLoras 全发。xy：只发被轴引用的 anchor（见
     // buildXYMatrix —— xyLoras 会沉积 picker 切项目/版本/删轴遗留的孤儿 anchor，
     // 整桶发出去会让孤儿叠到每个 cell，正是反复出现的「混进没选过的 LoRA」根因）。
-    let loraConfigs: LoraEntry[] = loras.filter((l) => l.path.trim())
+    let loraConfigs: LoraEntry[] = mode === 'single'
+      ? enabledLoras(prefs.singleLoras, prefs.singleLoraUi)
+      : loras.filter((l) => l.path.trim())
     if (mode === 'xy') {
       // schema 强制 prompts 单条 + count=1
       if (prompts.filter((p) => p.trim()).length > 1) {
@@ -854,7 +883,12 @@ export default function GeneratePage() {
         )}
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
-          <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">
+          <div
+            className="card relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden"
+            style={catalogDrawerOpen && mode === 'single' && sidebarTab === 'lora'
+              ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 }
+              : undefined}
+          >
             {/* 内容区：三个 section 都常驻 DOM、用 display 切换（不卸载）—— 切 tab 不重渲不闪烁。
                 scrollbar-gutter: stable both-edges —— 两侧都常驻预留滚动条槽（槽在 padding 外侧、
                 靠 border），所以左右 18px 内边距恒对称，且滚动条出现时只占右槽、不挤压/不位移内容。 */}
@@ -867,14 +901,23 @@ export default function GeneratePage() {
             <div style={{ display: sidebarTab === 'lora' ? undefined : 'none' }}>
               {mode === 'single' ? (
                 <>
-                  <div className="flex items-baseline justify-between mb-3">
+                  <div className="flex items-center justify-between gap-2 mb-3">
                     <h3 className="m-0 text-md font-semibold">LoRA</h3>
-                    <span className="text-xs text-fg-tertiary">{t('generate.loraHint')}</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setCatalogDrawerOpen((value) => !value)}
+                      aria-expanded={catalogDrawerOpen}
+                      aria-controls="lora-catalog-drawer"
+                      title={catalogDrawerOpen ? t('generate.closeCatalog') : t('generate.openCatalog')}
+                    >
+                      {catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
+                    </button>
                   </div>
                   <SidebarLoras
-                    loras={loras}
-                    onChange={setLoras}
-                    catalog={catalog}
+                    loras={prefs.singleLoras}
+                    ui={prefs.singleLoraUi}
+                    onChange={setSingleSelection}
                   />
                 </>
               ) : (
@@ -1100,6 +1143,14 @@ export default function GeneratePage() {
               </div>
             </div>
           </div>
+
+          <LoraCatalogDrawer
+            open={catalogDrawerOpen && mode === 'single' && sidebarTab === 'lora'}
+            onClose={() => setCatalogDrawerOpen(false)}
+            loras={prefs.singleLoras}
+            ui={prefs.singleLoraUi}
+            onChange={setSingleSelection}
+          />
 
           {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区
               flex-1 min-h-0，XY 网格自带滚动），auto 会因一点点溢出触发幻影滚动条、吃掉

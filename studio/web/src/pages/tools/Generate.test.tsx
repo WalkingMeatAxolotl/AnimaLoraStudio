@@ -331,6 +331,34 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(lastEnqueueBody!.xy_matrix).toBeNull()
   })
 
+  it('single sidecar：停用 LoRA 保留在 prefs，但生成和快照都只提交启用项', async () => {
+    seedPrefs({
+      mode: 'single',
+      singleLoras: [A, B],
+      singleLoraUi: [
+        { id: 'stable-a', enabled: false },
+        { id: 'stable-b', enabled: true },
+      ],
+      xyLoras: [],
+    })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([B])
+    expect((lastEnqueueBody!.params_snapshot as { loras: Array<{ name: string }> }).loras)
+      .toEqual([{ name: 'b.safetensors', scale: 1, project_id: null, version_id: null }])
+
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.singleLoras).toEqual([A, B])
+    expect(stored.singleLoraUi).toEqual([
+      { id: 'stable-a', enabled: false },
+      { id: 'stable-b', enabled: true },
+    ])
+  })
+
   it('xy 提交不带 singleLoras，也不带未被轴引用的 xyLoras 孤儿', async () => {
     // 默认 X 轴是 steps（不引用任何 LoRA）。singleLoras=[A] 不该泄漏到 xy；
     // xyLoras=[B] 是没被轴引用的孤儿（picker 切项目残留），也不该当 base 发。

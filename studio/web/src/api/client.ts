@@ -627,6 +627,8 @@ export interface GenerateSecretsConfig {
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean
+  /** LoRA catalog 的额外只读目录；默认 models_root/loras 不写入此列表。 */
+  lora_catalog_dirs: string[]
 }
 
 /** 系统级偏好（ADR 0002 / 0005）。update_channel 是用户视图偏好（"stable" /
@@ -1526,6 +1528,58 @@ export interface LoraEntry {
    *  提示用户重选。`path` 非空时此字段被忽略；submit 时 path='' 的 entry
    *  会被 `.filter(l => l.path.trim())` 跳过，不影响 daemon。 */
   name?: string | null
+}
+
+export type LoraCatalogSourceType = 'project' | 'studio_models' | 'external'
+export type LoraCatalogSort = 'recommended' | 'name' | 'mtime' | 'size' | 'source'
+
+export interface LoraCatalogItem {
+  path: string
+  name: string
+  relative_path: string
+  size: number
+  mtime: number
+  source_type: LoraCatalogSourceType
+  source_id: string
+  source_label: string
+  project_id: number | null
+  version_id: number | null
+  project_title: string | null
+  version_label: string | null
+  project_archived: boolean
+  kind: 'final' | 'step' | 'epoch' | 'other'
+}
+
+export interface LoraCatalogSource {
+  source_type: LoraCatalogSourceType
+  source_id: string
+  source_label: string
+  path: string
+  item_count: number
+  error: string | null
+  project_archived: boolean
+}
+
+export interface LoraCatalogResponse {
+  items: LoraCatalogItem[]
+  sources: LoraCatalogSource[]
+  total: number
+  cursor: number
+  next_cursor: number | null
+  generated_at: number
+  cached: boolean
+  cache_ttl_seconds: number
+}
+
+export interface LoraCatalogQuery {
+  q?: string
+  source?: string
+  sort?: LoraCatalogSort
+  order?: 'asc' | 'desc'
+  include_archived?: boolean
+  limit?: number
+  cursor?: number
+  refresh?: boolean
 }
 
 /** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。
@@ -2804,6 +2858,21 @@ export const api = {
   /** 查询先验生成 task 状态。 */
   getRegPriorTask: (pid: number, vid: number, taskId: number) =>
     req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-prior/${taskId}`),
+
+  /** 统一 LoRA catalog：项目输出 + models/loras + 第三方目录。 */
+  getLoraCatalog: (query: LoraCatalogQuery = {}) => {
+    const params = new URLSearchParams()
+    if (query.q) params.set('q', query.q)
+    if (query.source) params.set('source', query.source)
+    if (query.sort) params.set('sort', query.sort)
+    if (query.order) params.set('order', query.order)
+    if (query.include_archived) params.set('include_archived', 'true')
+    if (query.limit != null) params.set('limit', String(query.limit))
+    if (query.cursor != null) params.set('cursor', String(query.cursor))
+    if (query.refresh) params.set('refresh', 'true')
+    const qs = params.toString()
+    return req<LoraCatalogResponse>(`/api/lora-catalog${qs ? `?${qs}` : ''}`)
+  },
 
   /** 列出 version output/ 下所有 LoRA ckpt 文件（XY ckpt 轴 + 单图模式切 ckpt）。 */
   listVersionLoraCkpts: (pid: number, vid: number) =>
