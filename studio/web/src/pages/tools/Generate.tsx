@@ -50,6 +50,7 @@ import {
 } from './generate/loraSelection'
 import SidebarSectionTabs, { type SidebarTab } from './generate/SidebarSectionTabs'
 import SidebarXYAxes from './generate/SidebarXYAxes'
+import XYAxisEditorDrawer from './generate/XYAxisEditorDrawer'
 import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
 import {
@@ -80,10 +81,12 @@ const DEFAULT_GENERATE_PREFS = {
   scheduler: DEFAULT_SCHEDULER as SchedulerName,
   seed: 0,
   // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
-  // compare 是 xy 的子视图，跟 xy 共用 xyLoras。
+  // compare 是 xy 的子视图，跟 xy 共用固定 LoRA 与轴配置。
   singleLoras: [] as LoraEntry[],
   singleLoraUi: [] as LoraUiState[],
-  xyLoras: [] as LoraEntry[],
+  xyLoras: [] as LoraEntry[], // legacy bucket; migrated to xyFixedLoras
+  xyFixedLoras: [] as LoraEntry[],
+  xyFixedLoraUi: [] as LoraUiState[],
   xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
   yDraft: null as XYAxisDraft | null,
   datasetPick: null as DatasetPick | null,
@@ -95,12 +98,19 @@ const DEFAULT_GENERATE_PREFS = {
 
 type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
 
+/** 识别官方 variant key 与常见 custom 文件名中的 FP8 标记。
+ * 这是性能提示，不参与后端执行判定；daemon 仍以实际模型层类型为准。 */
+function isFp8BaseModel(value: string | null): boolean {
+  if (!value) return false
+  const name = value.split(/[\\/]/).pop() ?? value
+  return /(?:^|[-_.])fp8(?:[-_.]|$)/i.test(name)
+}
+
 /** 归一化 / 迁移持久化 prefs（readPersisted 不 merge default，必须自己补齐）：
  *  - 老版本只有共享 `loras`（single/xy 共用，正是被修的 bug）→ 拆成
  *    singleLoras/xyLoras 各复制一份，迁移不丢任何已选 LoRA；迁移后两边独立。
  *  - 补齐缺失字段（老 shape / 跨版本新增字段）。
- *  - clamp xDraft/yDraft.loraIndex 到 xyLoras 合法范围（xy 轴 loraIndex 指向
- *    xyLoras；越界会让 submit 抛 axisLoraMissing）。
+ *  - 迁移旧 checkpoint 轴的 loraIndex 为 checkpointAnchor；非 checkpoint 轴清除陈旧索引。
  */
 function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[]; count?: number }
@@ -108,9 +118,29 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   const singleLoras = Array.isArray(anyP.singleLoras) ? anyP.singleLoras : legacy
   const singleLoraUi = normalizeLoraUi(singleLoras, anyP.singleLoraUi)
   const xyLoras = Array.isArray(anyP.xyLoras) ? anyP.xyLoras : legacy
-  const clampIdx = (d: XYAxisDraft | null): XYAxisDraft | null => {
-    if (!d || d.loraIndex == null || d.loraIndex < xyLoras.length) return d
-    return { ...d, loraIndex: xyLoras.length > 0 ? 0 : null }
+  // `xyLoras` is the legacy axis-anchor bucket, not the new fixed-LoRA tab.  Do
+  // not promote it to fixed LoRAs: old picker leftovers must remain invisible
+  // unless an axis still references them.  Only the explicit new bucket is a
+  // fixed selection.
+  const xyFixedLoras = Array.isArray(anyP.xyFixedLoras) ? anyP.xyFixedLoras : []
+  const xyFixedLoraUi = normalizeLoraUi(xyFixedLoras, anyP.xyFixedLoraUi)
+  const migrateDraft = (draft: XYAxisDraft | null): XYAxisDraft | null => {
+    if (!draft) return null
+    if (draft.axis !== 'lora_ckpt') {
+      return { ...draft, loraIndex: null, checkpointAnchor: null }
+    }
+    if (draft.checkpointAnchor?.path.trim()) {
+      return { ...draft, loraIndex: null }
+    }
+    if (draft.loraIndex == null || !Number.isInteger(draft.loraIndex) || xyLoras.length === 0) {
+      return { ...draft, loraIndex: null, checkpointAnchor: null }
+    }
+    const index = Math.max(0, Math.min(draft.loraIndex, xyLoras.length - 1))
+    return {
+      ...draft,
+      loraIndex: index,
+      checkpointAnchor: xyLoras[index] ?? null,
+    }
   }
   const { loras: _legacy, count: _count, ...rest } = anyP  // count 已改瞬态，丢弃老持久值
   const merged = {
@@ -119,8 +149,10 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
     singleLoras,
     singleLoraUi,
     xyLoras,
-    xDraft: clampIdx(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
-    yDraft: clampIdx(rest.yDraft ?? null),
+    xyFixedLoras,
+    xyFixedLoraUi,
+    xDraft: migrateDraft(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
+    yDraft: migrateDraft(rest.yDraft ?? null),
   }
   // 族与 sampler 一致性（多模型 P4-4）：老 prefs 无 modelFamily / 持久化的
   // sampler 与当前族白名单不符时（越族值后端 422），落回族默认（首项）。
@@ -160,7 +192,7 @@ export default function GeneratePage() {
   // 之后读到的就是干净的 singleLoras/xyLoras 双桶 shape。
   useEffect(() => {
     const raw = rawPrefs as Partial<GeneratePrefs> & { loras?: unknown }
-    if ('loras' in raw || !('singleLoras' in raw) || !('singleLoraUi' in raw) || !('xyLoras' in raw)) {
+    if ('loras' in raw || !('singleLoras' in raw) || !('singleLoraUi' in raw) || !('xyLoras' in raw) || !('xyFixedLoras' in raw) || !('xyFixedLoraUi' in raw)) {
       setRawPrefs(normalizePrefs(rawPrefs))
     }
     // 仅 mount 跑一次：迁移是幂等的，rawPrefs 后续变化不需要重跑
@@ -168,16 +200,17 @@ export default function GeneratePage() {
   }, [])
 
   const { mode, modelFamily, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
-  // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
-  // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
-  const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
-  const setLoras = (loras: LoraEntry[]) =>
+  // single 与 XY 的固定 LoRA 完全隔离；旧 xyLoras 仅在 normalizePrefs 中迁移，新的编辑器不再使用它。
+  const loras = mode === 'single' ? prefs.singleLoras : prefs.xyFixedLoras
+  const loraUi = mode === 'single' ? prefs.singleLoraUi : prefs.xyFixedLoraUi
+  const setSelection = (nextLoras: LoraEntry[], nextUi: LoraUiState[]) =>
     setPrefs((p) => (p.mode === 'single'
-      ? { ...p, singleLoras: loras, singleLoraUi: normalizeLoraUi(loras, p.singleLoraUi) }
-      : { ...p, xyLoras: loras }))
-  const setSingleSelection = (singleLoras: LoraEntry[], singleLoraUi: LoraUiState[]) =>
-    setPrefs((p) => ({ ...p, singleLoras, singleLoraUi }))
-  const setMode = (mode: ViewMode) => setPrefs((p) => ({ ...p, mode }))
+      ? { ...p, singleLoras: nextLoras, singleLoraUi: nextUi }
+      : { ...p, xyFixedLoras: nextLoras, xyFixedLoraUi: nextUi }))
+  const setMode = (mode: ViewMode) => {
+    setPrefs((p) => ({ ...p, mode }))
+    setSidebarTab(mode === 'xy' ? 'xy' : 'lora')
+  }
   const setPrompts = (prompts: string[]) => setPrefs((p) => ({ ...p, prompts }))
   const setNegPrompt = (negPrompt: string) => setPrefs((p) => ({ ...p, negPrompt }))
   const setAspect = (aspect: AspectName) => setPrefs((p) => ({ ...p, aspect }))
@@ -209,7 +242,7 @@ export default function GeneratePage() {
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
   // Overview StatusBanner "在测试中加载" CTA 跳进来时，URL 是显式 "测这条 LoRA"
   // 意图 = 测这一条 → 落到 single 模式的列表（replace 成 [urlLora]）并切到 single；
-  // xy 列表独立、不受影响（xy 轴 loraIndex 已由 normalizePrefs clamp 到 xyLoras）。
+  // xy 列表独立、不受影响（旧 checkpoint 轴索引由 normalizePrefs 迁移为 anchor）。
   // 用 history.replaceState 清掉 query 避免刷新时重复触发。
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search)
@@ -278,7 +311,8 @@ export default function GeneratePage() {
   const effectiveTe = textEncoder ?? teOptions.selected
   // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
   // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
-  const { options: baseModelOptions } = useBaseModelOptions(modelFamily)
+  const { options: baseModelOptions, defaultValue: defaultBaseModel } = useBaseModelOptions(modelFamily)
+  const fp8BaseModel = modelFamily === 'krea2' && isFp8BaseModel(baseModel ?? defaultBaseModel)
   const onBaseModelChange = (v: string) => {
     setBaseModel(v)
     const picked = baseModelOptions.find((o) => o.value === v)
@@ -302,11 +336,20 @@ export default function GeneratePage() {
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
-  const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>('studio:generate:sidebarTab', 'lora')
+  const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>(
+    'studio:generate:sidebarTab:v2',
+    mode === 'xy' ? 'xy' : 'lora',
+  )
   const [catalogDrawerOpen, setCatalogDrawerOpen] = useState(false)
+  const [axisEditor, setAxisEditor] = useState<'X' | 'Y' | null>(null)
   useEffect(() => {
-    if (mode !== 'single' || sidebarTab !== 'lora') setCatalogDrawerOpen(false)
-  }, [mode, sidebarTab])
+    if (mode !== 'xy' && sidebarTab === 'xy') {
+      setSidebarTab('lora')
+      return
+    }
+    if (sidebarTab !== 'lora') setCatalogDrawerOpen(false)
+    if (mode !== 'xy' || sidebarTab !== 'xy') setAxisEditor(null)
+  }, [mode, sidebarTab, setSidebarTab])
   const [logOpen, setLogOpen] = useState(false)
   // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
   // 3D / Copy engine 触发图像渲染卡顿，甚至训练进程 OOM）。listQueue 默认
@@ -595,6 +638,19 @@ export default function GeneratePage() {
     }
     // 底模不在 prefs 里（独立 ephemeral state）→ 单独回填。
     setBaseModel(applied.baseModel)
+    const restoredXDraft = applied.xDraft && applied.xDraft.axis === 'lora_ckpt'
+      ? { ...applied.xDraft, checkpointAnchor: applied.xDraft.loraIndex != null ? applied.loras[applied.xDraft.loraIndex] ?? null : null }
+      : applied.xDraft
+    const restoredYDraft = applied.yDraft && applied.yDraft.axis === 'lora_ckpt'
+      ? { ...applied.yDraft, checkpointAnchor: applied.yDraft.loraIndex != null ? applied.loras[applied.yDraft.loraIndex] ?? null : null }
+      : applied.yDraft
+    const axisIndices = new Set(
+      [restoredXDraft, restoredYDraft]
+        .filter((draft): draft is NonNullable<typeof restoredXDraft> => Boolean(draft))
+        .filter((draft) => draft.axis === 'lora_ckpt')
+        .map((draft) => draft.loraIndex)
+        .filter((index): index is number => Number.isInteger(index)),
+    )
     setPrefs((prev) => {
       const base: GeneratePrefs = {
         ...prev,
@@ -622,9 +678,15 @@ export default function GeneratePage() {
       }
       return {
         ...base,
+        xyFixedLoras: applied.loras.filter((_, index) => !axisIndices.has(index)),
+        xyFixedLoraUi: applied.loras
+          .filter((_, index) => !axisIndices.has(index))
+          .map(() => createLoraUiState(true)),
+        // Keep the old bucket for readers of v1 snapshots, but the new UI uses
+        // xyFixedLoras plus the axis-owned checkpoint binding below.
         xyLoras: applied.loras,
-        xDraft: applied.xDraft ?? prev.xDraft,
-        yDraft: applied.yDraft ?? null,
+        xDraft: restoredXDraft ?? prev.xDraft,
+        yDraft: restoredYDraft ?? null,
       }
     })
     })()
@@ -663,12 +725,14 @@ export default function GeneratePage() {
     }
 
     let xy_matrix: XYMatrixSpec | null = null
+    let snapshotXDraft = xDraft
+    let snapshotYDraft = yDraft
     // single：base LoRA = singleLoras 全发。xy：只发被轴引用的 anchor（见
     // buildXYMatrix —— xyLoras 会沉积 picker 切项目/版本/删轴遗留的孤儿 anchor，
     // 整桶发出去会让孤儿叠到每个 cell，正是反复出现的「混进没选过的 LoRA」根因）。
     let loraConfigs: LoraEntry[] = mode === 'single'
       ? enabledLoras(prefs.singleLoras, prefs.singleLoraUi)
-      : loras.filter((l) => l.path.trim())
+      : []
     if (mode === 'xy') {
       // schema 强制 prompts 单条 + count=1
       if (prompts.filter((p) => p.trim()).length > 1) {
@@ -676,9 +740,21 @@ export default function GeneratePage() {
         return
       }
       try {
-        const built = buildXYMatrix(xDraft, yDraft, loras)
+        const built = buildXYMatrix(
+          xDraft, yDraft, [], prefs.xyFixedLoras, prefs.xyFixedLoraUi,
+        )
         xy_matrix = built.xy_matrix
         loraConfigs = built.loraConfigs
+        // Snapshots must store the wire lora_index generated by buildXYMatrix,
+        // not the editor-only checkpointAnchor identity. History restore and
+        // per-cell PNG metadata both address snapshot.loras by this index.
+        snapshotXDraft = {
+          ...xDraft,
+          loraIndex: built.xy_matrix.x.lora_index ?? null,
+        }
+        snapshotYDraft = yDraft
+          ? { ...yDraft, loraIndex: built.xy_matrix.y?.lora_index ?? null }
+          : null
       } catch (e) {
         toast(typeof e === 'string' ? e : String(e), 'error')
         return
@@ -726,8 +802,8 @@ export default function GeneratePage() {
         loras: snapshotLoras,
         xy_draft: mode === 'xy'
           ? {
-              x: transformAxisRawForSnapshot(xDraft),
-              y: yDraft ? transformAxisRawForSnapshot(yDraft) : null,
+              x: transformAxisRawForSnapshot(snapshotXDraft),
+              y: snapshotYDraft ? transformAxisRawForSnapshot(snapshotYDraft) : null,
             }
           : null,
         dataset_pick: datasetPick,
@@ -760,7 +836,9 @@ export default function GeneratePage() {
         // #1 + P-I：每 task 的运行态定格存进 Map（xDraft/yDraft 纯原始对象浅拷贝隔离后续
         // 编辑；snapshot 各带自己的 seed）。显示/入库各按 taskId 取。
         runsRef.current.set(task.id, {
-          xDraft: { ...xDraft }, yDraft: yDraft ? { ...yDraft } : null, snapshot: snap,
+          xDraft: { ...snapshotXDraft },
+          yDraft: snapshotYDraft ? { ...snapshotYDraft } : null,
+          snapshot: snap,
         })
         if (firstId === null) {
           firstId = task.id
@@ -885,7 +963,7 @@ export default function GeneratePage() {
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div
             className="card relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden"
-            style={catalogDrawerOpen && mode === 'single' && sidebarTab === 'lora'
+            style={(catalogDrawerOpen || axisEditor !== null) && sidebarTab === (axisEditor !== null ? 'xy' : 'lora')
               ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 }
               : undefined}
           >
@@ -897,44 +975,52 @@ export default function GeneratePage() {
               style={{ padding: 18, scrollbarGutter: 'stable both-edges' }}
             >
 
-            {/* tab=lora：mode=single → LoRA 选择；mode=xy → XY 轴（顶部合并 LoRA 选择） */}
-            <div style={{ display: sidebarTab === 'lora' ? undefined : 'none' }}>
-              {mode === 'single' ? (
-                <>
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <h3 className="m-0 text-md font-semibold">LoRA</h3>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setCatalogDrawerOpen((value) => !value)}
-                      aria-expanded={catalogDrawerOpen}
-                      aria-controls="lora-catalog-drawer"
-                      title={catalogDrawerOpen ? t('generate.closeCatalog') : t('generate.openCatalog')}
-                    >
-                      {catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
-                    </button>
-                  </div>
-                  <SidebarLoras
-                    loras={prefs.singleLoras}
-                    ui={prefs.singleLoraUi}
-                    onChange={setSingleSelection}
-                  />
-                </>
-              ) : (
-                <SidebarXYAxes
-                  xDraft={xDraft}
-                  yDraft={yDraft}
-                  onXChange={setXDraft}
-                  onYChange={setYDraft}
-                  loras={loras}
-                  onLorasChange={setLoras}
-                  catalog={catalog}
-                />
-              )}
+            {/* XY 模式把轴与固定 LoRA 分成两个独立 tab；所有大编辑器均从侧栏向右展开。 */}
+            <div
+              id="generate-sidebar-panel-xy"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-xy"
+              hidden={sidebarTab !== 'xy' || mode !== 'xy'}
+              style={{ display: sidebarTab === 'xy' && mode === 'xy' ? undefined : 'none' }}
+            >
+              <SidebarXYAxes
+                xDraft={xDraft}
+                yDraft={yDraft}
+                onEditX={() => setAxisEditor('X')}
+                onEditY={() => setAxisEditor('Y')}
+                onSwap={() => setPrefs((p) => ({ ...p, xDraft: p.yDraft ?? p.xDraft, yDraft: p.xDraft }))}
+                onAddY={() => setYDraft({ axis: xDraft.axis === 'cfg_scale' ? 'steps' : 'cfg_scale', raw: '3, 4, 5', loraIndex: null })}
+                onRemoveY={() => { setYDraft(null); setAxisEditor(null) }}
+                fixedLoras={prefs.xyFixedLoras}
+                fp8BaseModel={fp8BaseModel}
+              />
             </div>
 
+            <div
+              id="generate-sidebar-panel-lora"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-lora"
+              hidden={sidebarTab !== 'lora'}
+              style={{ display: sidebarTab === 'lora' ? undefined : 'none' }}
+            >
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="m-0 text-md font-semibold">LoRA</h3>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCatalogDrawerOpen((value) => !value)} aria-expanded={catalogDrawerOpen} aria-controls="lora-catalog-drawer" title={catalogDrawerOpen ? t('generate.closeCatalog') : t('generate.openCatalog')}>
+                  {catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
+                </button>
+              </div>
+              <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
+            </div>
+
+
             {/* tab=prompts */}
-            <div style={{ display: sidebarTab === 'prompts' ? undefined : 'none' }}>
+            <div
+              id="generate-sidebar-panel-prompts"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-prompts"
+              hidden={sidebarTab !== 'prompts'}
+              style={{ display: sidebarTab === 'prompts' ? undefined : 'none' }}
+            >
               <div className="flex items-baseline justify-between mb-3">
                 <h3 className="m-0 text-md font-semibold">{t('generate.prompts')}</h3>
                 {!datasetPickerOpen && (
@@ -966,7 +1052,13 @@ export default function GeneratePage() {
             </div>
 
             {/* tab=config */}
-            <div style={{ display: sidebarTab === 'config' ? undefined : 'none' }}>
+            <div
+              id="generate-sidebar-panel-config"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-config"
+              hidden={sidebarTab !== 'config'}
+              style={{ display: sidebarTab === 'config' ? undefined : 'none' }}
+            >
               <h3 className="m-0 text-md font-semibold mb-3">{t('generate.samplingParams')}</h3>
               <div className="flex flex-col gap-3">
                 <div>
@@ -1145,11 +1237,20 @@ export default function GeneratePage() {
           </div>
 
           <LoraCatalogDrawer
-            open={catalogDrawerOpen && mode === 'single' && sidebarTab === 'lora'}
+            open={catalogDrawerOpen && sidebarTab === 'lora'}
             onClose={() => setCatalogDrawerOpen(false)}
-            loras={prefs.singleLoras}
-            ui={prefs.singleLoraUi}
-            onChange={setSingleSelection}
+            loras={loras}
+            ui={loraUi}
+            onChange={setSelection}
+          />
+          <XYAxisEditorDrawer
+            open={axisEditor !== null && mode === 'xy' && sidebarTab === 'xy'}
+            label={axisEditor ?? 'X'}
+            draft={axisEditor === 'Y' && yDraft ? yDraft : xDraft}
+            otherAxis={axisEditor === 'X' ? yDraft?.axis ?? null : xDraft.axis}
+            fixedLoras={enabledLoras(prefs.xyFixedLoras, prefs.xyFixedLoraUi)}
+            onChange={(next) => axisEditor === 'Y' ? setYDraft(next) : setXDraft(next)}
+            onClose={() => setAxisEditor(null)}
           />
 
           {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区

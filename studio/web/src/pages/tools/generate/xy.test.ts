@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LoraEntry } from '../../../api/client'
-import { buildXYMatrix, cellCount, draftToSpec, parseAxisValues, type XYAxisDraft } from './xy'
+import { axisView, buildXYMatrix, cellCount, draftToSpec, parseAxisValues, type XYAxisDraft } from './xy'
 
 describe('parseAxisValues', () => {
   it('parses int axis (steps) splits by comma', () => {
@@ -31,6 +31,12 @@ describe('parseAxisValues', () => {
 
   it('accepts whitespace and trims', () => {
     expect(parseAxisValues('steps', '  20  ,30 , 40 ')).toEqual([20, 30, 40])
+  })
+
+  it('uses the same Chinese-comma split for parsing and summaries', () => {
+    const draft: XYAxisDraft = { axis: 'steps', raw: '20，25，30' }
+    expect(parseAxisValues(draft.axis, draft.raw)).toEqual([20, 25, 30])
+    expect(axisView(draft).values).toEqual(['20', '25', '30'])
   })
 })
 
@@ -98,14 +104,10 @@ describe('buildXYMatrix（只发被轴引用的 anchor，丢弃 picker 沉积的
     expect(xy_matrix.x.values).toEqual([CHEN.path])
   })
 
-  it('X/Y 都是 lora_ckpt 引用不同 anchor → 两条都保留，各自重映射', () => {
+  it('X/Y 同时使用 checkpoint 轴时拒绝提交（第一版不支持两个 checkpoint 轴）', () => {
     const x: XYAxisDraft = { axis: 'lora_ckpt', raw: CHEN.path, loraIndex: 2 }
     const y: XYAxisDraft = { axis: 'lora_ckpt', raw: HOSHI.path, loraIndex: 0 }
-    // loras=[HOSHI, ORPHAN, CHEN]：X→idx2(CHEN)，Y→idx0(HOSHI)，ORPHAN(idx1) 丢弃
-    const { xy_matrix, loraConfigs } = buildXYMatrix(x, y, [HOSHI, ORPHAN, CHEN])
-    expect(loraConfigs).toEqual([CHEN, HOSHI]) // 按出现顺序：X 先 → CHEN=0, Y → HOSHI=1
-    expect(xy_matrix.x.lora_index).toBe(0)
-    expect(xy_matrix.y?.lora_index).toBe(1)
+    expect(() => buildXYMatrix(x, y, [HOSHI, ORPHAN, CHEN])).toThrow(/不能使用相同类型/)
   })
 
   it('X/Y 引用同一 anchor → 去重成一条，两轴指同一索引', () => {
@@ -121,6 +123,48 @@ describe('buildXYMatrix（只发被轴引用的 anchor，丢弃 picker 沉积的
   it('lora_ckpt 轴 loraIndex 越界 → 抛错（不静默吞掉）', () => {
     const x: XYAxisDraft = { axis: 'lora_ckpt', raw: CHEN.path, loraIndex: 5 }
     expect(() => buildXYMatrix(x, null, [CHEN])).toThrow(/不存在/)
+  })
+
+  it('拒绝历史数据中的重复轴类型（包括两个 checkpoint 轴）', () => {
+    const x: XYAxisDraft = { axis: 'lora_ckpt', raw: CHEN.path, loraIndex: 0 }
+    const y: XYAxisDraft = { axis: 'lora_ckpt', raw: HOSHI.path, loraIndex: 1 }
+    expect(() => buildXYMatrix(x, y, [CHEN, HOSHI])).toThrow(/不能使用相同类型/)
+  })
+
+  it('新固定 LoRA 桶只发送启用项，并把 checkpoint anchor 追加到实际配置', () => {
+    const fixed = { path: 'G:/fixed.safetensors', scale: 0.7, project_id: null, version_id: null }
+    const anchor = { path: 'G:/step100.safetensors', scale: 1, project_id: 2, version_id: 4 }
+    const x: XYAxisDraft = {
+      axis: 'lora_ckpt', raw: `${anchor.path}, G:/step200.safetensors`,
+      checkpointAnchor: anchor, loraIndex: null,
+    }
+    const { loraConfigs, xy_matrix } = buildXYMatrix(
+      x, null, [], [fixed], [{ enabled: true }],
+    )
+    expect(loraConfigs).toEqual([fixed, anchor])
+    expect(xy_matrix.x.lora_index).toBe(1)
+  })
+
+  it('固定 LoRA 禁用后不参与 checkpoint 重复检测，且不会作为 base 配置发送', () => {
+    const fixed = { path: 'G:/fixed.safetensors', scale: 0.7 }
+    const x: XYAxisDraft = { axis: 'steps', raw: '20, 30', loraIndex: null }
+    const { loraConfigs } = buildXYMatrix(x, null, [], [fixed], [{ enabled: false }])
+    expect(loraConfigs).toEqual([])
+  })
+
+  it('固定 LoRA 与 checkpoint anchor 使用同一路径时拒绝提交', () => {
+    const fixed = { path: 'G:/same.safetensors', scale: 1 }
+    const x: XYAxisDraft = {
+      axis: 'lora_ckpt', raw: fixed.path,
+      checkpointAnchor: fixed, loraIndex: null,
+    }
+    expect(() => buildXYMatrix(x, null, [], [fixed], [{ enabled: true }]))
+      .toThrow(/已经是固定 LoRA/)
+  })
+
+  it('没有有效 LoRA 时拒绝权重轴', () => {
+    const x: XYAxisDraft = { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null }
+    expect(() => buildXYMatrix(x, null, [], [], [])).toThrow(/至少需要一个启用的 LoRA/)
   })
 })
 

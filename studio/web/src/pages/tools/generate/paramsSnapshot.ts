@@ -19,7 +19,7 @@ import {
   SAMPLER_OPTIONS_BY_FAMILY, SCHEDULER_OPTIONS_BY_FAMILY,
   type SamplerName, type SchedulerName,
 } from './types'
-import type { XYAxisDraft } from './xy'
+import { splitAxisRaw, type XYAxisDraft } from './xy'
 
 export const PARAMS_SNAPSHOT_VERSION = 1
 
@@ -99,15 +99,12 @@ export function loraBasename(path: string): string {
  *  其它轴 raw 是数字串，原样返回。 */
 export function transformAxisRawForSnapshot(draft: XYAxisDraft): SnapshotXYAxis {
   if (draft.axis !== 'lora_ckpt') {
-    return { axis: draft.axis, raw: draft.raw, loraIndex: draft.loraIndex }
+    return { axis: draft.axis, raw: draft.raw, loraIndex: draft.loraIndex ?? null }
   }
-  const raw = draft.raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  const raw = splitAxisRaw(draft.raw)
     .map(loraBasename)
     .join(', ')
-  return { axis: draft.axis, raw, loraIndex: draft.loraIndex }
+  return { axis: draft.axis, raw, loraIndex: draft.loraIndex ?? null }
 }
 
 /** 回填：给定某 (project, version) 下的 ckpts，把快照 LoRA 解析成当前机器 path。

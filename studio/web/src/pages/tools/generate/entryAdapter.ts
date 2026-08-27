@@ -9,6 +9,7 @@
  */
 import type { GenerateTimelineEntry } from '../../../api/client'
 import type { GenerateParamsSnapshot } from './paramsSnapshot'
+import { splitAxisRaw } from './xy'
 
 /** XY 历史回看的 axis 元数据(PreviewXYGrid 重建用)。 */
 export interface HistoryXYMeta {
@@ -70,9 +71,9 @@ export function adaptTimelineEntry(e: GenerateTimelineEntry): HistoryEntry {
   if (mode === 'xy' && cells.length > 0) {
     const xDraft = params?.xy_draft?.x
     const yDraft = params?.xy_draft?.y
-    const xValues = xDraft?.raw.split(',').map((s) => s.trim()).filter(Boolean) ?? []
+    const xValues = xDraft ? splitAxisRaw(xDraft.raw) : []
     const yValues: Array<string | null> = yDraft
-      ? yDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
+      ? splitAxisRaw(yDraft.raw)
       : [null]
     xyMeta = {
       xAxis: xDraft?.axis ?? '',
@@ -149,8 +150,8 @@ export function entryDisplayLabel(e: HistoryEntry): string {
 export function entryBadge(e: HistoryEntry): string | undefined {
   if (e.mode !== 'xy') return undefined
   if (e.params?.xy_draft) {
-    const xLen = e.params.xy_draft.x.raw.split(',').filter((s) => s.trim()).length
-    const yLen = e.params.xy_draft.y?.raw.split(',').filter((s) => s.trim()).length ?? 1
+    const xLen = splitAxisRaw(e.params.xy_draft.x.raw).length
+    const yLen = e.params.xy_draft.y ? splitAxisRaw(e.params.xy_draft.y.raw).length : 1
     return `XY ${xLen}×${yLen}`
   }
   if (e.xyMeta) {

@@ -90,7 +90,7 @@ async function waitForInitialLorasLoad() {
 // 正向 / 负向 textarea 现在归到左侧「提示词」分页 tab（默认 tab 是 LoRA）；
 // 要操作 prompt 的用例先切到这一页。
 async function openPromptsTab(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: '提示词' }))
+  await user.click(screen.getByRole('tab', { name: '提示词' }))
 }
 
 describe('GeneratePage 端到端 smoke', () => {
@@ -146,6 +146,9 @@ describe('GeneratePage 端到端 smoke', () => {
     setup()
 
     await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    // Numeric values are edited in the XY Axis Editor Drawer, not inline in
+    // the summary card.
+    await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
     // 按钮文案包含 cell 数
     await waitFor(() =>
@@ -163,6 +166,20 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(xy.y).toBeNull()
     // schema 强制 count=1（即使 UI count 字段被隐藏，前端也要把它发对）
     expect(body.count).toBe(1)
+  })
+
+  it('sidebar tabs support arrow-key navigation', async () => {
+    const user = userEvent.setup()
+    setup()
+
+    const loraTab = screen.getByRole('tab', { name: 'LoRA' })
+    loraTab.focus()
+    await user.keyboard('{ArrowRight}')
+
+    const promptsTab = screen.getByRole('tab', { name: '提示词' })
+    expect(promptsTab).toHaveFocus()
+    expect(promptsTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel', { name: '提示词' })).toBeVisible()
   })
 
   it('多 prompt 轮换功能已隐藏：只有一个 textarea，"添加 prompt"按钮不存在', async () => {
@@ -233,12 +250,11 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(btn).not.toBeDisabled()
   })
 
-  it('URL ?lora= 进入时 replace 缓存 LoRA list + clamp xDraft.loraIndex', async () => {
+  it('URL ?lora= 进入时 replace 缓存 LoRA list + 迁移旧 checkpoint 绑定', async () => {
     // 用户场景：localStorage 缓存里有旧 LoRA + xDraft 指 loraIndex=1（lora_ckpt 轴
     // 绑第 2 条 LoRA）；从项目页 "在测试中加载" 跳过来，URL 带新 LoRA。
-    // 修前：append → loras=[旧, 新]（视觉拥挤）+ loraIndex=1 偶然合法；如果用户
-    //   之前没第 2 条 LoRA 但 loraIndex=1（脏 state）→ axisLoraMissing。
-    // 修后：replace → loras=[新]，loraIndex 越界 → clamp 到 0。
+    // 修前：append → loras=[旧, 新]；脏索引还可能让 submit 抛 axisLoraMissing。
+    // 修后：single 列表 replace 为新 LoRA；旧 XY checkpoint 索引迁移成稳定 anchor。
     window.localStorage.setItem(
       'studio:generate:params:v1',
       JSON.stringify({
@@ -273,10 +289,14 @@ describe('GeneratePage 端到端 smoke', () => {
       { path: newLoraPath, scale: 1.0, project_id: 2, version_id: 3 },
     ])
 
-    // localStorage 里 xDraft/yDraft.loraIndex 应被 clamp（5/3 都越界）
+    // localStorage 里 checkpoint 轴的旧索引迁移成稳定 anchor；
+    // 非 checkpoint 轴不再保留已被 schema 禁止的 loraIndex。
     const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
-    expect(stored.xDraft.loraIndex).toBe(0)
-    expect(stored.yDraft.loraIndex).toBe(0)
+    expect(stored.xDraft.loraIndex).toBeNull()
+    expect(stored.xDraft.checkpointAnchor).toEqual({
+      path: 'G:/old/cached.safetensors', scale: 1, project_id: 1, version_id: 1,
+    })
+    expect(stored.yDraft.loraIndex).toBeNull()
     // URL query 已被 replaceState 清掉
     expect(window.location.search).toBe('')
   })
@@ -377,6 +397,88 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(lastEnqueueBody!.xy_matrix).not.toBeNull()
   })
 
+  const mockKrea2Catalog = (selected: 'raw' | 'raw_fp8', selectedTe: 'bf16' | 'fp8') => {
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/models/catalog')) {
+        const body = {
+          krea2_main: {
+            variants: [
+              { variant: 'raw', exists: true, purpose: 'training' },
+              { variant: 'raw_fp8', exists: true, purpose: 'training' },
+            ],
+            custom: [],
+            selected,
+          },
+          krea2_text_encoder: { selected: selectedTe },
+          krea2_text_encoder_fp8: { files: [] },
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl!(url, init)
+    })
+  }
+
+  it('FP8 性能警告跟随底模，而不是文本编码器', async () => {
+    seedPrefs({
+      mode: 'xy',
+      modelFamily: 'krea2',
+      textEncoder: 'fp8',
+      xDraft: { axis: 'lora_ckpt', raw: A.path, loraIndex: null, checkpointAnchor: A },
+      yDraft: { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null },
+    })
+    mockKrea2Catalog('raw', 'fp8')
+    setup()
+
+    await waitFor(() => expect(screen.getByLabelText('底模')).toHaveValue('raw'))
+    expect(screen.queryByText(/每个单元格都可能重新合并/)).not.toBeInTheDocument()
+  })
+
+  it('FP8 底模的 checkpoint × weight 组合显示性能警告', async () => {
+    seedPrefs({
+      mode: 'xy',
+      modelFamily: 'krea2',
+      textEncoder: 'bf16',
+      xDraft: { axis: 'lora_ckpt', raw: A.path, loraIndex: null, checkpointAnchor: A },
+      yDraft: { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null },
+    })
+    mockKrea2Catalog('raw_fp8', 'bf16')
+    setup()
+
+    expect(await screen.findByText(/每个单元格都可能重新合并/)).toBeInTheDocument()
+  })
+
+  it('xy 新草稿持久化 checkpointAnchor，不依赖旧 xyLoras 索引', async () => {
+    seedPrefs({
+      mode: 'xy',
+      xyLoras: [],
+      xyFixedLoras: [],
+      xyFixedLoraUi: [],
+      xDraft: {
+        axis: 'lora_ckpt',
+        raw: A.path,
+        loraIndex: null,
+        checkpointAnchor: A,
+      },
+    })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成 · 1 张/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([A])
+    expect((lastEnqueueBody!.xy_matrix as { x: { lora_index: number } }).x.lora_index).toBe(0)
+    expect((lastEnqueueBody!.params_snapshot as {
+      xy_draft: { x: { loraIndex: number | null } }
+    }).xy_draft.x.loraIndex).toBe(0)
+  })
+
   it('老版本共享 loras 迁移：拆成 singleLoras/xyLoras 各一份，不丢已选 LoRA', async () => {
     // 老 shape 只有共享 loras=[A]（无 singleLoras/xyLoras）
     seedPrefs({ mode: 'single', loras: [A] })
@@ -458,8 +560,11 @@ describe('GeneratePage 端到端 smoke', () => {
     const user = userEvent.setup()
     setup()
     await waitForInitialLorasLoad()
+    // Numeric values are edited in the XY Axis Editor Drawer; the sidebar only
+    // renders the compact summary card.
+    await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // 默认 X 轴是 steps —— 文本输入框显示 "20, 25, 30"
+    // 默认 X 轴编辑器中的文本输入框显示 "20, 25, 30"
     const initialAxisInput = await screen.findByDisplayValue(/20, 25, 30/)
     expect(initialAxisInput).toBeInTheDocument()
 
@@ -467,17 +572,13 @@ describe('GeneratePage 端到端 smoke', () => {
     const thumb = await screen.findByTitle(/xy plot 1 ·/)
     await user.click(thumb)
 
-    // 回填后：X 轴 dropdown 切到 LoRA，raw 写入新值。
-    // 因为 axis=lora_ckpt 渲染的是 AxisLoraCkptPicker（不是 text input）—— 直接
-    // 看 X 轴 select 的 value（一行 select 元素，AxisCard.label='X'）。
+    // 回填后：X 轴编辑器中的 dropdown 切到 LoRA，raw 写入新值。
+    const axisEditor = screen.getByTestId('xy-axis-editor-drawer')
     await waitFor(() => {
-      const xLabel = screen.getAllByText('X 轴')[0]
-      // AxisCard 外框跟 LoRA 槽对齐用 bg-overlay（原 bg-sunken 在 dark 下近黑显突兀）
-      const card = xLabel.closest('div.bg-overlay')!
-      const axisSelect = card.querySelector('select') as HTMLSelectElement
+      const axisSelect = axisEditor.querySelector('select') as HTMLSelectElement
       expect(axisSelect.value).toBe('lora_ckpt')
     })
-    // 原 "20, 25, 30" 文本框该消失（切到 lora_ckpt 渲染的是 picker）
+    // 原 "20, 25, 30" 文本框该消失（切到 lora_ckpt 后显示 checkpoint 列表）
     expect(screen.queryByDisplayValue(/20, 25, 30/)).not.toBeInTheDocument()
   })
 
@@ -497,15 +598,16 @@ describe('GeneratePage 端到端 smoke', () => {
     const user = userEvent.setup()
     setup()
     await waitForInitialLorasLoad()
+    await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
     // 开始生成（3 张）→ dispatch 定格本次运行态 run
     await user.click(await screen.findByRole('button', { name: /开始生成 · 3 张/ }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
 
     // 网格渲染出 steps 三档表头（20/25/30）
-    await waitFor(() => expect(screen.getByText('30')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText('30').length).toBeGreaterThan(0))
 
-    // 取消 30 那一档：X 轴 raw "20, 25, 30" → "20, 25"
+    // Drawer 中编辑当前 X 轴的值；左侧只显示摘要卡。
     const axisInput = screen.getByDisplayValue('20, 25, 30')
     await user.clear(axisInput)
     await user.type(axisInput, '20, 25')
@@ -513,7 +615,7 @@ describe('GeneratePage 端到端 smoke', () => {
     // live sidebar 确实改成了 "20, 25"（下次生成会用它）……
     await waitFor(() => expect(axisInput).toHaveValue('20, 25'))
     // ……但右侧已出结果网格冻结：仍含 "30" 表头，未被 live 编辑串改
-    expect(screen.getByText('30')).toBeInTheDocument()
+    expect(screen.getAllByText('30').length).toBeGreaterThan(0)
   })
 
   // ---- 回看历史 XY 时点「开始生成」→ 回到实时视图（P-I 回归修复）----

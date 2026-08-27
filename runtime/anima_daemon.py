@@ -1194,6 +1194,65 @@ def _swap_ckpt_for_axis(spec: dict[str, Any], val: Any,
         lora_configs[idx]["path"] = str(val)
 
 
+def _axis_changes_lora_state(
+    axis: dict[str, Any] | None,
+    *,
+    fp8_scale_axes: bool,
+) -> bool:
+    """Return whether an axis requires an expensive LoRA state transition.
+
+    Checkpoint replacement always changes the loaded adapter state.  A scale
+    axis only does so for FP8 merged LoRAs; dynamic (BF16) adapters can update
+    their multiplier in place in ``_apply_axis``.
+    """
+    if axis is None:
+        return False
+    axis_type = axis.get("axis")
+    return axis_type == "lora_ckpt" or (
+        fp8_scale_axes and axis_type == "lora_scale"
+    )
+
+
+def _iter_xy_cells(
+    x_spec: dict[str, Any],
+    y_spec: dict[str, Any] | None,
+    *,
+    fp8_scale_axes: bool = False,
+) -> Iterable[tuple[int, int, Any, Any]]:
+    """Yield XY cells in an execution-efficient order.
+
+    The tuple always contains the *original matrix* coordinates and values:
+    ``(xi, yi, xv, yv)``.  Only the order of execution changes.  Most grids
+    retain the historical row-major order (Y outer, X inner), while a single
+    expensive LoRA-changing X axis is traversed column-major so the loaded
+    LoRA state can be reused for every Y value in that column.  The symmetric
+    Y-only case keeps row-major order.  When both axes change LoRA state, the
+    stable historical order is used because neither axis can reuse its state
+    across the other axis.
+    """
+    x_values = x_spec["values"]
+    y_values = y_spec["values"] if y_spec is not None else [None]
+    x_changes_lora = _axis_changes_lora_state(
+        x_spec, fp8_scale_axes=fp8_scale_axes,
+    )
+    y_changes_lora = _axis_changes_lora_state(
+        y_spec, fp8_scale_axes=fp8_scale_axes,
+    )
+
+    if x_changes_lora and not y_changes_lora:
+        for xi, xv in enumerate(x_values):
+            for yi, yv in enumerate(y_values):
+                yield xi, yi, xv, yv
+        return
+
+    # Keep the established row-major order for Y-only, both-axis, and
+    # non-LoRA grids.  In particular, BF16 lora_scale is deliberately in this
+    # branch: multiplier updates are cheap and must not trigger FP8 ordering.
+    for yi, yv in enumerate(y_values):
+        for xi, xv in enumerate(x_values):
+            yield xi, yi, xv, yv
+
+
 def _cell_lora_configs(
     x_spec: dict[str, Any],
     y_spec: dict[str, Any] | None,
@@ -1609,8 +1668,8 @@ def _run_xy(
     # fp8 底模的 LoRA 是 merge 进权重的（无常驻 network），lora_scale 轴
     # 不能 multiplier 热换——逐格走 detach 还原 + 重 merge
     # （_cell_lora_configs 组装 → CACHE.apply_loras，lora_ckpt 轴同款）。
-    # 每个不同 scale 值一次全模型重 merge：scale 放 Y 轴时每行只 merge
-    # 一次（specs 去重），放 X 轴则每格一次。
+    # _iter_xy_cells 会让唯一的昂贵 LoRA 轴做外层：X 轴变化时每个 X
+    # 状态连续跑完 Y，Y 轴变化时保持原有 Y 外层；两轴都变化时保持稳定顺序。
     fp8_model = False
     if CACHE.model is not None:
         from training.families.krea2.quant_fp8 import model_has_fp8_layers
@@ -1632,112 +1691,113 @@ def _run_xy(
     img_idx = 0
     image_done_count = 0
     image_errors: list[str] = []
-    for yi, yv in enumerate(y_values):
-        for xi, xv in enumerate(x_values):
-            _raise_if_canceled(cancel_event)
-            # lora_ckpt 换文件 /（fp8 时）lora_scale 换强度：组装本格
-            # lora_configs 调 CACHE.apply_loras —— detach 还原 + 重挂载
-            # （bf16 reinject / fp8 重 merge）。base_paths/base_scales 是
-            # 循环外快照，格间互不污染。
-            lora_configs = _cell_lora_configs(
-                x_spec, y_spec, xv, yv, base_lora_paths, base_scales,
-                fp8_scale_axes=fp8_model,
-            )
-            if lora_configs is not None:
-                adapters = CACHE.apply_loras(lora_configs)
+    for xi, yi, xv, yv in _iter_xy_cells(
+        x_spec, y_spec, fp8_scale_axes=fp8_model,
+    ):
+        _raise_if_canceled(cancel_event)
+        # lora_ckpt 换文件 /（fp8 时）lora_scale 换强度：组装本格
+        # lora_configs 调 CACHE.apply_loras —— detach 还原 + 重挂载
+        # （bf16 reinject / fp8 重 merge）。base_paths/base_scales 是
+        # 循环外快照，格间互不污染。
+        lora_configs = _cell_lora_configs(
+            x_spec, y_spec, xv, yv, base_lora_paths, base_scales,
+            fp8_scale_axes=fp8_model,
+        )
+        if lora_configs is not None:
+            adapters = CACHE.apply_loras(lora_configs)
 
-            for i, s in enumerate(base_scales):
-                if i < len(adapters):
-                    _set_lora_multiplier(adapters[i], s)
+        for i, s in enumerate(base_scales):
+            if i < len(adapters):
+                _set_lora_multiplier(adapters[i], s)
 
-            cur_steps = base_steps
-            cur_cfg_scale = base_cfg_scale
+        cur_steps = base_steps
+        cur_cfg_scale = base_cfg_scale
 
+        cur_steps, cur_cfg_scale = _apply_axis(
+            x_spec, xv,
+            cur_steps=cur_steps, cur_cfg_scale=cur_cfg_scale,
+            adapters=adapters,
+        )
+        if y_spec is not None and yv is not None:
             cur_steps, cur_cfg_scale = _apply_axis(
-                x_spec, xv,
+                y_spec, yv,
                 cur_steps=cur_steps, cur_cfg_scale=cur_cfg_scale,
                 adapters=adapters,
             )
-            if y_spec is not None and yv is not None:
-                cur_steps, cur_cfg_scale = _apply_axis(
-                    y_spec, yv,
-                    cur_steps=cur_steps, cur_cfg_scale=cur_cfg_scale,
-                    adapters=adapters,
-                )
 
-            cur_seed = base_seed
-            torch.manual_seed(cur_seed)
-            random.seed(cur_seed)
+        cur_seed = base_seed
+        torch.manual_seed(cur_seed)
+        random.seed(cur_seed)
 
-            _emit_for(
-                req_id, "image_started",
-                batch_idx=img_idx, batch_total=total, total_steps=cur_steps,
-            )
+        _emit_for(
+            req_id, "image_started",
+            batch_idx=img_idx, batch_total=total, total_steps=cur_steps,
+        )
+        try:
+            vram_policy = str(cfg.get("vram_policy") or "auto")
             try:
-                vram_policy = str(cfg.get("vram_policy") or "auto")
-                try:
-                    def _sample_once():
-                        return CACHE.family.sample_image(
-                            CACHE.model, CACHE.vae, CACHE.text_stack,
-                            prompt,
-                            height=height,
-                            width=width,
-                            steps=cur_steps,
-                            step_callback=preview_callback,
-                            phase_callback=phase_callback,
-                            cfg_scale=cur_cfg_scale,
-                            negative_prompt=negative_prompt,
-                            sampler_name=base_sampler,
-                            scheduler=scheduler,
-                            distilled=distilled,
-                            device=CACHE.device,
-                            dtype=CACHE.dtype,
-                            seed=cur_seed,
-                            vram_policy=vram_policy,
-                        )
-
-                    img = _sample_with_cuda_oom_retry(
-                        _sample_once,
-                        seed=cur_seed,
+                def _sample_once():
+                    return CACHE.family.sample_image(
+                        CACHE.model, CACHE.vae, CACHE.text_stack,
+                        prompt,
+                        height=height,
+                        width=width,
+                        steps=cur_steps,
+                        step_callback=preview_callback,
+                        phase_callback=phase_callback,
+                        cfg_scale=cur_cfg_scale,
+                        negative_prompt=negative_prompt,
+                        sampler_name=base_sampler,
+                        scheduler=scheduler,
+                        distilled=distilled,
                         device=CACHE.device,
-                        before_retry=lambda: release_vae_after_decode(
-                            CACHE.vae, vram_policy,
-                        ),
+                        dtype=CACHE.dtype,
+                        seed=cur_seed,
+                        vram_policy=vram_policy,
                     )
-                finally:
-                    release_vae_after_decode(CACHE.vae, vram_policy)
-                CACHE._move_runtime_to_device()
-                fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
-                vpath = _virtual_path(task_id, fname)
-                b64, byte_size = _encode_png(img)
-                if update_monitor:
-                    update_monitor(
-                        sample_path=vpath,
-                        step=img_idx + 1,
-                        xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
-                    )
-                _emit_for(
-                    req_id, "image_done",
-                    filename=fname, path=vpath,
-                    step=img_idx + 1, total=total,
-                    xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
-                    image_b64=b64, byte_size=byte_size,
+
+                img = _sample_with_cuda_oom_retry(
+                    _sample_once,
+                    seed=cur_seed,
+                    device=CACHE.device,
+                    before_retry=lambda: release_vae_after_decode(
+                        CACHE.vae, vram_policy,
+                    ),
                 )
-                image_done_count += 1
-            except GenerationCanceled:
-                raise
-            except Exception as e:
-                logger.warning(
-                    "XY cell %d,%d failed: seed=%d; continuing with the "
-                    "remaining cells", xi, yi, cur_seed, exc_info=True,
-                )
-                image_errors.append(str(e))
-                _emit_for(
-                    req_id, "image_error",
-                    step=img_idx + 1, message=str(e),
+            finally:
+                release_vae_after_decode(CACHE.vae, vram_policy)
+            CACHE._move_runtime_to_device()
+            fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
+            vpath = _virtual_path(task_id, fname)
+            b64, byte_size = _encode_png(img)
+            if update_monitor:
+                update_monitor(
+                    sample_path=vpath,
+                    step=img_idx + 1,
                     xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                 )
-            img_idx += 1
+            _emit_for(
+                req_id, "image_done",
+                filename=fname, path=vpath,
+                step=img_idx + 1, total=total,
+                xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
+                image_b64=b64, byte_size=byte_size,
+            )
+            image_done_count += 1
+        except GenerationCanceled:
+            raise
+        except Exception as e:
+            logger.warning(
+                "XY cell %d,%d failed: seed=%d; continuing with the "
+                "remaining cells", xi, yi, cur_seed, exc_info=True,
+            )
+            image_errors.append(str(e))
+            _emit_for(
+                req_id, "image_error",
+                step=img_idx + 1, message=str(e),
+                xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
+            )
+        img_idx += 1
 
     if image_done_count == 0 and image_errors:
         raise RuntimeError(f"all generated images failed: {image_errors[-1]}")

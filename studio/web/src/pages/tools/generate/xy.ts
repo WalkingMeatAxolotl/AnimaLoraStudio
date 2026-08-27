@@ -1,58 +1,38 @@
-/** XY 模式本地 state + values 解析/校验工具。
- *
- * 后端 schema 要求 values 类型按 axis 派生（int / float / string）；前端
- * 把用户输入的逗号字符串解析成正确类型，并在解析失败时给出错误信息。 */
-
 import type { LoraEntry, XYAxisSpec, XYAxisType, XYMatrixSpec } from '../../../api/client'
 import i18n from '../../../i18n'
 
-/** UI 侧 axis 状态：raw 是用户输入的逗号字符串（不实时解析便于编辑）。 */
 export interface XYAxisDraft {
   axis: XYAxisType
   raw: string
-  loraIndex: number | null
+  /** 旧版持久化字段；新 UI 不把它当作长期身份。 */
+  loraIndex?: number | null
+  /** lora_ckpt 轴实际加载的动态 LoRA，运行时生成 lora_index。 */
+  checkpointAnchor?: LoraEntry | null
 }
 
-/** XYAxisSpec 配套的字段类型映射（与 schema._check_axis_values 同源）。 */
 export const AXIS_VALUE_TYPE: Record<XYAxisType, 'int' | 'float' | 'string'> = {
-  steps: 'int',
-  cfg_scale: 'float',
-  lora_scale: 'float',
-  lora_ckpt: 'string',  // ckpt 路径
+  steps: 'int', cfg_scale: 'float', lora_scale: 'float', lora_ckpt: 'string',
 }
-
 export const AXIS_LABEL_KEYS: Record<XYAxisType, string> = {
-  steps: 'generate.axisSteps',
-  cfg_scale: 'generate.axisCfgScale',
-  lora_scale: 'generate.axisLoraScale',
-  lora_ckpt: 'generate.axisLora',
+  steps: 'generate.axisSteps', cfg_scale: 'generate.axisCfgScale',
+  lora_scale: 'generate.axisLoraScale', lora_ckpt: 'generate.axisLora',
 }
-
-export function axisLabel(axis: XYAxisType): string {
-  return i18n.t(AXIS_LABEL_KEYS[axis])
-}
-
-/** 仅 lora_ckpt 需要 loraIndex（指 cell 内 mutate 哪条 LoRA 的 path）。
- *  lora_scale 改成全局轴（所有 LoRA 共用 cell 值），不再绑特定 LoRA。 */
+export function axisLabel(axis: XYAxisType): string { return i18n.t(AXIS_LABEL_KEYS[axis]) }
 export const REQUIRES_LORA_INDEX: Set<XYAxisType> = new Set(['lora_ckpt'])
 
-/** 解析逗号分隔的 raw 字符串成 axis values。失败抛 string error。 */
+export function splitAxisRaw(raw: string): string[] {
+  return raw.split(/[,，]+/).map((value) => value.trim()).filter(Boolean)
+}
+
 export function parseAxisValues(axis: XYAxisType, raw: string): Array<number | string> {
-  const parts = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
-  if (parts.length === 0) {
-    throw i18n.t('generate.axisValueRequired', { axis: axisLabel(axis) })
-  }
-  const t = AXIS_VALUE_TYPE[axis]
-  if (t === 'string') {
-    return parts
-  }
+  const parts = splitAxisRaw(raw)
+  if (!parts.length) throw i18n.t('generate.axisValueRequired', { axis: axisLabel(axis) })
+  if (AXIS_VALUE_TYPE[axis] === 'string') return parts
   const out: number[] = []
   for (const p of parts) {
     const n = Number(p)
-    if (!Number.isFinite(n)) {
-      throw i18n.t('generate.axisValueInvalidNumber', { axis: axisLabel(axis), value: p })
-    }
-    if (t === 'int' && !Number.isInteger(n)) {
+    if (!Number.isFinite(n)) throw i18n.t('generate.axisValueInvalidNumber', { axis: axisLabel(axis), value: p })
+    if (AXIS_VALUE_TYPE[axis] === 'int' && !Number.isInteger(n)) {
       throw i18n.t('generate.axisValueMustBeInteger', { axis: axisLabel(axis), value: p })
     }
     out.push(n)
@@ -60,109 +40,97 @@ export function parseAxisValues(axis: XYAxisType, raw: string): Array<number | s
   return out
 }
 
-/** 把 draft 转成 XYAxisSpec —— schema 校验前的客户端 sanity check。 */
-export function draftToSpec(
-  draft: XYAxisDraft,
-  loras: LoraEntry[],
-): XYAxisSpec {
+export function draftToSpec(draft: XYAxisDraft, loras: LoraEntry[]): XYAxisSpec {
   const values = parseAxisValues(draft.axis, draft.raw)
   const spec: XYAxisSpec = { axis: draft.axis, values }
   if (REQUIRES_LORA_INDEX.has(draft.axis)) {
-    if (draft.loraIndex === null) {
-      throw i18n.t('generate.axisRequiresLora', { axis: axisLabel(draft.axis) })
+    const index = draft.loraIndex
+    if (index == null) throw i18n.t('generate.axisRequiresLora', { axis: axisLabel(draft.axis) })
+    if (index < 0 || index >= loras.length || !loras[index]?.path.trim()) {
+      throw i18n.t('generate.axisLoraMissing', { axis: axisLabel(draft.axis), n: index + 1 })
     }
-    if (draft.loraIndex >= loras.length) {
-      throw i18n.t('generate.axisLoraMissing', { axis: axisLabel(draft.axis), n: draft.loraIndex + 1 })
-    }
-    spec.lora_index = draft.loraIndex
+    spec.lora_index = index
   }
   return spec
 }
 
-/** XY 提交时构建 xy_matrix + 实际要发的 lora_configs。
- *
- * **为什么不能直接整桶发 loras**：XY 模式下唯一能往 loras（xyLoras）加 anchor
- * 的入口是 lora_ckpt 轴 picker，且它只 push 不 prune（SidebarXYAxes.commitPicks）
- * —— 切项目/版本、切轴类型、删 Y 轴都会把旧 anchor 留下成「孤儿」。后端把
- * lora_configs 全部当 base LoRA 叠到每个 cell（anima_daemon._run_xy），孤儿就会
- * 混进每张图（「选 chenbin V3.4 却带上没选过的 v3.2 / 跨 mode 的 hoshi」的根因）。
- *
- * 这里只保留被当前 X/Y 轴 loraIndex 引用的 anchor，按出现顺序重映射索引，孤儿
- * 一律丢弃。非 lora_ckpt 轴不贡献任何 anchor → lora_configs 为空。
- * 校验失败（轴值缺失 / loraIndex 越界）沿用 draftToSpec 抛 string error。 */
+function normalizedPath(path: string): string { return path.replace(/\\/g, '/').toLocaleLowerCase() }
+
+/** 构建 wire contract。第四个参数是新 UI 的固定 LoRA；第三个参数保留旧调用兼容。 */
 export function buildXYMatrix(
-  xDraft: XYAxisDraft,
-  yDraft: XYAxisDraft | null,
-  loras: LoraEntry[],
+  xDraft: XYAxisDraft, yDraft: XYAxisDraft | null,
+  legacyLoras: LoraEntry[] = [], fixedLoras?: LoraEntry[],
+  fixedUi?: Array<{ enabled: boolean }>,
 ): { xy_matrix: XYMatrixSpec; loraConfigs: LoraEntry[] } {
-  const remap = new Map<number, number>()
-  const loraConfigs: LoraEntry[] = []
-  const remapDraft = (d: XYAxisDraft): XYAxisDraft => {
-    if (d.axis !== 'lora_ckpt' || d.loraIndex == null) return d
-    const entry = loras[d.loraIndex]
-    if (!entry || !entry.path.trim()) return d // draftToSpec 会抛 axisLoraMissing
-    if (!remap.has(d.loraIndex)) {
-      remap.set(d.loraIndex, loraConfigs.length)
-      loraConfigs.push(entry)
-    }
-    return { ...d, loraIndex: remap.get(d.loraIndex) ?? null }
+  if (yDraft && xDraft.axis === yDraft.axis) {
+    throw i18n.t('generate.axisDuplicateType')
   }
-  const x = draftToSpec(remapDraft(xDraft), loraConfigs)
-  const y = yDraft ? draftToSpec(remapDraft(yDraft), loraConfigs) : null
-  return { xy_matrix: { x, y }, loraConfigs }
+  if (fixedLoras === undefined) {
+    const remap = new Map<number, number>()
+    const loraConfigs: LoraEntry[] = []
+    const remapDraft = (draft: XYAxisDraft): XYAxisDraft => {
+      if (draft.axis !== 'lora_ckpt' || draft.loraIndex == null) return draft
+      const entry = legacyLoras[draft.loraIndex]
+      if (!entry || !entry.path.trim()) return draft
+      if (!remap.has(draft.loraIndex)) {
+        remap.set(draft.loraIndex, loraConfigs.length)
+        loraConfigs.push(entry)
+      }
+      return { ...draft, loraIndex: remap.get(draft.loraIndex) ?? null }
+    }
+    const x = draftToSpec(remapDraft(xDraft), loraConfigs)
+    const y = yDraft ? draftToSpec(remapDraft(yDraft), loraConfigs) : null
+    return { xy_matrix: { x, y }, loraConfigs }
+  }
+
+  const base = fixedLoras.filter((entry, i) => entry.path.trim() && fixedUi?.[i]?.enabled !== false).map((entry) => ({ ...entry }))
+  const configs = [...base]
+  const anchorIndices = new Map<string, number>()
+
+  for (const draft of [xDraft, yDraft].filter((d): d is XYAxisDraft => Boolean(d))) {
+    if (draft.axis !== 'lora_ckpt') continue
+    const entry = draft.checkpointAnchor
+      ?? (draft.loraIndex != null ? legacyLoras[draft.loraIndex] : undefined)
+    if (!entry?.path.trim()) {
+      // 走旧 API 时保留原始错误文案；新 API 也拒绝没有动态 LoRA 的 checkpoint 轴。
+      throw i18n.t('generate.axisRequiresLora', { axis: axisLabel(draft.axis) })
+    }
+    if (configs.some((item) => normalizedPath(item.path) === normalizedPath(entry.path))) {
+      throw i18n.t('generate.axisDuplicateLora')
+    }
+    configs.push({ ...entry })
+    anchorIndices.set(normalizedPath(entry.path), configs.length - 1)
+  }
+  const remap = (draft: XYAxisDraft): XYAxisDraft => {
+    if (draft.axis !== 'lora_ckpt') return draft
+    const entry = draft.checkpointAnchor
+      ?? (draft.loraIndex != null ? legacyLoras[draft.loraIndex] : undefined)
+    const idx = entry ? anchorIndices.get(normalizedPath(entry.path)) : undefined
+    return { ...draft, loraIndex: idx ?? draft.loraIndex }
+  }
+  const x = draftToSpec(remap(xDraft), configs)
+  const y = yDraft ? draftToSpec(remap(yDraft), configs) : null
+  if ((x.axis === 'lora_scale' || y?.axis === 'lora_scale') && configs.length === 0) {
+    throw i18n.t('generate.axisLoraScaleRequiresLora')
+  }
+  // legacy tests and old callers intentionally keep their previous orphan-filter behavior.
+  return {
+    xy_matrix: { x, y },
+    loraConfigs: configs,
+  }
 }
 
-/** 计算 cell 总数（y=null 时退化成 1×N）。 */
-export function cellCount(xLen: number, yLen: number | null): number {
-  return xLen * (yLen ?? 1)
-}
-
-/** path → 不带目录前缀和 .safetensors 后缀的"短名"（XY 标头 / LoRA 卡片用）。 */
+export function cellCount(xLen: number, yLen: number | null): number { return xLen * (yLen ?? 1) }
 export function ckptStemFromPath(path: string): string {
   const filename = path.split(/[\\/]/).pop() ?? path
   return filename.replace(/\.safetensors$/i, '')
 }
-
-/** 如果 axis 是 lora_ckpt（值是 path），用 stem 显示；其他类型原样返回。 */
 export function formatAxisValue(axis: XYAxisType, value: string): string {
-  if (axis === 'lora_ckpt') return ckptStemFromPath(value)
-  return value
+  return axis === 'lora_ckpt' ? ckptStemFromPath(value) : value
 }
-
-/** 轴的**展示视图** —— 给 PreviewXYGrid / composeXYMatrix 用。
- *
- *  这两处以前直接收 `XYAxisDraft` / `XYAxisType`，把网格渲染和导出绑死在 Generate
- *  的四种轴类型上。抽成 { label, values } 之后，eval 的「checkpoint × prompt」矩阵
- *  也能复用同一套 zoom / pan / 全屏 / 导出，不用给 XYAxisType 塞一个只有 eval 用的值。 */
-export interface XYAxisView {
-  /** 轴名（已 i18n），用于 cell tooltip 和全屏 caption */
-  label: string
-  /** 各列 / 行的原始值 */
-  values: string[]
-  /** 显示用格式化；省略则原样显示 */
-  format?: (value: string) => string
-  /** hover 提示；省略则用原始值。评估的 prompt 轴靠它把「标签显示验证图 id、
-   *  hover 才看完整 prompt」这件事做出来 —— 显示值和提示内容不是同一个东西。 */
-  title?: (value: string) => string
-}
-
-/** XYAxisDraft → XYAxisView（Generate 页的适配）。 */
+export interface XYAxisView { label: string; values: string[]; format?: (value: string) => string; title?: (value: string) => string }
 export function axisView(draft: XYAxisDraft): XYAxisView {
-  return {
-    label: axisLabel(draft.axis),
-    values: draft.raw.split(',').map((s) => s.trim()).filter(Boolean),
-    format: (v) => formatAxisValue(draft.axis, v),
-  }
+  return { label: axisLabel(draft.axis), values: splitAxisRaw(draft.raw), format: (v) => formatAxisValue(draft.axis, v) }
 }
-
-/** 取轴值的显示文本（没给 format 就原样）。 */
-export function axisText(axis: XYAxisView, value: string | null): string {
-  if (value == null) return ''
-  return axis.format ? axis.format(value) : value
-}
-
-/** 轴值的 hover 提示（无 `title` 时退回原始值）。 */
-export function axisTitle(axis: XYAxisView, value: string | null): string {
-  if (value == null) return ''
-  return axis.title ? axis.title(value) : value
-}
+export function axisText(axis: XYAxisView, value: string | null): string { return value == null ? '' : axis.format ? axis.format(value) : value }
+export function axisTitle(axis: XYAxisView, value: string | null): string { return value == null ? '' : axis.title ? axis.title(value) : value }
