@@ -141,21 +141,24 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByRole('button', { name: /开始生成/ })).not.toBeDisabled()
   })
 
-  it('mode=xy 默认 X=steps 20,25,30：按钮显示「开始生成 · 3 张」并 enqueue 正确 xy_matrix', async () => {
+  it('mode=xy 默认 X=steps、Y=weight 1.0：标题显示「3张」且 enqueue 保持单维矩阵', async () => {
     const user = userEvent.setup()
     setup()
 
     await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    expect(screen.getByRole('tab', { name: 'Y 轴 · 权重' })).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Y 轴 · 权重' }))
+    expect(screen.getByTestId('xy-axis-selected-value')).toHaveTextContent('1.0')
+    await user.click(screen.getByRole('tab', { name: 'X 轴 · 步数' }))
     // Numeric values are edited in the XY Axis Editor Drawer, not inline in
     // the summary card.
     await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // 按钮文案包含 cell 数
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /开始生成 · 3 张/ })).toBeInTheDocument()
-    )
+    // cell 数只在 XY 标题右侧显示一次，生成按钮不重复。
+    await waitFor(() => expect(screen.getByTestId('xy-image-count')).toHaveTextContent('3张'))
+    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /开始生成 · 3 张/ }))
+    await user.click(screen.getByRole('button', { name: '开始生成' }))
 
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     const body = lastEnqueueBody!
@@ -317,7 +320,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await waitForInitialLorasLoad()
 
     expect(screen.getAllByPlaceholderText('输入正向提示词…')[0]).toHaveValue('persist me')
-    expect(screen.getByRole('button', { name: /开始生成 · 3 张/ })).toBeInTheDocument()
+    expect(screen.getByTestId('xy-image-count')).toHaveTextContent('3张')
+    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument()
     expect(screen.queryByText('#1')).toBeNull()
     expect(screen.getByText('填写参数后点击「开始生成」')).toBeInTheDocument()
   })
@@ -470,7 +474,7 @@ describe('GeneratePage 端到端 smoke', () => {
     setup()
     await waitForInitialLorasLoad()
 
-    await user.click(await screen.findByRole('button', { name: /开始生成 · 1 张/ }))
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     expect(lastEnqueueBody!.lora_configs).toEqual([A])
     expect((lastEnqueueBody!.xy_matrix as { x: { lora_index: number } }).x.lora_index).toBe(0)
@@ -601,7 +605,7 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
     // 开始生成（3 张）→ dispatch 定格本次运行态 run
-    await user.click(await screen.findByRole('button', { name: /开始生成 · 3 张/ }))
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
 
     // 网格渲染出 steps 三档表头（20/25/30）
@@ -634,7 +638,7 @@ describe('GeneratePage 端到端 smoke', () => {
       prompts: ['recall'], negative_prompt: '',
       width: 1024, height: 1024, steps: 25, cfg_scale: 4, count: 1, seed: 0,
       loras: [],
-      // 用 steps 轴（非 lora_ckpt）→ 回填后按钮仍是「· 3 张」，不引入 picker 异步
+      // 用 steps 轴（非 lora_ckpt）→ 回填后按钮保持简洁，不引入 picker 异步
       xy_draft: { x: { axis: 'steps', raw: '20, 25, 30', loraIndex: null }, y: null },
       dataset_pick: null,
     }
@@ -682,7 +686,7 @@ describe('GeneratePage 端到端 smoke', () => {
     await waitFor(() => expect(screen.getByText('xy plot 1')).toBeInTheDocument())
 
     // 点开始生成 → 清掉 override，结果区回到实时任务：底部 "xy plot 1" 文本消失
-    await user.click(screen.getByRole('button', { name: /开始生成 · 3 张/ }))
+    await user.click(screen.getByRole('button', { name: '开始生成' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     await waitFor(() => expect(screen.queryByText('xy plot 1')).not.toBeInTheDocument())
   })

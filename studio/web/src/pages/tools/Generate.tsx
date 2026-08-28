@@ -40,6 +40,7 @@ import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
 import SampleGallery from './generate/SampleGallery'
+import SidebarFixedLoras from './generate/SidebarFixedLoras'
 import SidebarLoras from './generate/SidebarLoras'
 import LoraCatalogDrawer from './generate/LoraCatalogDrawer'
 import {
@@ -61,7 +62,7 @@ import {
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
 import {
-  axisText, axisView, buildXYMatrix, cellCount, parseAxisValues,
+  axisText, axisView, buildXYMatrix,
   type XYAxisDraft,
 } from './generate/xy'
 
@@ -172,6 +173,12 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   }
 }
 
+function virtualYDraftFor(xDraft: XYAxisDraft, steps: number): XYAxisDraft {
+  return xDraft.axis === 'lora_scale'
+    ? { axis: 'steps', raw: String(steps), loraIndex: null, checkpointAnchor: null }
+    : { axis: 'lora_scale', raw: '1.0', loraIndex: null, checkpointAnchor: null }
+}
+
 export default function GeneratePage() {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -275,6 +282,11 @@ export default function GeneratePage() {
 
   const setXDraft = (xDraft: XYAxisDraft) => setPrefs((p) => ({ ...p, xDraft }))
   const setYDraft = (yDraft: XYAxisDraft | null) => setPrefs((p) => ({ ...p, yDraft }))
+  const virtualYDraft = useMemo(
+    () => virtualYDraftFor(xDraft, steps),
+    [steps, xDraft],
+  )
+  const visibleYDraft = yDraft ?? virtualYDraft
   const setDatasetPick = (datasetPick: DatasetPick | null) => setPrefs((p) => ({ ...p, datasetPick }))
 
   // 双图对比：选中的 2 个 sample 索引（从 PreviewXYGrid cell click 收集）
@@ -341,14 +353,16 @@ export default function GeneratePage() {
     mode === 'xy' ? 'xy' : 'lora',
   )
   const [catalogDrawerOpen, setCatalogDrawerOpen] = useState(false)
-  const [axisEditor, setAxisEditor] = useState<'X' | 'Y' | null>(null)
+  const [activeAxis, setActiveAxis] = useState<'X' | 'Y'>('X')
+  const [axisDrawerOpen, setAxisDrawerOpen] = useState(false)
+  const [axisOrderRevision, setAxisOrderRevision] = useState({ X: 0, Y: 0 })
   useEffect(() => {
     if (mode !== 'xy' && sidebarTab === 'xy') {
       setSidebarTab('lora')
       return
     }
     if (sidebarTab !== 'lora') setCatalogDrawerOpen(false)
-    if (mode !== 'xy' || sidebarTab !== 'xy') setAxisEditor(null)
+    if (mode !== 'xy' || sidebarTab !== 'xy') setAxisDrawerOpen(false)
   }, [mode, sidebarTab, setSidebarTab])
   const [logOpen, setLogOpen] = useState(false)
   // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
@@ -424,18 +438,6 @@ export default function GeneratePage() {
       }))
     return [...live, ...done]
   }, [liveGenerates, history.entries])
-
-  // XY mode 时，按钮显示「生成 N×M=K 张」
-  const xyCellCount = useMemo(() => {
-    if (mode !== 'xy') return 0
-    try {
-      const xLen = parseAxisValues(xDraft.axis, xDraft.raw).length
-      const yLen = yDraft ? parseAxisValues(yDraft.axis, yDraft.raw).length : null
-      return cellCount(xLen, yLen)
-    } catch {
-      return 0
-    }
-  }, [mode, xDraft, yDraft])
 
   const refreshBlockingTask = useCallback(async () => {
     try {
@@ -912,9 +914,7 @@ export default function GeneratePage() {
   // HTTP 窗口（submitting）显示「生成中」，其余显示动作 label。
   const generateLabel = submitting
     ? t('generate.generating')
-    : mode === 'xy' && xyCellCount > 0
-      ? t('generate.startGenerateCount', { n: xyCellCount })
-      : t('generate.startGenerate')
+    : t('generate.startGenerate')
 
   return (
     <div className="fade-in flex flex-col" style={{ height: '100%', overflow: 'hidden' }}>
@@ -962,10 +962,7 @@ export default function GeneratePage() {
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div
-            className="card relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden"
-            style={(catalogDrawerOpen || axisEditor !== null) && sidebarTab === (axisEditor !== null ? 'xy' : 'lora')
-              ? { borderTopRightRadius: 0, borderBottomRightRadius: 0 }
-              : undefined}
+            className={`card generate-sidebar relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden ${(catalogDrawerOpen || axisDrawerOpen) ? 'generate-sidebar--drawer-open' : ''}`}
           >
             {/* 内容区：三个 section 都常驻 DOM、用 display 切换（不卸载）—— 切 tab 不重渲不闪烁。
                 scrollbar-gutter: stable both-edges —— 两侧都常驻预留滚动条槽（槽在 padding 外侧、
@@ -985,13 +982,28 @@ export default function GeneratePage() {
             >
               <SidebarXYAxes
                 xDraft={xDraft}
-                yDraft={yDraft}
-                onEditX={() => setAxisEditor('X')}
-                onEditY={() => setAxisEditor('Y')}
-                onSwap={() => setPrefs((p) => ({ ...p, xDraft: p.yDraft ?? p.xDraft, yDraft: p.xDraft }))}
-                onAddY={() => setYDraft({ axis: xDraft.axis === 'cfg_scale' ? 'steps' : 'cfg_scale', raw: '3, 4, 5', loraIndex: null })}
-                onRemoveY={() => { setYDraft(null); setAxisEditor(null) }}
-                fixedLoras={prefs.xyFixedLoras}
+                yDraft={visibleYDraft}
+                yEnabled={yDraft !== null}
+                activeAxis={activeAxis}
+                editorOpen={axisDrawerOpen}
+                onSelectAxis={setActiveAxis}
+                onEdit={() => setAxisDrawerOpen((open) => !open)}
+                onAxisChange={(axis, next) => axis === 'X' ? setXDraft(next) : setYDraft(next)}
+                onManualReorder={(axis) => setAxisOrderRevision((revision) => ({
+                  ...revision,
+                  [axis]: revision[axis] + 1,
+                }))}
+                onSwap={() => {
+                  setPrefs((p) => ({
+                    ...p,
+                    xDraft: p.yDraft ?? virtualYDraftFor(p.xDraft, p.steps),
+                    yDraft: p.xDraft,
+                  }))
+                  setAxisOrderRevision((revision) => ({
+                    X: revision.Y + 1,
+                    Y: revision.X + 1,
+                  }))
+                }}
                 fp8BaseModel={fp8BaseModel}
               />
             </div>
@@ -1009,7 +1021,11 @@ export default function GeneratePage() {
                   {catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
                 </button>
               </div>
-              <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
+              {mode === 'xy' ? (
+                <SidebarFixedLoras loras={loras} ui={loraUi} onChange={setSelection} />
+              ) : (
+                <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
+              )}
             </div>
 
 
@@ -1244,13 +1260,14 @@ export default function GeneratePage() {
             onChange={setSelection}
           />
           <XYAxisEditorDrawer
-            open={axisEditor !== null && mode === 'xy' && sidebarTab === 'xy'}
-            label={axisEditor ?? 'X'}
-            draft={axisEditor === 'Y' && yDraft ? yDraft : xDraft}
-            otherAxis={axisEditor === 'X' ? yDraft?.axis ?? null : xDraft.axis}
+            open={axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy'}
+            label={activeAxis}
+            draft={activeAxis === 'Y' ? visibleYDraft : xDraft}
+            otherAxis={activeAxis === 'X' ? yDraft?.axis ?? null : xDraft.axis}
             fixedLoras={enabledLoras(prefs.xyFixedLoras, prefs.xyFixedLoraUi)}
-            onChange={(next) => axisEditor === 'Y' ? setYDraft(next) : setXDraft(next)}
-            onClose={() => setAxisEditor(null)}
+            manualOrderRevision={axisOrderRevision[activeAxis]}
+            onChange={(next) => activeAxis === 'Y' ? setYDraft(next) : setXDraft(next)}
+            onClose={() => setAxisDrawerOpen(false)}
           />
 
           {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区

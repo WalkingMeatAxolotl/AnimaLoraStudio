@@ -99,8 +99,9 @@ describe('XYAxisEditorDrawer', () => {
     const user = userEvent.setup()
     render(<Harness initial={{ axis: 'steps', raw: '20, 25', loraIndex: null }} />)
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByLabelText('轴类型')).toHaveFocus())
+    expect(screen.getByTestId('xy-axis-editor-drawer')).toHaveClass('generate-attached-drawer')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('轴类型')).toBeInTheDocument()
 
     const inputs = screen.getAllByLabelText('输入值，用逗号分隔')
     expect(inputs).toHaveLength(1)
@@ -143,7 +144,7 @@ describe('XYAxisEditorDrawer', () => {
     expect(screen.getByTestId('draft-raw')).toHaveTextContent('0.1, 0.2, 0.3')
   })
 
-  it('keeps an absolute checkpoint anchor when removing it before catalog rows load', async () => {
+  it('does not repeat selected checkpoint management inside the catalog drawer', async () => {
     const user = userEvent.setup()
     render(<Harness initial={{
       axis: 'lora_ckpt',
@@ -157,9 +158,11 @@ describe('XYAxisEditorDrawer', () => {
       },
     }} />)
 
-    await user.click(screen.getAllByRole('button', { name: '删除' })[0])
-    expect(screen.getByTestId('draft-raw')).toHaveTextContent(epoch40Item.path)
-    expect(screen.getByTestId('draft-anchor')).toHaveTextContent(epoch40Item.path)
+    expect(screen.queryByTestId('xy-axis-selected-values')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /上移/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /^Alpha project/ }))
+    expect(screen.queryByTestId('xy-axis-selected-values')).not.toBeInTheDocument()
   })
 
   it('replaces snapshot basenames and restores canonical checkpoint order', async () => {
@@ -180,27 +183,12 @@ describe('XYAxisEditorDrawer', () => {
     )
     expect(screen.getByTestId('draft-anchor')).toHaveTextContent(epoch40Item.path)
 
-    // Once the user reorders the list manually, later additions append rather
-    // than silently restoring canonical order.
-    const moveUpButtons = screen.getAllByRole('button', { name: '上移' })
-    await user.click(moveUpButtons[moveUpButtons.length - 1])
-    await user.click(row('final'))
-    await user.click(row('final'))
-    expect(screen.getByTestId('draft-raw')).toHaveTextContent(
-      `${epoch40Item.path}, ${epoch80Item.path}, ${finalItem.path}`,
-    )
-
-    await user.click(screen.getByRole('button', { name: '关闭' }))
+    await user.keyboard('{Escape}')
     await user.click(screen.getByRole('button', { name: 'Open editor' }))
-    await user.click((await screen.findAllByTestId('xy-axis-checkpoint')).find(
-      (candidate) => candidate.textContent?.includes('final'),
-    )!)
-    await user.click((await screen.findAllByTestId('xy-axis-checkpoint')).find(
-      (candidate) => candidate.textContent?.includes('final'),
-    )!)
-    expect(screen.getByTestId('draft-raw')).toHaveTextContent(
-      `${epoch40Item.path}, ${epoch80Item.path}, ${finalItem.path}`,
-    )
+    const reopenedRows = await screen.findAllByTestId('xy-axis-checkpoint')
+    expect(reopenedRows.find((candidate) => candidate.textContent?.includes('final'))).toHaveAttribute('aria-pressed', 'true')
+    expect(reopenedRows.find((candidate) => candidate.textContent?.includes('epoch_80'))).toHaveAttribute('aria-pressed', 'true')
+    expect(reopenedRows.find((candidate) => candidate.textContent?.includes('epoch_40'))).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('blocks checkpoints already used by an enabled fixed LoRA', async () => {

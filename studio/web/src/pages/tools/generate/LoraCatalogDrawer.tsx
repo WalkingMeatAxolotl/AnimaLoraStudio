@@ -8,6 +8,7 @@ import {
   type LoraEntry,
 } from '../../../api/client'
 import { createLoraUiState, normalizeLoraPath, type LoraUiState } from './loraSelection'
+import GenerateAttachedDrawer from './GenerateAttachedDrawer'
 
 const EMPTY_RESPONSE: LoraCatalogResponse = {
   items: [], sources: [], total: 0, cursor: 0, next_cursor: null,
@@ -201,19 +202,10 @@ export default function LoraCatalogDrawer({
   if (!open) return null
 
   return (
-    <aside
+    <GenerateAttachedDrawer
       id="lora-catalog-drawer"
-      aria-label={t('generate.loraCatalog')}
-      className="absolute z-20 flex flex-col bg-surface border border-subtle border-l-0 shadow-xl"
-      style={{
-        left: 'calc(420px + 1.5rem)',
-        top: '1.5rem',
-        bottom: '1.5rem',
-        width: 'min(860px, max(480px, calc(100% - 850px - 1.5rem)), calc(100% - 420px - 10.25rem))',
-        borderRadius: '0 var(--r-lg) var(--r-lg) 0',
-        overflow: 'hidden',
-      }}
-      data-testid="lora-catalog-drawer"
+      ariaLabel={t('generate.loraCatalog')}
+      testId="lora-catalog-drawer"
     >
       <header className="p-3 border-b border-subtle flex flex-col gap-2 shrink-0">
         <div className="flex items-center gap-2">
@@ -240,6 +232,13 @@ export default function LoraCatalogDrawer({
               <path d="M16 16h5v5" />
             </svg>
           </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm xl:hidden"
+            onClick={onClose}
+            title={t('common.close')}
+            aria-label={t('common.close')}
+          >×</button>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {selectedSource?.source_type === 'project' && versions.length > 1 && (
@@ -350,6 +349,6 @@ export default function LoraCatalogDrawer({
           </div>
         )}
       </div>
-    </aside>
+    </GenerateAttachedDrawer>
   )
 }
