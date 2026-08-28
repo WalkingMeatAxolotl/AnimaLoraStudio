@@ -171,6 +171,21 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(body.count).toBe(1)
   })
 
+  it('single 与 XY 模式的 LoRA tab 复用同一套既有内容', async () => {
+    const user = userEvent.setup()
+    setup()
+
+    expect(screen.getByTestId('current-lora-panel')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('tab', { name: 'LoRA' }))
+
+    expect(screen.getByTestId('current-lora-panel')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
+    expect(screen.queryByTestId('current-fixed-lora-panel')).not.toBeInTheDocument()
+  })
+
   it('sidebar tabs support arrow-key navigation', async () => {
     const user = userEvent.setup()
     setup()

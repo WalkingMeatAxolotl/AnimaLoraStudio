@@ -40,7 +40,6 @@ import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
 import SampleGallery from './generate/SampleGallery'
-import SidebarFixedLoras from './generate/SidebarFixedLoras'
 import SidebarLoras from './generate/SidebarLoras'
 import LoraCatalogDrawer from './generate/LoraCatalogDrawer'
 import {
@@ -1021,11 +1020,7 @@ export default function GeneratePage() {
                   {catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
                 </button>
               </div>
-              {mode === 'xy' ? (
-                <SidebarFixedLoras loras={loras} ui={loraUi} onChange={setSelection} />
-              ) : (
-                <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
-              )}
+              <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
             </div>
 
 
