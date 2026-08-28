@@ -42,7 +42,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .xy-axis-sortable-row { transition: none !important; }
+  .xy-axis-sortable-row,
+  .lora-sortable-card { transition: none !important; }
 }
 
 /* 可拖分栏（PaneResizer 配套），给"窄屏堆叠 / 宽屏并排"的页面用。

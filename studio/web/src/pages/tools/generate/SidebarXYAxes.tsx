@@ -86,9 +86,9 @@ function SortableAxisValueCard({
           data-testid="xy-axis-drop-indicator"
         />
       )}
-      <div className="relative">
+      <div className="relative group">
         <div
-          className={`xy-axis-sortable-row flex items-center rounded-md border border-subtle bg-sunken pl-3 pr-12 py-2.5 select-none touch-none cursor-grab active:cursor-grabbing transition-[background-color,border-color,box-shadow,opacity] hover:border-accent/50 hover:bg-overlay hover:shadow-sm ${isDragging ? 'border-accent shadow-md' : ''}`}
+          className={`xy-axis-sortable-row flex items-center rounded-md border bg-overlay p-2.5 pr-12 select-none touch-none cursor-grab active:cursor-grabbing transition-[background-color,border-color,box-shadow,opacity] ${isDragging ? 'border-accent shadow-md' : 'border-subtle'}`}
           data-testid="xy-axis-selected-value"
           title={t('generate.axisDrag')}
           aria-label={`${t('generate.axisDrag')} ${label}`}
@@ -101,7 +101,7 @@ function SortableAxisValueCard({
         </div>
         <button
           type="button"
-          className="btn btn-ghost btn-sm text-err absolute right-2 top-1/2 -translate-y-1/2 z-[2]"
+          className="btn btn-ghost btn-sm text-err absolute right-2 top-1/2 -translate-y-1/2 z-[2] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
           onPointerDown={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
           onClick={onRemove}
