@@ -91,7 +91,7 @@ View tasks on the **Queue** page; open **task detail** for logs / monitoring / o
 
 ## Test your LoRA + ComfyUI
 
-After training, the sidebar **Test** page runs single-image / XY matrix / inference daemon for LoRA evaluation. Prompts can be pulled directly from the training set, eliminating round trips to ComfyUI.
+After training, the sidebar **Test** page runs single-image / XY matrix / inference daemon for LoRA evaluation. Prompts can be pulled directly from the training set, eliminating round trips to ComfyUI. **Pick from gallery** in the Prompts section can also browse Danbooru or Gelbooru by source, rating, date range, and tags. Select one image and tag it with the globally configured WD14, CLTagger, or LLM; the result replaces the Training-set prompt. Configure the matching Booru credentials and tagger on the Settings page first. Studio rate-limits and caches proxied thumbnails, and does not import remote images into the training set.
 
 When Settings → Testing → Save test images is enabled, newly saved single images and
 XY cell PNGs include A1111 / Civitai-compatible metadata: the effective prompt,

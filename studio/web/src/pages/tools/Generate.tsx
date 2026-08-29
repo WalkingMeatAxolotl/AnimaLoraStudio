@@ -19,6 +19,7 @@ import AspectChips, { aspectFromDimensions, type AspectName } from './generate/A
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
 import GenerateAttachedDrawer from './generate/GenerateAttachedDrawer'
+import GalleryPickerDrawer from './generate/GalleryPickerDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
@@ -359,6 +360,7 @@ export default function GeneratePage() {
     phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
+  const [galleryPickerOpen, setGalleryPickerOpen] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
   const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>(
     'studio:generate:sidebarTab:v2',
@@ -381,7 +383,10 @@ export default function GeneratePage() {
       return
     }
     if (sidebarTab !== 'lora') setCatalogDrawerOpen(false)
-    if (sidebarTab !== 'prompts') setDatasetPickerOpen(false)
+    if (sidebarTab !== 'prompts') {
+      setDatasetPickerOpen(false)
+      setGalleryPickerOpen(false)
+    }
     if (mode !== 'xy' || sidebarTab !== 'xy') setAxisDrawerOpen(false)
   }, [mode, sidebarTab, setSidebarTab])
   const [logOpen, setLogOpen] = useState(false)
@@ -938,6 +943,7 @@ export default function GeneratePage() {
   const attachedDrawerOpen = (
     (catalogDrawerOpen && sidebarTab === 'lora')
     || (datasetPickerOpen && sidebarTab === 'prompts')
+    || (galleryPickerOpen && sidebarTab === 'prompts')
     || (axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy')
   )
 
@@ -1039,6 +1045,7 @@ export default function GeneratePage() {
                       if (opening) {
                         setCatalogDrawerOpen(false)
                         setDatasetPickerOpen(false)
+                        setGalleryPickerOpen(false)
                       }
                     }}
                     aria-expanded={axisDrawerOpen}
@@ -1108,6 +1115,7 @@ export default function GeneratePage() {
                     if (opening) {
                       setAxisDrawerOpen(false)
                       setDatasetPickerOpen(false)
+                      setGalleryPickerOpen(false)
                     }
                   }}
                   aria-expanded={catalogDrawerOpen}
@@ -1135,12 +1143,28 @@ export default function GeneratePage() {
                 style={{ top: -18, marginTop: -18, paddingTop: 18 }}
               >
                 <ToolbarAction
+                  label={galleryPickerOpen ? t('generate.collapseCatalog') : t('generate.pickFromGallery')}
+                  icon={<SidebarToolIcon name={galleryPickerOpen ? 'collapse' : 'image'} />}
+                  onClick={() => {
+                    const opening = !galleryPickerOpen
+                    setGalleryPickerOpen(opening)
+                    if (opening) {
+                      setDatasetPickerOpen(false)
+                      setCatalogDrawerOpen(false)
+                      setAxisDrawerOpen(false)
+                    }
+                  }}
+                  aria-expanded={galleryPickerOpen}
+                  aria-controls="prompt-gallery-drawer"
+                />
+                <ToolbarAction
                   label={datasetPickerOpen ? t('generate.collapseCatalog') : t('generate.pickFromDataset')}
                   icon={<SidebarToolIcon name={datasetPickerOpen ? 'collapse' : 'dataset'} />}
                   onClick={() => {
                     const opening = !datasetPickerOpen
                     setDatasetPickerOpen(opening)
                     if (opening) {
+                      setGalleryPickerOpen(false)
                       setCatalogDrawerOpen(false)
                       setAxisDrawerOpen(false)
                     }
@@ -1371,6 +1395,22 @@ export default function GeneratePage() {
             ui={loraUi}
             onChange={setSelection}
           />
+          {galleryPickerOpen && sidebarTab === 'prompts' && (
+            <GenerateAttachedDrawer
+              id="prompt-gallery-drawer"
+              ariaLabel={t('generate.galleryTitle')}
+              testId="prompt-gallery-drawer"
+            >
+              <GalleryPickerDrawer
+                onApplyPrompt={(prompt) => setPrefs((current) => ({
+                  ...current,
+                  datasetPick: null,
+                  datasetPrompt: prompt,
+                }))}
+                onClose={() => setGalleryPickerOpen(false)}
+              />
+            </GenerateAttachedDrawer>
+          )}
           {datasetPickerOpen && sidebarTab === 'prompts' && (
             <GenerateAttachedDrawer
               id="prompt-dataset-drawer"

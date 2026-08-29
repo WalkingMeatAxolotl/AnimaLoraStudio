@@ -238,6 +238,58 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
   })
 
+  it('opens the gallery left of the dataset action, keeps drawers exclusive, and applies tagged prompt', async () => {
+    const previousImpl = fetchMock.getMockImplementation()!
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/gallery/search')) {
+        return jsonOk({
+          items: [{
+            source: 'danbooru', post_id: '42', width: 800, height: 1200,
+            tags: ['1girl'], thumbnail_url: '/api/gallery/image?source=danbooru&url=x',
+            image_url: 'https://cdn.donmai.us/sample.jpg',
+          }],
+          page: 1, page_size: 30, has_more: false,
+        })
+      }
+      if (url === '/api/gallery/tag' && init?.method === 'POST') {
+        return jsonOk({ prompt: 'fresh gallery prompt' })
+      }
+      return previousImpl(url, init)
+    })
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      datasetPick: { projectId: 1, versionId: 2, name: 'old.png', tags: ['old'] },
+      datasetPrompt: 'old prompt',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+
+    const galleryAction = screen.getByRole('button', { name: '从画廊选取' })
+    const datasetAction = screen.getByRole('button', { name: '从训练集选取' })
+    expect(galleryAction.compareDocumentPosition(datasetAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await user.click(galleryAction)
+    expect(screen.getByTestId('prompt-gallery-drawer')).toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
+    await user.click(screen.getByRole('button', { name: '打标' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('fresh gallery prompt')
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.datasetPick).toBeNull()
+      expect(stored.datasetPrompt).toBe('fresh gallery prompt')
+    })
+
+    await user.click(datasetAction)
+    expect(screen.queryByTestId('prompt-gallery-drawer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('prompt-dataset-drawer')).toBeInTheDocument()
+  })
+
   it('训练集提示词位于正/负向下方，可编辑、持久化并进入 payload/快照；关闭 drawer 保留内容', async () => {
     const pick = {
       projectId: 1, versionId: 11, name: '0001.png', folder: '2_data', tags: ['original', 'tags'],

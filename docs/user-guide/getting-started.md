@@ -91,7 +91,7 @@ python tools/download_models.py --modelscope      # 走魔搭社区
 
 ## 测试 LoRA + 用到 ComfyUI
 
-训完后侧栏 **测试**：跑单图 / XY 矩阵 / 推理 daemon 评测 LoRA，prompt 可从训练集直接拉，不用切 ComfyUI 反复测。
+训完后侧栏 **测试**：跑单图 / XY 矩阵 / 推理 daemon 评测 LoRA，prompt 可从训练集直接拉，不用切 ComfyUI 反复测。提示词分区的 **从画廊选取** 还能按来源、分级、日期和 tag 浏览 Danbooru / Gelbooru；选中一张图后可用全局 WD14、CLTagger 或 LLM 设置打标，结果会直接替换“训练集提示词”。使用前请先在设置页配置对应 Booru 凭据与打标器；远程缩略图由 Studio 限流代理并缓存，不会自动导入训练集。
 
 开启 Settings → Testing → 保存测试图片后，新落盘的单图与 XY cell PNG 会携带
 A1111 / Civitai 兼容 metadata，包括实际 prompt、采样参数、底模、VAE、LoRA
