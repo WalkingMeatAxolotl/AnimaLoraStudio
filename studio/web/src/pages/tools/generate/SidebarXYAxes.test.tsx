@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import SidebarXYAxes from './SidebarXYAxes'
+import SidebarXYAxes, { XYAxisToolbar } from './SidebarXYAxes'
 import type { XYAxisDraft } from './xy'
 
 const firstPath = 'G:/checkpoints/final.safetensors'
@@ -38,45 +38,51 @@ function Harness({
       <output data-testid="x-anchor">{xDraft.checkpointAnchor?.path ?? ''}</output>
       <output data-testid="y-raw">{yDraft.raw}</output>
       <output data-testid="manual-reorders">{manualReorders}</output>
+      <XYAxisToolbar
+        xDraft={xDraft}
+        yDraft={yDraft}
+        activeAxis={activeAxis}
+        onSelectAxis={setActiveAxis}
+        onSwap={vi.fn()}
+      />
       <SidebarXYAxes
         xDraft={xDraft}
         yDraft={yDraft}
         yEnabled={yEnabled}
         activeAxis={activeAxis}
-        editorOpen={false}
         fp8BaseModel={false}
-        onSelectAxis={setActiveAxis}
-        onEdit={() => {}}
         onAxisChange={(axis, draft) => axis === 'X' ? setXDraft(draft) : setYDraft(draft)}
         onManualReorder={() => setManualReorders((count) => count + 1)}
-        onSwap={vi.fn()}
       />
     </>
   )
 }
 
 describe('SidebarXYAxes', () => {
-  it('uses X/Y top tabs, shows one compact image count, and has no Y close control', async () => {
+  it('uses a compact accessible X/Y tablist and keeps the immediate swap action beside it', async () => {
     const user = userEvent.setup()
     render(<Harness />)
 
-    expect(screen.getByTestId('xy-image-count')).toHaveTextContent('2张')
-    const xTab = screen.getByRole('tab', { name: 'X 轴 · LoRA' })
+    expect(screen.queryByTestId('xy-image-count')).not.toBeInTheDocument()
+    const xTab = screen.getByRole('tab', { name: 'X · LoRA' })
     expect(xTab).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: 'Y 轴 · 权重' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Y · 权重' })).toBeInTheDocument()
     expect(screen.queryByText(/固定 LoRA/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /添加 Y 轴/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /移除 Y 轴/ })).not.toBeInTheDocument()
 
-    expect(screen.getByTestId('xy-axis-sticky-header')).toHaveClass('sticky')
-    expect(screen.getAllByText('X 轴 · LoRA')).toHaveLength(1)
+    expect(screen.getByTestId('xy-axis-toolbar')).toBeInTheDocument()
+    expect(xTab).toHaveClass('text-2xs')
+    expect(screen.getByRole('button', { name: '交换 X/Y' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /选择 LoRA|编辑 [XY] 轴/ })).not.toBeInTheDocument()
+    expect(screen.getAllByText('X · LoRA')).toHaveLength(1)
 
     xTab.focus()
     await user.keyboard('{ArrowRight}')
-    expect(screen.getByRole('tab', { name: 'Y 轴 · 权重' })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Y · 权重' })).toHaveFocus()
     expect(screen.getByTestId('xy-axis-selected-value')).toHaveTextContent('1')
     expect(screen.getByTestId('xy-axis-selected-values')).toBeInTheDocument()
-    expect(screen.getAllByText('Y 轴 · 权重')).toHaveLength(1)
+    expect(screen.getAllByText('Y · 权重')).toHaveLength(1)
   })
 
   it('uses each checkpoint card as the drag target and preserves delete', async () => {
@@ -104,7 +110,7 @@ describe('SidebarXYAxes', () => {
     const user = userEvent.setup()
     render(<Harness yRaw="0.5, 0.75, 1" />)
 
-    await user.click(screen.getByRole('tab', { name: 'Y 轴 · 权重' }))
+    await user.click(screen.getByRole('tab', { name: 'Y · 权重' }))
     expect(screen.getAllByTestId('xy-axis-selected-value')).toHaveLength(3)
     expect(screen.getAllByRole('button', { name: /拖动调整顺序/ })).toHaveLength(3)
     expect(screen.queryByRole('button', { name: /上移|下移/ })).not.toBeInTheDocument()
@@ -129,8 +135,12 @@ describe('SidebarXYAxes', () => {
     expect(screen.getByTestId('x-anchor')).toHaveTextContent('/models/foo.safetensors')
   })
 
-  it('treats a virtual one-value Y axis as dimensionless for the count', () => {
-    render(<Harness yEnabled={false} />)
-    expect(screen.getByTestId('xy-image-count')).toHaveTextContent('2张')
+  it('treats a virtual Y axis as dimensionless for the large-matrix warning', () => {
+    const xRaw = Array.from({ length: 26 }, (_, index) => String(index + 1)).join(', ')
+    const { rerender } = render(<Harness xRaw={xRaw} yRaw="1, 2" yEnabled={false} />)
+    expect(screen.queryByText('矩阵较大，生成可能需要较长时间')).not.toBeInTheDocument()
+
+    rerender(<Harness xRaw={xRaw} yRaw="1, 2" yEnabled />)
+    expect(screen.getByText('矩阵较大，生成可能需要较长时间')).toBeInTheDocument()
   })
 })

@@ -50,12 +50,13 @@ export interface DatasetPick {
  * 不影响 value；用 localStorage 持久化跨 session 记忆浏览位置。
  */
 export default function PromptFromDatasetPicker({
-  value, onChange, onClose,
+  value, onChange, onClose, variant = 'inline',
 }: {
   /** 当前选中 caption（null = 未选） */
   value: DatasetPick | null
   onChange: (next: DatasetPick | null) => void
   onClose: () => void
+  variant?: 'inline' | 'drawer'
 }) {
   const { t } = useTranslation()
   // 一次性 migrate 旧 anima.* key 到 studio: 命名（PR #66 P1-4 约定）；module 顶部
@@ -220,7 +221,9 @@ export default function PromptFromDatasetPicker({
         不能丢 hover —— 否则未选中场景下大图与放大按钮会随 hoveredKey 清空而消失、点不到，
         已选场景下则会回落成放大 value 的另一张图。移出整个 picker 才清空、回落到 value。 */}
     <div
-      className="rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2"
+      className={variant === 'drawer'
+        ? 'flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-3'
+        : 'rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2'}
       data-testid="prompt-dataset-picker"
       onMouseLeave={() => setHoveredKey(null)}
     >

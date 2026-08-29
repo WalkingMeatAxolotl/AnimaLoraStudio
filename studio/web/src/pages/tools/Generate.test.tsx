@@ -84,7 +84,7 @@ function setup() {
 // 是 mount 必发。所以这里改成等页面渲染出生成按钮作为「页面就绪」信号；需要
 // picker 内容的用例自己再 waitFor 对应 chip（懒加载到位）。
 async function waitForInitialLorasLoad() {
-  await screen.findByRole('button', { name: /开始生成/ })
+  await screen.findByRole('button', { name: /开始生成|生成 \d+ 张/ })
 }
 
 // 正向 / 负向 textarea 现在归到左侧「提示词」分页 tab（默认 tab 是 LoRA）；
@@ -108,6 +108,28 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(body.count).toBe(1)
     // commit C: attention_backend 从 Generate 页移到 Settings；不再随 enqueue 发
     expect(body.attention_backend).toBeUndefined()
+  })
+
+  it('keeps the page title, puts the accessible mode switch in the left card, and hides result/history chrome', async () => {
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    expect(screen.getByRole('heading', { name: '测试' })).toBeInTheDocument()
+    expect(screen.queryByText('生成结果')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'LoRA' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '刷新' })).not.toBeInTheDocument()
+
+    const modeSwitch = screen.getByRole('radio', { name: '单图' })
+    expect(screen.getByRole('radiogroup', { name: '生成模式' })).toBeInTheDocument()
+    expect(modeSwitch).toHaveAttribute('aria-checked', 'true')
+    const loraTab = screen.getByRole('tab', { name: 'LoRA' })
+    expect(modeSwitch.compareDocumentPosition(loraTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    modeSwitch.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByRole('radio', { name: 'XY 矩阵' })).toHaveFocus()
+    expect(screen.getByRole('radio', { name: 'XY 矩阵' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('多任务（P-I）：running + pending → 排队列表带取消，提交按钮不禁用', async () => {
@@ -141,24 +163,32 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByRole('button', { name: /开始生成/ })).not.toBeDisabled()
   })
 
-  it('mode=xy 默认 X=steps、Y=weight 1.0：标题显示「3张」且 enqueue 保持单维矩阵', async () => {
+  it('mode=xy 默认 X=steps、Y=weight 1.0：生成按钮显示「3 张」且 enqueue 保持单维矩阵', async () => {
     const user = userEvent.setup()
     setup()
 
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
-    expect(screen.getByRole('tab', { name: 'Y 轴 · 权重' })).toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: 'Y 轴 · 权重' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
+    const secondaryTabs = screen.getByTestId('xy-axis-secondary-tabs')
+    const sectionTabs = screen.getByRole('tablist', { name: '生成配置' })
+    expect(secondaryTabs.compareDocumentPosition(sectionTabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Y · 权重' })).toBeInTheDocument()
+    const editAxisButton = screen.getByRole('button', { name: '编辑 X 轴' })
+    expect(editAxisButton).toHaveTextContent('编辑 X 轴')
+    expect(editAxisButton).toHaveAttribute('aria-controls', 'xy-axis-editor-drawer')
+    expect(secondaryTabs).not.toContainElement(editAxisButton)
+    await user.click(screen.getByRole('tab', { name: 'Y · 权重' }))
     expect(screen.getByTestId('xy-axis-selected-value')).toHaveTextContent('1.0')
-    await user.click(screen.getByRole('tab', { name: 'X 轴 · 步数' }))
+    await user.click(screen.getByRole('tab', { name: 'X · 步数' }))
     // Numeric values are edited in the XY Axis Editor Drawer, not inline in
     // the summary card.
     await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // cell 数只在 XY 标题右侧显示一次，生成按钮不重复。
-    await waitFor(() => expect(screen.getByTestId('xy-image-count')).toHaveTextContent('3张'))
-    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument()
+    // cell 数归入主操作按钮，轴工具栏不再重复显示。
+    expect(screen.queryByTestId('xy-image-count')).not.toBeInTheDocument()
+    const generateButton = screen.getByRole('button', { name: '生成 3 张' })
+    expect(generateButton).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '开始生成' }))
+    await user.click(generateButton)
 
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     const body = lastEnqueueBody!
@@ -178,12 +208,34 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByTestId('current-lora-panel')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
 
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
     await user.click(screen.getByRole('tab', { name: 'LoRA' }))
 
     expect(screen.getByTestId('current-lora-panel')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
     expect(screen.queryByTestId('current-fixed-lora-panel')).not.toBeInTheDocument()
+  })
+
+  it('opens the training-set picker in the shared attached drawer instead of inline', async () => {
+    const user = userEvent.setup()
+    setup()
+
+    await openPromptsTab(user)
+    const trigger = screen.getByRole('button', { name: '从训练集选取' })
+    expect(trigger).toHaveAttribute('aria-controls', 'prompt-dataset-drawer')
+    expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
+
+    await user.click(trigger)
+
+    const drawer = screen.getByTestId('prompt-dataset-drawer')
+    const picker = screen.getByTestId('prompt-dataset-picker')
+    expect(drawer).toHaveClass('generate-attached-drawer')
+    expect(drawer).toContainElement(picker)
+    expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('tabpanel', { name: '提示词' })).not.toContainElement(picker)
+
+    await user.click(screen.getByRole('button', { name: '收起' }))
+    expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
   })
 
   it('sidebar tabs support arrow-key navigation', async () => {
@@ -221,8 +273,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.clear(promptArea)
     await user.type(promptArea, 'my custom prompt')
 
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
-    await user.click(screen.getByRole('button', { name: '单图' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('radio', { name: '单图' }))
 
     expect(promptArea).toHaveValue('my custom prompt')
   })
@@ -328,15 +380,15 @@ describe('GeneratePage 端到端 smoke', () => {
     const promptArea = screen.getAllByPlaceholderText('输入正向提示词…')[0]
     await user.clear(promptArea)
     await user.type(promptArea, 'persist me')
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
 
     first.unmount()
     setup()
     await waitForInitialLorasLoad()
 
     expect(screen.getAllByPlaceholderText('输入正向提示词…')[0]).toHaveValue('persist me')
-    expect(screen.getByTestId('xy-image-count')).toHaveTextContent('3张')
-    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument()
+    expect(screen.queryByTestId('xy-image-count')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '生成 3 张' })).toBeInTheDocument()
     expect(screen.queryByText('#1')).toBeNull()
     expect(screen.getByText('填写参数后点击「开始生成」')).toBeInTheDocument()
   })
@@ -410,7 +462,7 @@ describe('GeneratePage 端到端 smoke', () => {
     setup()
     await waitForInitialLorasLoad()
 
-    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await user.click(await screen.findByRole('button', { name: '生成 3 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     expect(lastEnqueueBody!.lora_configs).toEqual([])
     expect(lastEnqueueBody!.xy_matrix).not.toBeNull()
@@ -489,7 +541,7 @@ describe('GeneratePage 端到端 smoke', () => {
     setup()
     await waitForInitialLorasLoad()
 
-    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await user.click(await screen.findByRole('button', { name: '生成 1 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     expect(lastEnqueueBody!.lora_configs).toEqual([A])
     expect((lastEnqueueBody!.xy_matrix as { x: { lora_index: number } }).x.lora_index).toBe(0)
@@ -619,8 +671,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await waitForInitialLorasLoad()
     await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // 开始生成（3 张）→ dispatch 定格本次运行态 run
-    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    // 生成 3 张 → dispatch 定格本次运行态 run
+    await user.click(await screen.findByRole('button', { name: '生成 3 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
 
     // 网格渲染出 steps 三档表头（20/25/30）
@@ -700,8 +752,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(thumb)
     await waitFor(() => expect(screen.getByText('xy plot 1')).toBeInTheDocument())
 
-    // 点开始生成 → 清掉 override，结果区回到实时任务：底部 "xy plot 1" 文本消失
-    await user.click(screen.getByRole('button', { name: '开始生成' }))
+    // 点生成按钮 → 清掉 override，结果区回到实时任务：底部 "xy plot 1" 文本消失
+    await user.click(screen.getByRole('button', { name: '生成 3 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     await waitFor(() => expect(screen.queryByText('xy plot 1')).not.toBeInTheDocument())
   })

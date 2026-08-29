@@ -20,6 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { useTranslation } from 'react-i18next'
 import { normalizeLoraPath } from './loraSelection'
+import { SegmentedControl, SidebarToolIcon, ToolbarAction } from './SidebarToolbar'
 import { axisLabel, axisView, cellCount, formatAxisValue, splitAxisRaw, type XYAxisDraft } from './xy'
 
 function checkpointName(path: string): string {
@@ -203,130 +204,83 @@ function AxisValueList({
   )
 }
 
+export function XYAxisToolbar({
+  xDraft,
+  yDraft,
+  activeAxis,
+  onSelectAxis,
+  onSwap,
+}: {
+  xDraft: XYAxisDraft
+  yDraft: XYAxisDraft
+  activeAxis: 'X' | 'Y'
+  onSelectAxis: (axis: 'X' | 'Y') => void
+  onSwap: () => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div className="flex items-center gap-1.5" data-testid="xy-axis-toolbar">
+      <SegmentedControl
+        items={[
+          {
+            value: 'X',
+            label: `X · ${axisLabel(xDraft.axis)}`,
+            controls: 'xy-active-axis-panel',
+          },
+          {
+            value: 'Y',
+            label: `Y · ${axisLabel(yDraft.axis)}`,
+            controls: 'xy-active-axis-panel',
+          },
+        ]}
+        value={activeAxis}
+        onChange={onSelectAxis}
+        ariaLabel={t('generate.xyAxes')}
+        density="compact"
+        idPrefix="xy-axis-tab"
+        className="flex-1"
+      />
+      <ToolbarAction
+        label={t('generate.swapAxes')}
+        icon={<SidebarToolIcon name="swap" />}
+        iconOnly
+        onClick={onSwap}
+      />
+    </div>
+  )
+}
+
 export default function SidebarXYAxes({
   xDraft,
   yDraft,
   yEnabled,
   activeAxis,
-  editorOpen,
   fp8BaseModel,
-  onSelectAxis,
-  onEdit,
   onAxisChange,
   onManualReorder,
-  onSwap,
 }: {
   xDraft: XYAxisDraft
   yDraft: XYAxisDraft
   yEnabled: boolean
   activeAxis: 'X' | 'Y'
-  editorOpen: boolean
   fp8BaseModel: boolean
-  onSelectAxis: (axis: 'X' | 'Y') => void
-  onEdit: () => void
   onAxisChange: (axis: 'X' | 'Y', draft: XYAxisDraft) => void
   onManualReorder: (axis: 'X' | 'Y') => void
-  onSwap: () => void
 }) {
   const { t } = useTranslation()
   const activeDraft = activeAxis === 'X' ? xDraft : yDraft
-  const xCount = axisView(xDraft).values.length
-  const yCount = yEnabled ? axisView(yDraft).values.length : null
-  const total = cellCount(xCount, yCount)
+  const total = cellCount(
+    axisView(xDraft).values.length,
+    yEnabled ? axisView(yDraft).values.length : null,
+  )
   const fp8MergeHeavy = fp8BaseModel
     && yEnabled
     && [xDraft.axis, yDraft.axis].includes('lora_ckpt')
     && [xDraft.axis, yDraft.axis].includes('lora_scale')
 
-  const tabs: Array<{ key: 'X' | 'Y'; draft: XYAxisDraft }> = [
-    { key: 'X', draft: xDraft },
-    { key: 'Y', draft: yDraft },
-  ]
-
   return (
     <div className="flex flex-col gap-3" data-testid="xy-axes-panel">
-      <div
-        className="sticky z-10 flex flex-col gap-3 bg-surface pb-3"
-        style={{ top: -18, marginTop: -18, paddingTop: 18 }}
-        data-testid="xy-axis-sticky-header"
-      >
-        <div className="flex items-baseline justify-between gap-3">
-          <h3 className="m-0 text-md font-semibold">{t('generate.xyAxes')}</h3>
-          <span className="font-mono text-xs font-semibold text-fg-secondary" data-testid="xy-image-count">
-            {t('generate.xyImageCountShort', { count: total })}
-          </span>
-        </div>
-
-        <div
-          role="tablist"
-          aria-label={t('generate.xyAxes')}
-          className="flex items-center gap-1"
-          style={{ background: 'var(--bg-sunken)', borderRadius: 'var(--r-md)', padding: 3 }}
-        >
-          {tabs.map(({ key, draft }) => {
-            const active = activeAxis === key
-            return (
-              <button
-                key={key}
-                id={`xy-axis-tab-${key.toLocaleLowerCase()}`}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                aria-controls="xy-active-axis-panel"
-                tabIndex={active ? 0 : -1}
-                className="flex-1 min-w-0 truncate text-xs text-center transition-colors"
-                style={{
-                  padding: '6px 5px',
-                  borderRadius: 'var(--r-sm)',
-                  border: `1px solid ${active ? 'var(--border-subtle)' : 'transparent'}`,
-                  background: active ? 'var(--bg-surface)' : 'transparent',
-                  color: active ? 'var(--fg-primary)' : 'var(--fg-tertiary)',
-                  fontWeight: active ? 600 : 500,
-                  boxShadow: active ? 'var(--sh-sm)' : 'none',
-                  cursor: 'pointer',
-                }}
-                onClick={() => onSelectAxis(key)}
-                onKeyDown={(event) => {
-                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-                  event.preventDefault()
-                  const next = key === 'X' ? 'Y' : 'X'
-                  onSelectAxis(next)
-                  document.getElementById(`xy-axis-tab-${next.toLocaleLowerCase()}`)?.focus()
-                }}
-              >
-                {key} {t('generate.axisShort')} · {axisLabel(draft.axis)}
-              </button>
-            )
-          })}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm shrink-0"
-            onClick={onSwap}
-            title={t('generate.swapAxes')}
-            aria-label={t('generate.swapAxes')}
-          >
-            ⇄
-          </button>
-        </div>
-
-        <div className="flex justify-end">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={onEdit}
-            aria-expanded={editorOpen}
-            aria-controls="xy-axis-editor-drawer"
-            aria-label={t('generate.editAxis', { label: activeAxis })}
-          >
-            {editorOpen
-              ? t('generate.collapseCatalog')
-              : activeDraft.axis === 'lora_ckpt'
-                ? t('generate.chooseCheckpoints')
-                : t('common.edit')}
-          </button>
-        </div>
-      </div>
-
       <div
         id="xy-active-axis-panel"
         role="tabpanel"

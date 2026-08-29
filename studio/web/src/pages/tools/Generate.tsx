@@ -18,6 +18,7 @@ import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
+import GenerateAttachedDrawer from './generate/GenerateAttachedDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
@@ -49,7 +50,8 @@ import {
   type LoraUiState,
 } from './generate/loraSelection'
 import SidebarSectionTabs, { type SidebarTab } from './generate/SidebarSectionTabs'
-import SidebarXYAxes from './generate/SidebarXYAxes'
+import { SidebarToolIcon, ToolbarAction } from './generate/SidebarToolbar'
+import SidebarXYAxes, { XYAxisToolbar } from './generate/SidebarXYAxes'
 import XYAxisEditorDrawer from './generate/XYAxisEditorDrawer'
 import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
@@ -61,7 +63,7 @@ import {
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
 import {
-  axisText, axisView, buildXYMatrix,
+  axisText, axisView, buildXYMatrix, cellCount,
   type XYAxisDraft,
 } from './generate/xy'
 
@@ -355,12 +357,20 @@ export default function GeneratePage() {
   const [activeAxis, setActiveAxis] = useState<'X' | 'Y'>('X')
   const [axisDrawerOpen, setAxisDrawerOpen] = useState(false)
   const [axisOrderRevision, setAxisOrderRevision] = useState({ X: 0, Y: 0 })
+  const prevModeRef = useRef(mode)
   useEffect(() => {
+    const prevMode = prevModeRef.current
+    prevModeRef.current = mode
+    if (mode === 'xy' && prevMode !== 'xy') {
+      setSidebarTab('xy')
+      return
+    }
     if (mode !== 'xy' && sidebarTab === 'xy') {
       setSidebarTab('lora')
       return
     }
     if (sidebarTab !== 'lora') setCatalogDrawerOpen(false)
+    if (sidebarTab !== 'prompts') setDatasetPickerOpen(false)
     if (mode !== 'xy' || sidebarTab !== 'xy') setAxisDrawerOpen(false)
   }, [mode, sidebarTab, setSidebarTab])
   const [logOpen, setLogOpen] = useState(false)
@@ -911,9 +921,21 @@ export default function GeneratePage() {
 
   // 0.17 P-I：按钮现在正在出图时也可点（提交新任务入队），所以 label 只在本次入队
   // HTTP 窗口（submitting）显示「生成中」，其余显示动作 label。
+  const xyImageCount = cellCount(
+    axisView(xDraft).values.length,
+    yDraft ? axisView(yDraft).values.length : null,
+  )
   const generateLabel = submitting
     ? t('generate.generating')
-    : t('generate.startGenerate')
+    : mode === 'xy'
+      ? t('generate.generateImageCount', { count: xyImageCount })
+      : t('generate.startGenerate')
+
+  const attachedDrawerOpen = (
+    (catalogDrawerOpen && sidebarTab === 'lora')
+    || (datasetPickerOpen && sidebarTab === 'prompts')
+    || (axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy')
+  )
 
   return (
     <div className="fade-in flex flex-col" style={{ height: '100%', overflow: 'hidden' }}>
@@ -922,6 +944,17 @@ export default function GeneratePage() {
         subtitle={t('generate.subtitle')}
         actions={
           <div className="flex items-center gap-2">
+            {currentTask && (
+              <>
+                <span className="caption">#{currentTask.id}</span>
+                <StatusBadge status={currentTask.status} />
+              </>
+            )}
+            {currentTask?.error_msg && (
+              <span className="text-xs text-err max-w-[240px] truncate" title={currentTask.error_msg}>
+                {currentTask.error_msg}
+              </span>
+            )}
             {/* 0.17 P-I：取消（当前显示 task）+ 清空队列（所有 pending）始终在位，不可用时
                 disabled，放「清理显存」（DaemonControls）左边。 */}
             <button
@@ -961,50 +994,89 @@ export default function GeneratePage() {
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div
-            className={`card generate-sidebar relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden ${(catalogDrawerOpen || axisDrawerOpen) ? 'generate-sidebar--drawer-open' : ''}`}
+            className={`card generate-sidebar relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden ${attachedDrawerOpen ? 'generate-sidebar--drawer-open' : ''}`}
           >
-            {/* 内容区：三个 section 都常驻 DOM、用 display 切换（不卸载）—— 切 tab 不重渲不闪烁。
-                scrollbar-gutter: stable both-edges —— 两侧都常驻预留滚动条槽（槽在 padding 外侧、
-                靠 border），所以左右 18px 内边距恒对称，且滚动条出现时只占右槽、不挤压/不位移内容。 */}
             <div
-              className="flex flex-col flex-1 min-h-0 overflow-y-auto"
-              style={{ padding: 18, scrollbarGutter: 'stable both-edges' }}
+              className="shrink-0"
+              style={{ padding: 12, borderBottom: '1px solid var(--border-subtle)' }}
             >
+              <ViewModeTabs mode={mode} onModeChange={setMode} />
+            </div>
+            {/* 内容区：各 section 常驻 DOM，用 display 切换以保留状态。每个 section
+                自己管理滚动；XY 额外把局部 X/Y tab 固定在内容面板底部，使主 footer
+                的分区 tab 和生成按钮不因二级导航出现而移动。 */}
+            <div className="flex-1 min-h-0 overflow-hidden">
 
-            {/* XY 模式把轴与固定 LoRA 分成两个独立 tab；所有大编辑器均从侧栏向右展开。 */}
+            {/* XY：顶部是展开编辑器的上下文操作，中间滚动内容，底部是局部二级 tab。 */}
             <div
               id="generate-sidebar-panel-xy"
               role="tabpanel"
               aria-labelledby="generate-sidebar-tab-xy"
               hidden={sidebarTab !== 'xy' || mode !== 'xy'}
-              style={{ display: sidebarTab === 'xy' && mode === 'xy' ? undefined : 'none' }}
+              className="h-full min-h-0 flex-col"
+              style={{ display: sidebarTab === 'xy' && mode === 'xy' ? 'flex' : 'none' }}
             >
-              <SidebarXYAxes
-                xDraft={xDraft}
-                yDraft={visibleYDraft}
-                yEnabled={yDraft !== null}
-                activeAxis={activeAxis}
-                editorOpen={axisDrawerOpen}
-                onSelectAxis={setActiveAxis}
-                onEdit={() => setAxisDrawerOpen((open) => !open)}
-                onAxisChange={(axis, next) => axis === 'X' ? setXDraft(next) : setYDraft(next)}
-                onManualReorder={(axis) => setAxisOrderRevision((revision) => ({
-                  ...revision,
-                  [axis]: revision[axis] + 1,
-                }))}
-                onSwap={() => {
-                  setPrefs((p) => ({
-                    ...p,
-                    xDraft: p.yDraft ?? virtualYDraftFor(p.xDraft, p.steps),
-                    yDraft: p.xDraft,
-                  }))
-                  setAxisOrderRevision((revision) => ({
-                    X: revision.Y + 1,
-                    Y: revision.X + 1,
-                  }))
-                }}
-                fp8BaseModel={fp8BaseModel}
-              />
+              <div
+                className="flex-1 min-h-0 overflow-y-auto"
+                style={{ padding: 18, scrollbarGutter: 'stable both-edges' }}
+              >
+                <div
+                  className="sticky z-10 flex justify-end bg-surface pb-3"
+                  style={{ top: -18, marginTop: -18, paddingTop: 18 }}
+                >
+                  <ToolbarAction
+                    label={axisDrawerOpen
+                      ? t('generate.collapseCatalog')
+                      : t('generate.editAxis', { label: activeAxis })}
+                    icon={<SidebarToolIcon name={axisDrawerOpen ? 'collapse' : 'edit'} />}
+                    onClick={() => {
+                      const opening = !axisDrawerOpen
+                      setAxisDrawerOpen(opening)
+                      if (opening) {
+                        setCatalogDrawerOpen(false)
+                        setDatasetPickerOpen(false)
+                      }
+                    }}
+                    aria-expanded={axisDrawerOpen}
+                    aria-controls="xy-axis-editor-drawer"
+                  />
+                </div>
+                <SidebarXYAxes
+                  xDraft={xDraft}
+                  yDraft={visibleYDraft}
+                  yEnabled={yDraft !== null}
+                  activeAxis={activeAxis}
+                  onAxisChange={(axis, next) => axis === 'X' ? setXDraft(next) : setYDraft(next)}
+                  onManualReorder={(axis) => setAxisOrderRevision((revision) => ({
+                    ...revision,
+                    [axis]: revision[axis] + 1,
+                  }))}
+                  fp8BaseModel={fp8BaseModel}
+                />
+              </div>
+              <div
+                className="shrink-0 bg-surface"
+                data-testid="xy-axis-secondary-tabs"
+                style={{ borderTop: '1px solid var(--border-subtle)', padding: '10px 12px' }}
+              >
+                <XYAxisToolbar
+                  xDraft={xDraft}
+                  yDraft={visibleYDraft}
+                  activeAxis={activeAxis}
+                  onSelectAxis={setActiveAxis}
+                  onSwap={() => {
+                    setPrefs((p) => ({
+                      ...p,
+                      xDraft: p.yDraft ?? virtualYDraftFor(p.xDraft, p.steps),
+                      yDraft: p.xDraft,
+                    }))
+                    setAxisOrderRevision((revision) => ({
+                      X: revision.Y + 1,
+                      Y: revision.X + 1,
+                    }))
+                  }}
+                />
+              </div>
             </div>
 
             <div
@@ -1012,17 +1084,34 @@ export default function GeneratePage() {
               role="tabpanel"
               aria-labelledby="generate-sidebar-tab-lora"
               hidden={sidebarTab !== 'lora'}
-              style={{ display: sidebarTab === 'lora' ? undefined : 'none' }}
+              className="h-full overflow-y-auto"
+              style={{
+                display: sidebarTab === 'lora' ? undefined : 'none',
+                padding: 18,
+                scrollbarGutter: 'stable both-edges',
+              }}
             >
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="m-0 text-md font-semibold">LoRA</h3>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCatalogDrawerOpen((value) => !value)} aria-expanded={catalogDrawerOpen} aria-controls="lora-catalog-drawer" title={catalogDrawerOpen ? t('generate.closeCatalog') : t('generate.openCatalog')}>
-                  {catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
-                </button>
+              <div
+                className="sticky z-10 flex justify-end bg-surface pb-3"
+                style={{ top: -18, marginTop: -18, paddingTop: 18 }}
+              >
+                <ToolbarAction
+                  label={catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
+                  icon={<SidebarToolIcon name={catalogDrawerOpen ? 'collapse' : 'plus'} />}
+                  onClick={() => {
+                    const opening = !catalogDrawerOpen
+                    setCatalogDrawerOpen(opening)
+                    if (opening) {
+                      setAxisDrawerOpen(false)
+                      setDatasetPickerOpen(false)
+                    }
+                  }}
+                  aria-expanded={catalogDrawerOpen}
+                  aria-controls="lora-catalog-drawer"
+                />
               </div>
               <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
             </div>
-
 
             {/* tab=prompts */}
             <div
@@ -1030,32 +1119,32 @@ export default function GeneratePage() {
               role="tabpanel"
               aria-labelledby="generate-sidebar-tab-prompts"
               hidden={sidebarTab !== 'prompts'}
-              style={{ display: sidebarTab === 'prompts' ? undefined : 'none' }}
+              className="h-full overflow-y-auto"
+              style={{
+                display: sidebarTab === 'prompts' ? undefined : 'none',
+                padding: 18,
+                scrollbarGutter: 'stable both-edges',
+              }}
             >
-              <div className="flex items-baseline justify-between mb-3">
-                <h3 className="m-0 text-md font-semibold">{t('generate.prompts')}</h3>
-                {!datasetPickerOpen && (
-                  <button
-                    onClick={() => setDatasetPickerOpen(true)}
-                    className="btn btn-ghost text-xs text-fg-tertiary"
-                    title={t('generate.pickFromDatasetTitle')}
-                  >
-                    {t('generate.pickFromDataset')}
-                  </button>
-                )}
+              <div
+                className="sticky z-10 flex justify-end bg-surface pb-3"
+                style={{ top: -18, marginTop: -18, paddingTop: 18 }}
+              >
+                <ToolbarAction
+                  label={datasetPickerOpen ? t('generate.collapseCatalog') : t('generate.pickFromDataset')}
+                  icon={<SidebarToolIcon name={datasetPickerOpen ? 'collapse' : 'dataset'} />}
+                  onClick={() => {
+                    const opening = !datasetPickerOpen
+                    setDatasetPickerOpen(opening)
+                    if (opening) {
+                      setCatalogDrawerOpen(false)
+                      setAxisDrawerOpen(false)
+                    }
+                  }}
+                  aria-expanded={datasetPickerOpen}
+                  aria-controls="prompt-dataset-drawer"
+                />
               </div>
-              {datasetPickerOpen && (
-                <div className="mb-3">
-                  <PromptFromDatasetPicker
-                    value={datasetPick}
-                    onChange={setDatasetPick}
-                    onClose={() => {
-                      setDatasetPick(null)
-                      setDatasetPickerOpen(false)
-                    }}
-                  />
-                </div>
-              )}
               <label className="caption block mb-1">{t('generate.positive')}</label>
               <PromptList prompts={prompts} onChange={setPrompts} modelFamily={modelFamily} />
               <label className="caption block mb-1 mt-3">{t('generate.negative')}</label>
@@ -1068,9 +1157,13 @@ export default function GeneratePage() {
               role="tabpanel"
               aria-labelledby="generate-sidebar-tab-config"
               hidden={sidebarTab !== 'config'}
-              style={{ display: sidebarTab === 'config' ? undefined : 'none' }}
+              className="h-full overflow-y-auto"
+              style={{
+                display: sidebarTab === 'config' ? undefined : 'none',
+                padding: 18,
+                scrollbarGutter: 'stable both-edges',
+              }}
             >
-              <h3 className="m-0 text-md font-semibold mb-3">{t('generate.samplingParams')}</h3>
               <div className="flex flex-col gap-3">
                 <div>
                   <label className="caption block mb-1.5">{t('generate.aspect')}</label>
@@ -1254,6 +1347,23 @@ export default function GeneratePage() {
             ui={loraUi}
             onChange={setSelection}
           />
+          {datasetPickerOpen && sidebarTab === 'prompts' && (
+            <GenerateAttachedDrawer
+              id="prompt-dataset-drawer"
+              ariaLabel={t('generate.datasetPromptTitle')}
+              testId="prompt-dataset-drawer"
+            >
+              <PromptFromDatasetPicker
+                variant="drawer"
+                value={datasetPick}
+                onChange={setDatasetPick}
+                onClose={() => {
+                  setDatasetPick(null)
+                  setDatasetPickerOpen(false)
+                }}
+              />
+            </GenerateAttachedDrawer>
+          )}
           <XYAxisEditorDrawer
             open={axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy'}
             label={activeAxis}
@@ -1269,29 +1379,13 @@ export default function GeneratePage() {
               flex-1 min-h-0，XY 网格自带滚动），auto 会因一点点溢出触发幻影滚动条、吃掉
               10px 宽把 card 挤窄 → 结果卡与右栏之间凭空多出 10px margin（#2 根因）。 */}
           <div className="flex-1 min-w-0 flex flex-col overflow-hidden self-stretch">
-            <div className="card flex-1 flex flex-col" style={{ padding: 18, minHeight: 0 }}>
-              <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <span className="text-md font-semibold">{t('generate.results')}</span>
-                  {currentTask && (
-                    <>
-                      <span className="caption">#{currentTask.id}</span>
-                      <StatusBadge status={currentTask.status} />
-                    </>
-                  )}
-                  {currentTask?.error_msg && (
-                    <span className="text-xs text-err ml-1">{currentTask.error_msg}</span>
-                  )}
-                </div>
-                <ViewModeTabs mode={mode} onModeChange={setMode} />
-              </div>
-
+            <div className="card flex-1 flex flex-col overflow-hidden" style={{ padding: 0, minHeight: 0 }}>
               {/* 进度条已上移到页面 header 下（全宽细线），不再在结果卡内。 */}
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
                   {historyOverride.released || historyOverride.images.length === 0 ? (
                     /* 已释放：图不可取（temp 会话结束 / 文件手删），参数已回填。 */
-                    <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                    <div className="flex-1 grid place-items-center bg-sunken text-fg-tertiary text-sm">
                       {t('generate.releasedHint')}
                     </div>
                   ) : historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
@@ -1336,13 +1430,13 @@ export default function GeneratePage() {
                   {/* XY 网格保留 folder 作批次标识；单图 filename 与
                       ZoomableImage readout 重复，不再显示。 */}
                   {historyOverride.xyMeta && historyOverride.xyFolder && (
-                    <div className="text-xs text-fg-tertiary shrink-0">
+                    <div className="text-xs text-fg-tertiary shrink-0 px-3 pb-2">
                       {historyOverride.xyFolder}
                     </div>
                   )}
                 </div>
               ) : !currentTask ? (
-                <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                <div className="flex-1 grid place-items-center bg-sunken text-fg-tertiary text-sm">
                   {t('generate.emptyHint')}
                 </div>
               ) : mode === 'xy' && showCompareView ? (
@@ -1382,7 +1476,7 @@ export default function GeneratePage() {
                   </div>
                 </div>
               ) : samples.length === 0 ? (
-                <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                <div className="flex-1 grid place-items-center bg-sunken text-fg-tertiary text-sm">
                   {busy ? t('generate.waitingImages') : t('generate.finishedNoImages')}
                 </div>
               ) : (
@@ -1402,8 +1496,6 @@ export default function GeneratePage() {
               // pending 项：无内容，不选中（只可取消）。
             }}
             onCancel={cancelQueued}
-            onRefresh={history.refresh}
-            loading={history.loading}
           />
       </div>
 

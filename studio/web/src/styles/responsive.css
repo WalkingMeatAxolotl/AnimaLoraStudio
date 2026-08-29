@@ -31,7 +31,8 @@
 }
 
 @media (max-width: 1279px) {
-  .generate-attached-drawer {
+  /* 双类选择器确保覆盖组件上的 Tailwind `absolute` / `z-20` 工具类。 */
+  .generate-attached-drawer.generate-attached-drawer {
     position: fixed;
     z-index: 50;
     inset: 12px;
