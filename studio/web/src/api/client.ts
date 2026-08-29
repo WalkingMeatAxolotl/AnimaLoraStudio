@@ -1583,8 +1583,7 @@ export interface LoraCatalogQuery {
 }
 
 /** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。
- *  设了 xy_matrix 时后端强制 prompts 单条 + count=1（避免排列爆炸）。
- *  v1 不支持 lora_path 轴（缺 unhook 接口，留 v2）。 */
+ *  设了 xy_matrix 时后端强制 prompts 单条 + count=1（避免排列爆炸）。 */
 export type XYAxisType =
   | 'lora_scale'
   | 'steps'
@@ -1595,7 +1594,7 @@ export interface XYAxisSpec {
   axis: XYAxisType
   /** 类型按 axis 派生：steps→int；lora_scale/cfg_scale→number；lora_ckpt→string(path) */
   values: Array<number | string>
-  /** axis=lora_scale / lora_ckpt 时必填 —— 绑定到 lora_configs 哪一项 */
+  /** 仅 axis=lora_ckpt 时必填，用来指定要替换 lora_configs 中哪一项的 path。 */
   lora_index?: number | null
 }
 

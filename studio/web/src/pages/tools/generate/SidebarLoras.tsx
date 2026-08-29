@@ -1,3 +1,20 @@
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LoraEntry } from '../../../api/client'
@@ -8,6 +25,118 @@ import {
   serializeLoraText,
   type LoraUiState,
 } from './loraSelection'
+
+export function reorderLoraSelection(
+  loras: LoraEntry[],
+  ui: LoraUiState[],
+  activeId: string,
+  overId: string,
+): { loras: LoraEntry[]; ui: LoraUiState[] } | null {
+  const ids = loras.map((_, index) => ui[index]?.id ?? `missing-${index}`)
+  const from = ids.indexOf(activeId)
+  const to = ids.indexOf(overId)
+  if (from < 0 || to < 0 || from === to) return null
+  return {
+    loras: arrayMove(loras, from, to),
+    ui: arrayMove(ui, from, to),
+  }
+}
+
+function SortableLoraCard({
+  id,
+  entry,
+  state,
+  onEnabledChange,
+  onWeightChange,
+  onRemove,
+}: {
+  id: string
+  entry: LoraEntry
+  state: LoraUiState | undefined
+  onEnabledChange: (enabled: boolean) => void
+  onWeightChange: (scale: number) => void
+  onRemove: () => void
+}) {
+  const { t } = useTranslation()
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id })
+  const missing = !entry.path.trim()
+  const enabled = !missing && state?.enabled !== false
+  const name = loraTextName(entry) || t('generate.unknownLora')
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`lora-sortable-card group rounded-md border p-2.5 transition-[background-color,border-color,box-shadow,opacity] ${
+        missing
+          ? 'border-err bg-err-soft'
+          : isDragging
+            ? 'border-accent bg-overlay shadow-md'
+            : 'border-subtle bg-overlay'
+      }`}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : enabled || missing ? 1 : 0.62,
+        zIndex: isDragging ? 1 : undefined,
+      }}
+      data-lora-id={id}
+    >
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={missing}
+          onPointerDown={(event) => event.stopPropagation()}
+          onChange={(event) => onEnabledChange(event.target.checked)}
+          title={t('generate.loraEnabled')}
+          aria-label={`${t('generate.loraEnabled')} ${name}`}
+          className="shrink-0"
+        />
+        <div
+          className="flex-1 min-w-0 cursor-grab active:cursor-grabbing select-none touch-none"
+          title={t('generate.axisDrag')}
+          aria-label={`${t('generate.axisDrag')} ${name}`}
+          {...attributes}
+          {...listeners}
+        >
+          <div className="font-mono text-xs text-fg-primary truncate" title={name}>{name}</div>
+          {missing && <div className="text-2xs text-err truncate mt-0.5">{t('generate.loraNotFoundHint')}</div>}
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm text-err shrink-0 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={onRemove}
+          title={t('generate.removeLora')}
+          aria-label={`${t('generate.removeLora')} ${name}`}
+        >
+          ×
+        </button>
+        {!missing && (
+          <input
+            type="number"
+            min={0}
+            max={1.5}
+            step={0.05}
+            value={entry.scale}
+            onPointerDown={(event) => event.stopPropagation()}
+            onChange={(event) => onWeightChange(Number(event.target.value))}
+            aria-label={`${t('generate.weightValue')} ${name}`}
+            className="input input-mono text-xs shrink-0"
+            style={{ width: 70, padding: '3px 5px' }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function SidebarLoras({
   loras,
@@ -23,6 +152,11 @@ export default function SidebarLoras({
   const [textError, setTextError] = useState<string | null>(null)
   const textFocused = useRef(false)
   const summary = useMemo(() => serializeLoraText(loras, ui), [loras, ui])
+  const ids = loras.map((_, index) => ui[index]?.id ?? `missing-${index}`)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   useEffect(() => {
     if (!textFocused.current) setText(summary)
@@ -34,6 +168,12 @@ export default function SidebarLoras({
 
   const removeEntry = (index: number) => {
     onChange(loras.filter((_, i) => i !== index), ui.filter((_, i) => i !== index))
+  }
+
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over) return
+    const next = reorderLoraSelection(loras, ui, String(active.id), String(over.id))
+    if (next) onChange(next.loras, next.ui)
   }
 
   const applyText = () => {
@@ -80,61 +220,25 @@ export default function SidebarLoras({
         </div>
       )}
 
-      {loras.map((entry, index) => {
-        const state = ui[index]
-        const id = state?.id ?? `missing-${index}`
-        const missing = !entry.path.trim()
-        const enabled = !missing && state?.enabled !== false
-        const name = loraTextName(entry) || t('generate.unknownLora')
-        return (
-          <div
-            key={id}
-            className={`rounded-md border p-2.5 transition-all ${missing ? 'border-err bg-err-soft' : 'border-subtle bg-overlay'}`}
-            style={{ opacity: enabled || missing ? 1 : 0.62 }}
-            data-lora-id={id}
-          >
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={enabled}
-                disabled={missing}
-                onChange={(event) => onChange(loras, ui.map((item, i) => (
-                  i === index ? { ...item, enabled: event.target.checked } : item
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+          <div className="flex flex-col gap-2" data-testid="current-lora-list">
+            {loras.map((entry, index) => (
+              <SortableLoraCard
+                key={ids[index]}
+                id={ids[index]}
+                entry={entry}
+                state={ui[index]}
+                onEnabledChange={(enabled) => onChange(loras, ui.map((item, i) => (
+                  i === index ? { ...item, enabled } : item
                 )))}
-                title={t('generate.loraEnabled')}
-                aria-label={`${t('generate.loraEnabled')} ${name}`}
-                className="shrink-0"
+                onWeightChange={(scale) => updateEntry(index, { scale })}
+                onRemove={() => removeEntry(index)}
               />
-              <div className="flex-1 min-w-0">
-                <div className="font-mono text-xs text-fg-primary truncate" title={name}>{name}</div>
-                {missing && <div className="text-2xs text-err truncate mt-0.5">{t('generate.loraNotFoundHint')}</div>}
-              </div>
-              {!missing && (
-                <input
-                  type="number"
-                  min={0}
-                  max={1.5}
-                  step={0.05}
-                  value={entry.scale}
-                  onChange={(event) => updateEntry(index, { scale: Number(event.target.value) })}
-                  aria-label={`${t('generate.weightValue')} ${name}`}
-                  className="input input-mono text-xs shrink-0"
-                  style={{ width: 70, padding: '3px 5px' }}
-                />
-              )}
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm text-err shrink-0"
-                onClick={() => removeEntry(index)}
-                title={t('generate.removeLora')}
-                aria-label={`${t('generate.removeLora')} ${name}`}
-              >
-                ×
-              </button>
-            </div>
+            ))}
           </div>
-        )
-      })}
+        </SortableContext>
+      </DndContext>
     </div>
   )
 }

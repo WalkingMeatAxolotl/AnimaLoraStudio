@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
 import type { LoraEntry } from '../../../api/client'
-import SidebarLoras from './SidebarLoras'
+import SidebarLoras, { reorderLoraSelection } from './SidebarLoras'
 import type { LoraUiState } from './loraSelection'
 
 function Harness() {
@@ -59,9 +59,36 @@ describe('SidebarLoras', () => {
     expect(weight).toHaveAttribute('min', '0')
     expect(weight).toHaveAttribute('max', '1.5')
     expect(weight).toHaveAttribute('step', '0.05')
+    const remove = screen.getByRole('button', { name: /移除 LoRA ink/ })
+    expect(remove).toHaveClass('opacity-0', 'pointer-events-none', 'group-hover:opacity-100', 'group-hover:pointer-events-auto', 'group-focus-within:opacity-100')
+    expect(remove.nextElementSibling).toBe(weight)
+
+    expect(screen.getByRole('button', { name: '拖动调整顺序 ink' })).toHaveClass('cursor-grab')
 
     fireEvent.blur(textarea)
     await user.click(screen.getByRole('checkbox', { name: /启用 LoRA ink/ }))
     await waitFor(() => expect(textarea).toHaveValue(''))
+  })
+
+  it('reorders the LoRA entries and their UI sidecars together', () => {
+    const loras: LoraEntry[] = [
+      { path: 'D:/ComfyUI/models/loras/styles/ink.safetensors', scale: 1 },
+      { path: 'D:/ComfyUI/models/loras/styles/watercolor.safetensors', scale: 0.8 },
+    ]
+    const ui: LoraUiState[] = [
+      { id: 'ink', enabled: true },
+      { id: 'watercolor', enabled: false },
+    ]
+
+    const result = reorderLoraSelection(loras, ui, 'ink', 'watercolor')
+
+    expect(result?.loras.map((entry) => entry.path)).toEqual([
+      'D:/ComfyUI/models/loras/styles/watercolor.safetensors',
+      'D:/ComfyUI/models/loras/styles/ink.safetensors',
+    ])
+    expect(result?.ui).toEqual([
+      { id: 'watercolor', enabled: false },
+      { id: 'ink', enabled: true },
+    ])
   })
 })
