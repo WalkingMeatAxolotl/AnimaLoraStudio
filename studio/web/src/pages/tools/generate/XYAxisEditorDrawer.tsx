@@ -537,7 +537,7 @@ export default function XYAxisEditorDrawer({
           </select>
           <button
             type="button"
-            className="btn btn-ghost btn-sm xl:hidden"
+            className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
             onClick={onClose}
             title={t('common.close')}
             aria-label={t('common.close')}

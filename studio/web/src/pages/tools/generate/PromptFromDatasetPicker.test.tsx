@@ -124,6 +124,39 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     expect(src).not.toContain('/versions/12/thumb')
   })
 
+  it('选择行返回来源，当前行再点反选；drawer 无只读框且列表/预览平分剩余高度', async () => {
+    vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
+    vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
+    vi.spyOn(api, 'listCaptionsFull').mockResolvedValue({
+      folder: null,
+      items: [cap('first.png', 'tag one'), cap('second.png', 'tag two')],
+    })
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    const view = render(
+      <PromptFromDatasetPicker variant="drawer" value={null} onChange={onChange} onClose={vi.fn()} />,
+    )
+    await screen.findByRole('option', { name: 'projA' })
+    await user.selectOptions(screen.getByLabelText('选择项目'), '1')
+    await screen.findByText('first.png')
+
+    await user.click(screen.getByText('first.png'))
+    const firstPick = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0]
+    expect(firstPick).toMatchObject({ projectId: 1, versionId: 11, name: 'first.png', tags: ['tag one'] })
+
+    view.rerender(
+      <PromptFromDatasetPicker variant="drawer" value={firstPick} onChange={onChange} onClose={vi.fn()} />,
+    )
+    await user.click(screen.getByText('first.png'))
+    expect(onChange).toHaveBeenLastCalledWith(null)
+
+    const picker = screen.getByTestId('prompt-dataset-picker')
+    expect(picker).toHaveClass('overflow-hidden')
+    expect(screen.getByTestId('dataset-caption-list')).toHaveClass('flex-1', 'min-h-0', 'overflow-y-auto')
+    expect(screen.getByTestId('dataset-image-preview')).toHaveClass('flex-1', 'min-h-0', 'overflow-hidden')
+    expect(screen.queryByLabelText(/已选 caption 的 tags/)).not.toBeInTheDocument()
+  })
+
   it('点击底部大图预览放大成全屏 modal（复用 ImagePreviewModal，请求 1600 大图）', async () => {
     vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
     vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)

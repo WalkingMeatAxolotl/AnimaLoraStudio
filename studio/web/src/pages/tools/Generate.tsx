@@ -92,6 +92,8 @@ const DEFAULT_GENERATE_PREFS = {
   xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
   yDraft: null as XYAxisDraft | null,
   datasetPick: null as DatasetPick | null,
+  // caption 来源身份与实际生成文本分离：前者用于高亮/图片定位，后者可手工编辑。
+  datasetPrompt: '',
   // 底模 / TE 的显式覆盖也持久化（用户反馈：切页面被重置回全局默认太烦）。
   // null = 跟随设置页 selected / selected_te（仍是默认行为）。
   baseModel: null as string | null,
@@ -145,9 +147,13 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
     }
   }
   const { loras: _legacy, count: _count, ...rest } = anyP  // count 已改瞬态，丢弃老持久值
+  const datasetPrompt = typeof anyP.datasetPrompt === 'string'
+    ? anyP.datasetPrompt
+    : (anyP.datasetPick?.tags ?? []).join(', ')
   const merged = {
     ...DEFAULT_GENERATE_PREFS,
     ...rest,
+    datasetPrompt,
     singleLoras,
     singleLoraUi,
     xyLoras,
@@ -200,14 +206,14 @@ export default function GeneratePage() {
   // 之后读到的就是干净的 singleLoras/xyLoras 双桶 shape。
   useEffect(() => {
     const raw = rawPrefs as Partial<GeneratePrefs> & { loras?: unknown }
-    if ('loras' in raw || !('singleLoras' in raw) || !('singleLoraUi' in raw) || !('xyLoras' in raw) || !('xyFixedLoras' in raw) || !('xyFixedLoraUi' in raw)) {
+    if ('loras' in raw || !('singleLoras' in raw) || !('singleLoraUi' in raw) || !('xyLoras' in raw) || !('xyFixedLoras' in raw) || !('xyFixedLoraUi' in raw) || typeof raw.datasetPrompt !== 'string') {
       setRawPrefs(normalizePrefs(rawPrefs))
     }
     // 仅 mount 跑一次：迁移是幂等的，rawPrefs 后续变化不需要重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { mode, modelFamily, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
+  const { mode, modelFamily, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick, datasetPrompt } = prefs
   // single 与 XY 的固定 LoRA 完全隔离；旧 xyLoras 仅在 normalizePrefs 中迁移，新的编辑器不再使用它。
   const loras = mode === 'single' ? prefs.singleLoras : prefs.xyFixedLoras
   const loraUi = mode === 'single' ? prefs.singleLoraUi : prefs.xyFixedLoraUi
@@ -288,7 +294,12 @@ export default function GeneratePage() {
     [steps, xDraft],
   )
   const visibleYDraft = yDraft ?? virtualYDraft
-  const setDatasetPick = (datasetPick: DatasetPick | null) => setPrefs((p) => ({ ...p, datasetPick }))
+  const setDatasetPrompt = (datasetPrompt: string) => setPrefs((p) => ({ ...p, datasetPrompt }))
+  const setDatasetPick = (datasetPick: DatasetPick | null) => setPrefs((p) => ({
+    ...p,
+    datasetPick,
+    datasetPrompt: datasetPick ? datasetPick.tags.join(', ') : '',
+  }))
 
   // 双图对比：选中的 2 个 sample 索引（从 PreviewXYGrid cell click 收集）
   const [selectedIndices, setSelectedIndices] = useState<number[]>([])
@@ -640,13 +651,6 @@ export default function GeneratePage() {
     if (applied.unresolvedLoraCount > 0) {
       toast(t('generate.historyLorasMissing', { n: applied.unresolvedLoraCount }), 'info')
     }
-    // datasetPick 非空 → 自动展开 picker 让用户看到选中行 + tags 文本（picker
-    // 是 closed by default，不展开的话 prompts[0] 经常是 ""（用户全靠 dataset
-    // tags 当 prompt 的常见场景），UI 表面看就像"啥都没回填"）。fallback 路径
-    // 已经把 tags 灌到 prompts[0] + datasetPick=null，所以这里只看 applied 即可。
-    if (applied.datasetPick) {
-      setDatasetPickerOpen(true)
-    }
     // 底模不在 prefs 里（独立 ephemeral state）→ 单独回填。
     setBaseModel(applied.baseModel)
     const restoredXDraft = applied.xDraft && applied.xDraft.axis === 'lora_ckpt'
@@ -678,6 +682,7 @@ export default function GeneratePage() {
         scheduler: applied.scheduler,
         seed: applied.seed,
         datasetPick: applied.datasetPick,
+        datasetPrompt: applied.datasetPrompt,
         // 0.17 P-I：batch size 是瞬态值，点历史图**不回填**（用户设的值保持不变）。
       }
       if (applied.mode === 'single') {
@@ -727,9 +732,7 @@ export default function GeneratePage() {
   }, [deepLinkTaskId, history.loading, history.entries])
 
   const handleGenerate = async () => {
-    const datasetSuffix = datasetPick && datasetPick.tags.length > 0
-      ? datasetPick.tags.join(', ')
-      : ''
+    const datasetSuffix = datasetPrompt.trim()
     if (!prompts.some((p) => p.trim()) && !datasetSuffix) {
       toast(t('generate.promptOrDatasetRequired'), 'error')
       return
@@ -818,6 +821,7 @@ export default function GeneratePage() {
             }
           : null,
         dataset_pick: datasetPick,
+        dataset_prompt: datasetPrompt,
       }
       // 0.17 P-I：count 现在 = **batch size**（每次入队的 task 数）。single 拆成 batch 个
       // task（各出 1 张、seed 递增区分）→ 在右栏时间线逐个排队；xy 一次一个矩阵（batch 忽略）。
@@ -1149,6 +1153,26 @@ export default function GeneratePage() {
               <PromptList prompts={prompts} onChange={setPrompts} modelFamily={modelFamily} />
               <label className="caption block mb-1 mt-3">{t('generate.negative')}</label>
               <NegPromptInput value={negPrompt} onChange={setNegPrompt} modelFamily={modelFamily} />
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <label className="caption block">{t('generate.datasetPromptLabel')}</label>
+                {(datasetPick || datasetPrompt) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
+                    title={t('generate.clearDatasetPromptTitle')}
+                    onClick={() => setDatasetPick(null)}
+                  >
+                    {t('generate.clearDatasetPick')}
+                  </button>
+                )}
+              </div>
+              <PromptList
+                prompts={[datasetPrompt]}
+                onChange={(next) => setDatasetPrompt(next[0] ?? '')}
+                modelFamily={modelFamily}
+                placeholder={t('generate.datasetPromptPlaceholder')}
+                ariaLabel={t('generate.datasetPromptAria')}
+              />
             </div>
 
             {/* tab=config */}
@@ -1357,10 +1381,7 @@ export default function GeneratePage() {
                 variant="drawer"
                 value={datasetPick}
                 onChange={setDatasetPick}
-                onClose={() => {
-                  setDatasetPick(null)
-                  setDatasetPickerOpen(false)
-                }}
+                onClose={() => setDatasetPickerOpen(false)}
               />
             </GenerateAttachedDrawer>
           )}

@@ -95,6 +95,17 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('XYAxisEditorDrawer', () => {
+  it('keeps the top-right close button visible and closes the drawer', async () => {
+    const user = userEvent.setup()
+    render(<Harness initial={{ axis: 'steps', raw: '20, 25', loraIndex: null }} />)
+
+    const closeButton = screen.getByRole('button', { name: '关闭' })
+    expect(closeButton).not.toHaveClass('xl:hidden')
+    await user.click(closeButton)
+
+    expect(screen.queryByTestId('xy-axis-editor-drawer')).not.toBeInTheDocument()
+  })
+
   it('edits a numeric axis through one direct input and generates an integer range', async () => {
     const user = userEvent.setup()
     render(<Harness initial={{ axis: 'steps', raw: '20, 25', loraIndex: null }} />)

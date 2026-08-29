@@ -174,12 +174,16 @@ def prewarm_resource_hashes(
 
 
 def _effective_prompt_from_snapshot(params: dict[str, Any]) -> str:
-    """兼容无 task manifest 的旧客户端：按前端提交规则合并 picker tags。"""
+    """兼容无 task manifest：优先使用新字段，缺失时回退旧 picker tags。"""
     raw_prompts = params.get("prompts") or [""]
     prompts = [str(x).strip() for x in raw_prompts if str(x).strip()]
-    pick = params.get("dataset_pick")
-    tags = pick.get("tags") if isinstance(pick, dict) else None
-    suffix = ", ".join(str(x) for x in tags if str(x).strip()) if isinstance(tags, list) else ""
+    dataset_prompt = params.get("dataset_prompt")
+    if isinstance(dataset_prompt, str):
+        suffix = dataset_prompt.strip()
+    else:
+        pick = params.get("dataset_pick")
+        tags = pick.get("tags") if isinstance(pick, dict) else None
+        suffix = ", ".join(str(x) for x in tags if str(x).strip()) if isinstance(tags, list) else ""
     if prompts:
         return f"{prompts[0]}, {suffix}" if suffix else prompts[0]
     return suffix

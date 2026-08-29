@@ -37,14 +37,12 @@ export interface DatasetPick {
   tags: string[]
 }
 
-/** 从训练集 caption 里选一条作为生成时的 prompt 后缀（不写入 sidebar 「正向」textarea）。
+/** 从训练集 caption 里选一条，向父组件提供来源身份与原始 tags。
  *
  * 受控单选：
- * - 父组件控 open / close（× 触发 onClose）；生成不自动关
- * - 选中状态 (DatasetPick) 由父组件持有；**关闭 picker 时父组件应同时清空 value**，
- *   否则 datasetPick.tags 会继续被 handleGenerate 拼到 prompt，用户以为没选还在生效
+ * - 父组件控制 open / close；关闭只收起，不改变 value
  * - 点 list 行：未选 → 激活；已选同一行 → 取消（反选）
- * - 选中 caption 的 tags 在底部只读 textarea 展示，不写进上层 prompt 框
+ * - 实际生成文本由父组件单独持久化并允许编辑，本组件不再展示只读 tags 框
  *
  * pid/vid 是「浏览中」的状态，跟 value 解耦 —— 浏览时切别的 project/version 看
  * 不影响 value；用 localStorage 持久化跨 session 记忆浏览位置。
@@ -174,8 +172,6 @@ export default function PromptFromDatasetPicker({
     return value.name
   }, [value, loaded])
 
-  const tagsText = value ? value.tags.join(', ') : ''
-
   // 底部大图预览源：优先悬停行（浏览中 pid/vid），其次已选 value（用 value 自带
   // 的 project/version/folder，跟浏览位置解耦）。旧快照的 value 没 folder → 不渲染。
   const hoveredCaption = hoveredKey
@@ -222,13 +218,13 @@ export default function PromptFromDatasetPicker({
         已选场景下则会回落成放大 value 的另一张图。移出整个 picker 才清空、回落到 value。 */}
     <div
       className={variant === 'drawer'
-        ? 'flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-3'
+        ? 'flex h-full min-h-0 flex-col gap-2 overflow-hidden p-3'
         : 'rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2'}
       data-testid="prompt-dataset-picker"
       onMouseLeave={() => setHoveredKey(null)}
     >
       {/* header */}
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <span className="text-xs font-semibold text-fg-secondary shrink-0">{t('generate.datasetPromptTitle')}</span>
         <span className="flex-1" />
         {value && (
@@ -251,7 +247,7 @@ export default function PromptFromDatasetPicker({
       </div>
 
       {/* project / version 选择 */}
-      <div className="flex gap-2">
+      <div className="flex shrink-0 gap-2">
         <select
           className="input text-xs flex-1"
           value={pid ?? ''}
@@ -280,7 +276,7 @@ export default function PromptFromDatasetPicker({
       {/* search */}
       <input
         type="text"
-        className="input text-xs"
+        className="input shrink-0 text-xs"
         placeholder={t('generate.searchFilenameTag')}
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -291,8 +287,11 @@ export default function PromptFromDatasetPicker({
 
       {/* caption 列表 */}
       <div
-        className="flex flex-col gap-px overflow-y-auto"
-        style={{ maxHeight: 320 }}
+        className={variant === 'drawer'
+          ? 'flex min-h-0 flex-1 flex-col gap-px overflow-y-auto'
+          : 'flex flex-col gap-px overflow-y-auto'}
+        data-testid="dataset-caption-list"
+        style={variant === 'drawer' ? undefined : { maxHeight: 320 }}
       >
         {loading && <div className="text-2xs text-fg-tertiary">{t('common.loading')}</div>}
         {!loading && pid && vid && captions.length === 0 && !error && (
@@ -341,45 +340,35 @@ export default function PromptFromDatasetPicker({
         })}
       </div>
 
-      <label className="caption block mt-1">{t('generate.selectedDatasetTagsLabel')}</label>
-      {/* 上：训练集大图（悬停行 / 已选行），跟生成结果肉眼比对；下：只读 tags。
-          object-contain 看全图（大预览惯例，对齐 TagEdit / Preprocess），不裁切。 */}
-      <div className="flex flex-col gap-2">
-        <div
-          className="rounded border border-subtle bg-sunken overflow-hidden flex items-center justify-center"
-          style={{ height: 240 }}
-        >
-          {previewSrc ? (
-            <button
-              type="button"
-              onClick={() => previewMeta && setZoomMeta(previewMeta)}
-              className="w-full h-full flex items-center justify-center border-none bg-transparent p-0 cursor-zoom-in"
-              title={t('generate.datasetPreviewZoomTitle')}
-              aria-label={t('generate.datasetPreviewZoomTitle')}
-            >
-              <img
-                src={previewSrc}
-                alt={t('generate.datasetPreviewAlt')}
-                loading="lazy"
-                className="w-full h-full object-contain"
-                onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
-              />
-            </button>
-          ) : (
-            <span className="text-2xs text-fg-tertiary px-1.5 text-center leading-snug">
-              {t('generate.datasetPreviewEmpty')}
-            </span>
-          )}
-        </div>
-        {/* 最小高度对齐「正向」(PromptList rows=5 text-sm)：5×20 行高 + .input 14 padding + 2 边框 = 116 */}
-        <textarea
-          className="input w-full font-mono text-xs resize-y"
-          style={{ minHeight: 116 }}
-          value={tagsText}
-          readOnly
-          placeholder={t('generate.selectedDatasetTagsPlaceholder')}
-          aria-label={t('generate.selectedDatasetTagsAria')}
-        />
+      {/* 训练集大图与列表在 drawer 中各占一份剩余高度；两区内部独立滚动/缩放。 */}
+      <div
+        className={variant === 'drawer'
+          ? 'flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded border border-subtle bg-sunken'
+          : 'flex items-center justify-center overflow-hidden rounded border border-subtle bg-sunken'}
+        style={variant === 'drawer' ? undefined : { height: 240 }}
+        data-testid="dataset-image-preview"
+      >
+        {previewSrc ? (
+          <button
+            type="button"
+            onClick={() => previewMeta && setZoomMeta(previewMeta)}
+            className="w-full h-full flex items-center justify-center border-none bg-transparent p-0 cursor-zoom-in"
+            title={t('generate.datasetPreviewZoomTitle')}
+            aria-label={t('generate.datasetPreviewZoomTitle')}
+          >
+            <img
+              src={previewSrc}
+              alt={t('generate.datasetPreviewAlt')}
+              loading="lazy"
+              className="w-full h-full object-contain"
+              onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
+            />
+          </button>
+        ) : (
+          <span className="text-2xs text-fg-tertiary px-1.5 text-center leading-snug">
+            {t('generate.datasetPreviewEmpty')}
+          </span>
+        )}
       </div>
     </div>
     {zoomMeta && (

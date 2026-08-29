@@ -84,6 +84,8 @@ export interface GenerateParamsSnapshot {
   /** 训练集 caption picker 选择（保留 picker UI 上下文）。
    *  name 是相对路径（如 "5_concept/0001.txt"），不含本地绝对路径。 */
   dataset_pick?: DatasetPick | null
+  /** 用户可编辑、实际参与生成的训练集提示词。老快照缺失时从 dataset_pick.tags 迁移。 */
+  dataset_prompt?: string
   /** XY cell PNG 专有；composite / single PNG 永远是 undefined。
    *  forward-compat 字段，老代码读不到不影响 v2 migrate 透传。 */
   xy_origin?: XYCellOrigin | null
@@ -158,6 +160,7 @@ export interface AppliedSnapshot {
   /** 当时选用的底模；null = 跟随设置默认 */
   baseModel: string | null
   datasetPick: DatasetPick | null
+  datasetPrompt: string
   /** 按 mode 二选一灌入 prefs.singleLoras / prefs.xyLoras */
   loras: LoraEntry[]
   /** 仅 xy 模式回填；single 时为 undefined（不动 prev.xDraft/yDraft） */
@@ -165,18 +168,6 @@ export interface AppliedSnapshot {
   yDraft?: SnapshotXYAxis | null
   /** resolve 失败的 LoRA 数量（>0 时调用方应 toast 提示重选） */
   unresolvedLoraCount: number
-}
-
-/** dataset_pick 失败兜底：把 tags 追加到第一条 prompt 末尾。
- *  和 handleGenerate 里 `datasetSuffix` 拼法保持一致（join(', ')），避免视觉差异。 */
-function mergeTagsIntoFirstPrompt(prompts: string[], tags: string[]): string[] {
-  if (tags.length === 0) return prompts
-  const suffix = tags.join(', ')
-  const first = (prompts[0] ?? '').trimEnd()
-  // 已经以 tags 结尾（用户在前一次回填后又点了一次同 entry）→ 不重复追加
-  if (first.endsWith(suffix)) return prompts
-  const sep = first === '' ? '' : (first.endsWith(',') ? ' ' : ', ')
-  return [`${first}${sep}${suffix}`, ...prompts.slice(1)]
 }
 
 /** 快照里的 sampler/scheduler 归并到合法值 —— 老快照缺字段、或外部 PNG 带了
@@ -204,15 +195,14 @@ export async function applySnapshot(
   // compare 视图回填到 xy（compare 是 xy 子视图，无 selectedIndices 不直接进）
   const mode: 'single' | 'xy' = snap.mode === 'single' ? 'single' : 'xy'
 
-  // dataset_pick fallback：snap 存了 dataset_pick 但 project 在当前机器上没了
-  // （project 被删 / 跨机器）→ tags 拼进 prompts[0]，不再回填 picker
-  // （datasetPick=null）。用户能在正向 textarea 里直接看到具体内容，否则 picker
-  // 关着 tags 不可见、又会偷偷在 handleGenerate 里拼一次。projectExists 由调用方
-  // 用 catalog 已加载的项目列表判定。
-  let prompts = snap.prompts
+  // 新快照直接恢复用户编辑后的文本；老快照缺字段时从来源 tags 迁移。
+  // 来源 project 不存在只清身份，文本仍保留在 sidebar，不再污染正向 prompts。
+  const prompts = snap.prompts
   let datasetPick = snap.dataset_pick ?? null
-  if (datasetPick && datasetPick.tags.length > 0 && !projectExists(datasetPick.projectId)) {
-    prompts = mergeTagsIntoFirstPrompt(prompts, datasetPick.tags)
+  const datasetPrompt = typeof snap.dataset_prompt === 'string'
+    ? snap.dataset_prompt
+    : (datasetPick?.tags ?? []).join(', ')
+  if (datasetPick && !projectExists(datasetPick.projectId)) {
     datasetPick = null
   }
 
@@ -233,6 +223,7 @@ export async function applySnapshot(
     seed: snap.seed,
     baseModel: snap.base_model ?? null,
     datasetPick,
+    datasetPrompt,
     loras: resolved,
     unresolvedLoraCount: unresolved,
   }

@@ -238,6 +238,105 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
   })
 
+  it('训练集提示词位于正/负向下方，可编辑、持久化并进入 payload/快照；关闭 drawer 保留内容', async () => {
+    const pick = {
+      projectId: 1, versionId: 11, name: '0001.png', folder: '2_data', tags: ['original', 'tags'],
+    }
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      prompts: ['base prompt'], datasetPick: pick, datasetPrompt: 'original, tags',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+
+    const datasetInput = screen.getByRole('textbox', { name: '可编辑的训练集提示词' })
+    const negativeLabel = screen.getByText('负向', { selector: 'label' })
+    const datasetLabel = screen.getByText('训练集提示词', { selector: 'label' })
+    expect(negativeLabel.compareDocumentPosition(datasetLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(datasetInput).toHaveValue('original, tags')
+
+    await user.click(screen.getByRole('button', { name: '从训练集选取' }))
+    const drawer = screen.getByTestId('prompt-dataset-drawer')
+    await user.click(drawer.querySelector('button[aria-label="关闭"]') as HTMLButtonElement)
+    expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
+    expect(datasetInput).toHaveValue('original, tags')
+
+    await user.clear(datasetInput)
+    await user.type(datasetInput, 'manually edited')
+    await user.click(screen.getByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.prompts).toEqual(['base prompt, manually edited'])
+    expect((lastEnqueueBody!.params_snapshot as Record<string, unknown>).dataset_prompt).toBe('manually edited')
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.datasetPrompt).toBe('manually edited')
+    expect(stored.datasetPick).toEqual(pick)
+  })
+
+  it('drawer 选择另一 caption 覆盖可编辑字段，再点当前行同时清空身份与文本', async () => {
+    const previousImpl = fetchMock.getMockImplementation()!
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/projects') {
+        return jsonOk({ items: [{ id: 1, slug: 'p', title: 'Project' }] })
+      }
+      if (url === '/api/projects/1') {
+        return jsonOk({ id: 1, slug: 'p', title: 'Project', versions: [{ id: 11, label: 'v1' }] })
+      }
+      if (url === '/api/projects/1/versions/11/captions?full=1') {
+        return jsonOk({ folder: null, items: [
+          { name: 'first.png', folder: '2_data', tag_count: 1, tags_preview: ['first'], has_caption: true, tags: ['first tag'], format: 'txt' },
+          { name: 'second.png', folder: '2_data', tag_count: 1, tags_preview: ['second'], has_caption: true, tags: ['second tag'], format: 'txt' },
+        ] })
+      }
+      return previousImpl(url, init)
+    })
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      datasetPick: { projectId: 1, versionId: 11, name: 'first.png', folder: '2_data', tags: ['first tag'] },
+      datasetPrompt: 'hand edited first',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+    await user.click(screen.getByRole('button', { name: '从训练集选取' }))
+    await screen.findByText('second.png')
+
+    await user.click(screen.getByText('second.png'))
+    const datasetInput = screen.getByRole('textbox', { name: '可编辑的训练集提示词' })
+    expect(datasetInput).toHaveValue('second tag')
+    await user.click(screen.getByText('second.png'))
+    expect(datasetInput).toHaveValue('')
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.datasetPick).toBeNull()
+      expect(stored.datasetPrompt).toBe('')
+    })
+  })
+
+  it('旧 prefs 从 datasetPick.tags 迁移 datasetPrompt，显式空字符串保持为空', async () => {
+    const pick = { projectId: 1, versionId: 11, name: '0001.png', tags: ['old', 'tags'] }
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({ datasetPick: pick }))
+    const first = setup()
+    const user = userEvent.setup()
+    await openPromptsTab(user)
+    expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('old, tags')
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.datasetPrompt).toBe('old, tags')
+    })
+
+    first.unmount()
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      datasetPick: pick, datasetPrompt: '',
+    }))
+    setup()
+    await openPromptsTab(userEvent.setup())
+    expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('')
+  })
+
   it('sidebar tabs support arrow-key navigation', async () => {
     const user = userEvent.setup()
     setup()

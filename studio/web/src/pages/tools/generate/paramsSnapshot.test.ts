@@ -158,53 +158,47 @@ describe('applySnapshot（async + 注入 resolver/projectExists）', () => {
     expect(r.yDraft?.axis).toBe('steps')
   })
 
-  it('dataset_pick fallback：projectExists 命中 → datasetPick 保留', async () => {
-    const snap = snapshot({
+  it('新快照恢复手工编辑值（含显式空字符串），不污染正向 prompts', async () => {
+    const selected = {
+      projectId: 1, versionId: 11,
+      name: '0001.txt', tags: ['tag-a', 'tag-b'],
+    }
+    const edited = await applySnapshot(snapshot({
+      prompts: ['1girl'], dataset_pick: selected, dataset_prompt: 'custom caption text',
+    }), resolver, projectExists)
+    expect(edited.datasetPick?.projectId).toBe(1)
+    expect(edited.datasetPrompt).toBe('custom caption text')
+    expect(edited.prompts).toEqual(['1girl'])
+
+    const explicitEmpty = await applySnapshot(snapshot({
+      dataset_pick: selected, dataset_prompt: '',
+    }), resolver, projectExists)
+    expect(explicitEmpty.datasetPrompt).toBe('')
+  })
+
+  it('旧快照缺 dataset_prompt 时从 dataset_pick.tags 推导', async () => {
+    const r = await applySnapshot(snapshot({
       dataset_pick: {
         projectId: 1, versionId: 11,
         name: '0001.txt', tags: ['tag-a', 'tag-b'],
       },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
-    expect(r.datasetPick?.projectId).toBe(1)
-    expect(r.prompts).toEqual(['1girl'])  // 没污染 prompts
+    }), resolver, projectExists)
+    expect(r.datasetPrompt).toBe('tag-a, tag-b')
+    expect(r.prompts).toEqual(['1girl'])
   })
 
-  it('dataset_pick fallback：projectExists 不命中 → tags 拼进第一条 prompt + datasetPick=null', async () => {
-    const snap = snapshot({
+  it('dataset_pick 来源项目不存在时仅清身份，保留 datasetPrompt 与正向 prompts', async () => {
+    const r = await applySnapshot(snapshot({
       prompts: ['base prompt'],
       dataset_pick: {
-        projectId: 999, versionId: 88,  // projectExists 返 false
+        projectId: 999, versionId: 88,
         name: '0001.txt', tags: ['fall-tag-1', 'fall-tag-2'],
       },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
+      dataset_prompt: 'manually edited',
+    }), resolver, projectExists)
     expect(r.datasetPick).toBeNull()
-    expect(r.prompts[0]).toBe('base prompt, fall-tag-1, fall-tag-2')
-  })
-
-  it('dataset_pick fallback：第一条 prompt 空 → 直接是 tags 串', async () => {
-    const snap = snapshot({
-      prompts: [''],
-      dataset_pick: {
-        projectId: 999, versionId: 88,
-        name: '0001.txt', tags: ['x', 'y'],
-      },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
-    expect(r.prompts[0]).toBe('x, y')
-  })
-
-  it('dataset_pick fallback：tags 已在第一条末尾 → 不重复追加（防双击同一历史 entry）', async () => {
-    const snap = snapshot({
-      prompts: ['base, x, y'],
-      dataset_pick: {
-        projectId: 999, versionId: 88,
-        name: '0001.txt', tags: ['x', 'y'],
-      },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
-    expect(r.prompts[0]).toBe('base, x, y')
+    expect(r.datasetPrompt).toBe('manually edited')
+    expect(r.prompts).toEqual(['base prompt'])
   })
 
   it('未 resolve 的 LoRA（版本无 ckpts）→ unresolvedLoraCount > 0', async () => {
@@ -229,6 +223,14 @@ describe('buildCellSnapshot', () => {
     steps: 20,
     cfg_scale: 5,
     loras: [{ name: 'a.safetensors', scale: 0.5 }, { name: 'b.safetensors', scale: 0.7 }],
+  })
+
+  it('dataset_prompt 自然透传到 cell snapshot', () => {
+    const cell = buildCellSnapshot({ ...baseXy, dataset_prompt: 'edited dataset prompt' }, { xi: 0, yi: 0 }, {
+      x: { axis: 'steps', loraIndex: null, value: 30 },
+      y: null,
+    })
+    expect(cell.dataset_prompt).toBe('edited dataset prompt')
   })
 
   it('steps axis: 顶层 steps 覆盖；mode → single；xy_draft → null；xy_origin 记位置', () => {

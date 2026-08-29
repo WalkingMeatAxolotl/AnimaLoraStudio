@@ -85,6 +85,17 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('LoraCatalogDrawer', () => {
+  it('keeps the top-right close button visible and closes the drawer', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    const closeButton = screen.getByRole('button', { name: '关闭' })
+    expect(closeButton).not.toHaveClass('xl:hidden')
+    await user.click(closeButton)
+
+    expect(screen.queryByTestId('lora-catalog-drawer')).not.toBeInTheDocument()
+  })
+
   it('renders sources first and only requests items after entering a source', async () => {
     const user = userEvent.setup()
     render(<Harness />)
