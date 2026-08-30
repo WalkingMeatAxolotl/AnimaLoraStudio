@@ -26,8 +26,8 @@ import ZoomableImage from '../../components/ZoomableImage'
 import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
-  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename, resolveLoraFromCkpts,
-  transformAxisRawForSnapshot,
+  PARAMS_SNAPSHOT_VERSION, applySnapshot, isAbsoluteLoraPath, loraBasename,
+  resolveLoraFromCkpts, restoreCheckpointAxisPaths, transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './generate/paramsSnapshot'
 import { composeXYMatrix } from './generate/exportXY'
@@ -197,14 +197,18 @@ export default function GeneratePage() {
 
   const [rawPrefs, setRawPrefs] = useLocalStorageState(GENERATE_PREFS_KEY, DEFAULT_GENERATE_PREFS)
   const prefs = useMemo(() => normalizePrefs(rawPrefs), [rawPrefs])
+  const prefsEditRevisionRef = useRef(0)
   // 所有 setPrefs 更新都先把 prev 归一化（迁移老 shape + clamp），保证 updater
-  // 收到的永远是新 shape（含 singleLoras/xyLoras，无遗留 loras）。
+  // 收到的永远是新 shape（含 singleLoras/xyLoras，无遗留 loras）。revision
+  // 同时让迟到的历史快照恢复不得覆盖用户刚刚完成的表单编辑。
   const setPrefs = useCallback(
-    (next: GeneratePrefs | ((p: GeneratePrefs) => GeneratePrefs)) =>
+    (next: GeneratePrefs | ((p: GeneratePrefs) => GeneratePrefs)) => {
+      prefsEditRevisionRef.current += 1
       setRawPrefs((prev) => {
         const norm = normalizePrefs(prev)
         return typeof next === 'function' ? next(norm) : next
-      }),
+      })
+    },
     [setRawPrefs],
   )
   // 一次性把老 shape（共享 loras）迁移落库，避免 storage 长期残留遗留字段；
@@ -442,6 +446,26 @@ export default function GeneratePage() {
   const showCompareView = mode === 'xy' && selectedIndices.length === 2
 
   const catalog = useLoraCatalog()
+  const historyRestoreRequestRef = useRef(0)
+  const resolveCheckpointDraft = useCallback(async (
+    draft: XYAxisDraft,
+    fallbackAnchor: LoraEntry | null = null,
+  ) => {
+    if (draft.axis !== 'lora_ckpt') {
+      return restoreCheckpointAxisPaths(draft, null, [])
+    }
+    const checkpointAnchor = draft.checkpointAnchor ?? fallbackAnchor
+    const withoutCatalog = restoreCheckpointAxisPaths(draft, checkpointAnchor, [])
+    if (checkpointAnchor?.project_id == null || checkpointAnchor.version_id == null) {
+      return withoutCatalog
+    }
+    // 即使 raw 已是绝对路径也按 catalog 重核一次：项目目录可能搬迁，basename
+    // 仍可映射到新位置；fetchCkpts 自带缓存，不会让频繁生成重复扫目录。
+    const ckpts = await catalog
+      .fetchCkpts(checkpointAnchor.project_id, checkpointAnchor.version_id)
+      .catch(() => [])
+    return restoreCheckpointAxisPaths(draft, checkpointAnchor, ckpts)
+  }, [catalog])
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
   // useEffect 把 samples 当依赖触发不必要的重跑
   const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
@@ -638,6 +662,8 @@ export default function GeneratePage() {
 
 
   const handleHistorySelect = (entry: HistoryEntry) => {
+    const restoreRequest = ++historyRestoreRequestRef.current
+    const editRevision = prefsEditRevisionRef.current
     setHistoryOverride(entry)  // 先切图（同步），sidebar 回填随 ckpts 解析异步补上
     // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；现在 async：
     // LoRA 解析按需拉对应版本 ckpts（懒级联），不依赖 mount 全量列表。老 entry
@@ -665,17 +691,37 @@ export default function GeneratePage() {
     } catch {
       return
     }
-    if (applied.unresolvedLoraCount > 0) {
-      toast(t('generate.historyLorasMissing', { n: applied.unresolvedLoraCount }), 'info')
+    if (
+      restoreRequest !== historyRestoreRequestRef.current
+      || editRevision !== prefsEditRevisionRef.current
+    ) return
+    const xAnchor = applied.xDraft?.loraIndex != null
+      ? applied.loras[applied.xDraft.loraIndex] ?? null
+      : null
+    const yAnchor = applied.yDraft?.loraIndex != null
+      ? applied.loras[applied.yDraft.loraIndex] ?? null
+      : null
+    const [restoredX, restoredY] = await Promise.all([
+      applied.xDraft
+        ? resolveCheckpointDraft(applied.xDraft, xAnchor)
+        : Promise.resolve(null),
+      applied.yDraft
+        ? resolveCheckpointDraft(applied.yDraft, yAnchor)
+        : Promise.resolve(null),
+    ])
+    const unresolvedCount = applied.unresolvedLoraCount
+      + (restoredX?.unresolvedCount ?? 0)
+      + (restoredY?.unresolvedCount ?? 0)
+    if (
+      restoreRequest !== historyRestoreRequestRef.current
+      || editRevision !== prefsEditRevisionRef.current
+    ) return
+    if (unresolvedCount > 0) {
+      toast(t('generate.historyLorasMissing', { n: unresolvedCount }), 'info')
     }
-    // 底模不在 prefs 里（独立 ephemeral state）→ 单独回填。
-    setBaseModel(applied.baseModel)
-    const restoredXDraft = applied.xDraft && applied.xDraft.axis === 'lora_ckpt'
-      ? { ...applied.xDraft, checkpointAnchor: applied.xDraft.loraIndex != null ? applied.loras[applied.xDraft.loraIndex] ?? null : null }
-      : applied.xDraft
-    const restoredYDraft = applied.yDraft && applied.yDraft.axis === 'lora_ckpt'
-      ? { ...applied.yDraft, checkpointAnchor: applied.yDraft.loraIndex != null ? applied.loras[applied.yDraft.loraIndex] ?? null : null }
-      : applied.yDraft
+    // 底模与其余参数一起原子回填，避免异步解析期间用户编辑后被部分覆盖。
+    const restoredXDraft = restoredX?.draft
+    const restoredYDraft = restoredY?.draft ?? null
     const axisIndices = new Set(
       [restoredXDraft, restoredYDraft]
         .filter((draft): draft is NonNullable<typeof restoredXDraft> => Boolean(draft))
@@ -683,11 +729,17 @@ export default function GeneratePage() {
         .map((draft) => draft.loraIndex)
         .filter((index): index is number => Number.isInteger(index)),
     )
-    setPrefs((prev) => {
+    setRawPrefs((previousRaw) => {
+      if (
+        restoreRequest !== historyRestoreRequestRef.current
+        || editRevision !== prefsEditRevisionRef.current
+      ) return previousRaw
+      const prev = normalizePrefs(previousRaw)
       const base: GeneratePrefs = {
         ...prev,
         mode: applied.mode,
         modelFamily: applied.modelFamily,
+        baseModel: applied.baseModel,
         prompts: applied.prompts.length > 0 ? applied.prompts : prev.prompts,
         negPrompt: applied.negPrompt,
         width: applied.width,
@@ -750,6 +802,8 @@ export default function GeneratePage() {
 
   const handleGenerate = async (datasetOverride?: GenerateDatasetOverride) => {
     if (submitting) return
+    // 用户已明确发起当前表单，不能让较早点击历史项的迟到解析覆盖它。
+    historyRestoreRequestRef.current += 1
     const effectiveDatasetPrompt = datasetOverride?.datasetPrompt ?? datasetPrompt
     const effectiveDatasetPick = datasetOverride ? datasetOverride.datasetPick : datasetPick
     const datasetSuffix = effectiveDatasetPrompt.trim()
@@ -761,6 +815,14 @@ export default function GeneratePage() {
     let xy_matrix: XYMatrixSpec | null = null
     let snapshotXDraft = xDraft
     let snapshotYDraft = yDraft
+    const persistedLoras = mode === 'single' ? prefs.singleLoras : prefs.xyFixedLoras
+    const persistedLoraUi = mode === 'single' ? prefs.singleLoraUi : prefs.xyFixedLoraUi
+    if (persistedLoras.some((lora, index) => (
+      persistedLoraUi[index]?.enabled !== false && !isAbsoluteLoraPath(lora.path)
+    ))) {
+      toast(t('generate.loraPathsUnresolved'), 'error')
+      return
+    }
     // single：base LoRA = singleLoras 全发。xy：只发被轴引用的 anchor（见
     // buildXYMatrix —— xyLoras 会沉积 picker 切项目/版本/删轴遗留的孤儿 anchor，
     // 整桶发出去会让孤儿叠到每个 cell，正是反复出现的「混进没选过的 LoRA」根因）。
@@ -768,6 +830,35 @@ export default function GeneratePage() {
       ? enabledLoras(prefs.singleLoras, prefs.singleLoraUi)
       : []
     if (mode === 'xy') {
+      const legacyAnchor = (draft: XYAxisDraft | null): LoraEntry | null => {
+        if (!draft || draft.axis !== 'lora_ckpt' || draft.loraIndex == null) return null
+        return prefs.xyLoras[draft.loraIndex] ?? null
+      }
+      const [resolvedX, resolvedY] = await Promise.all([
+        resolveCheckpointDraft(xDraft, legacyAnchor(xDraft)),
+        yDraft
+          ? resolveCheckpointDraft(yDraft, legacyAnchor(yDraft))
+          : Promise.resolve(null),
+      ])
+      if (resolvedX.unresolvedCount + (resolvedY?.unresolvedCount ?? 0) > 0) {
+        toast(t('generate.loraPathsUnresolved'), 'error')
+        return
+      }
+      snapshotXDraft = resolvedX.draft
+      snapshotYDraft = resolvedY?.draft ?? null
+      if (
+        snapshotXDraft.raw !== xDraft.raw
+        || snapshotYDraft?.raw !== yDraft?.raw
+      ) {
+        setPrefs((current) => {
+          if (current.xDraft.axis !== xDraft.axis || current.xDraft.raw !== xDraft.raw) return current
+          if (
+            (current.yDraft?.axis ?? null) !== (yDraft?.axis ?? null)
+            || (current.yDraft?.raw ?? null) !== (yDraft?.raw ?? null)
+          ) return current
+          return { ...current, xDraft: snapshotXDraft, yDraft: snapshotYDraft }
+        })
+      }
       // schema 强制 prompts 单条 + count=1
       if (prompts.filter((p) => p.trim()).length > 1) {
         toast(t('generate.xySinglePromptOnly'), 'error')
@@ -775,7 +866,7 @@ export default function GeneratePage() {
       }
       try {
         const built = buildXYMatrix(
-          xDraft, yDraft, [], prefs.xyFixedLoras, prefs.xyFixedLoraUi,
+          snapshotXDraft, snapshotYDraft, [], prefs.xyFixedLoras, prefs.xyFixedLoraUi,
         )
         xy_matrix = built.xy_matrix
         loraConfigs = built.loraConfigs
@@ -783,11 +874,11 @@ export default function GeneratePage() {
         // not the editor-only checkpointAnchor identity. History restore and
         // per-cell PNG metadata both address snapshot.loras by this index.
         snapshotXDraft = {
-          ...xDraft,
+          ...snapshotXDraft,
           loraIndex: built.xy_matrix.x.lora_index ?? null,
         }
-        snapshotYDraft = yDraft
-          ? { ...yDraft, loraIndex: built.xy_matrix.y?.lora_index ?? null }
+        snapshotYDraft = snapshotYDraft
+          ? { ...snapshotYDraft, loraIndex: built.xy_matrix.y?.lora_index ?? null }
           : null
       } catch (e) {
         toast(typeof e === 'string' ? e : String(e), 'error')

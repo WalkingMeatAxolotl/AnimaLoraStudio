@@ -345,6 +345,18 @@ def apply_loras(
 
     from utils.lycoris_adapter import AnimaLycorisAdapter
 
+    # 先完整预检，再开始注入任何 adapter；否则列表中后一个文件在任务排队期间
+    # 被移走时，前面已注入的 hook 会因本次异常而失去可追踪句柄。
+    missing_path = next(
+        (spec.path or "" for spec in specs if not spec.path or not Path(spec.path).is_file()),
+        None,
+    )
+    if missing_path is not None:
+        raise FileNotFoundError(
+            f"LoRA file not found: {missing_path or '<empty>'}; generation aborted "
+            "to avoid producing output without the requested LoRA"
+        )
+
     # fp8 量化底模走 ComfyUI merge 语义（dequant → 加 delta → stochastic
     # rounding 回写，seed=层名 CRC32）——lycoris hook 直接注入 fp8 权重会因
     # dtype 崩或产生与 Comfy 不一致的数值。目前只有 krea2 loader 会产出
@@ -358,13 +370,7 @@ def apply_loras(
     merge_sources: list[tuple[dict, float, str]] = []
     adapters: list[Any] = []
     for spec in specs:
-        path = spec.path or ""
-        if not path or not Path(path).exists():
-            logger.warning(
-                "LoRA file not found; skipped: path=%s "
-                "(this LoRA has no effect on the output)", path,
-            )
-            continue
+        path = spec.path
 
         meta = read_lora_meta(path)
         # 跨族 fail-fast（A5，与训练侧 resume_lora 检查同款）：krea2 LoRA 配

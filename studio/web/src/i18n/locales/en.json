@@ -1706,6 +1706,7 @@
     "axisValueMustBeInteger": "{{axis}} must be an integer (got {{value}})",
     "axisRequiresLora": "{{axis}} must bind a LoRA",
     "axisLoraMissing": "The LoRA #{{n}} bound to {{axis}} does not exist",
+    "loraPathsUnresolved": "Some LoRA or checkpoint paths could not be resolved to local files. Re-select them before generating.",
     "loadingCkpt": "Loading ckpts… ({{projectId}}/{{versionId}})",
     "loadCkptFailed": "Failed to load ckpts: {{error}}",
     "noCkptFiles": "No ckpt files found for this LoRA (*.safetensors under output/ required)",

@@ -75,6 +75,33 @@ _DISK_MODES = ("single", "xy")
 _PNG_NAME_SAFE_RE = re.compile(r"^[a-zA-Z0-9 ._-]+\.png$")
 
 
+def _validate_lora_files(body: GenerateRequest) -> None:
+    """在创建任务前验证所有静态 / XY 动态 LoRA 路径。
+
+    历史快照只保存 basename；若前端恢复失败，旧行为会让 daemon 把 basename
+    当工作目录相对路径，逐格跳过后仍产出“看似成功但没有 LoRA 效果”的图片。
+    enqueue 必须 fail-fast，避免生成不可置信结果。
+    """
+    candidates = [entry.path for entry in body.lora_configs]
+    if body.xy_matrix is not None:
+        for axis in (body.xy_matrix.x, body.xy_matrix.y):
+            if axis is not None and axis.axis == "lora_ckpt":
+                candidates.extend(str(value) for value in axis.values)
+
+    missing: list[str] = []
+    for raw in dict.fromkeys(candidates):
+        path = Path(raw)
+        if not path.is_absolute() or not path.is_file():
+            missing.append(raw)
+    if missing:
+        preview = ", ".join(Path(path).name or path for path in missing[:5])
+        suffix = f" 等 {len(missing)} 个文件" if len(missing) > 5 else ""
+        raise HTTPException(
+            status_code=422,
+            detail=f"LoRA 文件不存在或尚未解析为绝对路径：{preview}{suffix}。请重新选择后再生成。",
+        )
+
+
 def _cleanup_xy_tmp_folders() -> None:
     """import-time 清理旧版本 server crash 留下的 `.xy plot N.tmp/` 半成品。
 
@@ -104,6 +131,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     from ...services.inference.core import generate_tempdir
     from ...services.models.families import get_assets
 
+    _validate_lora_files(body)
     model_paths = _resolve_model_paths(body.base_model, family=body.model_family)
     # TE variant 覆盖（krea2）：请求显式给 bf16/fp8 时覆盖 selected_te 默认
     # （default_paths 已按 selected_te 解析）；fp8 未下载给可操作报错。

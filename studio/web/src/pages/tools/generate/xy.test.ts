@@ -79,6 +79,13 @@ describe('draftToSpec', () => {
     expect(s.lora_index).toBe(1)
     expect(s.values).toEqual(['/x/step.safetensors'])
   })
+
+  it('拒绝把快照 basename 当作 checkpoint 路径提交', () => {
+    const d: XYAxisDraft = {
+      axis: 'lora_ckpt', raw: 'epoch8.safetensors, epoch12.safetensors', loraIndex: 0,
+    }
+    expect(() => draftToSpec(d, loras)).toThrow(/尚未解析到本机文件/)
+  })
 })
 
 describe('buildXYMatrix（只发被轴引用的 anchor，丢弃 picker 沉积的孤儿）', () => {

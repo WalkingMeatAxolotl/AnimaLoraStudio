@@ -1706,6 +1706,7 @@
     "axisValueMustBeInteger": "{{axis}} 必须是整数（收到 {{value}}）",
     "axisRequiresLora": "{{axis}} 必须绑定一个 LoRA",
     "axisLoraMissing": "{{axis}} 绑定的 LoRA #{{n}} 不存在",
+    "loraPathsUnresolved": "部分 LoRA 或 checkpoint 尚未解析到本机文件，请重新选择后再生成",
     "loadingCkpt": "加载 ckpt…（{{projectId}}/{{versionId}}）",
     "loadCkptFailed": "加载 ckpt 失败：{{error}}",
     "noCkptFiles": "该 LoRA 没扫到 ckpt 文件（output/ 下需 *.safetensors）",

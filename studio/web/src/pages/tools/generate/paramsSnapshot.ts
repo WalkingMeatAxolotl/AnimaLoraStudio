@@ -10,7 +10,8 @@
  * **不存绝对路径**（避免泄露本地文件系统结构、跨机器死链、用户挪文件失效）：
  * - LoRA：只存 name + project_id + version_id + scale；回填时按 ids→path resolve
  * - XY lora_ckpt 轴 values：存 basename（去目录、保留 .safetensors 后缀）；
- *   回填时灌回 raw 字段，用户重 submit 前需要 picker 重选定位到具体 ckpt
+ *   回填时按 checkpoint anchor 的 project/version 批量解析回当前机器的绝对路径；
+ *   无法解析时保持 basename 占位并禁止提交，要求用户在轴抽屉中重选
  * - dataset_pick：只存 projectId/versionId/name/tags，name 是相对路径无机密
  */
 import type { LoraEntry, XYAxisType } from '../../../api/client'
@@ -97,6 +98,99 @@ export function loraBasename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
 }
 
+/** 浏览器侧只判断路径形态；文件是否仍存在由后端 enqueue 预检兜底。 */
+export function isAbsoluteLoraPath(path: string): boolean {
+  return /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path.trim())
+}
+
+export interface RestoredCheckpointAxis {
+  draft: XYAxisDraft
+  unresolvedCount: number
+}
+
+function isWindowsLoraPath(path: string): boolean {
+  return /^(?:[a-z]:[\\/]|\\\\)/i.test(path.trim())
+}
+
+function checkpointPathResolver(ckpts: readonly { path: string }[]) {
+  const exactPaths = new Map<string, string[]>()
+  const windowsPaths = new Map<string, string[]>()
+  const exactNames = new Map<string, string[]>()
+  const windowsNames = new Map<string, string[]>()
+  const add = (map: Map<string, string[]>, key: string, path: string) => {
+    map.set(key, [...(map.get(key) ?? []), path])
+  }
+  for (const ckpt of ckpts) {
+    const windows = isWindowsLoraPath(ckpt.path)
+    const exactPath = windows ? ckpt.path.replace(/\\/g, '/') : ckpt.path
+    const name = loraBasename(ckpt.path)
+    add(exactPaths, exactPath, ckpt.path)
+    add(exactNames, name, ckpt.path)
+    if (windows) {
+      add(windowsPaths, exactPath.toLowerCase(), ckpt.path)
+      add(windowsNames, name.toLowerCase(), ckpt.path)
+    }
+  }
+  const unique = (values: string[] | undefined) => values?.length === 1 ? values[0] : null
+  return (value: string): string | null => {
+    const windows = isWindowsLoraPath(value)
+    const exactPath = windows ? value.replace(/\\/g, '/') : value
+    const exact = unique(exactPaths.get(exactPath))
+    if (exact) return exact
+    if (windows) {
+      const foldedPath = unique(windowsPaths.get(exactPath.toLowerCase()))
+      if (foldedPath) return foldedPath
+    }
+    const name = loraBasename(value)
+    const exactName = unique(exactNames.get(name))
+    if (exactName) return exactName
+    return unique(windowsNames.get(name.toLowerCase()))
+  }
+}
+
+/** 将快照 / 老 localStorage 中的 checkpoint basename 升级为当前机器的绝对路径。
+ *
+ * 同一版本内 basename 必须唯一才会自动匹配；歧义或缺失项保留原值并计入
+ * unresolvedCount。POSIX 匹配保持大小写敏感；仅 Windows drive / UNC ckpt
+ * 使用确定性的大小写不敏感兜底。调用方必须阻止 unresolved draft 提交。
+ */
+export function restoreCheckpointAxisPaths(
+  draft: SnapshotXYAxis | XYAxisDraft,
+  checkpointAnchor: LoraEntry | null,
+  ckpts: readonly { path: string }[],
+): RestoredCheckpointAxis {
+  if (draft.axis !== 'lora_ckpt') {
+    return { draft: { ...draft, checkpointAnchor: null }, unresolvedCount: 0 }
+  }
+
+  const resolvePath = checkpointPathResolver(ckpts)
+  let unresolvedCount = 0
+  const paths = splitAxisRaw(draft.raw).map((value) => {
+    const resolved = resolvePath(value)
+    if (resolved) return resolved
+    if (!isAbsoluteLoraPath(value)) unresolvedCount += 1
+    return value
+  })
+  let restoredAnchor = checkpointAnchor
+  if (restoredAnchor) {
+    const resolved = resolvePath(restoredAnchor.path)
+      ?? (restoredAnchor.name ? resolvePath(restoredAnchor.name) : null)
+      ?? (!isAbsoluteLoraPath(restoredAnchor.path) ? paths.find(isAbsoluteLoraPath) : null)
+    if (resolved && resolved !== restoredAnchor.path) {
+      restoredAnchor = { ...restoredAnchor, path: resolved }
+    }
+  }
+
+  return {
+    draft: {
+      ...draft,
+      raw: paths.join(', '),
+      checkpointAnchor: restoredAnchor,
+    },
+    unresolvedCount,
+  }
+}
+
 /** XY lora_ckpt 轴的 raw 字符串（逗号分隔的 ckpt 路径列表）→ basename 列表。
  *  其它轴 raw 是数字串，原样返回。 */
 export function transformAxisRawForSnapshot(draft: XYAxisDraft): SnapshotXYAxis {
@@ -110,17 +204,15 @@ export function transformAxisRawForSnapshot(draft: XYAxisDraft): SnapshotXYAxis 
 }
 
 /** 回填：给定某 (project, version) 下的 ckpts，把快照 LoRA 解析成当前机器 path。
- *  优先 basename 精确匹配，否则取版本代表 ckpt（list_lora_ckpts 已按 final→step↓
- *  排，ckpts[0] 即最新）。解析失败 → path 留空（submit 时 `.filter(l => l.path.trim())`
- *  跳过；SidebarLoras 渲染 ⚠ 卡片提示重选）。
+ *  只接受唯一 basename 匹配；文件被删除或重命名时保留 placeholder 并要求用户
+ *  重选，绝不能退回 ckpts[0] 后静默换成另一个 LoRA。
  *
  *  ckpts 由调用方按需拉（懒级联，见 useLoraCatalog.fetchCkpts）—— 不再依赖
  *  mount 时一把拉好的全量 projectLoras。无 ids / 外部 LoRA → 调用方传 []。 */
 export function resolveLoraFromCkpts(
   snap: SnapshotLora, ckpts: readonly { path: string }[],
 ): LoraEntry {
-  const byName = ckpts.find((c) => loraBasename(c.path) === snap.name)
-  const path = byName?.path ?? ckpts[0]?.path ?? ''
+  const path = checkpointPathResolver(ckpts)(snap.name) ?? ''
   if (path) return {
     path, scale: snap.scale,
     project_id: snap.project_id ?? null, version_id: snap.version_id ?? null,

@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applySnapshot, buildCellSnapshot, loraBasename, resolveLoraFromCkpts, transformAxisRawForSnapshot,
+  applySnapshot, buildCellSnapshot, isAbsoluteLoraPath, loraBasename,
+  resolveLoraFromCkpts, restoreCheckpointAxisPaths, transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora, type SnapshotLoraResolver,
 } from './paramsSnapshot'
 import type { XYAxisDraft } from './xy'
@@ -70,6 +71,79 @@ describe('transformAxisRawForSnapshot', () => {
   })
 })
 
+describe('restoreCheckpointAxisPaths', () => {
+  const ckpts = [
+    { path: 'G:\\project\\output\\epoch8.safetensors' },
+    { path: 'G:\\project\\output\\epoch12.safetensors' },
+    { path: 'G:\\project\\output\\final.safetensors' },
+  ]
+  const anchor = {
+    path: ckpts[0].path, scale: 1, project_id: 4, version_id: 6,
+  }
+
+  it('按同一版本的 basename 恢复完整路径并保留顺序', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt',
+      raw: 'epoch8.safetensors, epoch12.safetensors, final.safetensors',
+      loraIndex: 0,
+    }, anchor, ckpts)
+
+    expect(restored.unresolvedCount).toBe(0)
+    expect(restored.draft.raw).toBe(ckpts.map((item) => item.path).join(', '))
+    expect(restored.draft.checkpointAnchor).toBe(anchor)
+  })
+
+  it('anchor 本身是历史占位时也恢复为可提交全路径', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'epoch8.safetensors, epoch12.safetensors', loraIndex: 0,
+    }, {
+      path: '', name: 'epoch8.safetensors', scale: 1, project_id: 4, version_id: 6,
+    }, ckpts)
+
+    expect(restored.unresolvedCount).toBe(0)
+    expect(restored.draft.checkpointAnchor?.path).toBe(ckpts[0].path)
+  })
+
+  it('basename 缺失或歧义时保持占位并报告未解析', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'missing.safetensors, duplicate.safetensors', loraIndex: 0,
+    }, anchor, [
+      { path: 'G:\\one\\duplicate.safetensors' },
+      { path: 'G:\\two\\duplicate.safetensors' },
+    ])
+
+    expect(restored.unresolvedCount).toBe(2)
+    expect(restored.draft.raw).toBe('missing.safetensors, duplicate.safetensors')
+  })
+
+  it('POSIX basename 保持大小写敏感，不把不同文件误配', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'Foo.safetensors', loraIndex: 0,
+    }, { path: '/loras/Foo.safetensors', scale: 1 }, [
+      { path: '/loras/foo.safetensors' },
+    ])
+
+    expect(restored.unresolvedCount).toBe(1)
+    expect(restored.draft.raw).toBe('Foo.safetensors')
+  })
+
+  it('Windows basename 允许大小写不敏感的唯一匹配', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'EPOCH8.SAFETENSORS', loraIndex: 0,
+    }, anchor, ckpts)
+
+    expect(restored.unresolvedCount).toBe(0)
+    expect(restored.draft.raw).toBe(ckpts[0].path)
+  })
+
+  it('识别 Windows、UNC 与 POSIX 绝对路径', () => {
+    expect(isAbsoluteLoraPath('G:\\loras\\a.safetensors')).toBe(true)
+    expect(isAbsoluteLoraPath('\\\\server\\loras\\a.safetensors')).toBe(true)
+    expect(isAbsoluteLoraPath('/loras/a.safetensors')).toBe(true)
+    expect(isAbsoluteLoraPath('a.safetensors')).toBe(false)
+  })
+})
+
 describe('resolveLoraFromCkpts', () => {
   const ckpts = [
     { path: '/loras/cute/v3/final.safetensors' },
@@ -88,13 +162,14 @@ describe('resolveLoraFromCkpts', () => {
     expect(r.version_id).toBe(11)
   })
 
-  it('basename 未命中但版本有 ckpts → 取版本代表 ckpts[0]（list 已按 final→step↓ 排）', () => {
+  it('basename 未命中时不回退到另一个 checkpoint', () => {
     const snap: SnapshotLora = {
       name: 'gone.safetensors', scale: 1.0,
       project_id: 1, version_id: 11,
     }
     const r = resolveLoraFromCkpts(snap, ckpts)
-    expect(r.path).toBe('/loras/cute/v3/final.safetensors')
+    expect(r.path).toBe('')
+    expect(r.name).toBe('gone.safetensors')
     expect(r.project_id).toBe(1)
     expect(r.version_id).toBe(11)
   })

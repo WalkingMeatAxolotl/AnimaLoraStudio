@@ -1,6 +1,6 @@
 /** GeneratePage 端到端 smoke：mock fetch，验证 single / xy / 多 prompt+xy
  *  三个关键路径的 enqueue payload 行为。 */
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../../components/Toast'
@@ -690,6 +690,24 @@ describe('GeneratePage 端到端 smoke', () => {
     ])
   })
 
+  it('已启用的历史 LoRA 仍是 basename 占位时阻止无 LoRA 生成', async () => {
+    seedPrefs({
+      mode: 'single',
+      singleLoras: [{
+        path: '', name: 'missing.safetensors', scale: 1, project_id: 19, version_id: 44,
+      }],
+      singleLoraUi: [{ id: 'missing-lora', enabled: true }],
+    })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+
+    expect(await screen.findByText(/部分 LoRA 或 checkpoint 尚未解析/)).toBeInTheDocument()
+    expect(lastEnqueueBody).toBeNull()
+  })
+
   it('xy 提交不带 singleLoras，也不带未被轴引用的 xyLoras 孤儿', async () => {
     // 默认 X 轴是 steps（不引用任何 LoRA）。singleLoras=[A] 不该泄漏到 xy；
     // xyLoras=[B] 是没被轴引用的孤儿（picker 切项目残留），也不该当 base 发。
@@ -808,11 +826,10 @@ describe('GeneratePage 端到端 smoke', () => {
   })
 
   // ---- 点击 XY 历史 entry 回填 sidebar 参数（含 xDraft）----
-  it('点击 XY 落盘历史 → 左侧 XY 轴 dropdown 切到 LoRA + raw 写入', async () => {
-    // 用户场景：当前 sidebar 在 XY mode 默认 X=steps；点 XY plot 1 历史 entry
-    // 回填后 X 轴应切到 lora_ckpt + raw=basenames（picker 后续会按 basename 升级
-    // 成全 path 给 daemon；这里只验 xDraft 同步进 prefs 这一步）。
-    seedPrefs({ mode: 'xy' })  // 起步默认 X=steps
+  it('点击 XY 落盘历史 → 自动恢复 checkpoint 全路径并可安全重新生成', async () => {
+    // 快照为了隐私只保存 basename；回填时必须借 anchor 的 project/version
+    // 将整条 checkpoint 轴恢复成当前机器全路径，不能把 basename 发给 daemon。
+    seedPrefs({ mode: 'xy' })
     const xySnapshotParams = {
       schema_version: 1,
       mode: 'xy',
@@ -821,8 +838,7 @@ describe('GeneratePage 端到端 smoke', () => {
       width: 768, height: 1344,
       steps: 25, cfg_scale: 5, count: 1, seed: 7,
       loras: [
-        { name: 'chen-bin_V3.7_step5500.safetensors', scale: 1,
-          project_id: 19, version_id: 44 },
+        { name: 'epoch40.safetensors', scale: 1, project_id: 19, version_id: 44 },
       ],
       xy_draft: {
         x: {
@@ -851,8 +867,36 @@ describe('GeneratePage 端到端 smoke', () => {
       available: true,
       xy_folder: 'xy plot 1',
     }
+    const checkpointPaths = [
+      'G:/studio_data/projects/demo/output/epoch40.safetensors',
+      'G:/studio_data/projects/demo/output/epoch38.safetensors',
+      'G:/studio_data/projects/demo/output/epoch24.safetensors',
+    ]
     const previousImpl = fetchMock.getMockImplementation()
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/projects') && (init?.method ?? 'GET') === 'GET') {
+        const body = { items: [{ id: 19, title: 'Demo project' }] }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      if (url.endsWith('/api/projects/19/versions/44/lora_ckpts')) {
+        const body = {
+          items: checkpointPaths.map((path, index) => ({
+            kind: 'epoch', value: 40 - index * 2,
+            label: `epoch ${40 - index * 2}`, path, mtime: 1,
+          })),
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
       if (url.includes('/api/generate/timeline') && (init?.method ?? 'GET') === 'GET') {
         const body = { entries: [timelineEntry], total: 1, offset: 0 }
         return Promise.resolve({
@@ -871,26 +915,107 @@ describe('GeneratePage 端到端 smoke', () => {
     const user = userEvent.setup()
     setup()
     await waitForInitialLorasLoad()
-    // Numeric values are edited in the XY Axis Editor Drawer; the sidebar only
-    // renders the compact summary card.
     await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // 默认 X 轴编辑器中的文本输入框显示 "20, 25, 30"
     const initialAxisInput = await screen.findByDisplayValue(/20, 25, 30/)
     expect(initialAxisInput).toBeInTheDocument()
 
-    // 等历史栏的 thumbnail 出现（HistoryItem div 的 title 含 folder 名）
     const thumb = await screen.findByTitle(/xy plot 1 ·/)
     await user.click(thumb)
 
-    // 回填后：X 轴编辑器中的 dropdown 切到 LoRA，raw 写入新值。
     const axisEditor = screen.getByTestId('xy-axis-editor-drawer')
     await waitFor(() => {
       const axisSelect = axisEditor.querySelector('select') as HTMLSelectElement
       expect(axisSelect.value).toBe('lora_ckpt')
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.xDraft.raw).toBe(checkpointPaths.join(', '))
     })
-    // 原 "20, 25, 30" 文本框该消失（切到 lora_ckpt 后显示 checkpoint 列表）
     expect(screen.queryByDisplayValue(/20, 25, 30/)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /生成 3 张/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect((lastEnqueueBody!.xy_matrix as { x: { values: string[] } }).x.values)
+      .toEqual(checkpointPaths)
+  })
+
+  it('历史 LoRA 解析迟到时不覆盖用户随后完成的表单编辑', async () => {
+    seedPrefs({ mode: 'single', prompts: ['before history resolves'] })
+    const snapshot = {
+      schema_version: 1,
+      mode: 'single',
+      prompts: ['stale history prompt'],
+      negative_prompt: '',
+      width: 1024, height: 1024,
+      steps: 25, cfg_scale: 4, count: 1, seed: 7,
+      loras: [{ name: 'final.safetensors', scale: 1, project_id: 19, version_id: 44 }],
+      xy_draft: null,
+      dataset_pick: null,
+    }
+    const entry = {
+      task_id: 92,
+      status: 'done',
+      created_at: 1717900001,
+      mode: 'single',
+      storage: 'disk',
+      params: snapshot,
+      images: [{
+        url: '/api/generate/disk/image/2026-06-09/single/single%20image%2092.png',
+        thumb_url: '/api/generate/disk/thumb/2026-06-09/single/single%20image%2092.png?w=128',
+      }],
+      available: true,
+    }
+    let finishCkpts!: (response: Response) => void
+    const delayedCkpts = new Promise<Response>((resolve) => { finishCkpts = resolve })
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/projects') && (init?.method ?? 'GET') === 'GET') {
+        const body = { items: [{ id: 19, title: 'Demo project' }] }
+        return Promise.resolve({
+          ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      if (url.endsWith('/api/projects/19/versions/44/lora_ckpts')) return delayedCkpts
+      if (url.includes('/api/generate/timeline') && (init?.method ?? 'GET') === 'GET') {
+        const body = { entries: [entry], total: 1, offset: 0 }
+        return Promise.resolve({
+          ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl ? previousImpl(url, init) : Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+    await openPromptsTab(user)
+    const prompt = screen.getByPlaceholderText('输入正向提示词…')
+    await user.click(await screen.findByTitle(/single image 92 ·/))
+    await user.clear(prompt)
+    await user.type(prompt, 'newer user edit')
+
+    await act(async () => {
+      const body = {
+        items: [{
+          kind: 'final', value: 0, label: 'final',
+          path: 'G:/studio_data/projects/demo/output/final.safetensors', mtime: 1,
+        }],
+      }
+      finishCkpts({
+        ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      } as Response)
+      await delayedCkpts
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+
+    expect(prompt).toHaveValue('newer user edit')
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.prompts).toEqual(['newer user edit'])
   })
 
   // ---- #1：XY 开始后改轴只影响下次，不串改右侧已出结果 ----
