@@ -20,9 +20,10 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Iterator, Optional, TypeVar
 from urllib.parse import urlparse
 
 import requests
@@ -134,6 +135,14 @@ class BooruClient:
         self._owns_session = session is None
         self._api_bucket = TokenBucket(self.cfg.api_rate_per_sec)
         self._cdn_bucket = TokenBucket(self.cfg.cdn_rate_per_sec)
+        # FastAPI can serve several gallery thumbnail requests at once.  The
+        # token buckets cap request *rate*, while these semaphores separately
+        # cap in-flight upstream calls so a slow CDN cannot exhaust the local
+        # server's worker threads.  Keep API/CDN pools independent: thumbnails
+        # must not block search pagination.
+        max_in_flight = max(1, self.cfg.parallel_workers)
+        self._api_slots = threading.BoundedSemaphore(max_in_flight)
+        self._cdn_slots = threading.BoundedSemaphore(max_in_flight)
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, self.cfg.parallel_workers),
             thread_name_prefix="booru-pool",
@@ -222,27 +231,67 @@ class BooruClient:
 
     def search_posts(self, api_source: str, tags_query: str, **kw: Any) -> list[dict[str, Any]]:
         """走 API bucket。kw 透传给 booru_api.search_posts。"""
-        self._wait_if_backoff("api")
-        self._api_bucket.acquire()
-        kw.setdefault("session", self._session)
-        try:
-            return booru_api.search_posts(api_source, tags_query, **kw)
-        except requests.HTTPError as exc:
-            if exc.response is not None:
-                self._check_response(exc.response, "api")
-            raise
+        with self._api_slots:
+            self._wait_if_backoff("api")
+            self._api_bucket.acquire()
+            kw.setdefault("session", self._session)
+            try:
+                return booru_api.search_posts(api_source, tags_query, **kw)
+            except requests.HTTPError as exc:
+                if exc.response is not None:
+                    self._check_response(exc.response, "api")
+                raise
+
+    def request_get(self, url: str, **kw: Any) -> requests.Response:
+        """受双 token bucket / sticky backoff 约束的原始 GET。
+
+        给需要自己流式校验响应的上层（例如画廊缩略图代理）使用；普通图片
+        下载仍应优先走 :meth:`download_image`。调用方负责 ``raise_for_status``
+        与关闭 response。
+        """
+        kind = "cdn" if is_cdn_host(url) else "api"
+        slots = self._cdn_slots if kind == "cdn" else self._api_slots
+        with slots:
+            self._wait_if_backoff(kind)
+            (self._cdn_bucket if kind == "cdn" else self._api_bucket).acquire()
+            resp = self._session.get(url, **kw)
+            self._check_response(resp, kind)
+            return resp
+
+    @contextmanager
+    def stream_get(self, url: str, **kw: Any) -> Iterator[requests.Response]:
+        """Yield a streamed response while holding its in-flight request slot.
+
+        The slot remains occupied until the caller finishes consuming the body,
+        unlike :meth:`request_get`, whose response headers may return before a
+        streamed body has been read.
+        """
+        kind = "cdn" if is_cdn_host(url) else "api"
+        slots = self._cdn_slots if kind == "cdn" else self._api_slots
+        response: requests.Response | None = None
+        with slots:
+            self._wait_if_backoff(kind)
+            (self._cdn_bucket if kind == "cdn" else self._api_bucket).acquire()
+            try:
+                response = self._session.get(url, **kw)
+                self._check_response(response, kind)
+                yield response
+            finally:
+                if response is not None:
+                    response.close()
 
     def download_image(self, url: str, save_path: Path, **kw: Any) -> Path:
         """走 CDN bucket。kw 透传给 booru_api.download_image。"""
-        self._wait_if_backoff("cdn")
-        self._cdn_bucket.acquire()
-        kw.setdefault("session", self._session)
-        try:
-            return booru_api.download_image(url, save_path, **kw)
-        except requests.HTTPError as exc:
-            if exc.response is not None:
-                self._check_response(exc.response, "cdn")
-            raise
+        with self._cdn_slots:
+            self._wait_if_backoff("cdn")
+            self._cdn_bucket.acquire()
+            kw.setdefault("session", self._session)
+            try:
+                return booru_api.download_image(url, save_path, **kw)
+            except requests.HTTPError as exc:
+                if exc.response is not None:
+                    self._check_response(exc.response, "cdn")
+                raise
 
     def parallel_download(
         self,

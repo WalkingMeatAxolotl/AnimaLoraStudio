@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { extractCurrentToken, findSuggestions, hasCjk, type SuggestStore } from './suggest'
+import {
+  extractCurrentToken,
+  extractWhitespaceToken,
+  findSuggestions,
+  hasCjk,
+  type SuggestStore,
+} from './suggest'
 import type { ReverseEntry } from './types'
 
 // ---------------------------------------------------------------------------
@@ -46,6 +52,24 @@ describe('extractCurrentToken', () => {
   it('clamps cursor to string range', () => {
     expect(extractCurrentToken('abc', 100)).toEqual({ token: 'abc', start: 0, end: 3 })
     expect(extractCurrentToken('abc', -5)).toEqual({ token: 'abc', start: 0, end: 3 })
+  })
+})
+
+describe('extractWhitespaceToken', () => {
+  it('extracts the current Booru tag after whitespace', () => {
+    expect(extractWhitespaceToken('1girl cat_ea', 12)).toEqual({
+      token: 'cat_ea', start: 6, end: 12,
+    })
+  })
+
+  it('keeps a unary modifier in the replacement range but not the lookup token', () => {
+    expect(extractWhitespaceToken('solo -long_ha', 13)).toEqual({
+      token: 'long_ha', start: 5, end: 13,
+    })
+  })
+
+  it('returns an empty token immediately after whitespace', () => {
+    expect(extractWhitespaceToken('1girl ', 6)).toEqual({ token: '', start: 6, end: 6 })
   })
 })
 

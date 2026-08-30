@@ -2153,6 +2153,36 @@ export interface ModelsRootMigrateStatus {
   error: string
 }
 
+export type GallerySource = 'danbooru' | 'gelbooru'
+export type GalleryRating = 'general' | 'sensitive' | 'questionable' | 'explicit'
+export type GalleryTagger = 'wd14' | 'cltagger' | 'llm'
+
+export interface GalleryItem {
+  source: GallerySource
+  post_id: string
+  width: number
+  height: number
+  tags: string[]
+  thumbnail_url: string
+  image_url: string
+}
+
+export interface GallerySearchResponse {
+  items: GalleryItem[]
+  page: number
+  page_size: number
+  has_more: boolean
+}
+
+export interface GallerySearchParams {
+  source: GallerySource
+  query: string
+  ratings: GalleryRating[]
+  dateFrom?: string
+  dateTo?: string
+  page: number
+}
+
 export interface AnnouncementPost {
   id: string
   date: string
@@ -2167,6 +2197,26 @@ export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
   state: () => req<Record<string, unknown>>('/api/state'),
+  searchGallery: (opts: GallerySearchParams, signal?: AbortSignal) => {
+    const params = new URLSearchParams({
+      source: opts.source,
+      query: opts.query,
+      page: String(opts.page),
+    })
+    opts.ratings.forEach((rating) => params.append('rating', rating))
+    if (opts.dateFrom) params.set('date_from', opts.dateFrom)
+    if (opts.dateTo) params.set('date_to', opts.dateTo)
+    return req<GallerySearchResponse>(`/api/gallery/search?${params}`, { signal })
+  },
+  tagGalleryImage: (body: {
+    source: 'danbooru' | 'gelbooru'
+    post_id: string
+    image_url: string
+    tagger: GalleryTagger
+  }) => req<{ prompt: string }>('/api/gallery/tag', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
 
   schema: () => req<SchemaResponse>('/api/schema'),
 

@@ -40,8 +40,18 @@ export function parseAxisValues(axis: XYAxisType, raw: string): Array<number | s
   return out
 }
 
+function isAbsoluteCheckpointPath(value: string): boolean {
+  return /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(value.trim())
+}
+
 export function draftToSpec(draft: XYAxisDraft, loras: LoraEntry[]): XYAxisSpec {
   const values = parseAxisValues(draft.axis, draft.raw)
+  if (
+    draft.axis === 'lora_ckpt'
+    && values.some((value) => typeof value !== 'string' || !isAbsoluteCheckpointPath(value))
+  ) {
+    throw i18n.t('generate.loraPathsUnresolved')
+  }
   const spec: XYAxisSpec = { axis: draft.axis, values }
   if (REQUIRES_LORA_INDEX.has(draft.axis)) {
     const index = draft.loraIndex

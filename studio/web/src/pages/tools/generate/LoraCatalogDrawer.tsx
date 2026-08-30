@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
@@ -32,7 +32,7 @@ function sourceDisplayName(source: LoraCatalogSource): string {
   return normalized.split('/').pop() || source.source_label
 }
 
-export default function LoraCatalogDrawer({
+function LoraCatalogDrawer({
   open,
   onClose,
   loras,
@@ -58,6 +58,21 @@ export default function LoraCatalogDrawer({
   const [error, setError] = useState<string | null>(null)
   const [refreshToken, setRefreshToken] = useState(0)
   const handledRefreshToken = useRef(0)
+  const loadedRequestKey = useRef<string | null>(null)
+  const currentRequestKey = useRef('')
+  const inFlightRequestKeys = useRef(new Set<string>())
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const closeAndRestoreFocus = useCallback(() => {
+    onClose()
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>('[aria-controls="lora-catalog-drawer"]')?.focus()
+    })
+  }, [onClose])
+
+  useEffect(() => {
+    if (open) searchInputRef.current?.focus()
+  }, [open])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 180)
@@ -67,24 +82,35 @@ export default function LoraCatalogDrawer({
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') closeAndRestoreFocus()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+  }, [closeAndRestoreFocus, open])
 
   const requestQuery = selectedSource ? debouncedQuery : ''
+  const requestSourceId = selectedSource?.source_id ?? null
+  const requestKey = `${requestSourceId ?? 'sources'}\u0000${requestQuery}\u0000${refreshToken}`
+  currentRequestKey.current = requestKey
 
   useEffect(() => {
-    if (!open) return
-    let canceled = false
+    setLoadingMore(false)
+  }, [requestKey])
+
+  useEffect(() => {
+    if (!open || loadedRequestKey.current === requestKey) return
+    if (inFlightRequestKeys.current.has(requestKey)) {
+      setLoading(true)
+      return
+    }
+    inFlightRequestKeys.current.add(requestKey)
     setLoading(true)
     setError(null)
     const forceRefresh = refreshToken !== handledRefreshToken.current
     handledRefreshToken.current = refreshToken
-    void api.getLoraCatalog(selectedSource ? {
+    void api.getLoraCatalog(requestSourceId ? {
       q: requestQuery,
-      source: selectedSource.source_id,
+      source: requestSourceId,
       sort: 'name',
       order: 'asc',
       include_archived: false,
@@ -95,19 +121,20 @@ export default function LoraCatalogDrawer({
       limit: 1,
       refresh: forceRefresh,
     }).then((result) => {
-      if (canceled) return
-      if (selectedSource) setResponse(result)
+      if (currentRequestKey.current !== requestKey) return
+      loadedRequestKey.current = requestKey
+      if (requestSourceId) setResponse(result)
       else {
         setSources(result.sources)
         setResponse(EMPTY_RESPONSE)
       }
     }).catch((reason) => {
-      if (!canceled) setError(String(reason))
+      if (currentRequestKey.current === requestKey) setError(String(reason))
     }).finally(() => {
-      if (!canceled) setLoading(false)
+      inFlightRequestKeys.current.delete(requestKey)
+      if (currentRequestKey.current === requestKey) setLoading(false)
     })
-    return () => { canceled = true }
-  }, [open, selectedSource, requestQuery, refreshToken])
+  }, [open, requestKey, requestQuery, requestSourceId, refreshToken])
 
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
@@ -180,6 +207,7 @@ export default function LoraCatalogDrawer({
 
   const loadMore = async () => {
     if (!selectedSource || response.next_cursor == null) return
+    const requestKeyAtStart = requestKey
     setLoadingMore(true)
     try {
       const next = await api.getLoraCatalog({
@@ -191,21 +219,21 @@ export default function LoraCatalogDrawer({
         limit: 500,
         cursor: response.next_cursor,
       })
+      if (currentRequestKey.current !== requestKeyAtStart) return
       setResponse((previous) => ({ ...next, items: [...previous.items, ...next.items] }))
     } catch (reason) {
-      setError(String(reason))
+      if (currentRequestKey.current === requestKeyAtStart) setError(String(reason))
     } finally {
-      setLoadingMore(false)
+      if (currentRequestKey.current === requestKeyAtStart) setLoadingMore(false)
     }
   }
-
-  if (!open) return null
 
   return (
     <GenerateAttachedDrawer
       id="lora-catalog-drawer"
       ariaLabel={t('generate.loraCatalog')}
       testId="lora-catalog-drawer"
+      open={open}
     >
       <header className="p-3 border-b border-subtle flex flex-col gap-2 shrink-0">
         <div className="flex items-center gap-2">
@@ -234,8 +262,8 @@ export default function LoraCatalogDrawer({
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm xl:hidden"
-            onClick={onClose}
+            className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
+            onClick={closeAndRestoreFocus}
             title={t('common.close')}
             aria-label={t('common.close')}
           >×</button>
@@ -254,6 +282,7 @@ export default function LoraCatalogDrawer({
             </select>
           )}
           <input
+            ref={searchInputRef}
             className="input text-xs flex-1"
             style={{ minWidth: 240 }}
             value={query}
@@ -352,3 +381,8 @@ export default function LoraCatalogDrawer({
     </GenerateAttachedDrawer>
   )
 }
+
+export default memo(
+  LoraCatalogDrawer,
+  (previous, next) => !previous.open && !next.open,
+)

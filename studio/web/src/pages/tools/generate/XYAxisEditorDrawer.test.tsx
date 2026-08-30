@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -95,6 +95,31 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('XYAxisEditorDrawer', () => {
+  it('keeps the top-right close button visible and closes the drawer', async () => {
+    const user = userEvent.setup()
+    render(<Harness initial={{ axis: 'steps', raw: '20, 25', loraIndex: null }} />)
+
+    const closeButton = screen.getByRole('button', { name: '关闭' })
+    expect(closeButton).not.toHaveClass('xl:hidden')
+    await user.click(closeButton)
+
+    expect(screen.getByTestId('xy-axis-editor-drawer')).not.toBeVisible()
+  })
+
+  it('reuses a pending source request across close and reopen', async () => {
+    let resolveRequest!: (value: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRequest = resolve }))
+    const user = userEvent.setup()
+    render(<Harness initial={{ axis: 'lora_ckpt', raw: '', loraIndex: null }} />)
+
+    await user.click(screen.getByRole('button', { name: '关闭' }))
+    await user.click(screen.getByRole('button', { name: 'Open editor' }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await act(async () => { resolveRequest(catalogResponse([])) })
+    expect(await screen.findByRole('button', { name: /^Alpha project/ })).toBeInTheDocument()
+  })
+
   it('edits a numeric axis through one direct input and generates an integer range', async () => {
     const user = userEvent.setup()
     render(<Harness initial={{ axis: 'steps', raw: '20, 25', loraIndex: null }} />)
@@ -171,6 +196,7 @@ describe('XYAxisEditorDrawer', () => {
 
     await user.click(await screen.findByRole('button', { name: /^Alpha project/ }))
     const rows = await screen.findAllByTestId('xy-axis-checkpoint')
+    const requestsBeforeClose = fetchMock.mock.calls.length
     const row = (name: string) => rows.find((candidate) => candidate.textContent?.includes(name))!
 
     await user.click(row('epoch_40'))
@@ -186,9 +212,28 @@ describe('XYAxisEditorDrawer', () => {
     await user.keyboard('{Escape}')
     await user.click(screen.getByRole('button', { name: 'Open editor' }))
     const reopenedRows = await screen.findAllByTestId('xy-axis-checkpoint')
+    expect(fetchMock).toHaveBeenCalledTimes(requestsBeforeClose)
+    expect(reopenedRows.find((candidate) => candidate.textContent?.includes('final'))).toBe(row('final'))
     expect(reopenedRows.find((candidate) => candidate.textContent?.includes('final'))).toHaveAttribute('aria-pressed', 'true')
     expect(reopenedRows.find((candidate) => candidate.textContent?.includes('epoch_80'))).toHaveAttribute('aria-pressed', 'true')
     expect(reopenedRows.find((candidate) => candidate.textContent?.includes('epoch_40'))).toHaveAttribute('aria-pressed', 'true')
+
+    const refreshedItem = item('refreshed', 'epoch')
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      return Promise.resolve(catalogResponse(url.includes('source=project%3A1') ? [refreshedItem] : []))
+    })
+    const callsBeforeRefresh = fetchMock.mock.calls.length
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    expect(await screen.findByText('refreshed')).toBeInTheDocument()
+
+    const refreshUrls = fetchMock.mock.calls
+      .slice(callsBeforeRefresh)
+      .map(([url]) => String(url))
+    expect(refreshUrls.filter((url) => url.includes('refresh=true'))).toHaveLength(1)
+    expect(refreshUrls.some((url) => (
+      url.includes('source=project%3A1') && !url.includes('refresh=true')
+    ))).toBe(true)
   })
 
   it('blocks checkpoints already used by an enabled fixed LoRA', async () => {

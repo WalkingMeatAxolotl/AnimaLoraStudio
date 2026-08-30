@@ -42,6 +42,20 @@
   }
 }
 
+/* Booru gallery 保留远程图原始比例，CSS multi-column 形成瀑布流；卡片禁止跨列。 */
+.gallery-waterfall {
+  column-width: 150px;
+  column-gap: 8px;
+}
+
+.gallery-waterfall-card {
+  break-inside: avoid;
+}
+
+@media (max-width: 520px) {
+  .gallery-waterfall { column-width: 120px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .xy-axis-sortable-row,
   .lora-sortable-card { transition: none !important; }

@@ -284,28 +284,22 @@ def test_apply_loras_uses_fp32_for_lora_and_loha_algos(tmp_path: Path, algo: str
     assert all(dtype == torch.float32 for dtype in loaded_dtypes)
 
 
-def test_apply_loras_skips_missing_path(tmp_path: Path) -> None:
-    p_real = tmp_path / "real.safetensors"
-    _write_lora_safetensors(p_real, rank=16, alpha=8.0, algo="lokr", factor=8)
+def test_apply_loras_rejects_missing_path_before_injecting_any_adapter(tmp_path: Path) -> None:
+    p_present = tmp_path / "present.safetensors"
+    p_present.write_bytes(b"not-read-because-preflight-runs-first")
     p_fake = tmp_path / "nonexistent.safetensors"
 
-    def _fake_adapter(*args: object, **kwargs: object) -> MagicMock:
-        m = MagicMock()
-        m.network = MagicMock()
-        m.network.loras = []
-        m.load_state_dict.return_value = MagicMock(missing_keys=[], unexpected_keys=[])
-        return m
-
     model = MagicMock()
-    with _patched_adapter(_fake_adapter):
-        adapters = apply_loras(
-            model,
-            [LoRASpec(path=str(p_fake)), LoRASpec(path=str(p_real))],
-            device="cpu",
-            dtype=torch.float32,
-        )
+    with patch("studio.services.inference.core.read_lora_meta") as read_meta:
+        with pytest.raises(FileNotFoundError, match="generation aborted"):
+            apply_loras(
+                model,
+                [LoRASpec(path=str(p_present)), LoRASpec(path=str(p_fake))],
+                device="cpu",
+                dtype=torch.float32,
+            )
 
-    assert len(adapters) == 1
+    read_meta.assert_not_called()
 
 
 def test_apply_loras_empty_specs() -> None:

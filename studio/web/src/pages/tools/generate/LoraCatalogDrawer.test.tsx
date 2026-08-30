@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LoraEntry } from '../../../api/client'
+import type { LoraCatalogItem, LoraEntry } from '../../../api/client'
 import LoraCatalogDrawer from './LoraCatalogDrawer'
 import type { LoraUiState } from './loraSelection'
 
@@ -42,13 +42,13 @@ const item = {
   kind: 'other',
 } as const
 
-function response(items: typeof item[]) {
+function response(items: LoraCatalogItem[], nextCursor: number | null = null) {
   return new Response(JSON.stringify({
     items,
     sources: [source, projectSource],
     total: items.length,
     cursor: 0,
-    next_cursor: null,
+    next_cursor: nextCursor,
     generated_at: 1,
     cached: false,
     cache_ttl_seconds: 20,
@@ -62,6 +62,7 @@ function Harness() {
   return (
     <>
       <div data-testid="count">{loras.length}</div>
+      {!open && <button type="button" onClick={() => setOpen(true)}>Open catalog</button>}
       <LoraCatalogDrawer
         open={open}
         onClose={() => setOpen(false)}
@@ -85,6 +86,84 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('LoraCatalogDrawer', () => {
+  it('keeps the top-right close button visible and closes the drawer', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    const drawer = screen.getByTestId('lora-catalog-drawer')
+    const closeButton = screen.getByRole('button', { name: '关闭' })
+    expect(closeButton).not.toHaveClass('xl:hidden')
+    await screen.findByRole('button', { name: /^loras / })
+    const requestsBeforeClose = fetchMock.mock.calls.length
+    await user.click(closeButton)
+
+    expect(screen.getByTestId('lora-catalog-drawer')).not.toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Open catalog' }))
+    expect(screen.getByTestId('lora-catalog-drawer')).toBe(drawer)
+    expect(fetchMock).toHaveBeenCalledTimes(requestsBeforeClose)
+  })
+
+  it('reuses a pending catalog request across close and reopen', async () => {
+    let resolveRequest!: (value: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRequest = resolve }))
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.click(screen.getByRole('button', { name: '关闭' }))
+    await user.click(screen.getByRole('button', { name: 'Open catalog' }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await act(async () => { resolveRequest(response([])) })
+    expect(await screen.findByRole('button', { name: /^loras / })).toBeInTheDocument()
+  })
+
+  it('ignores a stale load-more response after switching sources', async () => {
+    const staleItem: LoraCatalogItem = {
+      ...item,
+      path: 'D:/ComfyUI/models/loras/styles/stale.safetensors',
+      name: 'stale.safetensors',
+      relative_path: 'styles/stale.safetensors',
+    }
+    const projectItem: LoraCatalogItem = {
+      ...item,
+      path: 'G:/AnimaLoraStudio/studio_data/projects/alpha/final.safetensors',
+      name: 'final.safetensors',
+      relative_path: 'final.safetensors',
+      source_type: 'project',
+      source_id: 'project:1',
+      source_label: 'Alpha project',
+      project_id: 1,
+      version_id: 1,
+      project_title: 'Alpha project',
+      version_label: 'v1',
+      kind: 'final',
+    }
+    let resolveLoadMore!: (value: Response) => void
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('cursor=1')) {
+        return new Promise<Response>((resolve) => { resolveLoadMore = resolve })
+      }
+      if (url.includes('source=external%3A0')) return Promise.resolve(response([item], 1))
+      if (url.includes('source=project%3A1')) return Promise.resolve(response([projectItem], 2))
+      return Promise.resolve(response([]))
+    })
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.click(await screen.findByRole('button', { name: /^loras / }))
+    await screen.findByText('ink')
+    await user.click(screen.getByRole('button', { name: '加载更多' }))
+    await user.click(screen.getByRole('button', { name: '返回项目和来源' }))
+    await user.click(await screen.findByRole('button', { name: /^Alpha project/ }))
+    expect(await screen.findByText('final')).toBeInTheDocument()
+
+    await act(async () => { resolveLoadMore(response([staleItem])) })
+    expect(screen.queryByText('stale')).not.toBeInTheDocument()
+    expect(screen.getByText('final')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加载更多' })).toBeEnabled()
+  })
+
   it('renders sources first and only requests items after entering a source', async () => {
     const user = userEvent.setup()
     render(<Harness />)
@@ -129,6 +208,6 @@ describe('LoraCatalogDrawer', () => {
     await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'))
 
     fireEvent.keyDown(window, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByTestId('lora-catalog-drawer')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('lora-catalog-drawer')).not.toBeVisible())
   })
 })

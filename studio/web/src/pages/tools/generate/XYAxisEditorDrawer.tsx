@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
@@ -353,7 +353,7 @@ function CheckpointBrowser({
   )
 }
 
-export default function XYAxisEditorDrawer({
+function XYAxisEditorDrawer({
   open,
   label,
   draft,
@@ -386,33 +386,64 @@ export default function XYAxisEditorDrawer({
   const [itemError, setItemError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const itemCacheRef = useRef(new Map<string, LoraCatalogItem>())
-  const itemGenerationRef = useRef(0)
+  const loadedSourceRequestKey = useRef<string | null>(null)
+  const loadedItemRequestKey = useRef<string | null>(null)
+  const currentSourceRequestKey = useRef('')
+  const currentItemRequestKey = useRef('')
+  const inFlightSourceRequestKeys = useRef(new Set<string>())
+  const inFlightItemRequestKeys = useRef(new Set<string>())
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 180)
     return () => window.clearTimeout(timer)
   }, [query])
 
+  const sourceRequestKey = `${draft.axis}\u0000${reloadKey}`
+  currentSourceRequestKey.current = sourceRequestKey
   useEffect(() => {
-    if (!open || draft.axis !== 'lora_ckpt') return
-    let alive = true
+    if (!open || draft.axis !== 'lora_ckpt' || loadedSourceRequestKey.current === sourceRequestKey) return
+    if (inFlightSourceRequestKeys.current.has(sourceRequestKey)) {
+      setLoadingSources(true)
+      return
+    }
+    inFlightSourceRequestKeys.current.add(sourceRequestKey)
     setLoadingSources(true)
     setSourceError('')
     void api.getLoraCatalog({ limit: 1, refresh: reloadKey > 0 })
-      .then((next) => { if (alive) setSourceResponse(next) })
-      .catch((error) => { if (alive) setSourceError(errorMessage(error)) })
-      .finally(() => { if (alive) setLoadingSources(false) })
-    return () => { alive = false }
-  }, [draft.axis, open, reloadKey])
+      .then((next) => {
+        if (currentSourceRequestKey.current !== sourceRequestKey) return
+        loadedSourceRequestKey.current = sourceRequestKey
+        setSourceResponse(next)
+      })
+      .catch((error) => {
+        if (currentSourceRequestKey.current === sourceRequestKey) setSourceError(errorMessage(error))
+      })
+      .finally(() => {
+        inFlightSourceRequestKeys.current.delete(sourceRequestKey)
+        if (currentSourceRequestKey.current === sourceRequestKey) setLoadingSources(false)
+      })
+  }, [draft.axis, open, reloadKey, sourceRequestKey])
 
+  const itemRequestKey = `${draft.axis}\u0000${selectedSource?.source_id ?? ''}\u0000${debouncedQuery}\u0000${reloadKey}`
+  currentItemRequestKey.current = itemRequestKey
   useEffect(() => {
-    const generation = ++itemGenerationRef.current
-    setLoadingMore(false)
-    if (!open || draft.axis !== 'lora_ckpt' || !selectedSource) {
+    if (draft.axis !== 'lora_ckpt' || !selectedSource) {
+      loadedItemRequestKey.current = null
+      setLoadingMore(false)
       setResponse(null)
       setItemError('')
       return
     }
+    if (!open || loadedItemRequestKey.current === itemRequestKey) return
+    // A manual refresh first rebuilds the shared catalog through the source request.
+    // Wait for that one forced scan, then read this source from the refreshed cache.
+    if (loadedSourceRequestKey.current !== sourceRequestKey) return
+    if (inFlightItemRequestKeys.current.has(itemRequestKey)) {
+      setLoadingItems(true)
+      return
+    }
+    inFlightItemRequestKeys.current.add(itemRequestKey)
+    setLoadingMore(false)
     setLoadingItems(true)
     setItemError('')
     void api.getLoraCatalog({
@@ -424,17 +455,19 @@ export default function XYAxisEditorDrawer({
       cursor: 0,
     })
       .then((next) => {
-        if (generation !== itemGenerationRef.current) return
+        if (currentItemRequestKey.current !== itemRequestKey) return
+        loadedItemRequestKey.current = itemRequestKey
         for (const item of next.items) itemCacheRef.current.set(normalizePath(item.path), item)
         setResponse(next)
       })
       .catch((error) => {
-        if (generation === itemGenerationRef.current) setItemError(errorMessage(error))
+        if (currentItemRequestKey.current === itemRequestKey) setItemError(errorMessage(error))
       })
       .finally(() => {
-        if (generation === itemGenerationRef.current) setLoadingItems(false)
+        inFlightItemRequestKeys.current.delete(itemRequestKey)
+        if (currentItemRequestKey.current === itemRequestKey) setLoadingItems(false)
       })
-  }, [debouncedQuery, draft.axis, open, reloadKey, selectedSource])
+  }, [debouncedQuery, draft.axis, itemRequestKey, open, reloadKey, selectedSource, sourceRequestKey, sourceResponse])
 
   useEffect(() => {
     if (!open) return
@@ -447,7 +480,7 @@ export default function XYAxisEditorDrawer({
 
   const loadMore = () => {
     if (!selectedSource || response?.next_cursor == null || loadingMore) return
-    const generation = itemGenerationRef.current
+    const requestKeyAtStart = currentItemRequestKey.current
     const cursor = response.next_cursor
     setLoadingMore(true)
     setItemError('')
@@ -460,19 +493,17 @@ export default function XYAxisEditorDrawer({
       cursor,
     })
       .then((next) => {
-        if (generation !== itemGenerationRef.current) return
+        if (currentItemRequestKey.current !== requestKeyAtStart) return
         for (const item of next.items) itemCacheRef.current.set(normalizePath(item.path), item)
         setResponse((previous) => previous ? { ...next, items: [...previous.items, ...next.items], cursor: 0 } : next)
       })
       .catch((error) => {
-        if (generation === itemGenerationRef.current) setItemError(errorMessage(error))
+        if (currentItemRequestKey.current === requestKeyAtStart) setItemError(errorMessage(error))
       })
       .finally(() => {
-        if (generation === itemGenerationRef.current) setLoadingMore(false)
+        if (currentItemRequestKey.current === requestKeyAtStart) setLoadingMore(false)
       })
   }
-
-  if (!open) return null
 
   const checkpointMode = draft.axis === 'lora_ckpt'
   const error = sourceError || itemError
@@ -482,6 +513,7 @@ export default function XYAxisEditorDrawer({
       id="xy-axis-editor-drawer"
       ariaLabel={`${t('generate.xyAxis', { label })} · ${axisLabel(draft.axis)}`}
       testId="xy-axis-editor-drawer"
+      open={open}
     >
       <header className="p-3 border-b border-subtle flex flex-col gap-2 shrink-0">
         <div className="flex items-center gap-2">
@@ -537,7 +569,7 @@ export default function XYAxisEditorDrawer({
           </select>
           <button
             type="button"
-            className="btn btn-ghost btn-sm xl:hidden"
+            className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
             onClick={onClose}
             title={t('common.close')}
             aria-label={t('common.close')}
@@ -603,3 +635,8 @@ export default function XYAxisEditorDrawer({
     </GenerateAttachedDrawer>
   )
 }
+
+export default memo(
+  XYAxisEditorDrawer,
+  (previous, next) => !previous.open && !next.open,
+)
