@@ -12,6 +12,7 @@ import type { ReverseEntry, TagSuggestion } from './types'
 const CJK_RE = /[一-鿿]/
 
 const SEPARATORS = new Set([',', '，', '\n'])
+const WHITESPACE_RE = /\s/
 
 export interface ExtractedToken {
   /** trim 后的查询文本（喂给 findSuggestions）。 */
@@ -34,6 +35,18 @@ export function extractCurrentToken(value: string, cursor: number): ExtractedTok
   while (end < value.length && !SEPARATORS.has(value[end])) end++
   const raw = value.slice(start, end)
   const token = raw.trim()
+  return { token, start, end }
+}
+
+/** Booru 查询用：空白分隔 tag；负向/OR 前缀不参与词典匹配，但保留在替换 range。 */
+export function extractWhitespaceToken(value: string, cursor: number): ExtractedToken {
+  const cur = Math.max(0, Math.min(cursor, value.length))
+  let start = cur
+  while (start > 0 && !WHITESPACE_RE.test(value[start - 1])) start--
+  let end = cur
+  while (end < value.length && !WHITESPACE_RE.test(value[end])) end++
+  const raw = value.slice(start, end).trim()
+  const token = raw.replace(/^[-~]/, '')
   return { token, start, end }
 }
 

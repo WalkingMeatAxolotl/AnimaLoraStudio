@@ -103,6 +103,11 @@ const DEFAULT_GENERATE_PREFS = {
 
 type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
 
+type GenerateDatasetOverride = {
+  datasetPick: DatasetPick | null
+  datasetPrompt: string
+}
+
 /** 识别官方 variant key 与常见 custom 文件名中的 FP8 标记。
  * 这是性能提示，不参与后端执行判定；daemon 仍以实际模型层类型为准。 */
 function isFp8BaseModel(value: string | null): boolean {
@@ -736,8 +741,11 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkTaskId, history.loading, history.entries])
 
-  const handleGenerate = async () => {
-    const datasetSuffix = datasetPrompt.trim()
+  const handleGenerate = async (datasetOverride?: GenerateDatasetOverride) => {
+    if (submitting) return
+    const effectiveDatasetPrompt = datasetOverride?.datasetPrompt ?? datasetPrompt
+    const effectiveDatasetPick = datasetOverride ? datasetOverride.datasetPick : datasetPick
+    const datasetSuffix = effectiveDatasetPrompt.trim()
     if (!prompts.some((p) => p.trim()) && !datasetSuffix) {
       toast(t('generate.promptOrDatasetRequired'), 'error')
       return
@@ -825,8 +833,8 @@ export default function GeneratePage() {
               y: snapshotYDraft ? transformAxisRawForSnapshot(snapshotYDraft) : null,
             }
           : null,
-        dataset_pick: datasetPick,
-        dataset_prompt: datasetPrompt,
+        dataset_pick: effectiveDatasetPick,
+        dataset_prompt: effectiveDatasetPrompt,
       }
       // 0.17 P-I：count 现在 = **batch size**（每次入队的 task 数）。single 拆成 batch 个
       // task（各出 1 张、seed 递增区分）→ 在右栏时间线逐个排队；xy 一次一个矩阵（batch 忽略）。
@@ -1360,7 +1368,7 @@ export default function GeneratePage() {
                 <button
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
-                  onClick={handleGenerate}
+                  onClick={() => void handleGenerate()}
                   disabled={submitting}
                   title={
                     activeBlockingTask
@@ -1402,11 +1410,17 @@ export default function GeneratePage() {
               testId="prompt-gallery-drawer"
             >
               <GalleryPickerDrawer
-                onApplyPrompt={(prompt) => setPrefs((current) => ({
-                  ...current,
-                  datasetPick: null,
-                  datasetPrompt: prompt,
-                }))}
+                onApplyPrompt={async (prompt, autoGenerate) => {
+                  const datasetOverride: GenerateDatasetOverride = {
+                    datasetPick: null,
+                    datasetPrompt: prompt,
+                  }
+                  setPrefs((current) => ({
+                    ...current,
+                    ...datasetOverride,
+                  }))
+                  if (autoGenerate) await handleGenerate(datasetOverride)
+                }}
                 onClose={() => setGalleryPickerOpen(false)}
               />
             </GenerateAttachedDrawer>

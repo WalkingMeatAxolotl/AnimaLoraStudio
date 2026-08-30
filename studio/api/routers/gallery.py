@@ -8,7 +8,12 @@ from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 
 from ...services.booru import gallery
-from ..schemas.gallery import GallerySearchResponse, GalleryTagRequest, GalleryTagResponse
+from ..schemas.gallery import (
+    GalleryRating,
+    GallerySearchResponse,
+    GalleryTagRequest,
+    GalleryTagResponse,
+)
 
 router = APIRouter()
 
@@ -17,7 +22,7 @@ router = APIRouter()
 def search_gallery(
     source: Literal["danbooru", "gelbooru"] = "danbooru",
     query: str = Query(default="", max_length=500),
-    rating: Literal["general", "sensitive", "questionable", "explicit"] = "general",
+    rating: list[GalleryRating] | None = Query(default=None),
     date_from: date | None = None,
     date_to: date | None = None,
     page: int = Query(default=1, ge=1, le=10_000),
@@ -25,7 +30,7 @@ def search_gallery(
     return gallery.search_gallery(
         source=source,
         query=query,
-        rating=rating,
+        ratings=rating or ["general"],
         date_from=date_from,
         date_to=date_to,
         page=page,

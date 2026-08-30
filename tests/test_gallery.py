@@ -76,15 +76,28 @@ def _image_bytes(image_format: str = "PNG") -> bytes:
     return buf.getvalue()
 
 
-def test_build_search_query_maps_source_specific_date_filters() -> None:
+def test_build_search_query_maps_source_specific_filters() -> None:
     assert gallery.build_search_query(
-        "1girl blue_hair", "danbooru", "general",
+        "1girl blue_hair", "danbooru", ["general", "sensitive"],
         date(2025, 1, 2), date(2025, 2, 3),
-    ) == "1girl blue_hair rating:general date:2025-01-02..2025-02-03"
+    ) == "1girl blue_hair rating:g,s date:2025-01-02..2025-02-03"
     assert gallery.build_search_query(
-        "cat", "gelbooru", "questionable",
+        "cat", "gelbooru", ["questionable", "explicit"],
         date(2024, 4, 5), date(2024, 5, 6),
-    ) == "cat rating:questionable date:>=2024-04-05 date:<=2024-05-06"
+    ) == (
+        "cat {rating:questionable ~ rating:explicit} "
+        "date:>=2024-04-05 date:<=2024-05-06"
+    )
+    assert gallery.build_search_query(
+        "cat", "danbooru", ["general", "sensitive", "questionable", "explicit"],
+        None, None,
+    ) == "cat"
+
+
+def test_build_search_query_rejects_empty_ratings() -> None:
+    with pytest.raises(ValidationError) as exc:
+        gallery.build_search_query("", "danbooru", [], None, None)
+    assert exc.value.code == "gallery.rating_invalid"
 
 
 def test_build_search_query_rejects_inverted_dates() -> None:
@@ -109,7 +122,7 @@ def test_search_gallery_uses_credentials_and_normalizes(monkeypatch) -> None:
     }])
 
     result = gallery.search_gallery(
-        source="danbooru", query="1girl", rating="general",
+        source="danbooru", query="1girl", ratings=["general"],
         date_from=None, date_to=None, page=3, client=client,
     )
 
@@ -126,7 +139,7 @@ def test_search_gallery_uses_credentials_and_normalizes(monkeypatch) -> None:
     }
     source, query, kwargs = client.calls[0]
     assert source == "danbooru"
-    assert query == "1girl rating:general"
+    assert query == "1girl rating:g"
     assert kwargs["page"] == 3
     assert kwargs["limit"] == gallery.PAGE_SIZE
     assert kwargs["username"] == "dan-user"
@@ -146,7 +159,7 @@ def test_search_gallery_skips_non_image_posts(monkeypatch) -> None:
     }])
 
     result = gallery.search_gallery(
-        source="danbooru", query="", rating="general",
+        source="danbooru", query="", ratings=["general"],
         date_from=None, date_to=None, page=1, client=client,
     )
 

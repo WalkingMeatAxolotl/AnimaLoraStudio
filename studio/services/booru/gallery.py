@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -50,6 +51,15 @@ _ALLOWED_HOST_SUFFIXES: dict[str, tuple[str, ...]] = {
     "gelbooru": ("gelbooru.com",),
 }
 _RATING_VALUES = {"general", "sensitive", "questionable", "explicit"}
+_RATING_ORDER: tuple[GalleryRating, ...] = (
+    "general", "sensitive", "questionable", "explicit",
+)
+_DANBOORU_RATING_CODES: dict[GalleryRating, str] = {
+    "general": "g",
+    "sensitive": "s",
+    "questionable": "q",
+    "explicit": "e",
+}
 _SOURCE_VALUES = {"danbooru", "gelbooru"}
 _TAGGER_VALUES = {"wd14", "cltagger", "llm"}
 
@@ -85,10 +95,24 @@ def _shared_client() -> BooruClient:
         return client
 
 
+def _normalize_ratings(
+    ratings: Sequence[GalleryRating] | GalleryRating,
+) -> tuple[GalleryRating, ...]:
+    values = [ratings] if isinstance(ratings, str) else list(ratings)
+    invalid = [rating for rating in values if rating not in _RATING_VALUES]
+    if invalid or not values:
+        raise ValidationError(
+            "Unsupported gallery rating", code="gallery.rating_invalid",
+            details={"ratings": invalid or values}, http_status=400,
+        )
+    selected = set(values)
+    return tuple(rating for rating in _RATING_ORDER if rating in selected)
+
+
 def build_search_query(
     query: str,
     source: GallerySource,
-    rating: GalleryRating,
+    ratings: Sequence[GalleryRating] | GalleryRating,
     date_from: date | None,
     date_to: date | None,
 ) -> str:
@@ -98,11 +122,7 @@ def build_search_query(
             "Unsupported gallery source", code="gallery.source_invalid",
             details={"source": source}, http_status=400,
         )
-    if rating not in _RATING_VALUES:
-        raise ValidationError(
-            "Unsupported gallery rating", code="gallery.rating_invalid",
-            details={"rating": rating}, http_status=400,
-        )
+    normalized_ratings = _normalize_ratings(ratings)
     if date_from and date_to and date_from > date_to:
         raise ValidationError(
             "Start date must not be after end date",
@@ -111,7 +131,17 @@ def build_search_query(
         )
 
     parts = [part for part in query.strip().split() if part]
-    parts.append(f"rating:{rating}")
+    if len(normalized_ratings) < len(_RATING_ORDER):
+        if source == "danbooru":
+            values = ",".join(_DANBOORU_RATING_CODES[rating] for rating in normalized_ratings)
+            parts.append(f"rating:{values}")
+        elif len(normalized_ratings) == 1:
+            parts.append(f"rating:{normalized_ratings[0]}")
+        else:
+            alternatives = " ~ ".join(
+                f"rating:{rating}" for rating in normalized_ratings
+            )
+            parts.append(f"{{{alternatives}}}")
     if date_from or date_to:
         if source == "danbooru":
             if date_from and date_to:
@@ -203,7 +233,7 @@ def search_gallery(
     *,
     source: GallerySource,
     query: str,
-    rating: GalleryRating,
+    ratings: Sequence[GalleryRating] | GalleryRating,
     date_from: date | None,
     date_to: date | None,
     page: int,
@@ -214,7 +244,7 @@ def search_gallery(
             "Page must be at least 1", code="gallery.page_invalid",
             details={"page": page}, http_status=400,
         )
-    tags_query = build_search_query(query, source, rating, date_from, date_to)
+    tags_query = build_search_query(query, source, ratings, date_from, date_to)
     creds = _credentials(source)
     try:
         posts = (client or _shared_client()).search_posts(

@@ -2177,7 +2177,7 @@ export interface GallerySearchResponse {
 export interface GallerySearchParams {
   source: GallerySource
   query: string
-  rating: GalleryRating
+  ratings: GalleryRating[]
   dateFrom?: string
   dateTo?: string
   page: number
@@ -2201,9 +2201,9 @@ export const api = {
     const params = new URLSearchParams({
       source: opts.source,
       query: opts.query,
-      rating: opts.rating,
       page: String(opts.page),
     })
+    opts.ratings.forEach((rating) => params.append('rating', rating))
     if (opts.dateFrom) params.set('date_from', opts.dateFrom)
     if (opts.dateTo) params.set('date_to', opts.dateTo)
     return req<GallerySearchResponse>(`/api/gallery/search?${params}`, { signal })

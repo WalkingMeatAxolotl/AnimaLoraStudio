@@ -250,7 +250,7 @@ describe('GeneratePage 端到端 smoke', () => {
         return jsonOk({
           items: [{
             source: 'danbooru', post_id: '42', width: 800, height: 1200,
-            tags: ['1girl'], thumbnail_url: '/api/gallery/image?source=danbooru&url=x',
+            tags: ['1girl'], thumbnail_url: '/api/gallery/image?source=danbooru&post_id=42&url=x',
             image_url: 'https://cdn.donmai.us/sample.jpg',
           }],
           page: 1, page_size: 30, has_more: false,
@@ -288,6 +288,51 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(datasetAction)
     expect(screen.queryByTestId('prompt-gallery-drawer')).not.toBeInTheDocument()
     expect(screen.getByTestId('prompt-dataset-drawer')).toBeInTheDocument()
+    expect(lastEnqueueBody).toBeNull()
+  })
+
+  it('auto-generates with the newly tagged prompt instead of stale persisted prompt', async () => {
+    const previousImpl = fetchMock.getMockImplementation()!
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/gallery/search')) {
+        return jsonOk({
+          items: [{
+            source: 'danbooru', post_id: '42', width: 800, height: 1200,
+            tags: ['1girl'], thumbnail_url: '/api/gallery/image?source=danbooru&post_id=42&url=x',
+            image_url: 'https://cdn.donmai.us/sample.jpg',
+          }],
+          page: 1, page_size: 30, has_more: false,
+        })
+      }
+      if (url === '/api/gallery/tag' && init?.method === 'POST') {
+        return jsonOk({ prompt: 'fresh gallery prompt' })
+      }
+      return previousImpl(url, init)
+    })
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      prompts: ['base prompt'],
+      datasetPick: { projectId: 1, versionId: 2, name: 'old.png', tags: ['old'] },
+      datasetPrompt: 'stale prompt',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+    await user.click(screen.getByRole('button', { name: '从画廊选取' }))
+    await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
+    await user.click(screen.getByRole('switch', { name: '自动生成' }))
+    await user.click(screen.getByRole('button', { name: '打标' }))
+
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.prompts).toEqual(['base prompt, fresh gallery prompt'])
+    const snapshot = lastEnqueueBody!.params_snapshot as Record<string, unknown>
+    expect(snapshot.dataset_prompt).toBe('fresh gallery prompt')
+    expect(snapshot.dataset_pick).toBeNull()
+    expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('fresh gallery prompt')
   })
 
   it('训练集提示词位于正/负向下方，可编辑、持久化并进入 payload/快照；关闭 drawer 保留内容', async () => {
