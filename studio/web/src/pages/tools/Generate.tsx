@@ -18,7 +18,6 @@ import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
-import GenerateAttachedDrawer from './generate/GenerateAttachedDrawer'
 import GalleryPickerDrawer from './generate/GalleryPickerDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
@@ -230,6 +229,10 @@ export default function GeneratePage() {
   const setMode = (mode: ViewMode) => {
     setPrefs((p) => ({ ...p, mode }))
     setSidebarTab(mode === 'xy' ? 'xy' : 'lora')
+    setCatalogDrawerOpen(false)
+    setAxisDrawerOpen(false)
+    setDatasetPickerOpen(false)
+    setGalleryPickerOpen(false)
   }
   const setPrompts = (prompts: string[]) => setPrefs((p) => ({ ...p, prompts }))
   const setNegPrompt = (negPrompt: string) => setPrefs((p) => ({ ...p, negPrompt }))
@@ -365,15 +368,19 @@ export default function GeneratePage() {
     phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
+  const [datasetPickerMounted, setDatasetPickerMounted] = useState(false)
   const [galleryPickerOpen, setGalleryPickerOpen] = useState(false)
+  const [galleryPickerMounted, setGalleryPickerMounted] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
   const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>(
     'studio:generate:sidebarTab:v2',
     mode === 'xy' ? 'xy' : 'lora',
   )
   const [catalogDrawerOpen, setCatalogDrawerOpen] = useState(false)
+  const [catalogDrawerMounted, setCatalogDrawerMounted] = useState(false)
   const [activeAxis, setActiveAxis] = useState<'X' | 'Y'>('X')
   const [axisDrawerOpen, setAxisDrawerOpen] = useState(false)
+  const [axisDrawerMounted, setAxisDrawerMounted] = useState(false)
   const [axisOrderRevision, setAxisOrderRevision] = useState({ X: 0, Y: 0 })
   const prevModeRef = useRef(mode)
   useEffect(() => {
@@ -1051,6 +1058,7 @@ export default function GeneratePage() {
                       const opening = !axisDrawerOpen
                       setAxisDrawerOpen(opening)
                       if (opening) {
+                        setAxisDrawerMounted(true)
                         setCatalogDrawerOpen(false)
                         setDatasetPickerOpen(false)
                         setGalleryPickerOpen(false)
@@ -1121,6 +1129,7 @@ export default function GeneratePage() {
                     const opening = !catalogDrawerOpen
                     setCatalogDrawerOpen(opening)
                     if (opening) {
+                      setCatalogDrawerMounted(true)
                       setAxisDrawerOpen(false)
                       setDatasetPickerOpen(false)
                       setGalleryPickerOpen(false)
@@ -1157,6 +1166,7 @@ export default function GeneratePage() {
                     const opening = !galleryPickerOpen
                     setGalleryPickerOpen(opening)
                     if (opening) {
+                      setGalleryPickerMounted(true)
                       setDatasetPickerOpen(false)
                       setCatalogDrawerOpen(false)
                       setAxisDrawerOpen(false)
@@ -1172,6 +1182,7 @@ export default function GeneratePage() {
                     const opening = !datasetPickerOpen
                     setDatasetPickerOpen(opening)
                     if (opening) {
+                      setDatasetPickerMounted(true)
                       setGalleryPickerOpen(false)
                       setCatalogDrawerOpen(false)
                       setAxisDrawerOpen(false)
@@ -1396,59 +1407,53 @@ export default function GeneratePage() {
             </div>
           </div>
 
-          <LoraCatalogDrawer
-            open={catalogDrawerOpen && sidebarTab === 'lora'}
-            onClose={() => setCatalogDrawerOpen(false)}
-            loras={loras}
-            ui={loraUi}
-            onChange={setSelection}
-          />
-          {galleryPickerOpen && sidebarTab === 'prompts' && (
-            <GenerateAttachedDrawer
-              id="prompt-gallery-drawer"
-              ariaLabel={t('generate.galleryTitle')}
-              testId="prompt-gallery-drawer"
-            >
-              <GalleryPickerDrawer
-                onApplyPrompt={async (prompt, autoGenerate) => {
-                  const datasetOverride: GenerateDatasetOverride = {
-                    datasetPick: null,
-                    datasetPrompt: prompt,
-                  }
-                  setPrefs((current) => ({
-                    ...current,
-                    ...datasetOverride,
-                  }))
-                  if (autoGenerate) await handleGenerate(datasetOverride)
-                }}
-                onClose={() => setGalleryPickerOpen(false)}
-              />
-            </GenerateAttachedDrawer>
+          {catalogDrawerMounted && (
+            <LoraCatalogDrawer
+              open={catalogDrawerOpen && sidebarTab === 'lora'}
+              onClose={() => setCatalogDrawerOpen(false)}
+              loras={loras}
+              ui={loraUi}
+              onChange={setSelection}
+            />
           )}
-          {datasetPickerOpen && sidebarTab === 'prompts' && (
-            <GenerateAttachedDrawer
-              id="prompt-dataset-drawer"
-              ariaLabel={t('generate.datasetPromptTitle')}
-              testId="prompt-dataset-drawer"
-            >
-              <PromptFromDatasetPicker
-                variant="drawer"
-                value={datasetPick}
-                onChange={setDatasetPick}
-                onClose={() => setDatasetPickerOpen(false)}
-              />
-            </GenerateAttachedDrawer>
+          {galleryPickerMounted && (
+            <GalleryPickerDrawer
+              open={galleryPickerOpen && sidebarTab === 'prompts'}
+              onApplyPrompt={async (prompt, autoGenerate) => {
+                const datasetOverride: GenerateDatasetOverride = {
+                  datasetPick: null,
+                  datasetPrompt: prompt,
+                }
+                setPrefs((current) => ({
+                  ...current,
+                  ...datasetOverride,
+                }))
+                if (autoGenerate) await handleGenerate(datasetOverride)
+              }}
+              onClose={() => setGalleryPickerOpen(false)}
+            />
           )}
-          <XYAxisEditorDrawer
-            open={axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy'}
-            label={activeAxis}
-            draft={activeAxis === 'Y' ? visibleYDraft : xDraft}
-            otherAxis={activeAxis === 'X' ? yDraft?.axis ?? null : xDraft.axis}
-            fixedLoras={enabledLoras(prefs.xyFixedLoras, prefs.xyFixedLoraUi)}
-            manualOrderRevision={axisOrderRevision[activeAxis]}
-            onChange={(next) => activeAxis === 'Y' ? setYDraft(next) : setXDraft(next)}
-            onClose={() => setAxisDrawerOpen(false)}
-          />
+          {datasetPickerMounted && (
+            <PromptFromDatasetPicker
+              open={datasetPickerOpen && sidebarTab === 'prompts'}
+              variant="drawer"
+              value={datasetPick}
+              onChange={setDatasetPick}
+              onClose={() => setDatasetPickerOpen(false)}
+            />
+          )}
+          {axisDrawerMounted && (
+            <XYAxisEditorDrawer
+              open={axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy'}
+              label={activeAxis}
+              draft={activeAxis === 'Y' ? visibleYDraft : xDraft}
+              otherAxis={activeAxis === 'X' ? yDraft?.axis ?? null : xDraft.axis}
+              fixedLoras={enabledLoras(prefs.xyFixedLoras, prefs.xyFixedLoraUi)}
+              manualOrderRevision={axisOrderRevision[activeAxis]}
+              onChange={(next) => activeAxis === 'Y' ? setYDraft(next) : setXDraft(next)}
+              onClose={() => setAxisDrawerOpen(false)}
+            />
+          )}
 
           {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区
               flex-1 min-h-0，XY 网格自带滚动），auto 会因一点点溢出触发幻影滚动条、吃掉

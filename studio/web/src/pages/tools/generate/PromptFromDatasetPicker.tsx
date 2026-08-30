@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type CaptionEntry, type ProjectSummary } from '../../../api/client'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
+import GenerateAttachedDrawer from './GenerateAttachedDrawer'
 
 // 命名前缀对齐 useAdvancedMode 的 `studio:` 约定（PR #66 P1-4）。旧的
 // `anima.generate.promptDataset.*` key 在 mount 时 migrate 一次后丢弃。
@@ -47,14 +48,16 @@ export interface DatasetPick {
  * pid/vid 是「浏览中」的状态，跟 value 解耦 —— 浏览时切别的 project/version 看
  * 不影响 value；用 localStorage 持久化跨 session 记忆浏览位置。
  */
-export default function PromptFromDatasetPicker({
-  value, onChange, onClose, variant = 'inline',
+function PromptFromDatasetPicker({
+  value, onChange, onClose, variant = 'inline', open = true,
 }: {
   /** 当前选中 caption（null = 未选） */
   value: DatasetPick | null
   onChange: (next: DatasetPick | null) => void
   onClose: () => void
   variant?: 'inline' | 'drawer'
+  /** Drawer 模式下仅隐藏视图，组件状态与已加载列表在本次页面会话中保留。 */
+  open?: boolean
 }) {
   const { t } = useTranslation()
   // 一次性 migrate 旧 anima.* key 到 studio: 命名（PR #66 P1-4 约定）；module 顶部
@@ -86,6 +89,8 @@ export default function PromptFromDatasetPicker({
   const [loaded, setLoaded] = useState<{ pid: number; vid: number } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [projectLoadFailed, setProjectLoadFailed] = useState(false)
+  const [projectReloadToken, setProjectReloadToken] = useState(0)
   const [search, setSearch] = useState('')
   // 鼠标悬停的 caption key，驱动底部大图预览（移开 → 回落到已选 value 的图）
   const [hoveredKey, setHoveredKey] = useState<string | null>(null)
@@ -98,15 +103,24 @@ export default function PromptFromDatasetPicker({
 
   // 1. 拉项目列表；若上次记的 pid 在新项目列表中不存在则清掉避免幽灵选择
   useEffect(() => {
+    setProjectLoadFailed(false)
+    setError(null)
     void api.listProjects()
       .then((items) => {
         setProjects(items)
-        if (pid != null && !items.some((p) => p.id === pid)) setPid(null)
+        setPid((current) => (
+          current != null && !items.some((project) => project.id === current)
+            ? null
+            : current
+        ))
       })
-      .catch((e) => setError(String(e)))
-    // pid 进依赖会触发反复拉项目；mount 一次就够
+      .catch((e) => {
+        setError(String(e))
+        setProjectLoadFailed(true)
+      })
+    // pid 进依赖会触发反复拉项目；仅在 mount 或显式重试时拉取
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [projectReloadToken])
 
   // 2. 选项目后拉版本列表；优先复用 vid（如果该版本在新项目里仍存在）
   useEffect(() => {
@@ -211,11 +225,16 @@ export default function PromptFromDatasetPicker({
     })
   }
 
-  return (
-    <>
-    {/* onMouseLeave 绑在整个 picker（而非仅列表）：从列表行移到底部大图想点击放大时
-        不能丢 hover —— 否则未选中场景下大图与放大按钮会随 hoveredKey 清空而消失、点不到，
-        已选场景下则会回落成放大 value 的另一张图。移出整个 picker 才清空、回落到 value。 */}
+  useEffect(() => {
+    if (open) return
+    setHoveredKey(null)
+    setZoomMeta(null)
+  }, [open])
+
+  const picker = (
+    /* onMouseLeave 绑在整个 picker（而非仅列表）：从列表行移到底部大图想点击放大时
+       不能丢 hover —— 否则未选中场景下大图与放大按钮会随 hoveredKey 清空而消失、点不到，
+       已选场景下则会回落成放大 value 的另一张图。移出整个 picker才清空、回落到 value。 */
     <div
       className={variant === 'drawer'
         ? 'flex h-full min-h-0 flex-col gap-2 overflow-hidden p-3'
@@ -283,7 +302,20 @@ export default function PromptFromDatasetPicker({
         disabled={!pid || !vid || captions.length === 0}
       />
 
-      {error && <div className="text-2xs text-err">{error}</div>}
+      {error && (
+        <div className="flex items-center gap-2 text-2xs text-err">
+          <span className="flex-1">{error}</span>
+          {projectLoadFailed && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setProjectReloadToken((token) => token + 1)}
+            >
+              {t('common.retry')}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* caption 列表 */}
       <div
@@ -371,7 +403,21 @@ export default function PromptFromDatasetPicker({
         )}
       </div>
     </div>
-    {zoomMeta && (
+  )
+
+  return (
+    <>
+    {variant === 'drawer' ? (
+      <GenerateAttachedDrawer
+        id="prompt-dataset-drawer"
+        ariaLabel={t('generate.datasetPromptTitle')}
+        testId="prompt-dataset-drawer"
+        open={open}
+      >
+        {picker}
+      </GenerateAttachedDrawer>
+    ) : picker}
+    {open && zoomMeta && (
       <ImagePreviewModal
         src={api.versionThumbUrl(zoomMeta.pid, zoomMeta.vid, 'train', zoomMeta.name, zoomMeta.folder, 1600)}
         caption={zoomMeta.name}
@@ -381,3 +427,11 @@ export default function PromptFromDatasetPicker({
     </>
   )
 }
+
+export default memo(
+  PromptFromDatasetPicker,
+  (previous, next) => previous.variant === 'drawer'
+    && next.variant === 'drawer'
+    && previous.open === false
+    && next.open === false,
+)

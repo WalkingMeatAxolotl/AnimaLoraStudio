@@ -53,6 +53,46 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     return user
   }
 
+  it('retries the project list after an initial keep-alive load failure', async () => {
+    const listProjects = vi.spyOn(api, 'listProjects')
+      .mockRejectedValueOnce(new Error('project list unavailable'))
+      .mockResolvedValueOnce(projects)
+    const user = userEvent.setup()
+    render(<PromptFromDatasetPicker variant="drawer" open value={null} onChange={vi.fn()} onClose={vi.fn()} />)
+
+    expect(await screen.findByText(/project list unavailable/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+
+    expect(await screen.findByRole('option', { name: 'projA' })).toBeInTheDocument()
+    expect(listProjects).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/project list unavailable/)).not.toBeInTheDocument()
+  })
+
+  it('does not let a late project-list response clear a newer controlled project', async () => {
+    localStorage.setItem('studio:generate:promptDataset:projectId', JSON.stringify(999))
+    const pendingProjects = deferred<ProjectSummary[]>()
+    vi.spyOn(api, 'listProjects').mockReturnValue(pendingProjects.promise)
+    vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
+    vi.spyOn(api, 'listCaptionsFull').mockResolvedValue({ folder: null, items: [] })
+
+    const props = { onChange: vi.fn(), onClose: vi.fn() }
+    const { rerender } = render(
+      <PromptFromDatasetPicker value={null} {...props} />,
+    )
+    rerender(
+      <PromptFromDatasetPicker
+        value={{ projectId: 1, versionId: 11, name: 'selected.png', tags: [] }}
+        {...props}
+      />,
+    )
+    await waitFor(() => expect(api.getProject).toHaveBeenCalledWith(1))
+
+    await act(async () => { pendingProjects.resolve(projects) })
+
+    const projectSelect = await screen.findByLabelText('选择项目')
+    await waitFor(() => expect(projectSelect).toHaveValue('1'))
+  })
+
   it('行缩略图 URL 锚定当前 (pid, vid) + 行文件名', async () => {
     vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
     vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)

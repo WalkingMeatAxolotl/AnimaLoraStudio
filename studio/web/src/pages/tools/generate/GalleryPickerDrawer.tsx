@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type GalleryItem, type GalleryRating, type GallerySource, type GalleryTagger } from '../../../api/client'
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useOptionalToast } from '../../../components/Toast'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
+import GenerateAttachedDrawer from './GenerateAttachedDrawer'
 
 const SOURCE_KEY = 'studio:generate:gallery:source'
 const TAGGER_KEY = 'studio:generate:gallery:tagger'
@@ -39,10 +40,12 @@ type SearchState = {
 
 const EMPTY_RESULT: SearchState = { items: [], page: 1, hasMore: false }
 
-export default function GalleryPickerDrawer({
+function GalleryPickerDrawer({
+  open = true,
   onApplyPrompt,
   onClose,
 }: {
+  open?: boolean
   onApplyPrompt: (prompt: string, autoGenerate: boolean) => void | Promise<void>
   onClose: () => void
 }) {
@@ -76,7 +79,7 @@ export default function GalleryPickerDrawer({
     value: query,
     inputRef: searchInputRef,
     tokenMode: 'whitespace',
-    disabled: tagging,
+    disabled: tagging || !open,
     onPick: ({ suggestion, range }) => {
       const before = query.slice(0, range.start)
       const current = query.slice(range.start, range.end).trim()
@@ -165,7 +168,13 @@ export default function GalleryPickerDrawer({
   }, [dateDraft, dateFrom, dateTo, setDateFrom, setDateTo, setPage, t])
 
   useEffect(() => {
-    if (!ratingOpen && !timeOpen) return
+    if (open) return
+    setRatingOpen(false)
+    setTimeOpen(false)
+  }, [open])
+
+  useEffect(() => {
+    if (!open || (!ratingOpen && !timeOpen)) return
     const onMouseDown = (event: MouseEvent) => {
       const target = event.target as Node
       if (ratingOpen && !ratingWrapRef.current?.contains(target)) commitRatingFilter()
@@ -173,9 +182,10 @@ export default function GalleryPickerDrawer({
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [commitRatingFilter, commitTimeFilter, ratingOpen, timeOpen])
+  }, [commitRatingFilter, commitTimeFilter, open, ratingOpen, timeOpen])
 
   useEffect(() => {
+    if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (ratingOpen) commitRatingFilter()
@@ -184,7 +194,7 @@ export default function GalleryPickerDrawer({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commitRatingFilter, commitTimeFilter, onClose, ratingOpen, timeOpen])
+  }, [commitRatingFilter, commitTimeFilter, onClose, open, ratingOpen, timeOpen])
 
   const runSearch = () => {
     setPage(1)
@@ -266,7 +276,13 @@ export default function GalleryPickerDrawer({
   const timeFilterActive = Boolean(dateFrom || dateTo)
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden" data-testid="gallery-picker">
+    <GenerateAttachedDrawer
+      id="prompt-gallery-drawer"
+      ariaLabel={t('generate.galleryTitle')}
+      testId="prompt-gallery-drawer"
+      open={open}
+    >
+      <div className="flex h-full min-h-0 flex-col overflow-hidden" data-testid="gallery-picker">
       <header className="relative z-20 flex shrink-0 flex-col gap-2 border-b border-subtle p-3">
         <div className="flex flex-wrap items-center gap-2">
           <select
@@ -605,6 +621,12 @@ export default function GalleryPickerDrawer({
           {t('generate.galleryNext')}
         </button>
       </footer>
-    </div>
+      </div>
+    </GenerateAttachedDrawer>
   )
 }
+
+export default memo(
+  GalleryPickerDrawer,
+  (previous, next) => previous.open === false && next.open === false,
+)

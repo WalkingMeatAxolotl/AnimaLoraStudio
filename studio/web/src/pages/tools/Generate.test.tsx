@@ -1,6 +1,6 @@
 /** GeneratePage 端到端 smoke：mock fetch，验证 single / xy / 多 prompt+xy
  *  三个关键路径的 enqueue payload 行为。 */
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../../components/Toast'
@@ -173,6 +173,7 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(secondaryTabs.compareDocumentPosition(sectionTabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Y · 权重' })).toBeInTheDocument()
     const editAxisButton = screen.getByRole('button', { name: '编辑 X 轴' })
+    expect(screen.queryByTestId('xy-axis-editor-drawer')).not.toBeInTheDocument()
     expect(editAxisButton).toHaveTextContent('编辑 X 轴')
     expect(editAxisButton).toHaveAttribute('aria-controls', 'xy-axis-editor-drawer')
     expect(secondaryTabs).not.toContainElement(editAxisButton)
@@ -182,6 +183,7 @@ describe('GeneratePage 端到端 smoke', () => {
     // Numeric values are edited in the XY Axis Editor Drawer, not inline in
     // the summary card.
     await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
+    expect(screen.getByTestId('xy-axis-editor-drawer')).toBeVisible()
 
     // cell 数归入主操作按钮，轴工具栏不再重复显示。
     expect(screen.queryByTestId('xy-image-count')).not.toBeInTheDocument()
@@ -207,6 +209,17 @@ describe('GeneratePage 端到端 smoke', () => {
 
     expect(screen.getByTestId('current-lora-panel')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
+    expect(screen.queryByTestId('lora-catalog-drawer')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '添加 LoRA' }))
+    const catalogDrawer = screen.getByTestId('lora-catalog-drawer')
+    expect(catalogDrawer).toBeVisible()
+    await waitFor(() => expect(within(catalogDrawer).getByPlaceholderText('搜索项目或来源…')).toHaveFocus())
+
+    await user.click(within(catalogDrawer).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '添加 LoRA' })).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '添加 LoRA' }))
+    await waitFor(() => expect(within(catalogDrawer).getByPlaceholderText('搜索项目或来源…')).toHaveFocus())
 
     await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
     await user.click(screen.getByRole('tab', { name: 'LoRA' }))
@@ -214,6 +227,9 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByTestId('current-lora-panel')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
     expect(screen.queryByTestId('current-fixed-lora-panel')).not.toBeInTheDocument()
+    await waitFor(() => expect(catalogDrawer).not.toBeVisible())
+    await user.click(screen.getByRole('button', { name: '添加 LoRA' }))
+    expect(screen.getByTestId('lora-catalog-drawer')).toBe(catalogDrawer)
   })
 
   it('opens the training-set picker in the shared attached drawer instead of inline', async () => {
@@ -226,6 +242,10 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
 
     await user.click(trigger)
+    await waitFor(() => {
+      const projectRequests = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/projects'))
+      expect(projectRequests).toHaveLength(1)
+    })
 
     const drawer = screen.getByTestId('prompt-dataset-drawer')
     const picker = screen.getByTestId('prompt-dataset-picker')
@@ -235,7 +255,12 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByRole('tabpanel', { name: '提示词' })).not.toContainElement(picker)
 
     await user.click(screen.getByRole('button', { name: '收起' }))
-    expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('prompt-dataset-drawer')).not.toBeVisible()
+
+    await user.click(trigger)
+    expect(screen.getByTestId('prompt-dataset-drawer')).toBe(drawer)
+    const projectRequests = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/projects'))
+    expect(projectRequests).toHaveLength(1)
   })
 
   it('opens the gallery left of the dataset action, keeps drawers exclusive, and applies tagged prompt', async () => {
@@ -276,6 +301,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(galleryAction)
     expect(screen.getByTestId('prompt-gallery-drawer')).toBeInTheDocument()
     await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
+    const selectedGalleryCard = screen.getByRole('button', { name: '选择图片 #42' })
+    expect(selectedGalleryCard).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '打标' }))
 
     await waitFor(() => {
@@ -285,9 +312,26 @@ describe('GeneratePage 端到端 smoke', () => {
       expect(stored.datasetPrompt).toBe('fresh gallery prompt')
     })
 
+    const galleryRequestsBeforeClose = fetchMock.mock.calls.filter(
+      ([url]) => String(url).startsWith('/api/gallery/search'),
+    ).length
+    const galleryDrawer = screen.getByTestId('prompt-gallery-drawer')
+    const galleryList = screen.getByTestId('gallery-image-list')
+    galleryList.scrollTop = 137
     await user.click(datasetAction)
-    expect(screen.queryByTestId('prompt-gallery-drawer')).not.toBeInTheDocument()
-    expect(screen.getByTestId('prompt-dataset-drawer')).toBeInTheDocument()
+    expect(galleryDrawer).not.toBeVisible()
+    expect(galleryDrawer).toHaveAttribute('aria-hidden', 'true')
+    expect(galleryDrawer).toHaveAttribute('hidden')
+    expect(screen.getByTestId('prompt-dataset-drawer')).toBeVisible()
+
+    await user.click(galleryAction)
+    expect(galleryDrawer).toBeVisible()
+    expect(screen.getByTestId('gallery-image-list')).toBe(galleryList)
+    expect(galleryList.scrollTop).toBe(137)
+    expect(screen.getByRole('button', { name: '选择图片 #42' })).toBe(selectedGalleryCard)
+    expect(fetchMock.mock.calls.filter(
+      ([url]) => String(url).startsWith('/api/gallery/search'),
+    )).toHaveLength(galleryRequestsBeforeClose)
     expect(lastEnqueueBody).toBeNull()
   })
 
@@ -355,7 +399,7 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(screen.getByRole('button', { name: '从训练集选取' }))
     const drawer = screen.getByTestId('prompt-dataset-drawer')
     await user.click(drawer.querySelector('button[aria-label="关闭"]') as HTMLButtonElement)
-    expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('prompt-dataset-drawer')).not.toBeVisible()
     expect(datasetInput).toHaveValue('original, tags')
 
     await user.clear(datasetInput)
