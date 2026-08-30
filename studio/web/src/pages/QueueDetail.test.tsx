@@ -279,10 +279,11 @@ describe('QueueDetailPage 评估 tab', () => {
     )
     renderDetailPage()
 
-    await waitFor(() => expect(screen.getByText('样图')).toBeInTheDocument())
+    // task=null 时按 train 基线暂时也会显示「样图」和「监控」；等待 monitor
+    // 消失才能证明 eval_session 已加载且类型差异化 tab 已收敛。
+    await waitFor(() => expect(screen.queryByText('监控')).not.toBeInTheDocument())
+    expect(screen.getByText('样图')).toBeInTheDocument()
     expect(screen.getByText('指标')).toBeInTheDocument()
-    // 训练专用 tab 不该出现在评估作业上
-    expect(screen.queryByText('监控')).not.toBeInTheDocument()
     // 溯源进了概览的键值表，不是单独一块进度卡。parent 是异步认领的（params 里
     // 只有 session_id），所以等它出现而不是等「关联训练」那一格。
     await waitFor(() => expect(screen.getByText('#88')).toBeInTheDocument())
