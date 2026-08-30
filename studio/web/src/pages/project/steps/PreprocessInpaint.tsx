@@ -111,8 +111,14 @@ export default function PreprocessInpaintPage() {
     () => images.find((im) => im.name === activeName) ?? null,
     [images, activeName],
   )
-  const activeHistory = activeName ? (historyByImage[activeName] ?? []) : []
-  const activeRedo = activeName ? (redoByImage[activeName] ?? []) : []
+  const activeHistory = useMemo(
+    () => (activeName ? (historyByImage[activeName] ?? []) : []),
+    [activeName, historyByImage],
+  )
+  const activeRedo = useMemo(
+    () => (activeName ? (redoByImage[activeName] ?? []) : []),
+    [activeName, redoByImage],
+  )
   const activePaintStrokes = useMemo(
     () => activeHistory.filter((h) => h.kind === 'paint').map((h) => h.stroke),
     [activeHistory],

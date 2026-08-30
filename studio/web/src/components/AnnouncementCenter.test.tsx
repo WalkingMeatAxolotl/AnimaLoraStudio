@@ -113,8 +113,10 @@ describe('AnnouncementCenter', () => {
     renderCenter()
     await waitFor(() =>
       expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
-    // ### 解析成标题（原文 "### 新增" 不会有 heading role）
-    expect(screen.getByRole('heading', { name: '新增' })).toBeInTheDocument()
+    // modal 会先于默认选中 effect 出现；等待正文标题，避免慢速 CI 读到
+    // selectedId 仍为空的中间态。
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: '新增' })).toBeInTheDocument())
     // - 解析成列表项
     expect(screen.getByText('甲项')).toBeInTheDocument()
   })
