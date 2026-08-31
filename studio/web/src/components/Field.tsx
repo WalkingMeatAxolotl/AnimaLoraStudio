@@ -88,7 +88,7 @@ export default function Field({
             {label}
             {hintNode}
           </div>
-          {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+          {help && <div className="type-field-help mt-1">{help}</div>}
         </span>
       </label>
     )
@@ -99,7 +99,7 @@ export default function Field({
     const triValue = value === true ? 'true' : value === false ? 'false' : ''
     return (
       <div className="py-1.5">
-        <div className="text-sm font-medium text-fg-secondary mb-1">
+        <div className="type-field-label mb-1">
           {label}{hintNode}
         </div>
         <select
@@ -115,7 +115,7 @@ export default function Field({
           <option value="true">{t('field.yes')}</option>
           <option value="false">{t('field.no')}</option>
         </select>
-        {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+        {help && <div className="type-field-help mt-1">{help}</div>}
       </div>
     )
   }
@@ -124,7 +124,7 @@ export default function Field({
   if (kind === 'select') {
     return (
       <div className="py-1.5">
-        <div className="text-sm font-medium text-fg-secondary mb-1">
+        <div className="type-field-label mb-1">
           {label}{hintNode}
         </div>
         <select
@@ -151,7 +151,7 @@ export default function Field({
             )
           })}
         </select>
-        {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+        {help && <div className="type-field-help mt-1">{help}</div>}
       </div>
     )
   }
@@ -265,7 +265,7 @@ function TextareaField({
   useAutoGrowTextarea(taRef, text)
   return (
     <div className="py-1.5">
-      <div className="text-sm font-medium text-fg-secondary mb-1">
+      <div className="type-field-label mb-1">
         {label}{hintNode}
       </div>
       <textarea
@@ -276,7 +276,7 @@ function TextareaField({
         disabled={disabled}
         className="input input-mono resize-none overflow-hidden" style={fieldStyle(disabled)}
       />
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="type-field-help mt-1">{help}</div>}
     </div>
   )
 }
@@ -302,7 +302,7 @@ function StringListField({
 
   return (
     <div className="py-1.5">
-      <div className="text-sm font-medium text-fg-secondary mb-1">
+      <div className="type-field-label mb-1">
         {label}{hintNode}
       </div>
       <textarea
@@ -317,7 +317,7 @@ function StringListField({
         disabled={disabled}
         className="input input-mono resize-none overflow-hidden" style={fieldStyle(disabled)}
       />
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="type-field-help mt-1">{help}</div>}
     </div>
   )
 }
@@ -374,7 +374,7 @@ function JsonCodeField({
 
   return (
     <div className="py-1.5">
-      <div className="text-sm font-medium text-fg-secondary mb-1">
+      <div className="type-field-label mb-1">
         {label}{hintNode}
       </div>
       <textarea
@@ -391,7 +391,7 @@ function JsonCodeField({
         style={fieldStyle(disabled)}
       />
       {error && <div className="text-xs text-err mt-1">{error}</div>}
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="type-field-help mt-1">{help}</div>}
     </div>
   )
 }
@@ -441,7 +441,7 @@ function IntListField({
 
   return (
     <div className="py-1.5">
-      <div className="text-sm font-medium text-fg-secondary mb-1">
+      <div className="type-field-label mb-1">
         {label}{hintNode}
       </div>
       <input
@@ -461,7 +461,7 @@ function IntListField({
         className="input input-mono" style={fieldStyle(disabled)}
         placeholder={placeholder}
       />
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="type-field-help mt-1">{help}</div>}
     </div>
   )
 }
@@ -518,7 +518,7 @@ function NumberField({
 
   return (
     <div className="py-1.5">
-      <div className="text-sm font-medium text-fg-secondary mb-1">
+      <div className="type-field-label mb-1">
         {label}{hintNode}
       </div>
       <input
@@ -537,7 +537,7 @@ function NumberField({
         disabled={disabled}
         className="input input-mono" style={fieldStyle(disabled)}
       />
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="type-field-help mt-1">{help}</div>}
     </div>
   )
 }
@@ -588,7 +588,7 @@ function PathStringField({
 
   return (
     <div className="py-1.5 relative">
-      <div className="text-sm font-medium text-fg-secondary mb-1">
+      <div className="type-field-label mb-1">
         {label}
         {kind === 'path' && (
           <span className="ml-2 text-xs text-fg-tertiary">{t('field.pathHint')}</span>
@@ -660,7 +660,7 @@ function PathStringField({
         )}
         {suffix}
       </div>
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="type-field-help mt-1">{help}</div>}
       {/* resume_state / resume_lora：贴字段的 dropdown，按 version 分组列文件 */}
       {useResumePicker && picking && !disabled && (
         <ResumeFieldPicker

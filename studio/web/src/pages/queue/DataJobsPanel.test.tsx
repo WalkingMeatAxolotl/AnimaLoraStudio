@@ -83,6 +83,10 @@ describe('DataJobsPanel', () => {
     renderPanel()
 
     await waitFor(() => expect(screen.getByTestId('job-row-10')).toBeInTheDocument())
+    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
+      .toHaveClass('type-section-label')
+    expect(screen.getByRole('heading', { level: 3, name: /历史/ }))
+      .toHaveClass('type-section-label')
     expect(within(screen.getByTestId('job-row-10')).getByText('打标')).toBeInTheDocument()
     expect(within(screen.getByTestId('job-row-9')).getByText('素材下载')).toBeInTheDocument()
     await waitFor(() => expect(screen.getAllByText(/MyProj/).length).toBeGreaterThan(0))

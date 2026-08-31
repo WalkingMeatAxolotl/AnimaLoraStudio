@@ -205,6 +205,73 @@ select option:checked {
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .tnum { font-variant-numeric: tabular-nums; }
 .serif { font-family: var(--font-serif); }
+
+/* Semantic typography roles. These classes map meaning onto the density-aware
+ * foundation scale; pages should not reassemble the same font/weight/color tuple. */
+.type-page-title,
+.type-page-description,
+.type-section-title,
+.type-panel-title,
+.type-section-label,
+.type-field-label,
+.type-field-help {
+  font-family: var(--font-sans);
+}
+.type-page-title {
+  margin: 0;
+  color: var(--fg-primary);
+  font-size: var(--t-2xl);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+.type-page-description {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--fg-secondary);
+  font-size: var(--t-md);
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.type-section-title {
+  margin: 0;
+  color: var(--fg-primary);
+  font-size: var(--t-lg);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.type-panel-title {
+  margin: 0;
+  color: var(--fg-primary);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.type-section-label {
+  margin: 0;
+  color: var(--fg-tertiary);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+.type-field-label {
+  color: var(--fg-secondary);
+  font-size: var(--t-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.type-field-help {
+  color: var(--fg-tertiary);
+  font-size: var(--t-xs);
+  font-weight: 400;
+  line-height: 1.5;
+}
 .caption {
   font-family: var(--font-mono);
   font-size: var(--t-xs);

@@ -231,11 +231,11 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
         onSubmit={handleSubmit}
         className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[440px] p-6 flex flex-col gap-4 shadow-xl"
       >
-        <h2 className="m-0 text-lg font-semibold text-fg-primary">{title}</h2>
+        <h2 className="type-section-title">{title}</h2>
 
         {state.type === 'prompt' ? (
           <label className="flex flex-col gap-1.5">
-            <span className="text-sm text-fg-secondary">{state.label}</span>
+            <span className="type-field-label">{state.label}</span>
             <input
               ref={inputRef}
               className="input input-mono font-mono"

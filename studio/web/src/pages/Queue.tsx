@@ -1060,7 +1060,7 @@ export default function QueuePage() {
             {/* 进行中（running + paused） */}
             {activeItems.length > 0 && (
               <section className="flex flex-col gap-2">
-                <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                <h3 className="type-section-label">
                   {t('queue.sectionActive')} ({activeItems.length})
                 </h3>
                 {activeItems.map(renderRow)}
@@ -1070,7 +1070,7 @@ export default function QueuePage() {
             {/* 等待入队（pending） */}
             {pendingItems.length > 0 && (
               <section className="flex flex-col gap-2">
-                <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                <h3 className="type-section-label">
                   {t('queue.sectionWaiting')} ({pendingItems.length})
                 </h3>
                 {pendingItems.map(renderRow)}
@@ -1080,7 +1080,7 @@ export default function QueuePage() {
             {/* 计划任务（scheduled，0.17 P-B）——到点自动转入等待入队 */}
             {scheduledItems.length > 0 && (
               <section className="flex flex-col gap-2" data-testid="queue-scheduled-section">
-                <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                <h3 className="type-section-label">
                   {t('queue.sectionScheduled')} ({scheduledItems.length})
                 </h3>
                 {scheduledItems.map(renderRow)}
@@ -1089,7 +1089,7 @@ export default function QueuePage() {
 
             {/* 历史（terminal，后端分页） */}
             <section className="flex flex-col gap-2">
-              <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+              <h3 className="type-section-label">
                 {t('queue.sectionHistory')} ({history.total})
               </h3>
 

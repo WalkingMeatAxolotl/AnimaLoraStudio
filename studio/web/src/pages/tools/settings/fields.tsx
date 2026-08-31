@@ -13,7 +13,7 @@ export function SettingsSection({
   headerExtras?: React.ReactNode  // 可选 slot：渲染在 h2 右侧（紧贴），给 ⓘ tooltip 之类用
   children: React.ReactNode
 }) {
-  const titleEl = <h2 className="text-sm font-semibold text-fg-primary">{title}</h2>
+  const titleEl = <h2 className="type-panel-title">{title}</h2>
   return (
     <section id={id} className="rounded-md border border-subtle bg-surface p-4 flex flex-col gap-3 scroll-mt-24">
       {headerExtras ? (
@@ -89,7 +89,7 @@ export function SectionIndex({
   return (
     <aside className="hidden lg:block">
       <nav className="sticky top-4 flex flex-col gap-0.5">
-        <div className="caption mb-2 px-2">{t('settings.pageIndex')}</div>
+        <div className="type-section-label mb-2 px-2">{t('settings.pageIndex')}</div>
         {sections.map((s) => (
           <button
             key={s.id}
@@ -119,7 +119,7 @@ export function SettingsField({ label, helpTooltip, children }: {
   return (
     <div className="grid grid-cols-[240px_1fr] gap-3 items-start">
       <div className="flex items-center gap-2 min-w-0 pt-1.5">
-        <label className="text-xs text-fg-secondary font-mono leading-none">{label}</label>
+        <label className="type-field-label">{label}</label>
         {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
       </div>
       <div className="min-w-0">{children}</div>

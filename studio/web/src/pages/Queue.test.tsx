@@ -112,9 +112,13 @@ describe('QueuePage 分区 + 分页', () => {
 
     renderQueue()
 
-    await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
-    expect(screen.getByText(/等待入队/)).toBeInTheDocument()
-    expect(screen.getByText(/历史/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: /进行中/ })).toBeInTheDocument())
+    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
+      .toHaveClass('type-section-label')
+    expect(screen.getByRole('heading', { level: 3, name: /等待入队/ }))
+      .toHaveClass('type-section-label')
+    expect(screen.getByRole('heading', { level: 3, name: /历史/ }))
+      .toHaveClass('type-section-label')
     // 历史 total=25 > page_size=20 → 分页器 + 页码指示
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument()
     expect(screen.getByTestId('history-prev')).toBeDisabled()

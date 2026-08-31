@@ -35,6 +35,15 @@ const wrap = (run: (api: ReturnType<typeof useDialog>) => Promise<unknown>) =>
   )
 
 describe('Dialog (useDialog API)', () => {
+  it('uses the shared section-title hierarchy', async () => {
+    const user = userEvent.setup()
+    wrap((api) => api.confirm('删除？', { title: '删除任务' }))
+    await user.click(screen.getByText('trigger'))
+
+    expect(screen.getByRole('heading', { level: 2, name: '删除任务' }))
+      .toHaveClass('type-section-title')
+  })
+
   it('confirm 点确认返回 true', async () => {
     const user = userEvent.setup()
     wrap((api) => api.confirm('删除？'))

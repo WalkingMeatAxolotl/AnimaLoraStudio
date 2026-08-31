@@ -50,16 +50,37 @@ indicator. Dark mode must preserve hierarchy rather than simply invert colors.
 
 ### Typography
 
-- `text-base`: normal interface and body copy.
-- `text-sm`: compact controls and secondary content.
-- `text-xs`: metadata, timestamps, and badges.
-- `text-2xs`: dense supporting labels only; never primary actions.
-- `text-xl` and above: page or major section hierarchy.
-- `font-mono`: code, paths, identifiers, logs, and measurements—not generic UI chrome.
-- `.tnum`: changing or comparable numeric values.
+The Studio uses the local system sans stack for interface copy and the local mono
+stack for machine-readable data. Do not add a network font dependency: the app
+must remain readable while offline and should not shift when a font finishes
+loading. Use no more than `400`, `500`, and `600` for normal UI hierarchy.
 
-Use the configured type scale. Arbitrary pixel font sizes require a documented
-layout constraint and should remain exceptional.
+| Role | Contract | Use |
+| --- | --- | --- |
+| Page title | `.type-page-title`: `text-2xl`, 600, primary | One `h1` for the current page or workflow step |
+| Page description | `.type-page-description`: `text-md`, secondary, relaxed, max `68ch` | A concise explanation directly below the page title |
+| Section title | `.type-section-title`: `text-lg`, 600, primary | A major region inside a page or dialog |
+| Panel title | `.type-panel-title`: `text-sm`, 600, primary | A card, settings group, or compact panel |
+| Section label | `.type-section-label`: `text-xs`, 600, tertiary, tracked uppercase | A direct category heading such as queue status; never an eyebrow above another heading |
+| Field label | `.type-field-label`: `text-sm`, 500, secondary | The human-readable name of a form control |
+| Field help | `.type-field-help`: `text-xs`, tertiary, relaxed | Optional supporting copy below a field |
+| Metadata | `text-xs` + tertiary | Timestamps, counts, and passive context |
+| Technical data | `font-mono`; add `.tnum` for comparable numbers | Code, paths, identifiers, logs, and measurements—not generic UI chrome |
+
+Rules:
+
+- Normal interface and body copy uses `text-base`; compact controls and secondary
+  content use `text-sm`. `text-2xs` is reserved for dense supporting labels and
+  must never carry a primary action or required instruction.
+- Keep normal reading copy between `65ch` and `75ch`; headings and control labels
+  remain content-sized rather than stretching across the viewport.
+- Choose heading elements by document structure, then apply the matching role.
+  Do not skip levels to obtain a visual size.
+- Use sentence case for ordinary headings. Uppercase/tracking is reserved for a
+  category label that stands on its own; it is not a decorative kicker.
+- The configured density changes the scale without changing semantic roles.
+- Arbitrary pixel font sizes require a documented layout constraint and should
+  remain exceptional.
 
 ### Spacing, radius, and depth
 
