@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next'
+import { SegmentedControl, SidebarToolIcon } from './SidebarToolbar'
 
-/** 视图模式 tab：单图 / XY 矩阵。
+/** 视图模式选择：单图 / XY 矩阵。
  *
- * 用户决策：双图对比合并进 XY 模式内部（selectedIndices=2 时自动切到
- * compare sub-view，不再单独占顶部 tab）。 */
-
+ * 这是工作模式的互斥选择，不是内容 tab；使用 radiogroup 语义。
+ * 双图对比合并进 XY 模式内部（selectedIndices=2 时自动切到 compare sub-view）。 */
 export type ViewMode = 'single' | 'xy'
 
 export default function ViewModeTabs({
@@ -14,20 +14,26 @@ export default function ViewModeTabs({
   onModeChange: (m: ViewMode) => void
 }) {
   const { t } = useTranslation()
-  const tab = (m: ViewMode, label: string) => (
-    <button
-      onClick={() => onModeChange(m)}
-      className={`btn btn-sm text-xs ${
-        mode === m ? 'btn-primary' : 'btn-ghost text-fg-secondary'
-      }`}
-    >
-      {label}
-    </button>
-  )
   return (
-    <div className="flex items-center gap-1.5" role="tablist">
-      {tab('single', t('generate.singleMode'))}
-      {tab('xy', t('generate.xyMode'))}
-    </div>
+    <SegmentedControl
+      items={[
+        {
+          value: 'single',
+          label: t('generate.singleMode'),
+          icon: <SidebarToolIcon name="image" />,
+        },
+        {
+          value: 'xy',
+          label: t('generate.xyMode'),
+          icon: <SidebarToolIcon name="grid" />,
+        },
+      ]}
+      value={mode}
+      onChange={onModeChange}
+      ariaLabel={t('generate.viewModes')}
+      semantics="radio"
+      idPrefix="generate-view-mode"
+      className="w-full"
+    />
   )
 }

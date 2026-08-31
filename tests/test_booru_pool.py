@@ -299,6 +299,41 @@ def test_parallel_download_respects_workers(monkeypatch: pytest.MonkeyPatch) -> 
     client.close()
 
 
+def test_stream_requests_hold_in_flight_slot_until_body_is_consumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gallery streams must keep their slot until the caller finishes the body."""
+    cfg = booru_pool.BooruPoolConfig(
+        parallel_workers=2, api_rate_per_sec=10_000.0, cdn_rate_per_sec=10_000.0,
+    )
+    client = booru_pool.BooruClient(cfg)
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    response = MagicMock(status_code=200)
+    monkeypatch.setattr(client._session, "get", lambda *_args, **_kwargs: response)
+
+    def consume() -> None:
+        nonlocal active, max_active
+        with client.stream_get("https://cdn.donmai.us/a.jpg"):
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.03)
+            with lock:
+                active -= 1
+
+    threads = [threading.Thread(target=consume) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert max_active <= 2
+    assert response.close.call_count == 8
+    client.close()
+
+
 def test_parallel_download_cancel_event(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = booru_pool.BooruPoolConfig(
         parallel_workers=2, api_rate_per_sec=100.0, cdn_rate_per_sec=100.0

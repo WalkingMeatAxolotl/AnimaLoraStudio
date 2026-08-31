@@ -1,6 +1,6 @@
 /** GeneratePage 端到端 smoke：mock fetch，验证 single / xy / 多 prompt+xy
  *  三个关键路径的 enqueue payload 行为。 */
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../../components/Toast'
@@ -84,13 +84,13 @@ function setup() {
 // 是 mount 必发。所以这里改成等页面渲染出生成按钮作为「页面就绪」信号；需要
 // picker 内容的用例自己再 waitFor 对应 chip（懒加载到位）。
 async function waitForInitialLorasLoad() {
-  await screen.findByRole('button', { name: /开始生成/ })
+  await screen.findByRole('button', { name: /开始生成|生成 \d+ 张/ })
 }
 
 // 正向 / 负向 textarea 现在归到左侧「提示词」分页 tab（默认 tab 是 LoRA）；
 // 要操作 prompt 的用例先切到这一页。
 async function openPromptsTab(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: '提示词' }))
+  await user.click(screen.getByRole('tab', { name: '提示词' }))
 }
 
 describe('GeneratePage 端到端 smoke', () => {
@@ -108,6 +108,28 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(body.count).toBe(1)
     // commit C: attention_backend 从 Generate 页移到 Settings；不再随 enqueue 发
     expect(body.attention_backend).toBeUndefined()
+  })
+
+  it('keeps the page title, puts the accessible mode switch in the left card, and hides result/history chrome', async () => {
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    expect(screen.getByRole('heading', { name: '测试' })).toBeInTheDocument()
+    expect(screen.queryByText('生成结果')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'LoRA' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '刷新' })).not.toBeInTheDocument()
+
+    const modeSwitch = screen.getByRole('radio', { name: '单图' })
+    expect(screen.getByRole('radiogroup', { name: '生成模式' })).toBeInTheDocument()
+    expect(modeSwitch).toHaveAttribute('aria-checked', 'true')
+    const loraTab = screen.getByRole('tab', { name: 'LoRA' })
+    expect(modeSwitch.compareDocumentPosition(loraTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    modeSwitch.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByRole('radio', { name: 'XY 矩阵' })).toHaveFocus()
+    expect(screen.getByRole('radio', { name: 'XY 矩阵' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('多任务（P-I）：running + pending → 排队列表带取消，提交按钮不禁用', async () => {
@@ -141,18 +163,34 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByRole('button', { name: /开始生成/ })).not.toBeDisabled()
   })
 
-  it('mode=xy 默认 X=steps 20,25,30：按钮显示「开始生成 · 3 张」并 enqueue 正确 xy_matrix', async () => {
+  it('mode=xy 默认 X=steps、Y=weight 1.0：生成按钮显示「3 张」且 enqueue 保持单维矩阵', async () => {
     const user = userEvent.setup()
     setup()
 
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
+    const secondaryTabs = screen.getByTestId('xy-axis-secondary-tabs')
+    const sectionTabs = screen.getByRole('tablist', { name: '生成配置' })
+    expect(secondaryTabs.compareDocumentPosition(sectionTabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Y · 权重' })).toBeInTheDocument()
+    const editAxisButton = screen.getByRole('button', { name: '编辑 X 轴' })
+    expect(screen.queryByTestId('xy-axis-editor-drawer')).not.toBeInTheDocument()
+    expect(editAxisButton).toHaveTextContent('编辑 X 轴')
+    expect(editAxisButton).toHaveAttribute('aria-controls', 'xy-axis-editor-drawer')
+    expect(secondaryTabs).not.toContainElement(editAxisButton)
+    await user.click(screen.getByRole('tab', { name: 'Y · 权重' }))
+    expect(screen.getByTestId('xy-axis-selected-value')).toHaveTextContent('1.0')
+    await user.click(screen.getByRole('tab', { name: 'X · 步数' }))
+    // Numeric values are edited in the XY Axis Editor Drawer, not inline in
+    // the summary card.
+    await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
+    expect(screen.getByTestId('xy-axis-editor-drawer')).toBeVisible()
 
-    // 按钮文案包含 cell 数
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /开始生成 · 3 张/ })).toBeInTheDocument()
-    )
+    // cell 数归入主操作按钮，轴工具栏不再重复显示。
+    expect(screen.queryByTestId('xy-image-count')).not.toBeInTheDocument()
+    const generateButton = screen.getByRole('button', { name: '生成 3 张' })
+    expect(generateButton).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /开始生成 · 3 张/ }))
+    await user.click(generateButton)
 
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     const body = lastEnqueueBody!
@@ -163,6 +201,295 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(xy.y).toBeNull()
     // schema 强制 count=1（即使 UI count 字段被隐藏，前端也要把它发对）
     expect(body.count).toBe(1)
+  })
+
+  it('single 与 XY 模式的 LoRA tab 复用同一套既有内容', async () => {
+    const user = userEvent.setup()
+    setup()
+
+    expect(screen.getByTestId('current-lora-panel')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
+    expect(screen.queryByTestId('lora-catalog-drawer')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '添加 LoRA' }))
+    const catalogDrawer = screen.getByTestId('lora-catalog-drawer')
+    expect(catalogDrawer).toBeVisible()
+    await waitFor(() => expect(within(catalogDrawer).getByPlaceholderText('搜索项目或来源…')).toHaveFocus())
+
+    await user.click(within(catalogDrawer).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '添加 LoRA' })).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '添加 LoRA' }))
+    await waitFor(() => expect(within(catalogDrawer).getByPlaceholderText('搜索项目或来源…')).toHaveFocus())
+
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('tab', { name: 'LoRA' }))
+
+    expect(screen.getByTestId('current-lora-panel')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'LoRA 文本' })).toBeVisible()
+    expect(screen.queryByTestId('current-fixed-lora-panel')).not.toBeInTheDocument()
+    await waitFor(() => expect(catalogDrawer).not.toBeVisible())
+    await user.click(screen.getByRole('button', { name: '添加 LoRA' }))
+    expect(screen.getByTestId('lora-catalog-drawer')).toBe(catalogDrawer)
+  })
+
+  it('opens the training-set picker in the shared attached drawer instead of inline', async () => {
+    const user = userEvent.setup()
+    setup()
+
+    await openPromptsTab(user)
+    const trigger = screen.getByRole('button', { name: '从训练集选取' })
+    expect(trigger).toHaveAttribute('aria-controls', 'prompt-dataset-drawer')
+    expect(screen.queryByTestId('prompt-dataset-drawer')).not.toBeInTheDocument()
+
+    await user.click(trigger)
+    await waitFor(() => {
+      const projectRequests = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/projects'))
+      expect(projectRequests).toHaveLength(1)
+    })
+
+    const drawer = screen.getByTestId('prompt-dataset-drawer')
+    const picker = screen.getByTestId('prompt-dataset-picker')
+    expect(drawer).toHaveClass('generate-attached-drawer')
+    expect(drawer).toContainElement(picker)
+    expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('tabpanel', { name: '提示词' })).not.toContainElement(picker)
+
+    await user.click(screen.getByRole('button', { name: '收起' }))
+    expect(screen.getByTestId('prompt-dataset-drawer')).not.toBeVisible()
+
+    await user.click(trigger)
+    expect(screen.getByTestId('prompt-dataset-drawer')).toBe(drawer)
+    const projectRequests = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/projects'))
+    expect(projectRequests).toHaveLength(1)
+  })
+
+  it('opens the gallery left of the dataset action, keeps drawers exclusive, and applies tagged prompt', async () => {
+    const previousImpl = fetchMock.getMockImplementation()!
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/gallery/search')) {
+        return jsonOk({
+          items: [{
+            source: 'danbooru', post_id: '42', width: 800, height: 1200,
+            tags: ['1girl'], thumbnail_url: '/api/gallery/image?source=danbooru&post_id=42&url=x',
+            image_url: 'https://cdn.donmai.us/sample.jpg',
+          }],
+          page: 1, page_size: 30, has_more: false,
+        })
+      }
+      if (url === '/api/gallery/tag' && init?.method === 'POST') {
+        return jsonOk({ prompt: 'fresh gallery prompt' })
+      }
+      return previousImpl(url, init)
+    })
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      datasetPick: { projectId: 1, versionId: 2, name: 'old.png', tags: ['old'] },
+      datasetPrompt: 'old prompt',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+
+    const galleryAction = screen.getByRole('button', { name: '从画廊选取' })
+    const datasetAction = screen.getByRole('button', { name: '从训练集选取' })
+    expect(galleryAction.compareDocumentPosition(datasetAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await user.click(galleryAction)
+    expect(screen.getByTestId('prompt-gallery-drawer')).toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
+    const selectedGalleryCard = screen.getByRole('button', { name: '选择图片 #42' })
+    expect(selectedGalleryCard).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: '打标' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('fresh gallery prompt')
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.datasetPick).toBeNull()
+      expect(stored.datasetPrompt).toBe('fresh gallery prompt')
+    })
+
+    const galleryRequestsBeforeClose = fetchMock.mock.calls.filter(
+      ([url]) => String(url).startsWith('/api/gallery/search'),
+    ).length
+    const galleryDrawer = screen.getByTestId('prompt-gallery-drawer')
+    const galleryList = screen.getByTestId('gallery-image-list')
+    galleryList.scrollTop = 137
+    await user.click(datasetAction)
+    expect(galleryDrawer).not.toBeVisible()
+    expect(galleryDrawer).toHaveAttribute('aria-hidden', 'true')
+    expect(galleryDrawer).toHaveAttribute('hidden')
+    expect(screen.getByTestId('prompt-dataset-drawer')).toBeVisible()
+
+    await user.click(galleryAction)
+    expect(galleryDrawer).toBeVisible()
+    expect(screen.getByTestId('gallery-image-list')).toBe(galleryList)
+    expect(galleryList.scrollTop).toBe(137)
+    expect(screen.getByRole('button', { name: '选择图片 #42' })).toBe(selectedGalleryCard)
+    expect(fetchMock.mock.calls.filter(
+      ([url]) => String(url).startsWith('/api/gallery/search'),
+    )).toHaveLength(galleryRequestsBeforeClose)
+    expect(lastEnqueueBody).toBeNull()
+  })
+
+  it('auto-generates with the newly tagged prompt instead of stale persisted prompt', async () => {
+    const previousImpl = fetchMock.getMockImplementation()!
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/gallery/search')) {
+        return jsonOk({
+          items: [{
+            source: 'danbooru', post_id: '42', width: 800, height: 1200,
+            tags: ['1girl'], thumbnail_url: '/api/gallery/image?source=danbooru&post_id=42&url=x',
+            image_url: 'https://cdn.donmai.us/sample.jpg',
+          }],
+          page: 1, page_size: 30, has_more: false,
+        })
+      }
+      if (url === '/api/gallery/tag' && init?.method === 'POST') {
+        return jsonOk({ prompt: 'fresh gallery prompt' })
+      }
+      return previousImpl(url, init)
+    })
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      prompts: ['base prompt'],
+      datasetPick: { projectId: 1, versionId: 2, name: 'old.png', tags: ['old'] },
+      datasetPrompt: 'stale prompt',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+    await user.click(screen.getByRole('button', { name: '从画廊选取' }))
+    await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
+    await user.click(screen.getByRole('switch', { name: '自动生成' }))
+    await user.click(screen.getByRole('button', { name: '打标' }))
+
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.prompts).toEqual(['base prompt, fresh gallery prompt'])
+    const snapshot = lastEnqueueBody!.params_snapshot as Record<string, unknown>
+    expect(snapshot.dataset_prompt).toBe('fresh gallery prompt')
+    expect(snapshot.dataset_pick).toBeNull()
+    expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('fresh gallery prompt')
+  })
+
+  it('训练集提示词位于正/负向下方，可编辑、持久化并进入 payload/快照；关闭 drawer 保留内容', async () => {
+    const pick = {
+      projectId: 1, versionId: 11, name: '0001.png', folder: '2_data', tags: ['original', 'tags'],
+    }
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      prompts: ['base prompt'], datasetPick: pick, datasetPrompt: 'original, tags',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+
+    const datasetInput = screen.getByRole('textbox', { name: '可编辑的训练集提示词' })
+    const negativeLabel = screen.getByText('负向', { selector: 'label' })
+    const datasetLabel = screen.getByText('训练集提示词', { selector: 'label' })
+    expect(negativeLabel.compareDocumentPosition(datasetLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(datasetInput).toHaveValue('original, tags')
+
+    await user.click(screen.getByRole('button', { name: '从训练集选取' }))
+    const drawer = screen.getByTestId('prompt-dataset-drawer')
+    await user.click(drawer.querySelector('button[aria-label="关闭"]') as HTMLButtonElement)
+    expect(screen.getByTestId('prompt-dataset-drawer')).not.toBeVisible()
+    expect(datasetInput).toHaveValue('original, tags')
+
+    await user.clear(datasetInput)
+    await user.type(datasetInput, 'manually edited')
+    await user.click(screen.getByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.prompts).toEqual(['base prompt, manually edited'])
+    expect((lastEnqueueBody!.params_snapshot as Record<string, unknown>).dataset_prompt).toBe('manually edited')
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.datasetPrompt).toBe('manually edited')
+    expect(stored.datasetPick).toEqual(pick)
+  })
+
+  it('drawer 选择另一 caption 覆盖可编辑字段，再点当前行同时清空身份与文本', async () => {
+    const previousImpl = fetchMock.getMockImplementation()!
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/projects') {
+        return jsonOk({ items: [{ id: 1, slug: 'p', title: 'Project' }] })
+      }
+      if (url === '/api/projects/1') {
+        return jsonOk({ id: 1, slug: 'p', title: 'Project', versions: [{ id: 11, label: 'v1' }] })
+      }
+      if (url === '/api/projects/1/versions/11/captions?full=1') {
+        return jsonOk({ folder: null, items: [
+          { name: 'first.png', folder: '2_data', tag_count: 1, tags_preview: ['first'], has_caption: true, tags: ['first tag'], format: 'txt' },
+          { name: 'second.png', folder: '2_data', tag_count: 1, tags_preview: ['second'], has_caption: true, tags: ['second tag'], format: 'txt' },
+        ] })
+      }
+      return previousImpl(url, init)
+    })
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      datasetPick: { projectId: 1, versionId: 11, name: 'first.png', folder: '2_data', tags: ['first tag'] },
+      datasetPrompt: 'hand edited first',
+    }))
+    const user = userEvent.setup()
+    setup()
+    await openPromptsTab(user)
+    await user.click(screen.getByRole('button', { name: '从训练集选取' }))
+    await screen.findByText('second.png')
+
+    await user.click(screen.getByText('second.png'))
+    const datasetInput = screen.getByRole('textbox', { name: '可编辑的训练集提示词' })
+    expect(datasetInput).toHaveValue('second tag')
+    await user.click(screen.getByText('second.png'))
+    expect(datasetInput).toHaveValue('')
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.datasetPick).toBeNull()
+      expect(stored.datasetPrompt).toBe('')
+    })
+  })
+
+  it('旧 prefs 从 datasetPick.tags 迁移 datasetPrompt，显式空字符串保持为空', async () => {
+    const pick = { projectId: 1, versionId: 11, name: '0001.png', tags: ['old', 'tags'] }
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({ datasetPick: pick }))
+    const first = setup()
+    const user = userEvent.setup()
+    await openPromptsTab(user)
+    expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('old, tags')
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.datasetPrompt).toBe('old, tags')
+    })
+
+    first.unmount()
+    window.localStorage.setItem('studio:generate:params:v1', JSON.stringify({
+      datasetPick: pick, datasetPrompt: '',
+    }))
+    setup()
+    await openPromptsTab(userEvent.setup())
+    expect(screen.getByRole('textbox', { name: '可编辑的训练集提示词' })).toHaveValue('')
+  })
+
+  it('sidebar tabs support arrow-key navigation', async () => {
+    const user = userEvent.setup()
+    setup()
+
+    const loraTab = screen.getByRole('tab', { name: 'LoRA' })
+    loraTab.focus()
+    await user.keyboard('{ArrowRight}')
+
+    const promptsTab = screen.getByRole('tab', { name: '提示词' })
+    expect(promptsTab).toHaveFocus()
+    expect(promptsTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel', { name: '提示词' })).toBeVisible()
   })
 
   it('多 prompt 轮换功能已隐藏：只有一个 textarea，"添加 prompt"按钮不存在', async () => {
@@ -186,8 +513,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.clear(promptArea)
     await user.type(promptArea, 'my custom prompt')
 
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
-    await user.click(screen.getByRole('button', { name: '单图' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('radio', { name: '单图' }))
 
     expect(promptArea).toHaveValue('my custom prompt')
   })
@@ -233,12 +560,11 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(btn).not.toBeDisabled()
   })
 
-  it('URL ?lora= 进入时 replace 缓存 LoRA list + clamp xDraft.loraIndex', async () => {
+  it('URL ?lora= 进入时 replace 缓存 LoRA list + 迁移旧 checkpoint 绑定', async () => {
     // 用户场景：localStorage 缓存里有旧 LoRA + xDraft 指 loraIndex=1（lora_ckpt 轴
     // 绑第 2 条 LoRA）；从项目页 "在测试中加载" 跳过来，URL 带新 LoRA。
-    // 修前：append → loras=[旧, 新]（视觉拥挤）+ loraIndex=1 偶然合法；如果用户
-    //   之前没第 2 条 LoRA 但 loraIndex=1（脏 state）→ axisLoraMissing。
-    // 修后：replace → loras=[新]，loraIndex 越界 → clamp 到 0。
+    // 修前：append → loras=[旧, 新]；脏索引还可能让 submit 抛 axisLoraMissing。
+    // 修后：single 列表 replace 为新 LoRA；旧 XY checkpoint 索引迁移成稳定 anchor。
     window.localStorage.setItem(
       'studio:generate:params:v1',
       JSON.stringify({
@@ -273,10 +599,14 @@ describe('GeneratePage 端到端 smoke', () => {
       { path: newLoraPath, scale: 1.0, project_id: 2, version_id: 3 },
     ])
 
-    // localStorage 里 xDraft/yDraft.loraIndex 应被 clamp（5/3 都越界）
+    // localStorage 里 checkpoint 轴的旧索引迁移成稳定 anchor；
+    // 非 checkpoint 轴不再保留已被 schema 禁止的 loraIndex。
     const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
-    expect(stored.xDraft.loraIndex).toBe(0)
-    expect(stored.yDraft.loraIndex).toBe(0)
+    expect(stored.xDraft.loraIndex).toBeNull()
+    expect(stored.xDraft.checkpointAnchor).toEqual({
+      path: 'G:/old/cached.safetensors', scale: 1, project_id: 1, version_id: 1,
+    })
+    expect(stored.yDraft.loraIndex).toBeNull()
     // URL query 已被 replaceState 清掉
     expect(window.location.search).toBe('')
   })
@@ -290,14 +620,15 @@ describe('GeneratePage 端到端 smoke', () => {
     const promptArea = screen.getAllByPlaceholderText('输入正向提示词…')[0]
     await user.clear(promptArea)
     await user.type(promptArea, 'persist me')
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+    await user.click(screen.getByRole('radio', { name: 'XY 矩阵' }))
 
     first.unmount()
     setup()
     await waitForInitialLorasLoad()
 
     expect(screen.getAllByPlaceholderText('输入正向提示词…')[0]).toHaveValue('persist me')
-    expect(screen.getByRole('button', { name: /开始生成 · 3 张/ })).toBeInTheDocument()
+    expect(screen.queryByTestId('xy-image-count')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '生成 3 张' })).toBeInTheDocument()
     expect(screen.queryByText('#1')).toBeNull()
     expect(screen.getByText('填写参数后点击「开始生成」')).toBeInTheDocument()
   })
@@ -331,6 +662,52 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(lastEnqueueBody!.xy_matrix).toBeNull()
   })
 
+  it('single sidecar：停用 LoRA 保留在 prefs，但生成和快照都只提交启用项', async () => {
+    seedPrefs({
+      mode: 'single',
+      singleLoras: [A, B],
+      singleLoraUi: [
+        { id: 'stable-a', enabled: false },
+        { id: 'stable-b', enabled: true },
+      ],
+      xyLoras: [],
+    })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([B])
+    expect((lastEnqueueBody!.params_snapshot as { loras: Array<{ name: string }> }).loras)
+      .toEqual([{ name: 'b.safetensors', scale: 1, project_id: null, version_id: null }])
+
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.singleLoras).toEqual([A, B])
+    expect(stored.singleLoraUi).toEqual([
+      { id: 'stable-a', enabled: false },
+      { id: 'stable-b', enabled: true },
+    ])
+  })
+
+  it('已启用的历史 LoRA 仍是 basename 占位时阻止无 LoRA 生成', async () => {
+    seedPrefs({
+      mode: 'single',
+      singleLoras: [{
+        path: '', name: 'missing.safetensors', scale: 1, project_id: 19, version_id: 44,
+      }],
+      singleLoraUi: [{ id: 'missing-lora', enabled: true }],
+    })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+
+    expect(await screen.findByText(/部分 LoRA 或 checkpoint 尚未解析/)).toBeInTheDocument()
+    expect(lastEnqueueBody).toBeNull()
+  })
+
   it('xy 提交不带 singleLoras，也不带未被轴引用的 xyLoras 孤儿', async () => {
     // 默认 X 轴是 steps（不引用任何 LoRA）。singleLoras=[A] 不该泄漏到 xy；
     // xyLoras=[B] 是没被轴引用的孤儿（picker 切项目残留），也不该当 base 发。
@@ -343,10 +720,92 @@ describe('GeneratePage 端到端 smoke', () => {
     setup()
     await waitForInitialLorasLoad()
 
-    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await user.click(await screen.findByRole('button', { name: '生成 3 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     expect(lastEnqueueBody!.lora_configs).toEqual([])
     expect(lastEnqueueBody!.xy_matrix).not.toBeNull()
+  })
+
+  const mockKrea2Catalog = (selected: 'raw' | 'raw_fp8', selectedTe: 'bf16' | 'fp8') => {
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/models/catalog')) {
+        const body = {
+          krea2_main: {
+            variants: [
+              { variant: 'raw', exists: true, purpose: 'training' },
+              { variant: 'raw_fp8', exists: true, purpose: 'training' },
+            ],
+            custom: [],
+            selected,
+          },
+          krea2_text_encoder: { selected: selectedTe },
+          krea2_text_encoder_fp8: { files: [] },
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl!(url, init)
+    })
+  }
+
+  it('FP8 性能警告跟随底模，而不是文本编码器', async () => {
+    seedPrefs({
+      mode: 'xy',
+      modelFamily: 'krea2',
+      textEncoder: 'fp8',
+      xDraft: { axis: 'lora_ckpt', raw: A.path, loraIndex: null, checkpointAnchor: A },
+      yDraft: { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null },
+    })
+    mockKrea2Catalog('raw', 'fp8')
+    setup()
+
+    await waitFor(() => expect(screen.getByLabelText('底模')).toHaveValue('raw'))
+    expect(screen.queryByText(/每个单元格都可能重新合并/)).not.toBeInTheDocument()
+  })
+
+  it('FP8 底模的 checkpoint × weight 组合显示性能警告', async () => {
+    seedPrefs({
+      mode: 'xy',
+      modelFamily: 'krea2',
+      textEncoder: 'bf16',
+      xDraft: { axis: 'lora_ckpt', raw: A.path, loraIndex: null, checkpointAnchor: A },
+      yDraft: { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null },
+    })
+    mockKrea2Catalog('raw_fp8', 'bf16')
+    setup()
+
+    expect(await screen.findByText(/每个单元格都可能重新合并/)).toBeInTheDocument()
+  })
+
+  it('xy 新草稿持久化 checkpointAnchor，不依赖旧 xyLoras 索引', async () => {
+    seedPrefs({
+      mode: 'xy',
+      xyLoras: [],
+      xyFixedLoras: [],
+      xyFixedLoraUi: [],
+      xDraft: {
+        axis: 'lora_ckpt',
+        raw: A.path,
+        loraIndex: null,
+        checkpointAnchor: A,
+      },
+    })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: '生成 1 张' }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([A])
+    expect((lastEnqueueBody!.xy_matrix as { x: { lora_index: number } }).x.lora_index).toBe(0)
+    expect((lastEnqueueBody!.params_snapshot as {
+      xy_draft: { x: { loraIndex: number | null } }
+    }).xy_draft.x.loraIndex).toBe(0)
   })
 
   it('老版本共享 loras 迁移：拆成 singleLoras/xyLoras 各一份，不丢已选 LoRA', async () => {
@@ -367,11 +826,10 @@ describe('GeneratePage 端到端 smoke', () => {
   })
 
   // ---- 点击 XY 历史 entry 回填 sidebar 参数（含 xDraft）----
-  it('点击 XY 落盘历史 → 左侧 XY 轴 dropdown 切到 LoRA + raw 写入', async () => {
-    // 用户场景：当前 sidebar 在 XY mode 默认 X=steps；点 XY plot 1 历史 entry
-    // 回填后 X 轴应切到 lora_ckpt + raw=basenames（picker 后续会按 basename 升级
-    // 成全 path 给 daemon；这里只验 xDraft 同步进 prefs 这一步）。
-    seedPrefs({ mode: 'xy' })  // 起步默认 X=steps
+  it('点击 XY 落盘历史 → 自动恢复 checkpoint 全路径并可安全重新生成', async () => {
+    // 快照为了隐私只保存 basename；回填时必须借 anchor 的 project/version
+    // 将整条 checkpoint 轴恢复成当前机器全路径，不能把 basename 发给 daemon。
+    seedPrefs({ mode: 'xy' })
     const xySnapshotParams = {
       schema_version: 1,
       mode: 'xy',
@@ -380,8 +838,7 @@ describe('GeneratePage 端到端 smoke', () => {
       width: 768, height: 1344,
       steps: 25, cfg_scale: 5, count: 1, seed: 7,
       loras: [
-        { name: 'chen-bin_V3.7_step5500.safetensors', scale: 1,
-          project_id: 19, version_id: 44 },
+        { name: 'epoch40.safetensors', scale: 1, project_id: 19, version_id: 44 },
       ],
       xy_draft: {
         x: {
@@ -410,8 +867,36 @@ describe('GeneratePage 端到端 smoke', () => {
       available: true,
       xy_folder: 'xy plot 1',
     }
+    const checkpointPaths = [
+      'G:/studio_data/projects/demo/output/epoch40.safetensors',
+      'G:/studio_data/projects/demo/output/epoch38.safetensors',
+      'G:/studio_data/projects/demo/output/epoch24.safetensors',
+    ]
     const previousImpl = fetchMock.getMockImplementation()
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/projects') && (init?.method ?? 'GET') === 'GET') {
+        const body = { items: [{ id: 19, title: 'Demo project' }] }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      if (url.endsWith('/api/projects/19/versions/44/lora_ckpts')) {
+        const body = {
+          items: checkpointPaths.map((path, index) => ({
+            kind: 'epoch', value: 40 - index * 2,
+            label: `epoch ${40 - index * 2}`, path, mtime: 1,
+          })),
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
       if (url.includes('/api/generate/timeline') && (init?.method ?? 'GET') === 'GET') {
         const body = { entries: [timelineEntry], total: 1, offset: 0 }
         return Promise.resolve({
@@ -430,27 +915,107 @@ describe('GeneratePage 端到端 smoke', () => {
     const user = userEvent.setup()
     setup()
     await waitForInitialLorasLoad()
+    await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // 默认 X 轴是 steps —— 文本输入框显示 "20, 25, 30"
     const initialAxisInput = await screen.findByDisplayValue(/20, 25, 30/)
     expect(initialAxisInput).toBeInTheDocument()
 
-    // 等历史栏的 thumbnail 出现（HistoryItem div 的 title 含 folder 名）
     const thumb = await screen.findByTitle(/xy plot 1 ·/)
     await user.click(thumb)
 
-    // 回填后：X 轴 dropdown 切到 LoRA，raw 写入新值。
-    // 因为 axis=lora_ckpt 渲染的是 AxisLoraCkptPicker（不是 text input）—— 直接
-    // 看 X 轴 select 的 value（一行 select 元素，AxisCard.label='X'）。
+    const axisEditor = screen.getByTestId('xy-axis-editor-drawer')
     await waitFor(() => {
-      const xLabel = screen.getAllByText('X 轴')[0]
-      // AxisCard 外框跟 LoRA 槽对齐用 bg-overlay（原 bg-sunken 在 dark 下近黑显突兀）
-      const card = xLabel.closest('div.bg-overlay')!
-      const axisSelect = card.querySelector('select') as HTMLSelectElement
+      const axisSelect = axisEditor.querySelector('select') as HTMLSelectElement
       expect(axisSelect.value).toBe('lora_ckpt')
+      const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+      expect(stored.xDraft.raw).toBe(checkpointPaths.join(', '))
     })
-    // 原 "20, 25, 30" 文本框该消失（切到 lora_ckpt 渲染的是 picker）
     expect(screen.queryByDisplayValue(/20, 25, 30/)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /生成 3 张/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect((lastEnqueueBody!.xy_matrix as { x: { values: string[] } }).x.values)
+      .toEqual(checkpointPaths)
+  })
+
+  it('历史 LoRA 解析迟到时不覆盖用户随后完成的表单编辑', async () => {
+    seedPrefs({ mode: 'single', prompts: ['before history resolves'] })
+    const snapshot = {
+      schema_version: 1,
+      mode: 'single',
+      prompts: ['stale history prompt'],
+      negative_prompt: '',
+      width: 1024, height: 1024,
+      steps: 25, cfg_scale: 4, count: 1, seed: 7,
+      loras: [{ name: 'final.safetensors', scale: 1, project_id: 19, version_id: 44 }],
+      xy_draft: null,
+      dataset_pick: null,
+    }
+    const entry = {
+      task_id: 92,
+      status: 'done',
+      created_at: 1717900001,
+      mode: 'single',
+      storage: 'disk',
+      params: snapshot,
+      images: [{
+        url: '/api/generate/disk/image/2026-06-09/single/single%20image%2092.png',
+        thumb_url: '/api/generate/disk/thumb/2026-06-09/single/single%20image%2092.png?w=128',
+      }],
+      available: true,
+    }
+    let finishCkpts!: (response: Response) => void
+    const delayedCkpts = new Promise<Response>((resolve) => { finishCkpts = resolve })
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/projects') && (init?.method ?? 'GET') === 'GET') {
+        const body = { items: [{ id: 19, title: 'Demo project' }] }
+        return Promise.resolve({
+          ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      if (url.endsWith('/api/projects/19/versions/44/lora_ckpts')) return delayedCkpts
+      if (url.includes('/api/generate/timeline') && (init?.method ?? 'GET') === 'GET') {
+        const body = { entries: [entry], total: 1, offset: 0 }
+        return Promise.resolve({
+          ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl ? previousImpl(url, init) : Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+    await openPromptsTab(user)
+    const prompt = screen.getByPlaceholderText('输入正向提示词…')
+    await user.click(await screen.findByTitle(/single image 92 ·/))
+    await user.clear(prompt)
+    await user.type(prompt, 'newer user edit')
+
+    await act(async () => {
+      const body = {
+        items: [{
+          kind: 'final', value: 0, label: 'final',
+          path: 'G:/studio_data/projects/demo/output/final.safetensors', mtime: 1,
+        }],
+      }
+      finishCkpts({
+        ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      } as Response)
+      await delayedCkpts
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+
+    expect(prompt).toHaveValue('newer user edit')
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.prompts).toEqual(['newer user edit'])
   })
 
   // ---- #1：XY 开始后改轴只影响下次，不串改右侧已出结果 ----
@@ -469,15 +1034,16 @@ describe('GeneratePage 端到端 smoke', () => {
     const user = userEvent.setup()
     setup()
     await waitForInitialLorasLoad()
+    await user.click(await screen.findByRole('button', { name: '编辑 X 轴' }))
 
-    // 开始生成（3 张）→ dispatch 定格本次运行态 run
-    await user.click(await screen.findByRole('button', { name: /开始生成 · 3 张/ }))
+    // 生成 3 张 → dispatch 定格本次运行态 run
+    await user.click(await screen.findByRole('button', { name: '生成 3 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
 
     // 网格渲染出 steps 三档表头（20/25/30）
-    await waitFor(() => expect(screen.getByText('30')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText('30').length).toBeGreaterThan(0))
 
-    // 取消 30 那一档：X 轴 raw "20, 25, 30" → "20, 25"
+    // Drawer 中编辑当前 X 轴的值；左侧只显示摘要卡。
     const axisInput = screen.getByDisplayValue('20, 25, 30')
     await user.clear(axisInput)
     await user.type(axisInput, '20, 25')
@@ -485,7 +1051,7 @@ describe('GeneratePage 端到端 smoke', () => {
     // live sidebar 确实改成了 "20, 25"（下次生成会用它）……
     await waitFor(() => expect(axisInput).toHaveValue('20, 25'))
     // ……但右侧已出结果网格冻结：仍含 "30" 表头，未被 live 编辑串改
-    expect(screen.getByText('30')).toBeInTheDocument()
+    expect(screen.getAllByText('30').length).toBeGreaterThan(0)
   })
 
   // ---- 回看历史 XY 时点「开始生成」→ 回到实时视图（P-I 回归修复）----
@@ -504,7 +1070,7 @@ describe('GeneratePage 端到端 smoke', () => {
       prompts: ['recall'], negative_prompt: '',
       width: 1024, height: 1024, steps: 25, cfg_scale: 4, count: 1, seed: 0,
       loras: [],
-      // 用 steps 轴（非 lora_ckpt）→ 回填后按钮仍是「· 3 张」，不引入 picker 异步
+      // 用 steps 轴（非 lora_ckpt）→ 回填后按钮保持简洁，不引入 picker 异步
       xy_draft: { x: { axis: 'steps', raw: '20, 25, 30', loraIndex: null }, y: null },
       dataset_pick: null,
     }
@@ -551,8 +1117,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(thumb)
     await waitFor(() => expect(screen.getByText('xy plot 1')).toBeInTheDocument())
 
-    // 点开始生成 → 清掉 override，结果区回到实时任务：底部 "xy plot 1" 文本消失
-    await user.click(screen.getByRole('button', { name: /开始生成 · 3 张/ }))
+    // 点生成按钮 → 清掉 override，结果区回到实时任务：底部 "xy plot 1" 文本消失
+    await user.click(screen.getByRole('button', { name: '生成 3 张' }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     await waitFor(() => expect(screen.queryByText('xy plot 1')).not.toBeInTheDocument())
   })

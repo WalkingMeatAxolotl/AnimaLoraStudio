@@ -53,6 +53,46 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     return user
   }
 
+  it('retries the project list after an initial keep-alive load failure', async () => {
+    const listProjects = vi.spyOn(api, 'listProjects')
+      .mockRejectedValueOnce(new Error('project list unavailable'))
+      .mockResolvedValueOnce(projects)
+    const user = userEvent.setup()
+    render(<PromptFromDatasetPicker variant="drawer" open value={null} onChange={vi.fn()} onClose={vi.fn()} />)
+
+    expect(await screen.findByText(/project list unavailable/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+
+    expect(await screen.findByRole('option', { name: 'projA' })).toBeInTheDocument()
+    expect(listProjects).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/project list unavailable/)).not.toBeInTheDocument()
+  })
+
+  it('does not let a late project-list response clear a newer controlled project', async () => {
+    localStorage.setItem('studio:generate:promptDataset:projectId', JSON.stringify(999))
+    const pendingProjects = deferred<ProjectSummary[]>()
+    vi.spyOn(api, 'listProjects').mockReturnValue(pendingProjects.promise)
+    vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
+    vi.spyOn(api, 'listCaptionsFull').mockResolvedValue({ folder: null, items: [] })
+
+    const props = { onChange: vi.fn(), onClose: vi.fn() }
+    const { rerender } = render(
+      <PromptFromDatasetPicker value={null} {...props} />,
+    )
+    rerender(
+      <PromptFromDatasetPicker
+        value={{ projectId: 1, versionId: 11, name: 'selected.png', tags: [] }}
+        {...props}
+      />,
+    )
+    await waitFor(() => expect(api.getProject).toHaveBeenCalledWith(1))
+
+    await act(async () => { pendingProjects.resolve(projects) })
+
+    const projectSelect = await screen.findByLabelText('选择项目')
+    await waitFor(() => expect(projectSelect).toHaveValue('1'))
+  })
+
   it('行缩略图 URL 锚定当前 (pid, vid) + 行文件名', async () => {
     vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
     vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
@@ -122,6 +162,39 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     const src = rowThumb().getAttribute('src') ?? ''
     expect(src).toContain('/versions/11/thumb')
     expect(src).not.toContain('/versions/12/thumb')
+  })
+
+  it('选择行返回来源，当前行再点反选；drawer 无只读框且列表/预览平分剩余高度', async () => {
+    vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
+    vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
+    vi.spyOn(api, 'listCaptionsFull').mockResolvedValue({
+      folder: null,
+      items: [cap('first.png', 'tag one'), cap('second.png', 'tag two')],
+    })
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    const view = render(
+      <PromptFromDatasetPicker variant="drawer" value={null} onChange={onChange} onClose={vi.fn()} />,
+    )
+    await screen.findByRole('option', { name: 'projA' })
+    await user.selectOptions(screen.getByLabelText('选择项目'), '1')
+    await screen.findByText('first.png')
+
+    await user.click(screen.getByText('first.png'))
+    const firstPick = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0]
+    expect(firstPick).toMatchObject({ projectId: 1, versionId: 11, name: 'first.png', tags: ['tag one'] })
+
+    view.rerender(
+      <PromptFromDatasetPicker variant="drawer" value={firstPick} onChange={onChange} onClose={vi.fn()} />,
+    )
+    await user.click(screen.getByText('first.png'))
+    expect(onChange).toHaveBeenLastCalledWith(null)
+
+    const picker = screen.getByTestId('prompt-dataset-picker')
+    expect(picker).toHaveClass('overflow-hidden')
+    expect(screen.getByTestId('dataset-caption-list')).toHaveClass('flex-1', 'min-h-0', 'overflow-y-auto')
+    expect(screen.getByTestId('dataset-image-preview')).toHaveClass('flex-1', 'min-h-0', 'overflow-hidden')
+    expect(screen.queryByLabelText(/已选 caption 的 tags/)).not.toBeInTheDocument()
   })
 
   it('点击底部大图预览放大成全屏 modal（复用 ImagePreviewModal，请求 1600 大图）', async () => {

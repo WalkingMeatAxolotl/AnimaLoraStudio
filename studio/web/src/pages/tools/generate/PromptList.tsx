@@ -13,11 +13,16 @@ import { useTokenCount } from '../../../lib/useTokenCount'
  *
  * 接入 tag autocomplete：cursor 所在 token 触发建议；↑↓/Tab/Enter 选中插入。
  */
-export default function PromptList({ prompts, onChange, modelFamily = 'anima' }: {
+export default function PromptList({
+  prompts, onChange, modelFamily = 'anima', placeholder, ariaLabel,
+}: {
   prompts: string[]
   onChange: (p: string[]) => void
   /** token 计数用的族（选对应 tokenizer）；不传默认 anima。 */
   modelFamily?: string
+  /** 复用输入器时可覆盖默认正向提示。 */
+  placeholder?: string
+  ariaLabel?: string
 }) {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -54,7 +59,8 @@ export default function PromptList({ prompts, onChange, modelFamily = 'anima' }:
         onClick={() => suggest.notifyClick()}
         onFocus={() => suggest.notifyFocus()}
         onBlur={() => suggest.notifyBlur()}
-        placeholder={t('generate.positivePlaceholder')}
+        placeholder={placeholder ?? t('generate.positivePlaceholder')}
+        aria-label={ariaLabel}
       />
       {tokenCount != null && (
         <span className="absolute bottom-1.5 right-2 text-2xs text-fg-tertiary pointer-events-none select-none">

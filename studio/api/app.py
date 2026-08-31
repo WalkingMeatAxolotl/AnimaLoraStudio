@@ -26,9 +26,11 @@ from .routers import (
     diagnostics,
     events_sse,
     generate,
+    gallery,
     health,
     installs,
     logs,
+    lora_catalog,
     models,
     models_storage,
     presets,
@@ -85,6 +87,7 @@ app.include_router(secrets_router.router)
 app.include_router(models.router)
 app.include_router(upscalers.router)
 app.include_router(tag_dictionary.router)
+app.include_router(lora_catalog.router)
 # PR-6 commit 3: installs router（10 routes: wd14/torch/flash-attn/xformers/llm-tagger admin）
 app.include_router(installs.router)
 # PR-6 commit 4: system router（11 routes: restart / update / rollback / preflight / etc.）
@@ -94,6 +97,7 @@ app.include_router(system.router)
 app.include_router(diagnostics.router)
 # PR-6 commit 5: generate router（8 routes: 出图 + daemon 状态 + TAEFlux）
 app.include_router(generate.router)
+app.include_router(gallery.router)
 # PR-6 commit 6: queue 子包 3 文件（lifecycle 12 + io 3 + outputs 5 = 20 routes）
 # 注册顺序：io 必须在 lifecycle 之前（FastAPI 按定义顺序匹配 path，"export" /
 # "import" 字符串否则会被 `/api/queue/{task_id}` 的整数解析截胡 422）

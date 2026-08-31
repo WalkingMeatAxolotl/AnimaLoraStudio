@@ -9,7 +9,6 @@
  * - 按当前 mode 过滤（single / xy / compare）；live item 的 mode 由父组件按 runsRef 定。
  * - 定高窗口化虚拟滚动（item 同尺寸，uniform stride）：只渲染可见区间 + overscan，
  *   外层 total×stride 占位撑滚动条，item 绝对定位到 idx×stride。
- * - 顶部 [刷新] 重拉 disk-history（多 tab / 外部改盘后手动同步）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -42,12 +41,10 @@ interface Props {
   onSelect: (it: TimelineItem) => void
   /** 取消某条 pending/running 的 generate。 */
   onCancel: (taskId: number) => void
-  onRefresh?: () => Promise<void>
-  loading?: boolean
 }
 
 export default function PreviewHistoryRail({
-  items, mode, onSelect, onCancel, onRefresh, loading,
+  items, mode, onSelect, onCancel,
 }: Props) {
   const { t } = useTranslation()
   const list = useMemo(() => items.filter((it) => itemMode(it) === mode), [items, mode])
@@ -80,17 +77,6 @@ export default function PreviewHistoryRail({
       className="card flex flex-col gap-1 self-stretch"
       style={{ width: 110, padding: 8 }}
     >
-      {onRefresh && (
-        <button
-          className="btn btn-ghost text-2xs shrink-0"
-          style={{ padding: '1px 4px' }}
-          onClick={() => void onRefresh()}
-          disabled={loading}
-          title={t('generate.refreshHistoryTitle')}
-        >
-          {loading ? t('generate.checkingShort') : t('generate.refreshHistory')}
-        </button>
-      )}
       {total === 0 ? (
         <div className="text-fg-tertiary text-2xs text-center pt-3">{t('generate.noHistory')}</div>
       ) : (

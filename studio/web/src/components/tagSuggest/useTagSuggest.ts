@@ -7,18 +7,19 @@
  * 不弹，点击还会关掉已弹出的候选。全局开关（Settings「Tag 翻译词典」区）关掉
  * 后所有入口都不弹。
  *
- * 两种 token 模式：
- *   - `wholeAsToken: false`（默认）：根据 cursor + 逗号边界算当前 token，commit
- *     时给 caller `range` 以便切片替换。
+ * Token 模式：
  *   - `wholeAsToken: true`：整个 value 作为单 token。给 TagEditor chip 模式 input
  *     用（input 是 draft，本来就一段，commit 时直接 addTag(s.tag)）。
+ *   - `tokenMode: 'prompt'`（默认）：根据 cursor + 逗号边界算当前 token。
+ *   - `tokenMode: 'whitespace'`：根据空白边界算当前 token，供 Booru 查询等使用。
+ *     后两者 commit 时都给 caller `range`，由 caller 切片替换。
  */
 import { useEffect, useMemo, useState } from 'react'
 import type React from 'react'
 
 import { useTagAutocompleteEnabled } from '../../tagDict/prefs'
 import { useTagDict } from '../../tagDict/store'
-import { extractCurrentToken, findSuggestions } from '../../tagDict/suggest'
+import { extractCurrentToken, extractWhitespaceToken, findSuggestions } from '../../tagDict/suggest'
 import type { TagSuggestion } from '../../tagDict/types'
 
 export interface TagSuggestPick {
@@ -33,6 +34,8 @@ interface Args {
   inputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>
   onPick: (pick: TagSuggestPick) => void
   wholeAsToken?: boolean
+  /** prompt=逗号/换行分隔；whitespace=Booru 等空白分隔查询。 */
+  tokenMode?: 'prompt' | 'whitespace'
   /** 关掉 autocomplete（dict 未加载、字段 disabled 等场景）。 */
   disabled?: boolean
 }
@@ -62,7 +65,7 @@ export interface TagSuggestApi {
 }
 
 export function useTagSuggest({
-  value, inputRef, onPick, wholeAsToken = false, disabled = false,
+  value, inputRef, onPick, wholeAsToken = false, tokenMode = 'prompt', disabled = false,
 }: Args): TagSuggestApi {
   const dict = useTagDict()
   const [acEnabled] = useTagAutocompleteEnabled()
@@ -73,8 +76,10 @@ export function useTagSuggest({
 
   const tokenInfo = useMemo(() => {
     if (wholeAsToken) return { token: value.trim(), start: 0, end: value.length }
-    return extractCurrentToken(value, cursor)
-  }, [value, cursor, wholeAsToken])
+    return tokenMode === 'whitespace'
+      ? extractWhitespaceToken(value, cursor)
+      : extractCurrentToken(value, cursor)
+  }, [value, cursor, wholeAsToken, tokenMode])
 
   const suggestions = useMemo(() => {
     if (off || !open || dict.status !== 'ready' || !tokenInfo.token) return []
@@ -120,7 +125,7 @@ export function useTagSuggest({
       e.preventDefault(); pickAt(activeIdx); return true
     }
     if (e.key === 'Escape') {
-      e.preventDefault(); setOpen(false); return true
+      e.preventDefault(); e.stopPropagation(); setOpen(false); return true
     }
     return false
   }

@@ -18,6 +18,7 @@ import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
+import GalleryPickerDrawer from './generate/GalleryPickerDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
@@ -25,8 +26,8 @@ import ZoomableImage from '../../components/ZoomableImage'
 import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
-  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename, resolveLoraFromCkpts,
-  transformAxisRawForSnapshot,
+  PARAMS_SNAPSHOT_VERSION, applySnapshot, isAbsoluteLoraPath, loraBasename,
+  resolveLoraFromCkpts, restoreCheckpointAxisPaths, transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './generate/paramsSnapshot'
 import { composeXYMatrix } from './generate/exportXY'
@@ -41,8 +42,17 @@ import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
 import SampleGallery from './generate/SampleGallery'
 import SidebarLoras from './generate/SidebarLoras'
+import LoraCatalogDrawer from './generate/LoraCatalogDrawer'
+import {
+  createLoraUiState,
+  enabledLoras,
+  normalizeLoraUi,
+  type LoraUiState,
+} from './generate/loraSelection'
 import SidebarSectionTabs, { type SidebarTab } from './generate/SidebarSectionTabs'
-import SidebarXYAxes from './generate/SidebarXYAxes'
+import { SidebarToolIcon, ToolbarAction } from './generate/SidebarToolbar'
+import SidebarXYAxes, { XYAxisToolbar } from './generate/SidebarXYAxes'
+import XYAxisEditorDrawer from './generate/XYAxisEditorDrawer'
 import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
 import {
@@ -53,7 +63,7 @@ import {
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
 import {
-  axisText, axisView, buildXYMatrix, cellCount, parseAxisValues,
+  axisText, axisView, buildXYMatrix, cellCount,
   type XYAxisDraft,
 } from './generate/xy'
 
@@ -73,12 +83,17 @@ const DEFAULT_GENERATE_PREFS = {
   scheduler: DEFAULT_SCHEDULER as SchedulerName,
   seed: 0,
   // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
-  // compare 是 xy 的子视图，跟 xy 共用 xyLoras。
+  // compare 是 xy 的子视图，跟 xy 共用固定 LoRA 与轴配置。
   singleLoras: [] as LoraEntry[],
-  xyLoras: [] as LoraEntry[],
+  singleLoraUi: [] as LoraUiState[],
+  xyLoras: [] as LoraEntry[], // legacy bucket; migrated to xyFixedLoras
+  xyFixedLoras: [] as LoraEntry[],
+  xyFixedLoraUi: [] as LoraUiState[],
   xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
   yDraft: null as XYAxisDraft | null,
   datasetPick: null as DatasetPick | null,
+  // caption 来源身份与实际生成文本分离：前者用于高亮/图片定位，后者可手工编辑。
+  datasetPrompt: '',
   // 底模 / TE 的显式覆盖也持久化（用户反馈：切页面被重置回全局默认太烦）。
   // null = 跟随设置页 selected / selected_te（仍是默认行为）。
   baseModel: null as string | null,
@@ -87,30 +102,70 @@ const DEFAULT_GENERATE_PREFS = {
 
 type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
 
+type GenerateDatasetOverride = {
+  datasetPick: DatasetPick | null
+  datasetPrompt: string
+}
+
+/** 识别官方 variant key 与常见 custom 文件名中的 FP8 标记。
+ * 这是性能提示，不参与后端执行判定；daemon 仍以实际模型层类型为准。 */
+function isFp8BaseModel(value: string | null): boolean {
+  if (!value) return false
+  const name = value.split(/[\\/]/).pop() ?? value
+  return /(?:^|[-_.])fp8(?:[-_.]|$)/i.test(name)
+}
+
 /** 归一化 / 迁移持久化 prefs（readPersisted 不 merge default，必须自己补齐）：
  *  - 老版本只有共享 `loras`（single/xy 共用，正是被修的 bug）→ 拆成
  *    singleLoras/xyLoras 各复制一份，迁移不丢任何已选 LoRA；迁移后两边独立。
  *  - 补齐缺失字段（老 shape / 跨版本新增字段）。
- *  - clamp xDraft/yDraft.loraIndex 到 xyLoras 合法范围（xy 轴 loraIndex 指向
- *    xyLoras；越界会让 submit 抛 axisLoraMissing）。
+ *  - 迁移旧 checkpoint 轴的 loraIndex 为 checkpointAnchor；非 checkpoint 轴清除陈旧索引。
  */
 function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[]; count?: number }
   const legacy = Array.isArray(anyP.loras) ? anyP.loras : []
   const singleLoras = Array.isArray(anyP.singleLoras) ? anyP.singleLoras : legacy
+  const singleLoraUi = normalizeLoraUi(singleLoras, anyP.singleLoraUi)
   const xyLoras = Array.isArray(anyP.xyLoras) ? anyP.xyLoras : legacy
-  const clampIdx = (d: XYAxisDraft | null): XYAxisDraft | null => {
-    if (!d || d.loraIndex == null || d.loraIndex < xyLoras.length) return d
-    return { ...d, loraIndex: xyLoras.length > 0 ? 0 : null }
+  // `xyLoras` is the legacy axis-anchor bucket, not the new fixed-LoRA tab.  Do
+  // not promote it to fixed LoRAs: old picker leftovers must remain invisible
+  // unless an axis still references them.  Only the explicit new bucket is a
+  // fixed selection.
+  const xyFixedLoras = Array.isArray(anyP.xyFixedLoras) ? anyP.xyFixedLoras : []
+  const xyFixedLoraUi = normalizeLoraUi(xyFixedLoras, anyP.xyFixedLoraUi)
+  const migrateDraft = (draft: XYAxisDraft | null): XYAxisDraft | null => {
+    if (!draft) return null
+    if (draft.axis !== 'lora_ckpt') {
+      return { ...draft, loraIndex: null, checkpointAnchor: null }
+    }
+    if (draft.checkpointAnchor?.path.trim()) {
+      return { ...draft, loraIndex: null }
+    }
+    if (draft.loraIndex == null || !Number.isInteger(draft.loraIndex) || xyLoras.length === 0) {
+      return { ...draft, loraIndex: null, checkpointAnchor: null }
+    }
+    const index = Math.max(0, Math.min(draft.loraIndex, xyLoras.length - 1))
+    return {
+      ...draft,
+      loraIndex: index,
+      checkpointAnchor: xyLoras[index] ?? null,
+    }
   }
   const { loras: _legacy, count: _count, ...rest } = anyP  // count 已改瞬态，丢弃老持久值
+  const datasetPrompt = typeof anyP.datasetPrompt === 'string'
+    ? anyP.datasetPrompt
+    : (anyP.datasetPick?.tags ?? []).join(', ')
   const merged = {
     ...DEFAULT_GENERATE_PREFS,
     ...rest,
+    datasetPrompt,
     singleLoras,
+    singleLoraUi,
     xyLoras,
-    xDraft: clampIdx(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
-    yDraft: clampIdx(rest.yDraft ?? null),
+    xyFixedLoras,
+    xyFixedLoraUi,
+    xDraft: migrateDraft(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
+    yDraft: migrateDraft(rest.yDraft ?? null),
   }
   // 族与 sampler 一致性（多模型 P4-4）：老 prefs 无 modelFamily / 持久化的
   // sampler 与当前族白名单不符时（越族值后端 422），落回族默认（首项）。
@@ -130,40 +185,59 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   }
 }
 
+function virtualYDraftFor(xDraft: XYAxisDraft, steps: number): XYAxisDraft {
+  return xDraft.axis === 'lora_scale'
+    ? { axis: 'steps', raw: String(steps), loraIndex: null, checkpointAnchor: null }
+    : { axis: 'lora_scale', raw: '1.0', loraIndex: null, checkpointAnchor: null }
+}
+
 export default function GeneratePage() {
   const { t } = useTranslation()
   const { toast } = useToast()
 
   const [rawPrefs, setRawPrefs] = useLocalStorageState(GENERATE_PREFS_KEY, DEFAULT_GENERATE_PREFS)
   const prefs = useMemo(() => normalizePrefs(rawPrefs), [rawPrefs])
+  const prefsEditRevisionRef = useRef(0)
   // 所有 setPrefs 更新都先把 prev 归一化（迁移老 shape + clamp），保证 updater
-  // 收到的永远是新 shape（含 singleLoras/xyLoras，无遗留 loras）。
+  // 收到的永远是新 shape（含 singleLoras/xyLoras，无遗留 loras）。revision
+  // 同时让迟到的历史快照恢复不得覆盖用户刚刚完成的表单编辑。
   const setPrefs = useCallback(
-    (next: GeneratePrefs | ((p: GeneratePrefs) => GeneratePrefs)) =>
+    (next: GeneratePrefs | ((p: GeneratePrefs) => GeneratePrefs)) => {
+      prefsEditRevisionRef.current += 1
       setRawPrefs((prev) => {
         const norm = normalizePrefs(prev)
         return typeof next === 'function' ? next(norm) : next
-      }),
+      })
+    },
     [setRawPrefs],
   )
   // 一次性把老 shape（共享 loras）迁移落库，避免 storage 长期残留遗留字段；
   // 之后读到的就是干净的 singleLoras/xyLoras 双桶 shape。
   useEffect(() => {
     const raw = rawPrefs as Partial<GeneratePrefs> & { loras?: unknown }
-    if ('loras' in raw || !('singleLoras' in raw) || !('xyLoras' in raw)) {
+    if ('loras' in raw || !('singleLoras' in raw) || !('singleLoraUi' in raw) || !('xyLoras' in raw) || !('xyFixedLoras' in raw) || !('xyFixedLoraUi' in raw) || typeof raw.datasetPrompt !== 'string') {
       setRawPrefs(normalizePrefs(rawPrefs))
     }
     // 仅 mount 跑一次：迁移是幂等的，rawPrefs 后续变化不需要重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { mode, modelFamily, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
-  // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
-  // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
-  const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
-  const setLoras = (loras: LoraEntry[]) =>
-    setPrefs((p) => (p.mode === 'single' ? { ...p, singleLoras: loras } : { ...p, xyLoras: loras }))
-  const setMode = (mode: ViewMode) => setPrefs((p) => ({ ...p, mode }))
+  const { mode, modelFamily, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick, datasetPrompt } = prefs
+  // single 与 XY 的固定 LoRA 完全隔离；旧 xyLoras 仅在 normalizePrefs 中迁移，新的编辑器不再使用它。
+  const loras = mode === 'single' ? prefs.singleLoras : prefs.xyFixedLoras
+  const loraUi = mode === 'single' ? prefs.singleLoraUi : prefs.xyFixedLoraUi
+  const setSelection = (nextLoras: LoraEntry[], nextUi: LoraUiState[]) =>
+    setPrefs((p) => (p.mode === 'single'
+      ? { ...p, singleLoras: nextLoras, singleLoraUi: nextUi }
+      : { ...p, xyFixedLoras: nextLoras, xyFixedLoraUi: nextUi }))
+  const setMode = (mode: ViewMode) => {
+    setPrefs((p) => ({ ...p, mode }))
+    setSidebarTab(mode === 'xy' ? 'xy' : 'lora')
+    setCatalogDrawerOpen(false)
+    setAxisDrawerOpen(false)
+    setDatasetPickerOpen(false)
+    setGalleryPickerOpen(false)
+  }
   const setPrompts = (prompts: string[]) => setPrefs((p) => ({ ...p, prompts }))
   const setNegPrompt = (negPrompt: string) => setPrefs((p) => ({ ...p, negPrompt }))
   const setAspect = (aspect: AspectName) => setPrefs((p) => ({ ...p, aspect }))
@@ -195,7 +269,7 @@ export default function GeneratePage() {
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
   // Overview StatusBanner "在测试中加载" CTA 跳进来时，URL 是显式 "测这条 LoRA"
   // 意图 = 测这一条 → 落到 single 模式的列表（replace 成 [urlLora]）并切到 single；
-  // xy 列表独立、不受影响（xy 轴 loraIndex 已由 normalizePrefs clamp 到 xyLoras）。
+  // xy 列表独立、不受影响（旧 checkpoint 轴索引由 normalizePrefs 迁移为 anchor）。
   // 用 history.replaceState 清掉 query 避免刷新时重复触发。
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search)
@@ -210,7 +284,12 @@ export default function GeneratePage() {
         project_id: projectId ? Number(projectId) : null,
         version_id: versionId ? Number(versionId) : null,
       }]
-      return { ...p, mode: 'single', singleLoras: newLoras }
+      return {
+        ...p,
+        mode: 'single',
+        singleLoras: newLoras,
+        singleLoraUi: [createLoraUiState(true)],
+      }
     })
     const url = new URL(window.location.href)
     url.searchParams.delete('lora')
@@ -223,7 +302,17 @@ export default function GeneratePage() {
 
   const setXDraft = (xDraft: XYAxisDraft) => setPrefs((p) => ({ ...p, xDraft }))
   const setYDraft = (yDraft: XYAxisDraft | null) => setPrefs((p) => ({ ...p, yDraft }))
-  const setDatasetPick = (datasetPick: DatasetPick | null) => setPrefs((p) => ({ ...p, datasetPick }))
+  const virtualYDraft = useMemo(
+    () => virtualYDraftFor(xDraft, steps),
+    [steps, xDraft],
+  )
+  const visibleYDraft = yDraft ?? virtualYDraft
+  const setDatasetPrompt = (datasetPrompt: string) => setPrefs((p) => ({ ...p, datasetPrompt }))
+  const setDatasetPick = (datasetPick: DatasetPick | null) => setPrefs((p) => ({
+    ...p,
+    datasetPick,
+    datasetPrompt: datasetPick ? datasetPick.tags.join(', ') : '',
+  }))
 
   // 双图对比：选中的 2 个 sample 索引（从 PreviewXYGrid cell click 收集）
   const [selectedIndices, setSelectedIndices] = useState<number[]>([])
@@ -259,7 +348,8 @@ export default function GeneratePage() {
   const effectiveTe = textEncoder ?? teOptions.selected
   // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
   // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
-  const { options: baseModelOptions } = useBaseModelOptions(modelFamily)
+  const { options: baseModelOptions, defaultValue: defaultBaseModel } = useBaseModelOptions(modelFamily)
+  const fp8BaseModel = modelFamily === 'krea2' && isFp8BaseModel(baseModel ?? defaultBaseModel)
   const onBaseModelChange = (v: string) => {
     setBaseModel(v)
     const picked = baseModelOptions.find((o) => o.value === v)
@@ -282,8 +372,39 @@ export default function GeneratePage() {
     phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
+  const [datasetPickerMounted, setDatasetPickerMounted] = useState(false)
+  const [galleryPickerOpen, setGalleryPickerOpen] = useState(false)
+  const [galleryPickerMounted, setGalleryPickerMounted] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
-  const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>('studio:generate:sidebarTab', 'lora')
+  const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>(
+    'studio:generate:sidebarTab:v2',
+    mode === 'xy' ? 'xy' : 'lora',
+  )
+  const [catalogDrawerOpen, setCatalogDrawerOpen] = useState(false)
+  const [catalogDrawerMounted, setCatalogDrawerMounted] = useState(false)
+  const [activeAxis, setActiveAxis] = useState<'X' | 'Y'>('X')
+  const [axisDrawerOpen, setAxisDrawerOpen] = useState(false)
+  const [axisDrawerMounted, setAxisDrawerMounted] = useState(false)
+  const [axisOrderRevision, setAxisOrderRevision] = useState({ X: 0, Y: 0 })
+  const prevModeRef = useRef(mode)
+  useEffect(() => {
+    const prevMode = prevModeRef.current
+    prevModeRef.current = mode
+    if (mode === 'xy' && prevMode !== 'xy') {
+      setSidebarTab('xy')
+      return
+    }
+    if (mode !== 'xy' && sidebarTab === 'xy') {
+      setSidebarTab('lora')
+      return
+    }
+    if (sidebarTab !== 'lora') setCatalogDrawerOpen(false)
+    if (sidebarTab !== 'prompts') {
+      setDatasetPickerOpen(false)
+      setGalleryPickerOpen(false)
+    }
+    if (mode !== 'xy' || sidebarTab !== 'xy') setAxisDrawerOpen(false)
+  }, [mode, sidebarTab, setSidebarTab])
   const [logOpen, setLogOpen] = useState(false)
   // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
   // 3D / Copy engine 触发图像渲染卡顿，甚至训练进程 OOM）。listQueue 默认
@@ -325,6 +446,26 @@ export default function GeneratePage() {
   const showCompareView = mode === 'xy' && selectedIndices.length === 2
 
   const catalog = useLoraCatalog()
+  const historyRestoreRequestRef = useRef(0)
+  const resolveCheckpointDraft = useCallback(async (
+    draft: XYAxisDraft,
+    fallbackAnchor: LoraEntry | null = null,
+  ) => {
+    if (draft.axis !== 'lora_ckpt') {
+      return restoreCheckpointAxisPaths(draft, null, [])
+    }
+    const checkpointAnchor = draft.checkpointAnchor ?? fallbackAnchor
+    const withoutCatalog = restoreCheckpointAxisPaths(draft, checkpointAnchor, [])
+    if (checkpointAnchor?.project_id == null || checkpointAnchor.version_id == null) {
+      return withoutCatalog
+    }
+    // 即使 raw 已是绝对路径也按 catalog 重核一次：项目目录可能搬迁，basename
+    // 仍可映射到新位置；fetchCkpts 自带缓存，不会让频繁生成重复扫目录。
+    const ckpts = await catalog
+      .fetchCkpts(checkpointAnchor.project_id, checkpointAnchor.version_id)
+      .catch(() => [])
+    return restoreCheckpointAxisPaths(draft, checkpointAnchor, ckpts)
+  }, [catalog])
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
   // useEffect 把 samples 当依赖触发不必要的重跑
   const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
@@ -358,18 +499,6 @@ export default function GeneratePage() {
       }))
     return [...live, ...done]
   }, [liveGenerates, history.entries])
-
-  // XY mode 时，按钮显示「生成 N×M=K 张」
-  const xyCellCount = useMemo(() => {
-    if (mode !== 'xy') return 0
-    try {
-      const xLen = parseAxisValues(xDraft.axis, xDraft.raw).length
-      const yLen = yDraft ? parseAxisValues(yDraft.axis, yDraft.raw).length : null
-      return cellCount(xLen, yLen)
-    } catch {
-      return 0
-    }
-  }, [mode, xDraft, yDraft])
 
   const refreshBlockingTask = useCallback(async () => {
     try {
@@ -533,6 +662,8 @@ export default function GeneratePage() {
 
 
   const handleHistorySelect = (entry: HistoryEntry) => {
+    const restoreRequest = ++historyRestoreRequestRef.current
+    const editRevision = prefsEditRevisionRef.current
     setHistoryOverride(entry)  // 先切图（同步），sidebar 回填随 ckpts 解析异步补上
     // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；现在 async：
     // LoRA 解析按需拉对应版本 ckpts（懒级联），不依赖 mount 全量列表。老 entry
@@ -560,23 +691,55 @@ export default function GeneratePage() {
     } catch {
       return
     }
-    if (applied.unresolvedLoraCount > 0) {
-      toast(t('generate.historyLorasMissing', { n: applied.unresolvedLoraCount }), 'info')
+    if (
+      restoreRequest !== historyRestoreRequestRef.current
+      || editRevision !== prefsEditRevisionRef.current
+    ) return
+    const xAnchor = applied.xDraft?.loraIndex != null
+      ? applied.loras[applied.xDraft.loraIndex] ?? null
+      : null
+    const yAnchor = applied.yDraft?.loraIndex != null
+      ? applied.loras[applied.yDraft.loraIndex] ?? null
+      : null
+    const [restoredX, restoredY] = await Promise.all([
+      applied.xDraft
+        ? resolveCheckpointDraft(applied.xDraft, xAnchor)
+        : Promise.resolve(null),
+      applied.yDraft
+        ? resolveCheckpointDraft(applied.yDraft, yAnchor)
+        : Promise.resolve(null),
+    ])
+    const unresolvedCount = applied.unresolvedLoraCount
+      + (restoredX?.unresolvedCount ?? 0)
+      + (restoredY?.unresolvedCount ?? 0)
+    if (
+      restoreRequest !== historyRestoreRequestRef.current
+      || editRevision !== prefsEditRevisionRef.current
+    ) return
+    if (unresolvedCount > 0) {
+      toast(t('generate.historyLorasMissing', { n: unresolvedCount }), 'info')
     }
-    // datasetPick 非空 → 自动展开 picker 让用户看到选中行 + tags 文本（picker
-    // 是 closed by default，不展开的话 prompts[0] 经常是 ""（用户全靠 dataset
-    // tags 当 prompt 的常见场景），UI 表面看就像"啥都没回填"）。fallback 路径
-    // 已经把 tags 灌到 prompts[0] + datasetPick=null，所以这里只看 applied 即可。
-    if (applied.datasetPick) {
-      setDatasetPickerOpen(true)
-    }
-    // 底模不在 prefs 里（独立 ephemeral state）→ 单独回填。
-    setBaseModel(applied.baseModel)
-    setPrefs((prev) => {
+    // 底模与其余参数一起原子回填，避免异步解析期间用户编辑后被部分覆盖。
+    const restoredXDraft = restoredX?.draft
+    const restoredYDraft = restoredY?.draft ?? null
+    const axisIndices = new Set(
+      [restoredXDraft, restoredYDraft]
+        .filter((draft): draft is NonNullable<typeof restoredXDraft> => Boolean(draft))
+        .filter((draft) => draft.axis === 'lora_ckpt')
+        .map((draft) => draft.loraIndex)
+        .filter((index): index is number => Number.isInteger(index)),
+    )
+    setRawPrefs((previousRaw) => {
+      if (
+        restoreRequest !== historyRestoreRequestRef.current
+        || editRevision !== prefsEditRevisionRef.current
+      ) return previousRaw
+      const prev = normalizePrefs(previousRaw)
       const base: GeneratePrefs = {
         ...prev,
         mode: applied.mode,
         modelFamily: applied.modelFamily,
+        baseModel: applied.baseModel,
         prompts: applied.prompts.length > 0 ? applied.prompts : prev.prompts,
         negPrompt: applied.negPrompt,
         width: applied.width,
@@ -588,16 +751,27 @@ export default function GeneratePage() {
         scheduler: applied.scheduler,
         seed: applied.seed,
         datasetPick: applied.datasetPick,
+        datasetPrompt: applied.datasetPrompt,
         // 0.17 P-I：batch size 是瞬态值，点历史图**不回填**（用户设的值保持不变）。
       }
       if (applied.mode === 'single') {
-        return { ...base, singleLoras: applied.loras }
+        return {
+          ...base,
+          singleLoras: applied.loras,
+          singleLoraUi: applied.loras.map(() => createLoraUiState(true)),
+        }
       }
       return {
         ...base,
+        xyFixedLoras: applied.loras.filter((_, index) => !axisIndices.has(index)),
+        xyFixedLoraUi: applied.loras
+          .filter((_, index) => !axisIndices.has(index))
+          .map(() => createLoraUiState(true)),
+        // Keep the old bucket for readers of v1 snapshots, but the new UI uses
+        // xyFixedLoras plus the axis-owned checkpoint binding below.
         xyLoras: applied.loras,
-        xDraft: applied.xDraft ?? prev.xDraft,
-        yDraft: applied.yDraft ?? null,
+        xDraft: restoredXDraft ?? prev.xDraft,
+        yDraft: restoredYDraft ?? null,
       }
     })
     })()
@@ -626,30 +800,86 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkTaskId, history.loading, history.entries])
 
-  const handleGenerate = async () => {
-    const datasetSuffix = datasetPick && datasetPick.tags.length > 0
-      ? datasetPick.tags.join(', ')
-      : ''
+  const handleGenerate = async (datasetOverride?: GenerateDatasetOverride) => {
+    if (submitting) return
+    // 用户已明确发起当前表单，不能让较早点击历史项的迟到解析覆盖它。
+    historyRestoreRequestRef.current += 1
+    const effectiveDatasetPrompt = datasetOverride?.datasetPrompt ?? datasetPrompt
+    const effectiveDatasetPick = datasetOverride ? datasetOverride.datasetPick : datasetPick
+    const datasetSuffix = effectiveDatasetPrompt.trim()
     if (!prompts.some((p) => p.trim()) && !datasetSuffix) {
       toast(t('generate.promptOrDatasetRequired'), 'error')
       return
     }
 
     let xy_matrix: XYMatrixSpec | null = null
+    let snapshotXDraft = xDraft
+    let snapshotYDraft = yDraft
+    const persistedLoras = mode === 'single' ? prefs.singleLoras : prefs.xyFixedLoras
+    const persistedLoraUi = mode === 'single' ? prefs.singleLoraUi : prefs.xyFixedLoraUi
+    if (persistedLoras.some((lora, index) => (
+      persistedLoraUi[index]?.enabled !== false && !isAbsoluteLoraPath(lora.path)
+    ))) {
+      toast(t('generate.loraPathsUnresolved'), 'error')
+      return
+    }
     // single：base LoRA = singleLoras 全发。xy：只发被轴引用的 anchor（见
     // buildXYMatrix —— xyLoras 会沉积 picker 切项目/版本/删轴遗留的孤儿 anchor，
     // 整桶发出去会让孤儿叠到每个 cell，正是反复出现的「混进没选过的 LoRA」根因）。
-    let loraConfigs: LoraEntry[] = loras.filter((l) => l.path.trim())
+    let loraConfigs: LoraEntry[] = mode === 'single'
+      ? enabledLoras(prefs.singleLoras, prefs.singleLoraUi)
+      : []
     if (mode === 'xy') {
+      const legacyAnchor = (draft: XYAxisDraft | null): LoraEntry | null => {
+        if (!draft || draft.axis !== 'lora_ckpt' || draft.loraIndex == null) return null
+        return prefs.xyLoras[draft.loraIndex] ?? null
+      }
+      const [resolvedX, resolvedY] = await Promise.all([
+        resolveCheckpointDraft(xDraft, legacyAnchor(xDraft)),
+        yDraft
+          ? resolveCheckpointDraft(yDraft, legacyAnchor(yDraft))
+          : Promise.resolve(null),
+      ])
+      if (resolvedX.unresolvedCount + (resolvedY?.unresolvedCount ?? 0) > 0) {
+        toast(t('generate.loraPathsUnresolved'), 'error')
+        return
+      }
+      snapshotXDraft = resolvedX.draft
+      snapshotYDraft = resolvedY?.draft ?? null
+      if (
+        snapshotXDraft.raw !== xDraft.raw
+        || snapshotYDraft?.raw !== yDraft?.raw
+      ) {
+        setPrefs((current) => {
+          if (current.xDraft.axis !== xDraft.axis || current.xDraft.raw !== xDraft.raw) return current
+          if (
+            (current.yDraft?.axis ?? null) !== (yDraft?.axis ?? null)
+            || (current.yDraft?.raw ?? null) !== (yDraft?.raw ?? null)
+          ) return current
+          return { ...current, xDraft: snapshotXDraft, yDraft: snapshotYDraft }
+        })
+      }
       // schema 强制 prompts 单条 + count=1
       if (prompts.filter((p) => p.trim()).length > 1) {
         toast(t('generate.xySinglePromptOnly'), 'error')
         return
       }
       try {
-        const built = buildXYMatrix(xDraft, yDraft, loras)
+        const built = buildXYMatrix(
+          snapshotXDraft, snapshotYDraft, [], prefs.xyFixedLoras, prefs.xyFixedLoraUi,
+        )
         xy_matrix = built.xy_matrix
         loraConfigs = built.loraConfigs
+        // Snapshots must store the wire lora_index generated by buildXYMatrix,
+        // not the editor-only checkpointAnchor identity. History restore and
+        // per-cell PNG metadata both address snapshot.loras by this index.
+        snapshotXDraft = {
+          ...snapshotXDraft,
+          loraIndex: built.xy_matrix.x.lora_index ?? null,
+        }
+        snapshotYDraft = snapshotYDraft
+          ? { ...snapshotYDraft, loraIndex: built.xy_matrix.y?.lora_index ?? null }
+          : null
       } catch (e) {
         toast(typeof e === 'string' ? e : String(e), 'error')
         return
@@ -697,11 +927,12 @@ export default function GeneratePage() {
         loras: snapshotLoras,
         xy_draft: mode === 'xy'
           ? {
-              x: transformAxisRawForSnapshot(xDraft),
-              y: yDraft ? transformAxisRawForSnapshot(yDraft) : null,
+              x: transformAxisRawForSnapshot(snapshotXDraft),
+              y: snapshotYDraft ? transformAxisRawForSnapshot(snapshotYDraft) : null,
             }
           : null,
-        dataset_pick: datasetPick,
+        dataset_pick: effectiveDatasetPick,
+        dataset_prompt: effectiveDatasetPrompt,
       }
       // 0.17 P-I：count 现在 = **batch size**（每次入队的 task 数）。single 拆成 batch 个
       // task（各出 1 张、seed 递增区分）→ 在右栏时间线逐个排队；xy 一次一个矩阵（batch 忽略）。
@@ -731,7 +962,9 @@ export default function GeneratePage() {
         // #1 + P-I：每 task 的运行态定格存进 Map（xDraft/yDraft 纯原始对象浅拷贝隔离后续
         // 编辑；snapshot 各带自己的 seed）。显示/入库各按 taskId 取。
         runsRef.current.set(task.id, {
-          xDraft: { ...xDraft }, yDraft: yDraft ? { ...yDraft } : null, snapshot: snap,
+          xDraft: { ...snapshotXDraft },
+          yDraft: snapshotYDraft ? { ...snapshotYDraft } : null,
+          snapshot: snap,
         })
         if (firstId === null) {
           firstId = task.id
@@ -803,11 +1036,22 @@ export default function GeneratePage() {
 
   // 0.17 P-I：按钮现在正在出图时也可点（提交新任务入队），所以 label 只在本次入队
   // HTTP 窗口（submitting）显示「生成中」，其余显示动作 label。
+  const xyImageCount = cellCount(
+    axisView(xDraft).values.length,
+    yDraft ? axisView(yDraft).values.length : null,
+  )
   const generateLabel = submitting
     ? t('generate.generating')
-    : mode === 'xy' && xyCellCount > 0
-      ? t('generate.startGenerateCount', { n: xyCellCount })
+    : mode === 'xy'
+      ? t('generate.generateImageCount', { count: xyImageCount })
       : t('generate.startGenerate')
+
+  const attachedDrawerOpen = (
+    (catalogDrawerOpen && sidebarTab === 'lora')
+    || (datasetPickerOpen && sidebarTab === 'prompts')
+    || (galleryPickerOpen && sidebarTab === 'prompts')
+    || (axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy')
+  )
 
   return (
     <div className="fade-in flex flex-col" style={{ height: '100%', overflow: 'hidden' }}>
@@ -816,6 +1060,17 @@ export default function GeneratePage() {
         subtitle={t('generate.subtitle')}
         actions={
           <div className="flex items-center gap-2">
+            {currentTask && (
+              <>
+                <span className="caption">#{currentTask.id}</span>
+                <StatusBadge status={currentTask.status} />
+              </>
+            )}
+            {currentTask?.error_msg && (
+              <span className="text-xs text-err max-w-[240px] truncate" title={currentTask.error_msg}>
+                {currentTask.error_msg}
+              </span>
+            )}
             {/* 0.17 P-I：取消（当前显示 task）+ 清空队列（所有 pending）始终在位，不可用时
                 disabled，放「清理显存」（DaemonControls）左边。 */}
             <button
@@ -854,77 +1109,219 @@ export default function GeneratePage() {
         )}
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
-          <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">
-            {/* 内容区：三个 section 都常驻 DOM、用 display 切换（不卸载）—— 切 tab 不重渲不闪烁。
-                scrollbar-gutter: stable both-edges —— 两侧都常驻预留滚动条槽（槽在 padding 外侧、
-                靠 border），所以左右 18px 内边距恒对称，且滚动条出现时只占右槽、不挤压/不位移内容。 */}
+          <div
+            className={`card generate-sidebar relative z-30 flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden ${attachedDrawerOpen ? 'generate-sidebar--drawer-open' : ''}`}
+          >
             <div
-              className="flex flex-col flex-1 min-h-0 overflow-y-auto"
-              style={{ padding: 18, scrollbarGutter: 'stable both-edges' }}
+              className="shrink-0"
+              style={{ padding: 12, borderBottom: '1px solid var(--border-subtle)' }}
             >
+              <ViewModeTabs mode={mode} onModeChange={setMode} />
+            </div>
+            {/* 内容区：各 section 常驻 DOM，用 display 切换以保留状态。每个 section
+                自己管理滚动；XY 额外把局部 X/Y tab 固定在内容面板底部，使主 footer
+                的分区 tab 和生成按钮不因二级导航出现而移动。 */}
+            <div className="flex-1 min-h-0 overflow-hidden">
 
-            {/* tab=lora：mode=single → LoRA 选择；mode=xy → XY 轴（顶部合并 LoRA 选择） */}
-            <div style={{ display: sidebarTab === 'lora' ? undefined : 'none' }}>
-              {mode === 'single' ? (
-                <>
-                  <div className="flex items-baseline justify-between mb-3">
-                    <h3 className="m-0 text-md font-semibold">LoRA</h3>
-                    <span className="text-xs text-fg-tertiary">{t('generate.loraHint')}</span>
-                  </div>
-                  <SidebarLoras
-                    loras={loras}
-                    onChange={setLoras}
-                    catalog={catalog}
+            {/* XY：顶部是展开编辑器的上下文操作，中间滚动内容，底部是局部二级 tab。 */}
+            <div
+              id="generate-sidebar-panel-xy"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-xy"
+              hidden={sidebarTab !== 'xy' || mode !== 'xy'}
+              className="h-full min-h-0 flex-col"
+              style={{ display: sidebarTab === 'xy' && mode === 'xy' ? 'flex' : 'none' }}
+            >
+              <div
+                className="flex-1 min-h-0 overflow-y-auto"
+                style={{ padding: 18, scrollbarGutter: 'stable both-edges' }}
+              >
+                <div
+                  className="sticky z-10 flex justify-end bg-surface pb-3"
+                  style={{ top: -18, marginTop: -18, paddingTop: 18 }}
+                >
+                  <ToolbarAction
+                    label={axisDrawerOpen
+                      ? t('generate.collapseCatalog')
+                      : t('generate.editAxis', { label: activeAxis })}
+                    icon={<SidebarToolIcon name={axisDrawerOpen ? 'collapse' : 'edit'} />}
+                    onClick={() => {
+                      const opening = !axisDrawerOpen
+                      setAxisDrawerOpen(opening)
+                      if (opening) {
+                        setAxisDrawerMounted(true)
+                        setCatalogDrawerOpen(false)
+                        setDatasetPickerOpen(false)
+                        setGalleryPickerOpen(false)
+                      }
+                    }}
+                    aria-expanded={axisDrawerOpen}
+                    aria-controls="xy-axis-editor-drawer"
                   />
-                </>
-              ) : (
+                </div>
                 <SidebarXYAxes
                   xDraft={xDraft}
-                  yDraft={yDraft}
-                  onXChange={setXDraft}
-                  onYChange={setYDraft}
-                  loras={loras}
-                  onLorasChange={setLoras}
-                  catalog={catalog}
+                  yDraft={visibleYDraft}
+                  yEnabled={yDraft !== null}
+                  activeAxis={activeAxis}
+                  onAxisChange={(axis, next) => axis === 'X' ? setXDraft(next) : setYDraft(next)}
+                  onManualReorder={(axis) => setAxisOrderRevision((revision) => ({
+                    ...revision,
+                    [axis]: revision[axis] + 1,
+                  }))}
+                  fp8BaseModel={fp8BaseModel}
                 />
-              )}
+              </div>
+              <div
+                className="shrink-0 bg-surface"
+                data-testid="xy-axis-secondary-tabs"
+                style={{ borderTop: '1px solid var(--border-subtle)', padding: '10px 12px' }}
+              >
+                <XYAxisToolbar
+                  xDraft={xDraft}
+                  yDraft={visibleYDraft}
+                  activeAxis={activeAxis}
+                  onSelectAxis={setActiveAxis}
+                  onSwap={() => {
+                    setPrefs((p) => ({
+                      ...p,
+                      xDraft: p.yDraft ?? virtualYDraftFor(p.xDraft, p.steps),
+                      yDraft: p.xDraft,
+                    }))
+                    setAxisOrderRevision((revision) => ({
+                      X: revision.Y + 1,
+                      Y: revision.X + 1,
+                    }))
+                  }}
+                />
+              </div>
+            </div>
+
+            <div
+              id="generate-sidebar-panel-lora"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-lora"
+              hidden={sidebarTab !== 'lora'}
+              className="h-full overflow-y-auto"
+              style={{
+                display: sidebarTab === 'lora' ? undefined : 'none',
+                padding: 18,
+                scrollbarGutter: 'stable both-edges',
+              }}
+            >
+              <div
+                className="sticky z-10 flex justify-end bg-surface pb-3"
+                style={{ top: -18, marginTop: -18, paddingTop: 18 }}
+              >
+                <ToolbarAction
+                  label={catalogDrawerOpen ? t('generate.collapseCatalog') : t('generate.expandCatalog')}
+                  icon={<SidebarToolIcon name={catalogDrawerOpen ? 'collapse' : 'plus'} />}
+                  onClick={() => {
+                    const opening = !catalogDrawerOpen
+                    setCatalogDrawerOpen(opening)
+                    if (opening) {
+                      setCatalogDrawerMounted(true)
+                      setAxisDrawerOpen(false)
+                      setDatasetPickerOpen(false)
+                      setGalleryPickerOpen(false)
+                    }
+                  }}
+                  aria-expanded={catalogDrawerOpen}
+                  aria-controls="lora-catalog-drawer"
+                />
+              </div>
+              <SidebarLoras loras={loras} ui={loraUi} onChange={setSelection} />
             </div>
 
             {/* tab=prompts */}
-            <div style={{ display: sidebarTab === 'prompts' ? undefined : 'none' }}>
-              <div className="flex items-baseline justify-between mb-3">
-                <h3 className="m-0 text-md font-semibold">{t('generate.prompts')}</h3>
-                {!datasetPickerOpen && (
-                  <button
-                    onClick={() => setDatasetPickerOpen(true)}
-                    className="btn btn-ghost text-xs text-fg-tertiary"
-                    title={t('generate.pickFromDatasetTitle')}
-                  >
-                    {t('generate.pickFromDataset')}
-                  </button>
-                )}
-              </div>
-              {datasetPickerOpen && (
-                <div className="mb-3">
-                  <PromptFromDatasetPicker
-                    value={datasetPick}
-                    onChange={setDatasetPick}
-                    onClose={() => {
-                      setDatasetPick(null)
+            <div
+              id="generate-sidebar-panel-prompts"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-prompts"
+              hidden={sidebarTab !== 'prompts'}
+              className="h-full overflow-y-auto"
+              style={{
+                display: sidebarTab === 'prompts' ? undefined : 'none',
+                padding: 18,
+                scrollbarGutter: 'stable both-edges',
+              }}
+            >
+              <div
+                className="sticky z-10 flex justify-end bg-surface pb-3"
+                style={{ top: -18, marginTop: -18, paddingTop: 18 }}
+              >
+                <ToolbarAction
+                  label={galleryPickerOpen ? t('generate.collapseCatalog') : t('generate.pickFromGallery')}
+                  icon={<SidebarToolIcon name={galleryPickerOpen ? 'collapse' : 'image'} />}
+                  onClick={() => {
+                    const opening = !galleryPickerOpen
+                    setGalleryPickerOpen(opening)
+                    if (opening) {
+                      setGalleryPickerMounted(true)
                       setDatasetPickerOpen(false)
-                    }}
-                  />
-                </div>
-              )}
+                      setCatalogDrawerOpen(false)
+                      setAxisDrawerOpen(false)
+                    }
+                  }}
+                  aria-expanded={galleryPickerOpen}
+                  aria-controls="prompt-gallery-drawer"
+                />
+                <ToolbarAction
+                  label={datasetPickerOpen ? t('generate.collapseCatalog') : t('generate.pickFromDataset')}
+                  icon={<SidebarToolIcon name={datasetPickerOpen ? 'collapse' : 'dataset'} />}
+                  onClick={() => {
+                    const opening = !datasetPickerOpen
+                    setDatasetPickerOpen(opening)
+                    if (opening) {
+                      setDatasetPickerMounted(true)
+                      setGalleryPickerOpen(false)
+                      setCatalogDrawerOpen(false)
+                      setAxisDrawerOpen(false)
+                    }
+                  }}
+                  aria-expanded={datasetPickerOpen}
+                  aria-controls="prompt-dataset-drawer"
+                />
+              </div>
               <label className="caption block mb-1">{t('generate.positive')}</label>
               <PromptList prompts={prompts} onChange={setPrompts} modelFamily={modelFamily} />
               <label className="caption block mb-1 mt-3">{t('generate.negative')}</label>
               <NegPromptInput value={negPrompt} onChange={setNegPrompt} modelFamily={modelFamily} />
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <label className="caption block">{t('generate.datasetPromptLabel')}</label>
+                {(datasetPick || datasetPrompt) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
+                    title={t('generate.clearDatasetPromptTitle')}
+                    onClick={() => setDatasetPick(null)}
+                  >
+                    {t('generate.clearDatasetPick')}
+                  </button>
+                )}
+              </div>
+              <PromptList
+                prompts={[datasetPrompt]}
+                onChange={(next) => setDatasetPrompt(next[0] ?? '')}
+                modelFamily={modelFamily}
+                placeholder={t('generate.datasetPromptPlaceholder')}
+                ariaLabel={t('generate.datasetPromptAria')}
+              />
             </div>
 
             {/* tab=config */}
-            <div style={{ display: sidebarTab === 'config' ? undefined : 'none' }}>
-              <h3 className="m-0 text-md font-semibold mb-3">{t('generate.samplingParams')}</h3>
+            <div
+              id="generate-sidebar-panel-config"
+              role="tabpanel"
+              aria-labelledby="generate-sidebar-tab-config"
+              hidden={sidebarTab !== 'config'}
+              className="h-full overflow-y-auto"
+              style={{
+                display: sidebarTab === 'config' ? undefined : 'none',
+                padding: 18,
+                scrollbarGutter: 'stable both-edges',
+              }}
+            >
               <div className="flex flex-col gap-3">
                 <div>
                   <label className="caption block mb-1.5">{t('generate.aspect')}</label>
@@ -1073,7 +1470,7 @@ export default function GeneratePage() {
                 <button
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
-                  onClick={handleGenerate}
+                  onClick={() => void handleGenerate()}
                   disabled={submitting}
                   title={
                     activeBlockingTask
@@ -1101,33 +1498,65 @@ export default function GeneratePage() {
             </div>
           </div>
 
+          {catalogDrawerMounted && (
+            <LoraCatalogDrawer
+              open={catalogDrawerOpen && sidebarTab === 'lora'}
+              onClose={() => setCatalogDrawerOpen(false)}
+              loras={loras}
+              ui={loraUi}
+              onChange={setSelection}
+            />
+          )}
+          {galleryPickerMounted && (
+            <GalleryPickerDrawer
+              open={galleryPickerOpen && sidebarTab === 'prompts'}
+              onApplyPrompt={async (prompt, autoGenerate) => {
+                const datasetOverride: GenerateDatasetOverride = {
+                  datasetPick: null,
+                  datasetPrompt: prompt,
+                }
+                setPrefs((current) => ({
+                  ...current,
+                  ...datasetOverride,
+                }))
+                if (autoGenerate) await handleGenerate(datasetOverride)
+              }}
+              onClose={() => setGalleryPickerOpen(false)}
+            />
+          )}
+          {datasetPickerMounted && (
+            <PromptFromDatasetPicker
+              open={datasetPickerOpen && sidebarTab === 'prompts'}
+              variant="drawer"
+              value={datasetPick}
+              onChange={setDatasetPick}
+              onClose={() => setDatasetPickerOpen(false)}
+            />
+          )}
+          {axisDrawerMounted && (
+            <XYAxisEditorDrawer
+              open={axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy'}
+              label={activeAxis}
+              draft={activeAxis === 'Y' ? visibleYDraft : xDraft}
+              otherAxis={activeAxis === 'X' ? yDraft?.axis ?? null : xDraft.axis}
+              fixedLoras={enabledLoras(prefs.xyFixedLoras, prefs.xyFixedLoraUi)}
+              manualOrderRevision={axisOrderRevision[activeAxis]}
+              onChange={(next) => activeAxis === 'Y' ? setYDraft(next) : setXDraft(next)}
+              onClose={() => setAxisDrawerOpen(false)}
+            />
+          )}
+
           {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区
               flex-1 min-h-0，XY 网格自带滚动），auto 会因一点点溢出触发幻影滚动条、吃掉
               10px 宽把 card 挤窄 → 结果卡与右栏之间凭空多出 10px margin（#2 根因）。 */}
           <div className="flex-1 min-w-0 flex flex-col overflow-hidden self-stretch">
-            <div className="card flex-1 flex flex-col" style={{ padding: 18, minHeight: 0 }}>
-              <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <span className="text-md font-semibold">{t('generate.results')}</span>
-                  {currentTask && (
-                    <>
-                      <span className="caption">#{currentTask.id}</span>
-                      <StatusBadge status={currentTask.status} />
-                    </>
-                  )}
-                  {currentTask?.error_msg && (
-                    <span className="text-xs text-err ml-1">{currentTask.error_msg}</span>
-                  )}
-                </div>
-                <ViewModeTabs mode={mode} onModeChange={setMode} />
-              </div>
-
+            <div className="card flex-1 flex flex-col overflow-hidden" style={{ padding: 0, minHeight: 0 }}>
               {/* 进度条已上移到页面 header 下（全宽细线），不再在结果卡内。 */}
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
                   {historyOverride.released || historyOverride.images.length === 0 ? (
                     /* 已释放：图不可取（temp 会话结束 / 文件手删），参数已回填。 */
-                    <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                    <div className="flex-1 grid place-items-center bg-sunken text-fg-tertiary text-sm">
                       {t('generate.releasedHint')}
                     </div>
                   ) : historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
@@ -1172,13 +1601,13 @@ export default function GeneratePage() {
                   {/* XY 网格保留 folder 作批次标识；单图 filename 与
                       ZoomableImage readout 重复，不再显示。 */}
                   {historyOverride.xyMeta && historyOverride.xyFolder && (
-                    <div className="text-xs text-fg-tertiary shrink-0">
+                    <div className="text-xs text-fg-tertiary shrink-0 px-3 pb-2">
                       {historyOverride.xyFolder}
                     </div>
                   )}
                 </div>
               ) : !currentTask ? (
-                <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                <div className="flex-1 grid place-items-center bg-sunken text-fg-tertiary text-sm">
                   {t('generate.emptyHint')}
                 </div>
               ) : mode === 'xy' && showCompareView ? (
@@ -1218,7 +1647,7 @@ export default function GeneratePage() {
                   </div>
                 </div>
               ) : samples.length === 0 ? (
-                <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
+                <div className="flex-1 grid place-items-center bg-sunken text-fg-tertiary text-sm">
                   {busy ? t('generate.waitingImages') : t('generate.finishedNoImages')}
                 </div>
               ) : (
@@ -1238,8 +1667,6 @@ export default function GeneratePage() {
               // pending 项：无内容，不选中（只可取消）。
             }}
             onCancel={cancelQueued}
-            onRefresh={history.refresh}
-            loading={history.loading}
           />
       </div>
 

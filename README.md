@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.25.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.26.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。支持两个模型族的 LoRA 训练：[Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调，轻量入门）与 [Krea 2](https://huggingface.co/krea/Krea-2-Raw)（12.9B 单流 MMDiT，Raw 训练 / Turbo 快速出图）。
 
@@ -15,7 +15,7 @@
 - **正则集自动生成**：训练集 tag 分布反向搜 + 长宽比聚类，或底模 AI 先验出图（无需 LoRA）。
 - **Project / Version 双层管理**：单项目多 version 共享数据、独立配置 / 输出；预设池双向 fork。
 - **多任务队列**：训练 / 出图 / 数据作业统一台账；排队、定时开始、暂停（从最近 epoch 末续）、恢复、队列调度挂起。
-- **内置出图测试**：单图 / XY 矩阵评测 + 常驻推理 daemon；fp8 底模推理与 LoRA merge 对齐 ComfyUI 逐位一致；civitai 生态（PEFT / comfy 键格式）LoRA 可直接加载；输出 `lora_unet_*` 直接拖进 ComfyUI、无需转换。
+- **内置出图测试**：单图 / XY 矩阵评测 + 常驻推理 daemon；分层目录统一浏览项目 checkpoint 与外部 LoRA，XY 轴抽屉支持 checkpoint / LoRA 强度轴和拖拽排序，Booru 画廊可选图打标并回填提示词；fp8 底模推理与 LoRA merge 对齐 ComfyUI 逐位一致；civitai 生态（PEFT / comfy 键格式）LoRA 可直接加载；输出 `lora_unet_*` 直接拖进 ComfyUI、无需转换。
 - **LoRA 评估**：对训练产出的各 checkpoint 按验证集批量出图并算指标（CLIP / DINO / CCIP / WD14 标签召回，含纯底模对照），样图矩阵肉眼对比；一次评估 = 一个队列任务，中断可重试续跑。
 - **fp8 与显存编排**：官方 fp8 权重可直接做训练底模（fp8_base，Krea 2 训练下探到 24 GB 级显卡）与推理底模（权重显存约减半）；Block 交换把靠后的层放在内存、算到才换入显存，Krea 2 训练与出图门槛进一步下探到 16 GB、Anima 训练下探到 6 GB 级显卡；文本编码器任务级预编码后释放、显存策略三档、大权重加载 RAM 护栏。
 - **丰富训练算法**：多种 loss / timestep 采样 / 优化器（AdamW · Lion · Prodigy · SOAP 等）/ LoRA · LyCORIS adapter，详见 [训练算法选项](docs/user-guide/training-tips.md#训练算法选项)。

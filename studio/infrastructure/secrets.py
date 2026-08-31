@@ -608,6 +608,9 @@ class GenerateConfig(BaseModel):
       图片进展 → 强制终止 daemon 进程（多图/XY 任务每张图重新计时；卡死
       场景协议级取消无效，只能进程级 kill；下次任务自动重启）。0（默认）
       = 关闭。
+    - `lora_catalog_dirs`：测试页 LoRA catalog 的额外只读目录。默认来源始终是
+      `{models_root}/loras`，本字段只保存 ComfyUI 等第三方目录；扫描递归查找
+      `.safetensors`，不会移动、删除或修改其中的文件。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
@@ -622,6 +625,7 @@ class GenerateConfig(BaseModel):
     #: 唯一的办法。见 docs/design/block-swap.md。
     blocks_to_swap: int = 0
     task_timeout_minutes: int = 0
+    lora_catalog_dirs: list[str] = Field(default_factory=list)
 
 
 class SystemConfig(BaseModel):

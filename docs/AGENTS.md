@@ -207,7 +207,7 @@ registry，**不动** `main()` / `phases/` / `loop.py` / `context.py`。完整
 - 一个 PR 只做一件事；包含多件时理由写进描述
 - 改动跟开工前对齐的目标一致，没有滑坡
 - 没有"顺手"改的无关代码
-- commit message / PR title 是 Conventional Commits 格式
+- commit message / PR title 是 Conventional Commits 格式，且每个 commit 都有符合 `CONTRIBUTING.md` 要求的详细 description
 - bug fix 加了 regression test；feat 加了测试覆盖
 
 **按改动类型 trigger**：

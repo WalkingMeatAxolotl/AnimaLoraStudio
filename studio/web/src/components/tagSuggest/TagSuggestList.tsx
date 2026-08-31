@@ -23,6 +23,8 @@ interface Props {
   cursor?: number
   /** 触发位置重新计算的额外依赖（比如 value 字符串），改变就重新量 caret。 */
   positionDeps?: ReadonlyArray<unknown>
+  /** 可选 DOM id，供输入框 aria-controls 关联。 */
+  id?: string
 }
 
 interface Position {
@@ -33,7 +35,7 @@ interface Position {
 }
 
 export function TagSuggestList({
-  open, suggestions, activeIdx, onPick, onHover, inputRef, cursor, positionDeps = [],
+  open, suggestions, activeIdx, onPick, onHover, inputRef, cursor, positionDeps = [], id,
 }: Props) {
   const [pos, setPos] = useState<Position | null>(null)
 
@@ -70,12 +72,14 @@ export function TagSuggestList({
 
   return createPortal(
     <ul
+      id={id}
       className="bg-elevated border border-subtle rounded-sm shadow-lg max-h-[260px] overflow-y-auto min-w-[220px] list-none p-1 m-0"
       role="listbox"
       style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 1000 }}
     >
       {suggestions.map((s, i) => (
         <li
+          id={id ? `${id}-option-${i}` : undefined}
           key={s.tag}
           role="option"
           aria-selected={i === activeIdx}

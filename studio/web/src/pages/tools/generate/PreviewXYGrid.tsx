@@ -225,7 +225,7 @@ export default function PreviewXYGrid({
   return (
     // min-w-0：作为 flex 子项时默认 min-width:auto，网格宽度会顶穿父容器 ——
     // 下面那层 overflow-auto 就永远不滚，zoom 之后左右 pan 不动
-    <div className="flex flex-col gap-2 flex-1 min-h-0 min-w-0">
+    <div className="flex flex-col gap-2 flex-1 min-h-0 min-w-0 p-3">
       <div className="flex items-center justify-between shrink-0">
         <span className="caption">
           {t('generate.xyGridCount', { x: xLen, y: yLen, n: xLen * yLen, axis: yAxis ? ` × ${yLen}` : '' })}

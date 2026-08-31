@@ -120,6 +120,30 @@ def test_store_writes_a1111_parameters_block(env) -> None:
     assert "Size: 1024x1024" in a1111
 
 
+def test_a1111_prefers_dataset_prompt_over_legacy_tags_without_manifest(env) -> None:
+    """新字段保存手工编辑值；旧 tags 仅作为缺字段时的兼容 fallback。"""
+    task_id, _, _ = env
+    p = _params(
+        prompts=[],
+        dataset_prompt="hand edited prompt",
+        dataset_pick={"tags": ["stale", "legacy tags"]},
+    )
+    saved = storage._write_single(task_id, "a.png", _png_bytes(), p)
+    assert _open_png_text(saved)["parameters"].splitlines()[0] == "hand edited prompt"
+
+
+def test_a1111_preserves_explicit_empty_dataset_prompt_without_manifest(env) -> None:
+    """显式空字符串也优先，不得重新灌入旧 tags。"""
+    task_id, _, _ = env
+    p = _params(
+        prompts=["base prompt"],
+        dataset_prompt="",
+        dataset_pick={"tags": ["stale", "legacy tags"]},
+    )
+    saved = storage._write_single(task_id, "a.png", _png_bytes(), p)
+    assert _open_png_text(saved)["parameters"].splitlines()[0] == "base prompt"
+
+
 def test_a1111_uses_effective_dataset_prompt_without_manifest(env) -> None:
     """无 task 档案也不能把 dataset picker 实际 prompt 写成空。"""
     task_id, _, _ = env

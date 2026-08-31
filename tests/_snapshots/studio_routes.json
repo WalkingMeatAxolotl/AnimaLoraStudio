@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 210,
+  "count": 214,
   "routes": [
     {
       "path": "/",
@@ -119,6 +119,30 @@
         "GET"
       ],
       "name": "flash_attn_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/gallery/image",
+      "methods": [
+        "GET"
+      ],
+      "name": "gallery_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/gallery/search",
+      "methods": [
+        "GET"
+      ],
+      "name": "search_gallery",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/gallery/tag",
+      "methods": [
+        "POST"
+      ],
+      "name": "tag_gallery_image",
       "type": "APIRoute"
     },
     {
@@ -279,6 +303,14 @@
         "GET"
       ],
       "name": "get_log_raw",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/lora-catalog",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_lora_catalog",
       "type": "APIRoute"
     },
     {

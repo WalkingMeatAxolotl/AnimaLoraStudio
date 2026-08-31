@@ -12,6 +12,55 @@
   .phase-timeline-label { display: none; }
 }
 
+/* Generate 页的 LoRA / XY 共用侧接抽屉。桌面紧贴 420px sidebar；
+ * 窄屏改为有边界的 viewport 工作区，避免硬编码 sidebar 宽度导致溢出。 */
+.generate-attached-drawer {
+  left: calc(420px + 1.5rem);
+  top: 1.5rem;
+  bottom: 1.5rem;
+  width: min(860px, max(480px, calc(100% - 850px - 1.5rem)), calc(100% - 420px - 10.25rem));
+  border-radius: 0 var(--r-lg) var(--r-lg) 0;
+  overflow: hidden;
+}
+
+@media (min-width: 1280px) {
+  .generate-sidebar--drawer-open {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+
+@media (max-width: 1279px) {
+  /* 双类选择器确保覆盖组件上的 Tailwind `absolute` / `z-20` 工具类。 */
+  .generate-attached-drawer.generate-attached-drawer {
+    position: fixed;
+    z-index: 50;
+    inset: 12px;
+    width: auto;
+    border-left-width: 1px;
+    border-radius: var(--r-lg);
+  }
+}
+
+/* Booru gallery 保留远程图原始比例，CSS multi-column 形成瀑布流；卡片禁止跨列。 */
+.gallery-waterfall {
+  column-width: 150px;
+  column-gap: 8px;
+}
+
+.gallery-waterfall-card {
+  break-inside: avoid;
+}
+
+@media (max-width: 520px) {
+  .gallery-waterfall { column-width: 120px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xy-axis-sortable-row,
+  .lora-sortable-card { transition: none !important; }
+}
+
 /* 可拖分栏（PaneResizer 配套），给"窄屏堆叠 / 宽屏并排"的页面用。
  * 窄屏堆叠时必须不吃 --split-pct：column 方向下 flex-basis 量的是高度，
  * 直接套百分比会把面板高度锁死。故固定栏宽 + handle 只在 ≥1280px 生效

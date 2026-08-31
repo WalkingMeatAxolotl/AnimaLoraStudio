@@ -442,6 +442,47 @@ def test_import_bundle_rejects_dot_version_label(isolated, tmp_path: Path) -> No
     assert (vdir / "train" / "1_data" / "a.png").exists()
 
 
+def test_import_bundle_corrupt_reports_reason(isolated, tmp_path: Path) -> None:
+    """BadZipFile 的具体原因要进 details（区分截断 / CRC 损坏，远程排查用）。"""
+    bad = tmp_path / "bad.bundle.zip"
+    bad.write_bytes(b"this is not a zip file at all")
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.raises(train_io.TrainIOError) as ei:
+            train_io.import_bundle(conn, bad, presets_base=tmp_path / "presets")
+    assert ei.value.code == "dataset.import_corrupt"
+    assert ei.value.details.get("reason")
+
+
+def test_export_atomic_no_partial_zip_on_failure(isolated, tmp_path: Path) -> None:
+    """打包失败 / 中断不得在 dest 留半截 zip（半截 zip 会被当正常导出拿去
+    导入，报「文件已损坏」且无法区分）；成功路径 .part 不残留。"""
+    p, v, train = _make_project_with_train(isolated)
+    (train / "1_data").mkdir(parents=True, exist_ok=True)
+    (train / "1_data" / "a.png").write_bytes(_png())
+
+    dest = tmp_path / "out.zip"
+    with db.connection_for(isolated["db"]) as conn:
+        train_io.export_train(conn, v["id"], dest)
+    assert dest.exists()
+    assert not dest.with_name(dest.name + ".part").exists()
+
+    # 写入中途炸：zf.write 抛错 → dest 不出现、.part 被清理
+    real_zipfile = zipfile.ZipFile
+
+    class ExplodingZip(real_zipfile):
+        def write(self, *a, **kw):  # noqa: ANN002, ANN003
+            raise OSError("disk exploded")
+
+    dest2 = tmp_path / "boom.zip"
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(train_io.zipfile, "ZipFile", ExplodingZip)
+            with pytest.raises(OSError):
+                train_io.export_train(conn, v["id"], dest2)
+    assert not dest2.exists()
+    assert not dest2.with_name(dest2.name + ".part").exists()
+
+
 def _build_bundle_with_config(
     tmp_path: Path,
     *,

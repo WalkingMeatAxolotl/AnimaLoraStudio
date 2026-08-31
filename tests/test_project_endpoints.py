@@ -263,6 +263,39 @@ def test_train_zip_export_alien_version_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_packaged_zip_download_ignores_range(client: TestClient) -> None:
+    """现场打包的 zip 两次请求字节不保证一致（manifest 时间戳），多线程下载器
+    按 Range 分块并行下载会各块触发独立打包、拼出损坏文件——必须整文件 200
+    + Accept-Ranges: none，不能 206。"""
+    import io
+    import zipfile
+
+    p = client.post("/api/projects", json={"title": "Range Guard"}).json()
+    pid = p["id"]
+    vid = p["versions"][0]["id"]
+    train = versions.version_dir(pid, p["slug"], "v1") / "train" / "1_data"
+    train.mkdir(parents=True, exist_ok=True)
+    (train / "a.png").write_bytes(b"png-bytes-long-enough-to-slice")
+    (train / "a.txt").write_text("tag1", encoding="utf-8")
+
+    for url in (
+        f"/api/projects/{pid}/versions/{vid}/train.zip",
+        f"/api/projects/{pid}/versions/{vid}/bundle.zip",
+    ):
+        # identity：下载器分块走的就是无压缩路径（gzip 响应无 Content-Length 本就不可分块）
+        resp = client.get(
+            url,
+            headers={"Range": "bytes=0-9", "Accept-Encoding": "identity"},
+        )
+        assert resp.status_code == 200, f"{url} 必须无视 Range 返回整文件"
+        assert resp.headers.get("accept-ranges") == "none", url
+        assert resp.headers.get("content-length") == str(len(resp.content)), url
+        # 拿到的是完整可解析的 zip，不是前 10 字节
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            assert zf.testzip() is None
+            assert "manifest.json" in zf.namelist()
+
+
 def test_import_train_rejects_zip_slip(client: TestClient) -> None:
     import io
     import json

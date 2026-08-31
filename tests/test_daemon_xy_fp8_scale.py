@@ -25,6 +25,74 @@ _PATHS = ["a.safetensors", "b.safetensors"]
 _SCALES = [0.8, 0.6]
 
 
+def test_iter_xy_cells_x_lora_axis_uses_x_outer_order() -> None:
+    """仅 X 改 LoRA 时，同一 checkpoint 连续跑完所有 Y 值。"""
+    cells = list(anima_daemon._iter_xy_cells(
+        {"axis": "lora_ckpt", "values": ["a", "b", "c"]},
+        {"axis": "cfg_scale", "values": [3.0, 5.0]},
+    ))
+
+    assert cells == [
+        (0, 0, "a", 3.0), (0, 1, "a", 5.0),
+        (1, 0, "b", 3.0), (1, 1, "b", 5.0),
+        (2, 0, "c", 3.0), (2, 1, "c", 5.0),
+    ]
+    assert {(xi, yi) for xi, yi, _xv, _yv in cells} == {
+        (xi, yi) for xi in range(3) for yi in range(2)
+    }
+
+
+def test_iter_xy_cells_y_lora_axis_keeps_y_outer_order() -> None:
+    cells = list(anima_daemon._iter_xy_cells(
+        {"axis": "cfg_scale", "values": [3.0, 5.0]},
+        {"axis": "lora_ckpt", "values": ["a", "b"]},
+    ))
+
+    assert [(xi, yi, xv, yv) for xi, yi, xv, yv in cells] == [
+        (0, 0, 3.0, "a"), (1, 0, 5.0, "a"),
+        (0, 1, 3.0, "b"), (1, 1, 5.0, "b"),
+    ]
+
+
+def test_iter_xy_cells_fp8_scale_axis_uses_x_outer_order() -> None:
+    cells = list(anima_daemon._iter_xy_cells(
+        {"axis": "lora_scale", "values": [0.5, 1.0]},
+        {"axis": "steps", "values": [20, 30]},
+        fp8_scale_axes=True,
+    ))
+
+    assert [(xi, yi) for xi, yi, _xv, _yv in cells] == [
+        (0, 0), (0, 1), (1, 0), (1, 1),
+    ]
+
+
+def test_iter_xy_cells_bf16_scale_does_not_use_expensive_x_order() -> None:
+    """动态 BF16 multiplier 可热更新，非 FP8 scale 不触发列优先遍历。"""
+    cells = list(anima_daemon._iter_xy_cells(
+        {"axis": "lora_scale", "values": [0.5, 1.0]},
+        {"axis": "steps", "values": [20, 30]},
+        fp8_scale_axes=False,
+    ))
+
+    assert [(xi, yi) for xi, yi, _xv, _yv in cells] == [
+        (0, 0), (1, 0), (0, 1), (1, 1),
+    ]
+
+
+def test_iter_xy_cells_both_lora_axes_keeps_stable_row_major_order() -> None:
+    """两轴都改 LoRA 时保持原有稳定的 Y 外层顺序。"""
+    cells = list(anima_daemon._iter_xy_cells(
+        {"axis": "lora_ckpt", "values": ["a", "b"]},
+        {"axis": "lora_scale", "values": [0.5, 1.0]},
+        fp8_scale_axes=True,
+    ))
+
+    assert [(xi, yi, xv, yv) for xi, yi, xv, yv in cells] == [
+        (0, 0, "a", 0.5), (1, 0, "b", 0.5),
+        (0, 1, "a", 1.0), (1, 1, "b", 1.0),
+    ]
+
+
 def test_bf16_scale_axis_returns_none() -> None:
     """bf16（fp8_scale_axes=False）scale 轴走 multiplier 热换，不重挂载。"""
     out = _cell(

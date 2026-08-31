@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applySnapshot, buildCellSnapshot, loraBasename, resolveLoraFromCkpts, transformAxisRawForSnapshot,
+  applySnapshot, buildCellSnapshot, isAbsoluteLoraPath, loraBasename,
+  resolveLoraFromCkpts, restoreCheckpointAxisPaths, transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora, type SnapshotLoraResolver,
 } from './paramsSnapshot'
 import type { XYAxisDraft } from './xy'
@@ -70,6 +71,79 @@ describe('transformAxisRawForSnapshot', () => {
   })
 })
 
+describe('restoreCheckpointAxisPaths', () => {
+  const ckpts = [
+    { path: 'G:\\project\\output\\epoch8.safetensors' },
+    { path: 'G:\\project\\output\\epoch12.safetensors' },
+    { path: 'G:\\project\\output\\final.safetensors' },
+  ]
+  const anchor = {
+    path: ckpts[0].path, scale: 1, project_id: 4, version_id: 6,
+  }
+
+  it('按同一版本的 basename 恢复完整路径并保留顺序', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt',
+      raw: 'epoch8.safetensors, epoch12.safetensors, final.safetensors',
+      loraIndex: 0,
+    }, anchor, ckpts)
+
+    expect(restored.unresolvedCount).toBe(0)
+    expect(restored.draft.raw).toBe(ckpts.map((item) => item.path).join(', '))
+    expect(restored.draft.checkpointAnchor).toBe(anchor)
+  })
+
+  it('anchor 本身是历史占位时也恢复为可提交全路径', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'epoch8.safetensors, epoch12.safetensors', loraIndex: 0,
+    }, {
+      path: '', name: 'epoch8.safetensors', scale: 1, project_id: 4, version_id: 6,
+    }, ckpts)
+
+    expect(restored.unresolvedCount).toBe(0)
+    expect(restored.draft.checkpointAnchor?.path).toBe(ckpts[0].path)
+  })
+
+  it('basename 缺失或歧义时保持占位并报告未解析', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'missing.safetensors, duplicate.safetensors', loraIndex: 0,
+    }, anchor, [
+      { path: 'G:\\one\\duplicate.safetensors' },
+      { path: 'G:\\two\\duplicate.safetensors' },
+    ])
+
+    expect(restored.unresolvedCount).toBe(2)
+    expect(restored.draft.raw).toBe('missing.safetensors, duplicate.safetensors')
+  })
+
+  it('POSIX basename 保持大小写敏感，不把不同文件误配', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'Foo.safetensors', loraIndex: 0,
+    }, { path: '/loras/Foo.safetensors', scale: 1 }, [
+      { path: '/loras/foo.safetensors' },
+    ])
+
+    expect(restored.unresolvedCount).toBe(1)
+    expect(restored.draft.raw).toBe('Foo.safetensors')
+  })
+
+  it('Windows basename 允许大小写不敏感的唯一匹配', () => {
+    const restored = restoreCheckpointAxisPaths({
+      axis: 'lora_ckpt', raw: 'EPOCH8.SAFETENSORS', loraIndex: 0,
+    }, anchor, ckpts)
+
+    expect(restored.unresolvedCount).toBe(0)
+    expect(restored.draft.raw).toBe(ckpts[0].path)
+  })
+
+  it('识别 Windows、UNC 与 POSIX 绝对路径', () => {
+    expect(isAbsoluteLoraPath('G:\\loras\\a.safetensors')).toBe(true)
+    expect(isAbsoluteLoraPath('\\\\server\\loras\\a.safetensors')).toBe(true)
+    expect(isAbsoluteLoraPath('/loras/a.safetensors')).toBe(true)
+    expect(isAbsoluteLoraPath('a.safetensors')).toBe(false)
+  })
+})
+
 describe('resolveLoraFromCkpts', () => {
   const ckpts = [
     { path: '/loras/cute/v3/final.safetensors' },
@@ -88,13 +162,14 @@ describe('resolveLoraFromCkpts', () => {
     expect(r.version_id).toBe(11)
   })
 
-  it('basename 未命中但版本有 ckpts → 取版本代表 ckpts[0]（list 已按 final→step↓ 排）', () => {
+  it('basename 未命中时不回退到另一个 checkpoint', () => {
     const snap: SnapshotLora = {
       name: 'gone.safetensors', scale: 1.0,
       project_id: 1, version_id: 11,
     }
     const r = resolveLoraFromCkpts(snap, ckpts)
-    expect(r.path).toBe('/loras/cute/v3/final.safetensors')
+    expect(r.path).toBe('')
+    expect(r.name).toBe('gone.safetensors')
     expect(r.project_id).toBe(1)
     expect(r.version_id).toBe(11)
   })
@@ -158,53 +233,47 @@ describe('applySnapshot（async + 注入 resolver/projectExists）', () => {
     expect(r.yDraft?.axis).toBe('steps')
   })
 
-  it('dataset_pick fallback：projectExists 命中 → datasetPick 保留', async () => {
-    const snap = snapshot({
+  it('新快照恢复手工编辑值（含显式空字符串），不污染正向 prompts', async () => {
+    const selected = {
+      projectId: 1, versionId: 11,
+      name: '0001.txt', tags: ['tag-a', 'tag-b'],
+    }
+    const edited = await applySnapshot(snapshot({
+      prompts: ['1girl'], dataset_pick: selected, dataset_prompt: 'custom caption text',
+    }), resolver, projectExists)
+    expect(edited.datasetPick?.projectId).toBe(1)
+    expect(edited.datasetPrompt).toBe('custom caption text')
+    expect(edited.prompts).toEqual(['1girl'])
+
+    const explicitEmpty = await applySnapshot(snapshot({
+      dataset_pick: selected, dataset_prompt: '',
+    }), resolver, projectExists)
+    expect(explicitEmpty.datasetPrompt).toBe('')
+  })
+
+  it('旧快照缺 dataset_prompt 时从 dataset_pick.tags 推导', async () => {
+    const r = await applySnapshot(snapshot({
       dataset_pick: {
         projectId: 1, versionId: 11,
         name: '0001.txt', tags: ['tag-a', 'tag-b'],
       },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
-    expect(r.datasetPick?.projectId).toBe(1)
-    expect(r.prompts).toEqual(['1girl'])  // 没污染 prompts
+    }), resolver, projectExists)
+    expect(r.datasetPrompt).toBe('tag-a, tag-b')
+    expect(r.prompts).toEqual(['1girl'])
   })
 
-  it('dataset_pick fallback：projectExists 不命中 → tags 拼进第一条 prompt + datasetPick=null', async () => {
-    const snap = snapshot({
+  it('dataset_pick 来源项目不存在时仅清身份，保留 datasetPrompt 与正向 prompts', async () => {
+    const r = await applySnapshot(snapshot({
       prompts: ['base prompt'],
       dataset_pick: {
-        projectId: 999, versionId: 88,  // projectExists 返 false
+        projectId: 999, versionId: 88,
         name: '0001.txt', tags: ['fall-tag-1', 'fall-tag-2'],
       },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
+      dataset_prompt: 'manually edited',
+    }), resolver, projectExists)
     expect(r.datasetPick).toBeNull()
-    expect(r.prompts[0]).toBe('base prompt, fall-tag-1, fall-tag-2')
-  })
-
-  it('dataset_pick fallback：第一条 prompt 空 → 直接是 tags 串', async () => {
-    const snap = snapshot({
-      prompts: [''],
-      dataset_pick: {
-        projectId: 999, versionId: 88,
-        name: '0001.txt', tags: ['x', 'y'],
-      },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
-    expect(r.prompts[0]).toBe('x, y')
-  })
-
-  it('dataset_pick fallback：tags 已在第一条末尾 → 不重复追加（防双击同一历史 entry）', async () => {
-    const snap = snapshot({
-      prompts: ['base, x, y'],
-      dataset_pick: {
-        projectId: 999, versionId: 88,
-        name: '0001.txt', tags: ['x', 'y'],
-      },
-    })
-    const r = await applySnapshot(snap, resolver, projectExists)
-    expect(r.prompts[0]).toBe('base, x, y')
+    expect(r.datasetPrompt).toBe('manually edited')
+    expect(r.prompts).toEqual(['base prompt'])
   })
 
   it('未 resolve 的 LoRA（版本无 ckpts）→ unresolvedLoraCount > 0', async () => {
@@ -229,6 +298,14 @@ describe('buildCellSnapshot', () => {
     steps: 20,
     cfg_scale: 5,
     loras: [{ name: 'a.safetensors', scale: 0.5 }, { name: 'b.safetensors', scale: 0.7 }],
+  })
+
+  it('dataset_prompt 自然透传到 cell snapshot', () => {
+    const cell = buildCellSnapshot({ ...baseXy, dataset_prompt: 'edited dataset prompt' }, { xi: 0, yi: 0 }, {
+      x: { axis: 'steps', loraIndex: null, value: 30 },
+      y: null,
+    })
+    expect(cell.dataset_prompt).toBe('edited dataset prompt')
   })
 
   it('steps axis: 顶层 steps 覆盖；mode → single；xy_draft → null；xy_origin 记位置', () => {
