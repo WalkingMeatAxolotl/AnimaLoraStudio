@@ -32,6 +32,20 @@ const codeProp: SchemaProperty = {
 }
 
 describe('Field number input (PP10.3)', () => {
+  it('uses semantic label and supporting-text roles', () => {
+    const { container } = render(
+      <Field
+        name="lr"
+        prop={{ ...floatProp, description: 'Controls the learning rate.' }}
+        value={0.5}
+        onChange={vi.fn()}
+      />,
+    )
+
+    expect(container.querySelector('.type-field-label')).toBeInTheDocument()
+    expect(screen.getByText('Controls the learning rate.')).toHaveClass('type-field-help')
+  })
+
   it('does not commit on each keystroke — typing 0.05 stays intact', async () => {
     const onChange = vi.fn()
     const user = userEvent.setup()

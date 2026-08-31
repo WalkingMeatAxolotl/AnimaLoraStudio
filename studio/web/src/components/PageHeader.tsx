@@ -20,13 +20,13 @@ export default function PageHeader({ title, subtitle, tabs, actions, topRight, s
       )}
       <div className="flex items-end gap-4 flex-wrap">
         <div className="flex-1 min-w-0">
-          <h1 className="m-0 text-2xl font-semibold tracking-tight leading-[1.15]">{title}</h1>
+          <h1 className="type-page-title">{title}</h1>
           {/* tabs 在主标题下方取代 subtitle 位置；两者互斥（tabs 优先）。 */}
           {tabs ? (
             <div className="mt-3">{tabs}</div>
           ) : (
             subtitle && (
-              <p className="mt-1.5 text-fg-secondary text-md max-w-[720px] m-0">{subtitle}</p>
+              <p className="type-page-description mt-1.5">{subtitle}</p>
             )
           )}
         </div>

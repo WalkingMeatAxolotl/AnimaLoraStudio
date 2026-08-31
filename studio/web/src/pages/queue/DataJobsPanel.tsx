@@ -215,7 +215,7 @@ export default function DataJobsPanel({
         <>
           {live.length > 0 && (
             <section className="flex flex-col gap-2">
-              <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+              <h3 className="type-section-label">
                 {t('queue.sectionActive')} ({live.length})
               </h3>
               {live.map(renderRow)}
@@ -223,7 +223,7 @@ export default function DataJobsPanel({
           )}
 
           <section className="flex flex-col gap-2">
-            <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+            <h3 className="type-section-label">
               {t('queue.sectionHistory')} ({history.total})
             </h3>
             {history.items.length === 0 ? (
