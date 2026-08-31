@@ -6,6 +6,8 @@ import {
   type TaskStatus, type TaskType,
 } from '../api/client'
 import { DATA_VIEW_KINDS } from './queue/jobUtils'
+import Card from '../components/Card'
+import EmptyState from '../components/EmptyState'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -1028,7 +1030,7 @@ export default function QueuePage() {
             refreshToken={jobsRefreshToken}
           />
         ) : !loaded ? (
-          <div className="rounded-lg border border-subtle bg-surface overflow-hidden">
+          <Card className="overflow-hidden">
             {Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
@@ -1047,16 +1049,12 @@ export default function QueuePage() {
                 <div className="h-6 rounded bg-overlay" />
               </div>
             ))}
-          </div>
+          </Card>
         ) : isEmpty ? (
-          <div className="rounded-lg border border-subtle bg-surface py-12 text-center">
-            <div className="text-md font-semibold text-fg-secondary mb-1.5">
-              {t('queue.empty')}
-            </div>
-            <div className="text-sm text-fg-tertiary">
-              {t('queue.emptyHint')}
-            </div>
-          </div>
+          <EmptyState
+            title={t('queue.empty')}
+            description={t('queue.emptyHint')}
+          />
         ) : (
           <div className="flex flex-col gap-4">
             {/* 进行中（running + paused） */}
@@ -1096,9 +1094,7 @@ export default function QueuePage() {
               </h3>
 
               {history.items.length === 0 ? (
-                <div className="rounded-lg border border-subtle bg-surface py-8 text-center text-sm text-fg-tertiary">
-                  {t('queue.noMatch')}
-                </div>
+                <EmptyState size="sm" description={t('queue.noMatch')} />
               ) : (
                 history.items.map(renderRow)
               )}

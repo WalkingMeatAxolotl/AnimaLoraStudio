@@ -84,6 +84,21 @@ function renderQueue() {
 }
 
 describe('QueuePage 分区 + 分页', () => {
+  it('空队列使用共享的主空状态层级', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+
+    const title = await screen.findByText('队列为空')
+    expect(title.closest('.empty-state')).toHaveClass('card', 'empty-state')
+    expect(screen.getByText('从项目训练页入队任务即可'))
+      .toHaveClass('empty-state-description')
+  })
+
   it('渲染进行中/等待/历史三分区，历史超过一页时出分页器', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
