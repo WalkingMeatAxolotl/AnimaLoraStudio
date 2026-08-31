@@ -282,8 +282,45 @@ select option:checked {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-lg);
 }
-.card-hover { transition: all 120ms ease; }
+.card-compact { border-radius: var(--r-md); }
+.card-sunken { background: var(--bg-sunken); }
+.card-pad-sm { padding: var(--s-3); }
+.card-pad-md { padding: var(--s-4); }
+.card-pad-lg { padding: var(--s-6); }
+.card-hover {
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
 .card-hover:hover { box-shadow: var(--sh-md); border-color: var(--border-default); transform: translateY(-1px); }
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--s-8) + var(--s-4)) var(--s-6);
+  text-align: center;
+}
+.empty-state-sm { padding-block: var(--s-8); }
+.empty-state-title {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: var(--t-md);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.empty-state-description {
+  max-width: 56ch;
+  margin: 0;
+  color: var(--fg-tertiary);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+}
+.empty-state-title + .empty-state-description { margin-top: var(--s-2); }
+.empty-state-action { margin-top: var(--s-4); }
 
 .kbd {
   font-family: var(--font-mono);

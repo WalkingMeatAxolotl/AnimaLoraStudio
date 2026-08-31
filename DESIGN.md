@@ -25,7 +25,7 @@ surface has identical density.
 | --- | --- | --- |
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
-| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx` | Typed, accessible component APIs |
+| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx` | Typed, accessible component APIs |
 | Patterns | `PageHeader`, `StepShell`, `Dialog`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
@@ -126,7 +126,26 @@ metadata such as announcement tags; status badges use the default size.
 Domain components such as `VersionStatusBadge` own the mapping from backend state to
 badge tone. The generic `Badge` component must not know API enums.
 
-## 6. Forms and help text
+## 6. Surface and empty-state contract
+
+Use `Card` for ordinary bordered content surfaces. The default card uses the ordinary
+`--r-lg` radius; compact workbench panels opt into the compact radius explicitly.
+Padding belongs to the component API when it describes the whole surface, so density
+modes can adjust it through spacing tokens. Interactive links and buttons retain their
+native semantics and use `cardClassName()` for card presentation.
+
+Use `EmptyState` when a list or page region has no content to present:
+
+- `md` is the primary zero state for an otherwise empty page or tab.
+- `sm` is a compact no-match state inside an existing section.
+- Titles state what is absent; descriptions explain the next useful step.
+- Actions are optional and must use the appropriate Button or link primitive.
+- Loading, errors, and warnings are not empty states and require their own semantics.
+
+Do not reproduce `rounded-* + border-subtle + bg-surface` for an ordinary card or
+hand-build centered zero-state typography on product pages.
+
+## 7. Forms and help text
 
 Default forms use the standard `.input` surface. Parameter-heavy schema forms may
 use their existing compact canvas treatment as an explicit density variant.
@@ -135,7 +154,7 @@ Settings explanations belong in the label-adjacent `InfoButton` tooltip accordin
 to `docs/design/ui-info-design.md`; do not add permanent explanatory paragraphs
 under individual settings.
 
-## 7. Accessibility and resilience
+## 8. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -145,7 +164,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 8. Migration policy
+## 9. Migration policy
 
 Migration is incremental:
 

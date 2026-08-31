@@ -88,6 +88,20 @@ describe('DataJobsPanel', () => {
     await waitFor(() => expect(screen.getAllByText(/MyProj/).length).toBeGreaterThan(0))
   })
 
+  it('空数据视图使用共享的主空状态层级', async () => {
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderPanel()
+
+    const title = await screen.findByText('暂无数据任务')
+    expect(title.closest('.empty-state')).toHaveClass('card', 'empty-state')
+    expect(screen.getByText('下载 / 打标 / 正则构建 / 评估等数据任务会显示在这里'))
+      .toHaveClass('empty-state-description')
+  })
+
   it('数据源 = /api/queue resource_class=data（kind/q 透传）', async () => {
     const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
     const histSpy = vi.spyOn(api, 'listQueueHistory').mockResolvedValue({

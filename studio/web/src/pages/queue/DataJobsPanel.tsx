@@ -12,6 +12,8 @@ import { useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type Task, type TaskType,
 } from '../../api/client'
+import Card from '../../components/Card'
+import EmptyState from '../../components/EmptyState'
 import { useDialog } from '../../components/Dialog'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
@@ -201,16 +203,14 @@ export default function DataJobsPanel({
       )}
 
       {!loaded ? (
-        <div className="rounded-lg border border-subtle bg-surface py-8 text-center text-sm text-fg-tertiary">
+        <Card className="py-8 text-center text-sm text-fg-tertiary">
           {t('common.loading')}
-        </div>
+        </Card>
       ) : isEmpty ? (
-        <div className="rounded-lg border border-subtle bg-surface py-12 text-center">
-          <div className="text-md font-semibold text-fg-secondary mb-1.5">
-            {t('queue.jobs.empty')}
-          </div>
-          <div className="text-sm text-fg-tertiary">{t('queue.jobs.emptyHint')}</div>
-        </div>
+        <EmptyState
+          title={t('queue.jobs.empty')}
+          description={t('queue.jobs.emptyHint')}
+        />
       ) : (
         <>
           {live.length > 0 && (
@@ -227,9 +227,7 @@ export default function DataJobsPanel({
               {t('queue.sectionHistory')} ({history.total})
             </h3>
             {history.items.length === 0 ? (
-              <div className="rounded-lg border border-subtle bg-surface py-8 text-center text-sm text-fg-tertiary">
-                {t('queue.noMatch')}
-              </div>
+              <EmptyState size="sm" description={t('queue.noMatch')} />
             ) : (
               history.items.map(renderRow)
             )}
