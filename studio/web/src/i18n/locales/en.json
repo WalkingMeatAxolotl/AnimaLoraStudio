@@ -48,6 +48,8 @@
     "all": "All",
     "select": "Select",
     "selectAll": "Select all",
+    "selectedCount": "{{selected}} / {{total}} selected",
+    "noOptions": "No options available",
     "deselect": "Deselect",
     "preview": "Preview",
     "search": "Search",

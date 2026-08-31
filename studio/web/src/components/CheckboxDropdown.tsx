@@ -4,6 +4,8 @@
 // 原生 <select multiple> 又没法看清勾了哪些。收进一个 popover：按钮上显示「已选 n/m」，
 // 展开才是完整清单。
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import Button from './Button'
 
 export interface CheckboxDropdownOption {
   value: string
@@ -21,6 +23,7 @@ export default function CheckboxDropdown({
   onChange: (next: Set<string>) => void
   emptyHint?: string
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
 
@@ -46,27 +49,33 @@ export default function CheckboxDropdown({
 
   return (
     <div ref={wrapRef} className="relative">
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="xs"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label={label}
-        className="font-mono cursor-pointer flex items-center gap-1.5"
-        style={{
-          fontSize: 11,
-          padding: '4px 8px',
-          borderRadius: 'var(--r-md)',
-          border: '1px solid var(--border-subtle)',
-          background: 'var(--bg-sunken)',
-          color: 'var(--fg-secondary)',
-        }}
+        className="font-mono"
       >
         <span className="font-sans font-semibold">{label}</span>
         <span className="text-fg-tertiary">
           {selected.size}/{options.length}
         </span>
-        <span className="text-fg-tertiary">{open ? '▴' : '▾'}</span>
-      </button>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`text-fg-tertiary transition-transform ${open ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </Button>
 
       {open && (
         <div
@@ -76,26 +85,26 @@ export default function CheckboxDropdown({
           style={{ minWidth: 240, maxWidth: 'min(420px, 80vw)' }}
         >
           <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-subtle">
-            <span className="text-[11px] text-fg-tertiary flex-1">
-              已选 {selected.size} / {options.length}
+            <span className="text-xs text-fg-tertiary flex-1">
+              {t('common.selectedCount', { selected: selected.size, total: options.length })}
             </span>
-            <button
-              type="button"
-              className="text-[11px] text-fg-tertiary hover:text-fg underline bg-transparent border-none cursor-pointer p-0"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => onChange(allPicked ? new Set() : new Set(allValues))}
             >
-              {allPicked ? '清空' : '全选'}
-            </button>
+              {allPicked ? t('common.deselect') : t('common.selectAll')}
+            </Button>
           </div>
           <div className="overflow-y-auto py-1" style={{ maxHeight: 300 }}>
             {options.length === 0 ? (
-              <div className="px-2.5 py-2 text-[11px] text-fg-tertiary">
-                {emptyHint ?? '暂无可选项'}
+              <div className="px-2.5 py-2 text-xs text-fg-tertiary">
+                {emptyHint ?? t('common.noOptions')}
               </div>
             ) : options.map((o) => (
               <label
                 key={o.value}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] cursor-pointer hover:bg-overlay"
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs cursor-pointer hover:bg-overlay"
                 title={o.title ?? o.label}
               >
                 <input

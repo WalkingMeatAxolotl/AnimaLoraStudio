@@ -48,6 +48,8 @@
     "all": "全部",
     "select": "选择",
     "selectAll": "全选",
+    "selectedCount": "已选 {{selected}} / {{total}}",
+    "noOptions": "暂无可选项",
     "deselect": "取消选择",
     "preview": "预览",
     "search": "搜索",

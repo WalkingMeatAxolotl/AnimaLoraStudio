@@ -84,7 +84,10 @@ describe('AnnouncementCenter', () => {
     renderCenter()
     await waitFor(() =>
       expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('announcement-filter-notice'))
+    const noticeFilter = screen.getByTestId('announcement-filter-notice')
+    expect(noticeFilter).toHaveClass('btn', 'btn-secondary', 'btn-xs')
+    fireEvent.click(noticeFilter)
+    expect(noticeFilter).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByTestId('announcement-item-p-migration')).toBeNull()
     expect(screen.getByTestId('announcement-item-p-notice')).toBeInTheDocument()
   })
