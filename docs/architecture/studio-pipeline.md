@@ -194,7 +194,7 @@ Pydantic 模型在 `studio/infrastructure/secrets.py`（`studio/secrets.py` 是�
 ```
 ┌──────────────────────┐
 │  Anima                │
-│  lora studio · 0.25.0 │ ← 版本号从 /api/health 拉，single source of truth
+│  lora studio · 0.26.0 │ ← 版本号从 /api/health 拉，single source of truth
 ├──────────────────────┤
 │ ▶ 项目 (Projects)    │ /
 │   队列 (Queue)       │ /queue
