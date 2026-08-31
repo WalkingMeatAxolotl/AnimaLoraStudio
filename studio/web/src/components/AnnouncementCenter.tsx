@@ -10,6 +10,8 @@ import { useTranslation } from 'react-i18next'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AnnouncementPost } from '../api/client'
+import Badge, { type BadgeTone } from './Badge'
+import Button from './Button'
 import { useAnnouncements } from '../lib/Announcements'
 import { useSettingsDrawer } from '../lib/SettingsDrawer'
 import { SECTION_TO_TAB } from '../pages/tools/settings/constants'
@@ -42,8 +44,8 @@ export function announcementUrlTransform(url: string): string {
 type MdProps<T extends keyof React.JSX.IntrinsicElements> = ComponentPropsWithoutRef<T>
 const MD_COMPONENTS = {
   // # / ## 罕见（正文最高用 ###）；都按版块标题处理
-  h1: (p: MdProps<'h1'>) => <h3 className="mt-5 mb-2 pb-1 text-[15px] font-bold text-fg-primary border-b border-dim" {...p} />,
-  h2: (p: MdProps<'h2'>) => <h3 className="mt-5 mb-2 pb-1 text-[15px] font-bold text-fg-primary border-b border-dim" {...p} />,
+  h1: (p: MdProps<'h1'>) => <h3 className="mt-5 mb-2 pb-1 text-base font-bold text-fg-primary border-b border-dim" {...p} />,
+  h2: (p: MdProps<'h2'>) => <h3 className="mt-5 mb-2 pb-1 text-base font-bold text-fg-primary border-b border-dim" {...p} />,
   // ### = 分组标题（新增/变更/改进/修复…）：加粗 + 下划线，清晰分段
   h3: (p: MdProps<'h3'>) => <h4 className="mt-5 mb-2 pb-1 text-sm font-bold text-fg-primary border-b border-dim first:mt-1" {...p} />,
   h4: (p: MdProps<'h4'>) => <h4 className="mt-4 mb-1.5 text-sm font-semibold text-fg-primary" {...p} />,
@@ -60,11 +62,11 @@ const MD_COMPONENTS = {
   blockquote: (p: MdProps<'blockquote'>) => <blockquote className="my-2 pl-3 border-l-2 border-dim text-fg-tertiary" {...p} />,
 } as const
 
-function tagChipClass(tag: AnnouncementPost['tag']): string {
+function tagChipTone(tag: AnnouncementPost['tag']): BadgeTone {
   switch (tag) {
-    case 'release': return 'text-accent bg-accent-soft'
-    case 'migration': return 'text-warn bg-warn-soft'
-    default: return 'text-info bg-info-soft' // notice
+    case 'release': return 'accent'
+    case 'migration': return 'warning'
+    default: return 'info'
   }
 }
 
@@ -156,45 +158,47 @@ export function AnnouncementCenter() {
             {t('announcements.title')}
           </h1>
           {updateInfo?.has_update && (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="xs"
               onClick={() => { settingsDrawer.open({ section: 'version' }); closeCenter() }}
               title={t('announcements.updateAvailable', { tag: updateInfo.latest_tag ?? updateInfo.latest_commit.slice(0, 8) })}
-              className="flex items-center gap-1.5 px-2 py-[5px] rounded-md text-xs font-mono text-accent bg-accent-soft border border-accent cursor-pointer hover:bg-accent/10 transition-colors shrink-0"
+              className="font-mono shrink-0"
               data-testid="announcement-update-btn"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <span className="dot bg-accent" aria-hidden="true" />
               <span>{updateInfo.latest_tag ?? t('announcements.updateAvailable', { tag: '' }).trim()}</span>
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
+            iconOnly
             onClick={closeCenter}
             aria-label={t('announcements.close')}
-            className="flex items-center justify-center w-7 h-7 rounded-md text-fg-tertiary hover:text-fg-primary hover:bg-surface bg-transparent border-none cursor-pointer shrink-0"
+            className="shrink-0"
             data-testid="announcement-close"
           >
-            ✕
-          </button>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </Button>
         </div>
 
         {/* tag filter */}
         {tagsPresent.length > 1 && (
           <div className="flex gap-1.5 px-5 py-2 border-b border-dim shrink-0">
             {(['all', ...tagsPresent] as const).map((tg) => (
-              <button
+              <Button
                 key={tg}
-                type="button"
+                variant="secondary"
+                size="xs"
+                aria-pressed={activeTag === tg}
                 onClick={() => setActiveTag(tg)}
-                className={`px-2.5 py-1 text-xs rounded transition-colors cursor-pointer border ${
-                  activeTag === tg
-                    ? 'border-accent bg-accent-soft text-fg-primary'
-                    : 'border-dim bg-surface text-fg-secondary hover:border-accent/50'
-                }`}
                 data-testid={`announcement-filter-${tg}`}
               >
                 {tagLabel(tg)}
-              </button>
+              </Button>
             ))}
           </div>
         )}
@@ -228,9 +232,9 @@ export function AnnouncementCenter() {
                       <span className="text-sm font-medium text-fg-primary truncate">{p.title[lang]}</span>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className={`px-1.5 py-0.5 text-[10px] rounded ${tagChipClass(p.tag)}`}>
+                      <Badge tone={tagChipTone(p.tag)} size="sm">
                         {tagLabel(p.tag)}
-                      </span>
+                      </Badge>
                       <span className="text-xs text-fg-tertiary">{p.date}</span>
                     </div>
                   </button>

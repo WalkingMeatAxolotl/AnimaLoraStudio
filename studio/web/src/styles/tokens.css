@@ -27,8 +27,11 @@
   --border-strong:  #a8a59a;
 
   /* accents */
-  --accent:        #d8541d;     /* orange — primary action */
+  --accent:        #d8541d;     /* orange — active marks and decorative emphasis */
   --accent-hover:  #b9441a;
+  --accent-strong: #b24616;     /* accessible text on light and soft surfaces */
+  --accent-control: #c64d19;    /* brighter solid control with white-text contrast */
+  --accent-control-hover: #b9441a;
   --accent-soft:   #fbe8de;
   --accent-fg:     #ffffff;
 
@@ -37,13 +40,19 @@
   --row-selected-bg:     var(--accent-soft);
   --row-selected-border: var(--accent);
 
+  /* Base colors drive marks and fills; -strong keeps small text legible on soft fills. */
   --ok:    #2d7a4f;
+  --ok-strong: #23603d;
   --ok-soft: #d6ebde;
   --warn:  #b97a16;
+  --warn-strong: #79500f;
   --warn-soft: #f4e4c3;
+  --warn-on-solid: #15140f;
   --err:   #c2371b;
+  --err-strong: #982713;
   --err-soft: #f6dad1;
   --info:  #2a6597;
+  --info-strong: #24577f;
   --info-soft: #d4e3ef;
 
   /* type */
@@ -116,6 +125,9 @@
 
   --accent:        #ed6b3a;
   --accent-hover:  #f78a5e;
+  --accent-strong: #ed6b3a;
+  --accent-control: #ed6b3a;
+  --accent-control-hover: #f78a5e;
   --accent-soft:   #3a1f12;
   --accent-fg:     #15140f;
 
@@ -123,10 +135,11 @@
   --row-selected-bg:     #2c211a;
   --row-selected-border: #8a563b;
 
-  --ok: #5fc78c;       --ok-soft: #1a3328;
-  --warn: #e0a23a;     --warn-soft: #3a2a10;
-  --err: #e8765c;      --err-soft: #3a1a14;
-  --info: #6db1d9;     --info-soft: #18293a;
+  --ok: #5fc78c;       --ok-strong: #5fc78c;   --ok-soft: #1a3328;
+  --warn: #e0a23a;     --warn-strong: #e0a23a; --warn-soft: #3a2a10;
+  --warn-on-solid: #15140f;
+  --err: #e8765c;      --err-strong: #e8765c;  --err-soft: #3a1a14;
+  --info: #6db1d9;     --info-strong: #6db1d9; --info-soft: #18293a;
 
   --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --sh-md: 0 4px 8px -2px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05);
@@ -201,34 +214,68 @@ select option:checked {
 }
 
 .btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 7px 14px;
   border-radius: var(--r-md);
   border: 1px solid transparent;
-  font-size: var(--t-base); font-weight: 500;
-  transition: all 120ms ease;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--t-base);
+  font-weight: 500;
+  line-height: 1.35;
   white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
-.btn-primary { background: var(--accent); color: var(--accent-fg); }
-.btn-primary:hover { background: var(--accent-hover); }
+.btn:hover:not(:disabled) { text-decoration: none; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.btn-primary { background: var(--accent-control); color: var(--accent-fg); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-control-hover); }
 .btn-secondary { background: var(--bg-surface); color: var(--fg-primary); border-color: var(--border-default); }
-.btn-secondary:hover { background: var(--bg-overlay); border-color: var(--border-strong); }
+.btn-secondary:hover:not(:disabled) { background: var(--bg-overlay); border-color: var(--border-strong); }
+.btn[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+}
 .btn-ghost { background: transparent; color: var(--fg-secondary); }
-.btn-ghost:hover { background: var(--bg-overlay); color: var(--fg-primary); }
+.btn-ghost:hover:not(:disabled) { background: var(--bg-overlay); color: var(--fg-primary); }
 /* 警示/危险按钮走全 app 统一的 soft 语言（soft 底 + 色字 + 色边，同 badge-warn /
-   bg-err-soft 系）；hover 实心化给确认前的强提示。原实心白字版和页面语言脱节。 */
-.btn-danger { background: var(--err-soft); color: var(--err); border-color: var(--err); }
-.btn-danger:hover { background: var(--err); color: white; }
-.btn-warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
-.btn-warn:hover { background: var(--warn); color: white; }
-.btn-sm { padding: 4px 10px; font-size: var(--t-sm); }
-/* 禁用态：半透明 + not-allowed，hover 不再高亮/提亮（此前无 :disabled 规则，禁用看不出来）。 */
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary:disabled:hover { background: var(--accent); }
-.btn-ghost:disabled:hover { background: transparent; color: var(--fg-secondary); }
-.btn-secondary:disabled:hover { background: var(--bg-surface); border-color: var(--border-default); }
-.btn-danger:disabled:hover { background: var(--err-soft); color: var(--err); }
-.btn-warn:disabled:hover { background: var(--warn-soft); color: var(--warn); }
+   bg-err-soft 系）；hover 实心化给确认前的强提示。 */
+.btn-danger { background: var(--err-soft); color: var(--err-strong); border-color: var(--err); }
+.btn-danger:hover:not(:disabled) { background: var(--err); color: var(--fg-inverse); }
+.btn-warn { background: var(--warn-soft); color: var(--warn-strong); border-color: var(--warn); }
+.btn-warn:hover:not(:disabled) { background: var(--warn); color: var(--warn-on-solid); }
+.btn-sm { min-height: 30px; padding: 4px 10px; font-size: var(--t-sm); }
+.btn-xs { min-height: 24px; padding: 2px 8px; gap: 4px; font-size: var(--t-xs); }
+.btn-icon { width: 38px; padding-inline: 0; }
+.btn-icon.btn-sm { width: 30px; }
+.btn-icon.btn-xs { width: 24px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn-loading { cursor: progress; }
+.btn-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 700ms linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
 
 .card {
   background: var(--bg-surface);
@@ -250,19 +297,25 @@ select option:checked {
 }
 
 .badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 8px;
   border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 1.4;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
-.badge-ok   { background: var(--ok-soft);   color: var(--ok); }
-.badge-warn { background: var(--warn-soft); color: var(--warn); }
-.badge-err  { background: var(--err-soft);  color: var(--err); }
-.badge-info { background: var(--info-soft); color: var(--info); }
+.badge-sm { padding: 1px 6px; font-size: var(--t-2xs); }
+.badge-ok   { background: var(--ok-soft);   color: var(--ok-strong); }
+.badge-warn { background: var(--warn-soft); color: var(--warn-strong); }
+.badge-err  { background: var(--err-soft);  color: var(--err-strong); }
+.badge-info { background: var(--info-soft); color: var(--info-strong); }
 .badge-neutral { background: var(--bg-overlay); color: var(--fg-secondary); }
-.badge-accent { background: var(--accent-soft); color: var(--accent); }
+.badge-accent { background: var(--accent-soft); color: var(--accent-strong); }
+.badge .dot { flex-shrink: 0; }
 
 .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .dot-ok { background: var(--ok); }
@@ -270,6 +323,13 @@ select option:checked {
 .dot-err { background: var(--err); }
 .dot-running { background: var(--accent); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .card-hover { transition: none; }
+  .btn-spinner,
+  .dot-running { animation: none; }
+}
 
 /* pill radio — 互斥选项组（更新通道 / 显示设置的语言·主题·密度等）。
  * 原 version-section.css 的 .vs-channel-radio 泛化为通用类。

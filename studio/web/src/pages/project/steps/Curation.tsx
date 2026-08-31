@@ -10,6 +10,7 @@ import {
   type ValidationItem,
   type Version,
 } from '../../../api/client'
+import Button from '../../../components/Button'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PaneResizer from '../../../components/PaneResizer'
@@ -621,21 +622,21 @@ export default function CurationPage() {
           {/* 数据集切换（对齐队列页数据任务/GPU 任务切换，放最右）：前置切换
               icon（行为）+ 目标数据集名（宾语），读作「切到 X」；当前数据集看
               右栏面板标题。 */}
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => switchBucket(bucket === 'validation' ? 'train' : 'validation')}
             aria-pressed={bucket === 'validation'}
             data-testid="curate-bucket-toggle"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M17 1l4 4-4 4" />
               <path d="M3 11V9a4 4 0 0 1 4-4h14" />
               <path d="M7 23l-4-4 4-4" />
               <path d="M21 13v2a4 4 0 0 1-4 4H3" />
             </svg>
             <span>{bucket === 'validation' ? t('curate.bucketTrain') : t('curate.bucketValidation')}</span>
-          </button>
+          </Button>
         </>
       }
     >
@@ -653,35 +654,37 @@ export default function CurationPage() {
           subtitle={t('curate.downloadSubtitle', { unused: currentLeft.length, total: downloadTotal, sel: leftSel.size })}
           actions={
             <>
-              <BtnSecondary
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setLeftSel(new Set(leftSortedNames))}
                 disabled={busy || leftSortedNames.length === 0}
               >
                 {t('curate.selectAll')}
-              </BtnSecondary>
-              <BtnSecondary
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setLeftSel(new Set())}
                 disabled={busy || leftSel.size === 0}
               >
                 {t('curate.deselect')}
-              </BtnSecondary>
-              {isVal ? (
-                <BtnPrimary
-                  onClick={doCopy}
-                  disabled={busy || leftSel.size === 0}
-                  title={t('curate.copyToValTitle')}
-                >
-                  {t('curate.copyToValBtn', { n: leftSel.size })}
-                </BtnPrimary>
-              ) : (
-                <BtnPrimary
-                  onClick={doCopy}
-                  disabled={busy || leftSel.size === 0 || !rightFolder}
-                  title={rightFolder ? t('curate.copyToTitle', { folder: rightFolder }) : t('curate.noFolderTitle')}
-                >
-                  {t('curate.copyToBtn', { n: leftSel.size, folder: rightFolder || '?' })}
-                </BtnPrimary>
-              )}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={doCopy}
+                disabled={busy || leftSel.size === 0 || (!isVal && !rightFolder)}
+                title={isVal
+                  ? t('curate.copyToValTitle')
+                  : rightFolder
+                    ? t('curate.copyToTitle', { folder: rightFolder })
+                    : t('curate.noFolderTitle')}
+              >
+                {isVal
+                  ? t('curate.copyToValBtn', { n: leftSel.size })
+                  : t('curate.copyToBtn', { n: leftSel.size, folder: rightFolder || '?' })}
+              </Button>
             </>
           }
         >
@@ -731,26 +734,35 @@ export default function CurationPage() {
                     className="input input-mono px-2 py-0.5 text-sm"
                     style={{ width: 144 }}
                   />
-                  <BtnSecondary onClick={doCreateFolder} disabled={busy || !newFolder.trim()}>
+                  <Button variant="secondary" size="sm" onClick={doCreateFolder} disabled={busy || !newFolder.trim()}>
                     {t('curate.createFolderBtn')}
-                  </BtnSecondary>
+                  </Button>
                 </>
               )}
-              <BtnSecondary
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setRightSel(new Set(rightSortedNames))}
                 disabled={busy || rightSortedNames.length === 0}
               >
                 {t('curate.selectAll')}
-              </BtnSecondary>
-              <BtnSecondary
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setRightSel(new Set())}
                 disabled={busy || rightSel.size === 0}
               >
                 {t('curate.deselect')}
-              </BtnSecondary>
-              <BtnDanger onClick={doRemove} disabled={busy || rightSel.size === 0 || (!isVal && !rightFolder)}>
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={doRemove}
+                disabled={busy || rightSel.size === 0 || (!isVal && !rightFolder)}
+              >
                 {t('curate.removeNBtn', { n: rightSel.size })}
-              </BtnDanger>
+              </Button>
             </>
           }
         >
@@ -782,12 +794,12 @@ export default function CurationPage() {
                     className="input input-mono px-2 py-0.5"
                     style={{ width: 176 }}
                   />
-                  <BtnPrimary onClick={doRenameFolder} disabled={busy}>
+                  <Button variant="primary" size="sm" onClick={doRenameFolder} disabled={busy}>
                     {t('curate.renameOk')}
-                  </BtnPrimary>
-                  <button onClick={() => setRenaming(null)} className="btn btn-ghost btn-sm">
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setRenaming(null)}>
                     {t('common.cancel')}
-                  </button>
+                  </Button>
                 </div>
               )}
             </>
@@ -961,16 +973,4 @@ function PanelCard({
       <div className="flex-1 min-h-0 flex flex-col p-2">{children}</div>
     </section>
   )
-}
-
-function BtnPrimary({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button {...rest} className="btn btn-primary btn-sm">{children}</button>
-}
-
-function BtnSecondary({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button {...rest} className="btn btn-secondary btn-sm">{children}</button>
-}
-
-function BtnDanger({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button {...rest} className="btn btn-sm bg-err-soft text-err border-err">{children}</button>
 }

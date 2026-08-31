@@ -6,19 +6,16 @@
  */
 import { useTranslation } from 'react-i18next'
 import type { VersionPhase, VersionStatus } from '../api/client'
+import Badge, { type BadgeTone } from './Badge'
 
-const DOT_RUNNING = (
-  <span className="dot dot-running" style={{ flexShrink: 0 }} />
-)
-
-type StatusEntry = { badge: string; key: string; dot?: true }
+type StatusEntry = { tone: BadgeTone; key: string; active?: true }
 
 const STATUS_MAP: Record<VersionStatus, StatusEntry> = {
-  preparing: { badge: 'badge-warn',    key: 'versionStatus.preparing' },
-  training:  { badge: 'badge-accent',  key: 'versionStatus.training', dot: true },
-  completed: { badge: 'badge-ok',      key: 'versionStatus.completed' },
-  failed:    { badge: 'badge-err',     key: 'versionStatus.failed' },
-  canceled:  { badge: 'badge-neutral', key: 'versionStatus.canceled' },
+  preparing: { tone: 'warning', key: 'versionStatus.preparing' },
+  training:  { tone: 'accent',  key: 'versionStatus.training', active: true },
+  completed: { tone: 'success', key: 'versionStatus.completed' },
+  failed:    { tone: 'danger',  key: 'versionStatus.failed' },
+  canceled:  { tone: 'neutral', key: 'versionStatus.canceled' },
 }
 
 /** preparing 时 badge 后缀的 phase 文案（PR #265 评审改：可选步骤
@@ -42,14 +39,13 @@ export default function VersionStatusBadge({
 }) {
   const { t } = useTranslation()
   if (!status) return null
-  const entry = STATUS_MAP[status] ?? { badge: 'badge-neutral', key: status }
+  const entry = STATUS_MAP[status] ?? { tone: 'neutral' as const, key: status }
   const suffixKey =
     status === 'preparing' && phase ? PHASE_SUFFIX_KEY[phase] : undefined
   return (
-    <span className={`badge ${entry.badge}`}>
-      {entry.dot && DOT_RUNNING}
+    <Badge tone={entry.tone} active={entry.active}>
       {STATUS_MAP[status] ? t(entry.key) : status}
       {suffixKey ? ` · ${t(suffixKey)}` : ''}
-    </span>
+    </Badge>
   )
 }

@@ -183,6 +183,10 @@ describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
 
     // 初始：running header 已渲染（PID 卡片），但 is_pausable=false → 暂停按钮不在
     await waitFor(() => expect(screen.getByText('取消任务')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '取消任务' })).toHaveClass('btn-warn', 'btn-sm')
+    for (const statusBadge of screen.getAllByText('运行中')) {
+      expect(statusBadge).toHaveClass('badge-accent')
+    }
     expect(screen.queryByTestId('detail-pause-btn')).not.toBeInTheDocument()
 
     // 后端首个 epoch backup 落盘 → is_pausable 升级；推一条 SSE 事件
