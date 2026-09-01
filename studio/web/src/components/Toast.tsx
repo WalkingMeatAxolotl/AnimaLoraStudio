@@ -5,8 +5,15 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import Alert, { type AlertTone } from './Alert'
 
 type Kind = 'info' | 'success' | 'error'
+
+const ALERT_TONE: Record<Kind, AlertTone> = {
+  info: 'info',
+  success: 'success',
+  error: 'danger',
+}
 
 interface ToastItem {
   id: number
@@ -36,19 +43,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm">
         {items.map((t) => (
-          <div
+          <Alert
             key={t.id}
-            className={
-              'px-4 py-2 rounded-lg shadow-lg text-sm border ' +
-              (t.kind === 'error'
-                ? 'bg-err-soft border-err text-err'
-                : t.kind === 'success'
-                ? 'bg-ok-soft border-ok text-ok'
-                : 'bg-elevated border-subtle text-fg-primary')
-            }
+            tone={ALERT_TONE[t.kind]}
+            role={t.kind === 'error' ? 'alert' : 'status'}
+            aria-atomic="true"
+            className="shadow-lg"
           >
             {t.message}
-          </div>
+          </Alert>
         ))}
       </div>
     </Ctx.Provider>

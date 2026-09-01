@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api, type BundleImportResult, type ProjectSummary, type VersionStatus } from '../api/client'
+import Alert from '../components/Alert'
 import { Input, Select } from '../components/FormControl'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
@@ -302,7 +303,9 @@ export default function ProjectsPage() {
 
       <div className="px-page pb-page pt-section">
         {error && (
-          <div className="mb-4 px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-sm font-mono">{error}</div>
+          <Alert tone="danger" role="alert" className="mb-section font-mono">
+            {error}
+          </Alert>
         )}
 
         {loading ? (

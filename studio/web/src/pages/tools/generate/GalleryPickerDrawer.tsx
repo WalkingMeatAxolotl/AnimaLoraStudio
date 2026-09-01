@@ -259,9 +259,7 @@ function GalleryPickerDrawer({
       await onApplyPrompt(response.prompt, autoGenerate)
       toast(t('generate.galleryTagSuccess'), 'success')
     } catch (reason) {
-      const message = String(reason)
-      setError(message)
-      toast(message, 'error')
+      setError(String(reason))
     } finally {
       setTagging(false)
     }
