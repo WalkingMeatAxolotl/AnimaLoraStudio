@@ -438,7 +438,8 @@ select option:checked {
 
 @media (prefers-reduced-motion: reduce) {
   .btn,
-  .card-hover { transition: none; }
+  .card-hover,
+  .form-control { transition: none; }
   .btn-spinner,
   .dot-running { animation: none; }
 }
@@ -496,19 +497,69 @@ select option:checked {
   transform: none;
 }
 
+.form-control,
 .input {
-  background: var(--bg-surface);
+  background: var(--form-control-bg, var(--bg-surface));
   border: 1px solid var(--border-default);
   border-radius: var(--r-md);
   padding: 7px 12px;
   font-size: var(--t-base);
   color: var(--fg-primary);
   outline: none;
-  transition: border-color 100ms ease, box-shadow 100ms ease;
+  transition: border-color 100ms ease, box-shadow 100ms ease, background-color 100ms ease;
   width: 100%;
 }
-.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.form-control {
+  min-height: 38px;
+  line-height: 1.4;
+}
+.form-control-surface { --form-control-bg: var(--bg-surface); }
+.form-control-canvas { --form-control-bg: var(--bg-canvas); }
+.form-control-sunken { --form-control-bg: var(--bg-sunken); }
+.form-control-sm {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--t-sm);
+}
+.form-control-textarea { min-height: 0; }
+.form-control:focus-visible,
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.form-control:disabled {
+  background: var(--bg-sunken);
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
+.form-control[aria-invalid="true"] { border-color: var(--err); }
+.form-control[aria-invalid="true"]:focus-visible {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px var(--err-soft);
+}
+.form-control::placeholder { color: var(--fg-tertiary); }
+.form-control-mono,
 .input-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
+
+.form-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent-control);
+  cursor: pointer;
+}
+.form-checkbox-sm { width: 14px; height: 14px; }
+.form-checkbox:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+.form-checkbox:disabled { opacity: 0.55; cursor: not-allowed; }
+.form-checkbox[aria-invalid="true"] {
+  outline: 2px solid var(--err);
+  outline-offset: 2px;
+}
 
 .divider { height: 1px; background: var(--border-subtle); }
 

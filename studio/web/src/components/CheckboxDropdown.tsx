@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Button from './Button'
+import { Checkbox } from './FormControl'
 
 export interface CheckboxDropdownOption {
   value: string
@@ -107,8 +108,8 @@ export default function CheckboxDropdown({
                 className="flex items-center gap-1.5 px-2.5 py-1 text-xs cursor-pointer hover:bg-overlay"
                 title={o.title ?? o.label}
               >
-                <input
-                  type="checkbox"
+                <Checkbox
+                  controlSize="sm"
                   checked={selected.has(o.value)}
                   onChange={() => toggle(o.value)}
                 />

@@ -25,7 +25,7 @@ surface has identical density.
 | --- | --- | --- |
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
-| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx` | Typed, accessible component APIs |
+| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx` | Typed, accessible component APIs |
 | Patterns | `PageHeader`, `StepShell`, `Dialog`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
@@ -191,10 +191,36 @@ Use `EmptyState` when a list or page region has no content to present:
 Do not reproduce `rounded-* + border-subtle + bg-surface` for an ordinary card or
 hand-build centered zero-state typography on product pages.
 
-## 7. Forms and help text
+## 7. Form-control contract
 
-Default forms use the standard `.input` surface. Parameter-heavy schema forms may
-use their existing compact canvas treatment as an explicit density variant.
+Use the typed `Input`, `Select`, `Textarea`, and `Checkbox` primitives for ordinary
+native form controls. They preserve browser semantics while sharing focus, disabled,
+invalid, sizing, and theme behavior. The legacy `.input` and `.input-mono` classes
+remain compatibility paths during incremental migration.
+
+Control sizes:
+
+- `md` is the default for dialogs and ordinary forms and aligns with `Button md`.
+- `sm` is for settings rows, filter toolbars, schema forms, and other explicitly
+  compact workbench regions; it must not be recreated with local padding overrides.
+
+Control surfaces communicate placement, not state:
+
+- `surface` is the ordinary form plane and default.
+- `canvas` is the compact Schema `Field` treatment inside a surrounding surface.
+- `sunken` is for settings wells and data-entry regions designed as inset controls.
+
+Use `mono` only for paths, identifiers, JSON, numeric technical values, and other
+machine-readable content. Errors pair visible recovery copy with `invalid`, which
+exposes `aria-invalid` and the shared error border/focus ring. Disabled appearance,
+keyboard focus, placeholder color, and checkbox accent come from the primitive.
+Do not replace a native select or checkbox with a custom interaction only to alter
+its appearance.
+
+The primitive owns presentation only. Debouncing, parsing, commit-on-blur, schema
+validation, picker composition, and business state remain in Field or product
+patterns. File/color/range inputs and composite pickers require their own contracts
+and are not styled as text controls by default.
 
 Settings explanations belong in the label-adjacent `InfoButton` tooltip according
 to `docs/design/ui-info-design.md`; do not add permanent explanatory paragraphs

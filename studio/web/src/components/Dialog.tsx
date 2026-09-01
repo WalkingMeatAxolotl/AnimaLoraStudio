@@ -22,6 +22,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { Input } from './FormControl'
 
 export type DialogTone = 'default' | 'danger' | 'warn'
 
@@ -236,15 +237,16 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
         {state.type === 'prompt' ? (
           <label className="flex flex-col gap-1.5">
             <span className="type-field-label">{state.label}</span>
-            <input
+            <Input
               ref={inputRef}
-              className="input input-mono font-mono"
+              mono
               value={inputValue}
               placeholder={state.options.placeholder}
               onChange={(e) => {
                 setInputValue(e.target.value)
                 if (error) setError(null)
               }}
+              invalid={Boolean(error)}
             />
             {error && (
               <span className="text-xs text-err">{error}</span>

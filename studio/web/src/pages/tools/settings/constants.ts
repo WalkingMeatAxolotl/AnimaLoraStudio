@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next'
+import { controlClassName } from '../../../components/FormControl'
 import {
   DEFAULT_WD14_MODELS,
   type LLMPreset,
@@ -254,7 +255,8 @@ export const EMPTY: Secrets = {
   tag_dictionary: { show_translation: null, autocomplete: null },
 }
 
-export const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'
+/** 兼容设置页尚未逐项迁移的原生控件；视觉契约由 FormControl 统一提供。 */
+export const textInputClass = controlClassName({ size: 'sm', surface: 'sunken' })
 
 export const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   anima_main: 'settings.modelDescriptions.animaMain',

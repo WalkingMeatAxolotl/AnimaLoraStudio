@@ -43,6 +43,8 @@ describe('Field number input (PP10.3)', () => {
     )
 
     expect(container.querySelector('.type-field-label')).toBeInTheDocument()
+    expect(screen.getByRole('textbox'))
+      .toHaveClass('form-control', 'form-control-sm', 'form-control-canvas', 'form-control-mono')
     expect(screen.getByText('Controls the learning rate.')).toHaveClass('type-field-help')
   })
 
@@ -377,5 +379,6 @@ describe('Field code input', () => {
     fireEvent.blur(input)
     expect(onChange).not.toHaveBeenCalled()
     expect(screen.getByText('Invalid JSON')).toBeInTheDocument()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
   })
 })

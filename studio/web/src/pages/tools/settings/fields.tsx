@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InfoButton } from '../../../components/InfoButton'
-import { MASK, textInputClass } from './constants'
+import { Input, Select } from '../../../components/FormControl'
+import { MASK } from './constants'
 
 // ── Section / Field ────────────────────────────────────────────────────────
 
@@ -127,23 +128,33 @@ export function SettingsField({ label, helpTooltip, children }: {
   )
 }
 
-export function Bool({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+export function Bool({ value, onChange, disabled, className = 'max-w-32' }: {
+  value: boolean
+  onChange: (v: boolean) => void
+  disabled?: boolean
+  className?: string
+}) {
   const { t } = useTranslation()
   return (
-    <select
+    <Select
       value={value ? 'on' : 'off'}
       onChange={(e) => onChange(e.target.value === 'on')}
       disabled={disabled}
-      className={`${textInputClass} max-w-32 disabled:opacity-60`}
+      controlSize="sm"
+      surface="sunken"
+      className={className}
     >
       <option value="on">{t('settings.boolEnabled')}</option>
       <option value="off">{t('settings.boolDisabled')}</option>
-    </select>
+    </Select>
   )
 }
 
-export function SensitiveInput({ value, serverValue, onChange }: {
-  value: string; serverValue: string; onChange: (v: string) => void
+export function SensitiveInput({ value, serverValue, onChange, className }: {
+  value: string
+  serverValue: string
+  onChange: (v: string) => void
+  className?: string
 }) {
   const { t } = useTranslation()
   const [localValue, setLocalValue] = useState(value)
@@ -167,7 +178,7 @@ export function SensitiveInput({ value, serverValue, onChange }: {
   }
 
   return (
-    <input
+    <Input
       type="password"
       value={masked ? '' : localValue}
       placeholder={serverValue === MASK ? t('settings.sensitiveSavedPlaceholder') : ''}
@@ -178,7 +189,9 @@ export function SensitiveInput({ value, serverValue, onChange }: {
       data-lpignore="true"
       data-1p-ignore
       data-form-type="other"
-      className={textInputClass}
+      controlSize="sm"
+      surface="sunken"
+      className={className}
     />
   )
 }

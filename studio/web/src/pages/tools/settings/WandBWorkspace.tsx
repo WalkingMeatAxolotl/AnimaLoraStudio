@@ -67,6 +67,8 @@ function PBtn({ children, onClick, variant, title }: {
 /** artifact 上传三档合并进一个 dropdown：关闭 / 仅保留最新 / 保留全部。 */
 type UploadChoice = 'off' | 'last' | 'all'
 
+const WANDB_CONTROL_CLASS = 'max-w-md'
+
 /**
  * WandB 预设工作区 —— 骨架与 LLMTaggerWorkspace 完全同款：
  * 卡片(header 标题 + PresetBar 预设条 + 主体)。区别只有两点：
@@ -123,7 +125,7 @@ export default function WandBWorkspace({
           if (v === 'off') apply(false, policy)
           else apply(true, v)
         }}
-        className={`${textInputClass} max-w-40`}
+        className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
       >
         <option value="off">{t('settings.boolDisabled')}</option>
         <option value="last">{t('settings.policyLast')}</option>
@@ -220,14 +222,19 @@ export default function WandBWorkspace({
       </div>
 
       {/* 主体：单 section（wandb 字段少，不需要 LLM 的双栏 grid） */}
-      <div style={{ padding: '12px 16px 14px' }}>
-        <p className="m-0 mb-3 text-xs text-fg-tertiary">{t('settings.wandbPresetHint')}</p>
+      <div
+        className="flex flex-col gap-field"
+        data-testid="wandb-fields"
+        style={{ padding: '12px 16px 14px' }}
+      >
+        <p className="m-0 text-xs text-fg-tertiary">{t('settings.wandbPresetHint')}</p>
 
         <SettingsField label={t('settings.fieldApiKey')}>
           <SensitiveInput
             value={currentPreset.api_key}
             serverValue={serverPreset?.api_key ?? ''}
             onChange={(v) => onUpdatePreset({ api_key: v })}
+            className={WANDB_CONTROL_CLASS}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldProject')}>
@@ -236,7 +243,7 @@ export default function WandBWorkspace({
             value={currentPreset.project}
             onChange={(v) => onUpdatePreset({ project: v })}
             placeholder="AnimaLoraStudio"
-            className={textInputClass}
+            className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldEntity')} helpTooltip={<p>{t('settings.wandbEntityHint')}</p>}>
@@ -244,7 +251,7 @@ export default function WandBWorkspace({
             type="text"
             value={currentPreset.entity}
             onChange={(v) => onUpdatePreset({ entity: v })}
-            className={textInputClass}
+            className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldBaseUrl')} helpTooltip={<p>{t('settings.wandbBaseUrlHint')}</p>}>
@@ -253,14 +260,14 @@ export default function WandBWorkspace({
             value={currentPreset.base_url}
             onChange={(v) => onUpdatePreset({ base_url: v })}
             placeholder="https://api.wandb.ai"
-            className={textInputClass}
+            className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldMode')}>
           <select
             value={currentPreset.mode}
             onChange={(e) => onUpdatePreset({ mode: e.target.value as WandBPreset['mode'] })}
-            className={`${textInputClass} max-w-32`}
+            className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
           >
             <option value="online">online</option>
             <option value="offline">offline</option>
@@ -273,7 +280,11 @@ export default function WandBWorkspace({
             <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
           }
         >
-          <Bool value={currentPreset.log_samples} onChange={(v) => onUpdatePreset({ log_samples: v })} />
+          <Bool
+            value={currentPreset.log_samples}
+            onChange={(v) => onUpdatePreset({ log_samples: v })}
+            className={WANDB_CONTROL_CLASS}
+          />
         </SettingsField>
         {currentPreset.log_samples && (
           <>
@@ -287,7 +298,7 @@ export default function WandBWorkspace({
                 step={64}
                 value={currentPreset.sample_max_side}
                 onChange={(v) => onUpdatePreset({ sample_max_side: Math.max(64, parseInt(v) || 1216) })}
-                className={textInputClass}
+                className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
               />
             </SettingsField>
             <SettingsField
@@ -302,7 +313,7 @@ export default function WandBWorkspace({
                 step={50}
                 value={currentPreset.sample_every_n_steps}
                 onChange={(v) => onUpdatePreset({ sample_every_n_steps: Math.max(0, parseInt(v) || 0) })}
-                className={textInputClass}
+                className={`${textInputClass} ${WANDB_CONTROL_CLASS}`}
               />
             </SettingsField>
           </>
@@ -310,7 +321,7 @@ export default function WandBWorkspace({
 
         {/* artifact 上传与采样图无关，不随 log_samples 隐藏；
             开关 + 保留策略两个下拉合并为三档单下拉：关闭 / 仅保留最新 / 保留全部 */}
-        <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mt-4 mb-2">
+        <h4 className="type-section-label mt-related">
           {t('settings.uploadArtifacts')}
         </h4>
         {uploadSelect(
