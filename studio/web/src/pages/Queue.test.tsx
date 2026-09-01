@@ -6,7 +6,7 @@
  *   2) 缺字段（老 mock / 极老行）兜底 'train'；
  *   3) 不再受 config_name 影响 —— 修掉旧 inferKind 把名字含 "reg"/"tag" 的
  *      训练任务误判成别的类型的 latent bug。 */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
@@ -97,6 +97,23 @@ describe('QueuePage 分区 + 分页', () => {
     expect(title.closest('.empty-state')).toHaveClass('card', 'empty-state')
     expect(screen.getByText('从项目训练页入队任务即可'))
       .toHaveClass('empty-state-description')
+  })
+
+  it('队列挂起使用共享 warning Alert，并保留恢复操作', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({
+      held: true, pending_waiting: 2,
+    })
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+
+    const banner = await screen.findByTestId('queue-hold-banner')
+    expect(banner).toHaveClass('alert', 'alert-warning', 'alert-sm', 'sticky')
+    expect(within(banner).getByRole('button', { name: '恢复调度' }))
+      .toHaveClass('btn', 'btn-ghost', 'btn-xs')
   })
 
   it('渲染进行中/等待/历史三分区，历史超过一页时出分页器', async () => {

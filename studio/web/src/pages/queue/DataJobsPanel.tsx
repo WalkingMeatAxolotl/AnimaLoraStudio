@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type Task, type TaskType,
 } from '../../api/client'
+import Alert from '../../components/Alert'
 import Card from '../../components/Card'
 import EmptyState from '../../components/EmptyState'
 import { useDialog } from '../../components/Dialog'
@@ -197,9 +198,9 @@ export default function DataJobsPanel({
   return (
     <div className="flex flex-col gap-section" data-testid="data-jobs-panel">
       {error && (
-        <div className="px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
+        <Alert tone="danger" size="sm" role="alert" className="font-mono">
           {error}
-        </div>
+        </Alert>
       )}
 
       {!loaded ? (

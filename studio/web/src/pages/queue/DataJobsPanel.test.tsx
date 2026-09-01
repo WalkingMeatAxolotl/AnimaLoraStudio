@@ -109,6 +109,19 @@ describe('DataJobsPanel', () => {
       .toHaveClass('empty-state-description')
   })
 
+  it('加载失败使用共享 danger Alert 与即时播报语义', async () => {
+    vi.spyOn(api, 'listQueueLive').mockRejectedValue(new Error('offline'))
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderPanel()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveClass('alert', 'alert-danger', 'alert-sm', 'font-mono')
+    expect(alert).toHaveTextContent('offline')
+  })
+
   it('数据源 = /api/queue resource_class=data（kind/q 透传）', async () => {
     const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
     const histSpy = vi.spyOn(api, 'listQueueHistory').mockResolvedValue({

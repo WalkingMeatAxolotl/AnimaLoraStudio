@@ -25,7 +25,7 @@ surface has identical density.
 | --- | --- | --- |
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
-| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx` | Typed, accessible component APIs |
+| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx` | Typed, accessible component APIs |
 | Patterns | `PageHeader`, `StepShell`, `Dialog`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
@@ -226,7 +226,35 @@ Settings explanations belong in the label-adjacent `InfoButton` tooltip accordin
 to `docs/design/ui-info-design.md`; do not add permanent explanatory paragraphs
 under individual settings.
 
-## 8. Accessibility and resilience
+## 8. Feedback contract
+
+Use `Alert` for persistent, in-flow information, success confirmation, warnings, and
+errors. `Toast` remains the transient notification pattern and reuses Alert's visual
+tones without changing its timer or invocation API.
+
+| Tone | Meaning | Typical use |
+| --- | --- | --- |
+| `info` | Neutral operational context or guidance | non-blocking system information |
+| `success` | A completed action that remains relevant in the current view | saved or imported confirmation |
+| `warning` | Attention or recovery is required, but the state is not yet a failure | paused or held work |
+| `danger` | An operation failed or content is invalid | failed loads and rejected operations |
+
+Use `md` for ordinary page feedback and `sm` inside compact workbench regions. A
+semantic icon accompanies each tone so meaning does not depend on color alone. Titles
+are optional and should name the condition; body copy explains the consequence or
+recovery. Actions belong in the dedicated action slot and use `Button`.
+
+ARIA live behavior is explicit because not every visible notice is newly announced:
+use `role="alert"` only for urgent dynamic failures, `role="status"` for non-urgent
+dynamic confirmation, and no live role for persistent page context. Do not announce the
+same event through both an in-flow Alert and a Toast; choose the surface nearest to the
+recovery action. Field validation stays adjacent to its control; empty states, domain
+status cards, and modal workflow steps are not Alerts. Error copy and recovery details
+must wrap rather than truncate.
+
+Do not recreate feedback with local `bg-*-soft + border-* + text-*` combinations.
+
+## 9. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -236,7 +264,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 9. Migration policy
+## 10. Migration policy
 
 Migration is incremental:
 

@@ -6,6 +6,8 @@ import {
   type TaskStatus, type TaskType,
 } from '../api/client'
 import { DATA_VIEW_KINDS } from './queue/jobUtils'
+import Alert from '../components/Alert'
+import Button from '../components/Button'
 import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
 import { Input, Select } from '../components/FormControl'
@@ -1001,23 +1003,28 @@ export default function QueuePage() {
         {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。
             hold 覆盖全队列（含数据作业派发），两个视图都显示。 */}
         {holdState?.held && (
-          <div
-            className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
+          <Alert
+            tone="warning"
+            size="sm"
+            className="sticky top-0 z-10"
             data-testid="queue-hold-banner"
+            action={(
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => void releaseQueue()}
+              >
+                {t('queue.releaseQueue')}
+              </Button>
+            )}
           >
-            <span>{t('queue.heldBanner')}</span>
-            <button
-              onClick={() => void releaseQueue()}
-              className="btn btn-ghost btn-xs text-warn"
-            >
-              {t('queue.releaseQueue')}
-            </button>
-          </div>
+            {t('queue.heldBanner')}
+          </Alert>
         )}
         {error && (
-          <div className="px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
+          <Alert tone="danger" size="sm" role="alert" className="font-mono">
             {error}
-          </div>
+          </Alert>
         )}
 
         {queueTab === 'jobs' ? (
