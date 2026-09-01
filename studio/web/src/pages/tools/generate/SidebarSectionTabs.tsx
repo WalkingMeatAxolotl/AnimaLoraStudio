@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
-import { SegmentedControl, SidebarToolIcon, type SegmentedItem } from './SidebarToolbar'
+import { Tabs, type TabItem } from '../../../components/SelectionGroup'
+import { SidebarToolIcon } from './SidebarToolbar'
 import type { ViewMode } from './ViewModeTabs'
 
 export type SidebarTab = 'lora' | 'xy' | 'prompts' | 'config'
@@ -14,7 +15,7 @@ export default function SidebarSectionTabs({
   mode: ViewMode
 }) {
   const { t } = useTranslation()
-  const allTabs: Record<SidebarTab, SegmentedItem<SidebarTab>> = {
+  const allTabs: Record<SidebarTab, TabItem<SidebarTab>> = {
     xy: {
       value: 'xy',
       label: t('generate.xyAxes'),
@@ -45,7 +46,9 @@ export default function SidebarSectionTabs({
     : [allTabs.lora, allTabs.prompts, allTabs.config]
 
   return (
-    <SegmentedControl
+    <Tabs
+      appearance="segmented"
+      size="sm"
       items={tabs}
       value={tab}
       onChange={onTabChange}

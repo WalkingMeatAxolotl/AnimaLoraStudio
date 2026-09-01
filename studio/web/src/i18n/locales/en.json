@@ -801,6 +801,7 @@
   "queueDetail": {
     "invalidId": "Invalid task ID",
     "backToQueue": "← Queue",
+    "tabsAriaLabel": "Task detail sections",
     "tabOverview": "Overview",
     "tabLogs": "Logs",
     "tabMonitor": "Monitor",

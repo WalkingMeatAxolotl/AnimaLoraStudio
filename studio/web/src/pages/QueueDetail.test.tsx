@@ -4,6 +4,7 @@
  *  做 elapsed time tick，旧实现 [task] 作 deps 会让 snapshot config 也跟着
  *  2s 重拉 —— 浏览器卡顿、loading flash。 */
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../components/Toast'
@@ -248,8 +249,25 @@ describe('QueueDetailPage 类型差异化 tab（P-H）', () => {
     expect(screen.queryByText('指标')).not.toBeInTheDocument()
     expect(screen.queryByText('关联配置')).not.toBeInTheDocument()
     expect(screen.queryByText('输出')).not.toBeInTheDocument()
-    // overview tab 仍在
-    expect(screen.getByText('详情')).toBeInTheDocument()
+    // overview tab 仍在，并与当前面板建立 ARIA 关联
+    const tablist = screen.getByRole('tablist', { name: '任务详情分区' })
+    const overview = screen.getByRole('tab', { name: '详情' })
+    const log = screen.getByRole('tab', { name: '日志' })
+    expect(tablist).toHaveClass('ui-selection-underline')
+    expect(overview).toHaveAttribute('aria-selected', 'true')
+    expect(overview).toHaveAttribute('aria-controls', 'queue-detail-panel')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', overview.id)
+
+    const user = userEvent.setup()
+    overview.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(log).toHaveFocus()
+    expect(log).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', log.id)
+
+    // QueueDetail 把当前 tab 同步到 window.location.hash；切回概览，避免污染后续用例。
+    await user.keyboard('{ArrowLeft}')
+    expect(overview).toHaveAttribute('aria-selected', 'true')
   })
 })
 

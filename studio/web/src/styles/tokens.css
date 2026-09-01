@@ -500,9 +500,146 @@ select option:checked {
 @media (prefers-reduced-motion: reduce) {
   .btn,
   .card-hover,
-  .form-control { transition: none; }
+  .form-control,
+  .ui-selection-item { transition: none; }
   .btn-spinner,
   .dot-running { animation: none; }
+}
+
+/* tabs + segmented selection — content navigation and mutually exclusive values share
+ * roving focus and density-aware chrome, but expose different ARIA roles in React. */
+.ui-selection-group {
+  min-width: 0;
+  align-items: center;
+}
+.ui-selection-segmented {
+  display: flex;
+  gap: var(--s-1);
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+}
+.ui-selection-underline {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  padding: 3px 3px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+}
+.ui-selection-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-tertiary);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease,
+    box-shadow 120ms ease, color 120ms ease;
+}
+.ui-selection-item:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.ui-selection-segmented .ui-selection-item[data-state="active"]:focus-visible {
+  box-shadow: var(--sh-sm), inset 0 0 0 2px var(--accent);
+}
+.ui-selection-item:disabled {
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
+.ui-selection-icon {
+  display: inline-flex;
+  flex: none;
+}
+.ui-selection-label {
+  min-width: 0;
+}
+.ui-selection-segmented .ui-selection-item {
+  flex: 1 1 0;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+.ui-selection-segmented .ui-selection-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-selection-segmented .ui-selection-item:not(:disabled):not([data-state="active"]):hover {
+  background: var(--bg-overlay);
+  color: var(--fg-secondary);
+}
+.ui-selection-segmented .ui-selection-item[data-state="active"] {
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--fg-primary);
+  font-weight: 600;
+  box-shadow: var(--sh-sm);
+}
+.ui-selection-underline .ui-selection-item {
+  flex: none;
+  margin-bottom: -1px;
+  padding: 8px 18px;
+  border-bottom: 2px solid transparent;
+  font-size: var(--t-sm);
+  white-space: nowrap;
+}
+.ui-selection-underline .ui-selection-item:not(:disabled):not([data-state="active"]):hover {
+  border-bottom-color: var(--border-default);
+  color: var(--fg-primary);
+}
+.ui-selection-underline .ui-selection-item[data-state="active"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+.ui-selection-sm.ui-selection-segmented .ui-selection-item {
+  padding: 4px 8px;
+  font-size: var(--t-2xs);
+}
+.ui-selection-sm.ui-selection-underline .ui-selection-item {
+  padding: 6px 12px;
+  font-size: var(--t-xs);
+}
+.density-tight .ui-selection-segmented {
+  padding: 2px;
+}
+.density-tight .ui-selection-segmented .ui-selection-item {
+  padding: 4px 6px;
+}
+.density-tight .ui-selection-underline .ui-selection-item {
+  padding: 6px 14px;
+}
+.density-tight .ui-selection-sm.ui-selection-segmented .ui-selection-item {
+  padding: 3px 6px;
+}
+.density-tight .ui-selection-sm.ui-selection-underline .ui-selection-item {
+  padding: 4px 10px;
+}
+.density-loose .ui-selection-segmented {
+  padding: 4px;
+}
+.density-loose .ui-selection-segmented .ui-selection-item {
+  padding: 8px 10px;
+}
+.density-loose .ui-selection-underline .ui-selection-item {
+  padding: 10px 20px;
+}
+.density-loose .ui-selection-sm.ui-selection-segmented .ui-selection-item {
+  padding: 6px 10px;
+}
+.density-loose .ui-selection-sm.ui-selection-underline .ui-selection-item {
+  padding: 8px 14px;
 }
 
 /* pill radio — 互斥选项组（更新通道 / 显示设置的语言·主题·密度等）。

@@ -20,7 +20,8 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { useTranslation } from 'react-i18next'
 import { normalizeLoraPath } from './loraSelection'
-import { SegmentedControl, SidebarToolIcon, ToolbarAction } from './SidebarToolbar'
+import { Tabs, selectionItemId } from '../../../components/SelectionGroup'
+import { SidebarToolIcon, ToolbarAction } from './SidebarToolbar'
 import { axisLabel, axisView, cellCount, formatAxisValue, splitAxisRaw, type XYAxisDraft } from './xy'
 
 function checkpointName(path: string): string {
@@ -221,7 +222,8 @@ export function XYAxisToolbar({
 
   return (
     <div className="flex items-center gap-1.5" data-testid="xy-axis-toolbar">
-      <SegmentedControl
+      <Tabs
+        appearance="segmented"
         items={[
           {
             value: 'X',
@@ -237,7 +239,7 @@ export function XYAxisToolbar({
         value={activeAxis}
         onChange={onSelectAxis}
         ariaLabel={t('generate.xyAxes')}
-        density="compact"
+        size="sm"
         idPrefix="xy-axis-tab"
         className="flex-1"
       />
@@ -284,7 +286,7 @@ export default function SidebarXYAxes({
       <div
         id="xy-active-axis-panel"
         role="tabpanel"
-        aria-labelledby={`xy-axis-tab-${activeAxis.toLocaleLowerCase()}`}
+        aria-labelledby={selectionItemId('xy-axis-tab', activeAxis)}
       >
         <AxisValueList
           draft={activeDraft}

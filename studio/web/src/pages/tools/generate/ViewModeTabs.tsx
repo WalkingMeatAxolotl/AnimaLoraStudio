@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
-import { SegmentedControl, SidebarToolIcon } from './SidebarToolbar'
+import { SegmentedControl } from '../../../components/SelectionGroup'
+import { SidebarToolIcon } from './SidebarToolbar'
 
 /** 视图模式选择：单图 / XY 矩阵。
  *
@@ -31,7 +32,6 @@ export default function ViewModeTabs({
       value={mode}
       onChange={onModeChange}
       ariaLabel={t('generate.viewModes')}
-      semantics="radio"
       idPrefix="generate-view-mode"
       className="w-full"
     />
