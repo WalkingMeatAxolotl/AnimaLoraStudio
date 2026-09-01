@@ -267,7 +267,7 @@ export default function SettingsPage() {
 
   // Tab nav 抽出来传给 PageHeader 的 tabs prop（取代旧的 subtitle 位置）。
   const tabNav = (
-    <nav className="flex gap-1 -mb-4">
+    <nav className="flex gap-1 -mb-section">
       {TAB_LIST.map((item) => (
         <button
           key={item.id}
@@ -305,9 +305,9 @@ export default function SettingsPage() {
         actions={<SaveIndicator status={saveStatus} />}
       />
 
-      <div ref={scrollContainerRef} className="p-6 pb-12 flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} className="p-page pb-12 flex-1 overflow-y-auto">
       <div className="grid gap-10 max-w-[1920px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
-      <div className="flex flex-col gap-8 min-w-0">
+      <div className="flex flex-col gap-page-loose min-w-0">
 
       {error && (
         <div className="p-3 rounded-md bg-err-soft border border-err text-err text-sm font-mono">

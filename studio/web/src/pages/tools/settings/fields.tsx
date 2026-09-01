@@ -15,9 +15,9 @@ export function SettingsSection({
 }) {
   const titleEl = <h2 className="type-panel-title">{title}</h2>
   return (
-    <section id={id} className="rounded-md border border-subtle bg-surface p-4 flex flex-col gap-3 scroll-mt-24">
+    <section id={id} className="rounded-md border border-subtle bg-surface p-section flex flex-col gap-field scroll-mt-24">
       {headerExtras ? (
-        <div className="flex items-center gap-2 mb-0.5">
+        <div className="flex items-center gap-related mb-0.5">
           {titleEl}
           {headerExtras}
         </div>
@@ -117,8 +117,8 @@ export function SettingsField({ label, helpTooltip, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="grid grid-cols-[240px_1fr] gap-3 items-start">
-      <div className="flex items-center gap-2 min-w-0 pt-1.5">
+    <div className="grid grid-cols-[240px_1fr] gap-field items-start">
+      <div className="flex items-center gap-related min-w-0 pt-1.5">
         <label className="type-field-label">{label}</label>
         {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
       </div>

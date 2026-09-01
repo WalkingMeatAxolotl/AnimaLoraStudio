@@ -3,13 +3,20 @@ import { describe, expect, it } from 'vitest'
 import PageHeader from './PageHeader'
 
 describe('PageHeader', () => {
-  it('applies the shared page title and description hierarchy', () => {
-    render(<PageHeader title="Projects" subtitle="Manage training workspaces." />)
+  it('applies the shared page title, description, and shell rhythm', () => {
+    const { container } = render(
+      <PageHeader title="Projects" subtitle="Manage training workspaces." />,
+    )
 
+    expect(container.firstElementChild).toHaveClass(
+      'px-page',
+      'pt-page-start',
+      'pb-section',
+    )
     expect(screen.getByRole('heading', { level: 1, name: 'Projects' }))
       .toHaveClass('type-page-title')
     expect(screen.getByText('Manage training workspaces.'))
-      .toHaveClass('type-page-description')
+      .toHaveClass('type-page-description', 'mt-related')
   })
 
   it('lets tabs replace the description without changing the title hierarchy', () => {
@@ -24,7 +31,10 @@ describe('PageHeader', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' }))
       .toHaveClass('type-page-title')
     expect(screen.queryByText('Hidden description')).not.toBeInTheDocument()
-    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Settings sections' }))
+      .toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Settings sections' }).parentElement)
+      .toHaveClass('mt-field')
   })
 
   it('preserves the action and top-right slots', () => {
@@ -38,7 +48,11 @@ describe('PageHeader', () => {
     )
 
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh' }).parentElement)
+      .toHaveClass('gap-related')
     expect(screen.getByText('Phase 2')).toBeInTheDocument()
+    expect(screen.getByText('Phase 2').parentElement)
+      .toHaveClass('top-field', 'right-page')
     expect(screen.getByRole('heading', { name: 'Queue' }).closest('.sticky')).toBeInTheDocument()
   })
 })

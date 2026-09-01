@@ -74,6 +74,18 @@ export default {
         '3xl':  ['var(--t-3xl)', { lineHeight: '1.15' }],
       },
 
+      // ── 语义间距 → CSS 变量，支持运行时密度调节 ──────────────────
+      // 数字 utility 暂时保留为兼容路径；共享壳层和新代码按关系选用：
+      // related < field < section < page-start < page < page-loose。
+      spacing: {
+        related: 'var(--space-related)',
+        field: 'var(--space-field)',
+        section: 'var(--space-section)',
+        'page-start': 'var(--space-page-start)',
+        page: 'var(--space-page)',
+        'page-loose': 'var(--space-page-loose)',
+      },
+
       // ── 阴影 → CSS 变量，支持深色模式自动切换 ───────────────────
       // 用法: shadow-sm  shadow-md  shadow-lg  shadow-xl
       boxShadow: {

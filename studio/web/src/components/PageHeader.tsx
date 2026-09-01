@@ -14,24 +14,24 @@ interface Props {
 
 export default function PageHeader({ title, subtitle, tabs, actions, topRight, sticky }: Props) {
   return (
-    <div className={`px-6 pt-5 pb-4 bg-canvas border-b border-subtle ${sticky ? 'sticky top-0 z-[5]' : 'relative'}`}>
+    <div className={`px-page pt-page-start pb-section bg-canvas border-b border-subtle ${sticky ? 'sticky top-0 z-[5]' : 'relative'}`}>
       {topRight && (
-        <div className="absolute top-3 right-6 z-[1]">{topRight}</div>
+        <div className="absolute top-field right-page z-[1]">{topRight}</div>
       )}
-      <div className="flex items-end gap-4 flex-wrap">
+      <div className="flex items-end gap-section flex-wrap">
         <div className="flex-1 min-w-0">
           <h1 className="type-page-title">{title}</h1>
           {/* tabs 在主标题下方取代 subtitle 位置；两者互斥（tabs 优先）。 */}
           {tabs ? (
-            <div className="mt-3">{tabs}</div>
+            <div className="mt-field">{tabs}</div>
           ) : (
             subtitle && (
-              <p className="type-page-description mt-1.5">{subtitle}</p>
+              <p className="type-page-description mt-related">{subtitle}</p>
             )
           )}
         </div>
         {actions && (
-          <div className="flex gap-2 items-center">{actions}</div>
+          <div className="flex gap-related items-center">{actions}</div>
         )}
       </div>
     </div>
