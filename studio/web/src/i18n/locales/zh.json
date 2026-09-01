@@ -226,9 +226,9 @@
   },
   "saveBar": {
     "tooltip": "把本地编辑写入磁盘；写之前自动生成还原点",
-    "save": "💾 保存（{{n}}）",
-    "saved": "💾 已保存",
-    "restorePoints": "🕒 还原点",
+    "save": "保存（{{n}}）",
+    "saved": "已保存",
+    "restorePoints": "还原点",
     "noRestorePoints": "还没有还原点。每次「保存」会自动生成一个。",
     "restoreEntry": "{{n}} 文件 · {{size}}",
     "confirmRestore": "还原会覆盖当前所有 caption（含未保存的本地改动）。确定？",

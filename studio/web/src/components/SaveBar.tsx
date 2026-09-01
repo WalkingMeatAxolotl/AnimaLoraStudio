@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type CaptionSnapshot } from '../api/client'
+import ActionGroup from './ActionGroup'
+import Button from './Button'
 import { useDialog } from './Dialog'
 import { useToast } from './Toast'
 
@@ -79,31 +81,40 @@ export default function SaveBar({
 
   return (
     <div className="relative" ref={ref}>
-      <div className="flex items-center gap-1">
-        <button
-          onClick={save}
-          disabled={saving || dirtyCount === 0}
-          className={dirtyCount > 0 ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
-          title={t('saveBar.tooltip')}
-        >
-          {saving
-            ? t('common.saving')
-            : dirtyCount > 0
-              ? t('saveBar.save', { n: dirtyCount })
-              : t('saveBar.saved')}
-        </button>
-        <button
-          onClick={() => setOpen(!open)}
-          className="btn btn-ghost btn-sm"
-        >
-          {t('saveBar.restorePoints')}
-        </button>
-      </div>
+      <ActionGroup
+        secondary={(
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            aria-haspopup="dialog"
+          >
+            {t('saveBar.restorePoints')}
+          </Button>
+        )}
+        primary={(
+          <Button
+            variant={dirtyCount > 0 ? 'primary' : 'secondary'}
+            size="sm"
+            onClick={save}
+            disabled={dirtyCount === 0}
+            loading={saving}
+            title={t('saveBar.tooltip')}
+          >
+            {saving
+              ? t('common.saving')
+              : dirtyCount > 0
+                ? t('saveBar.save', { n: dirtyCount })
+                : t('saveBar.saved')}
+          </Button>
+        )}
+      />
 
       {open && (
         <div
           role="dialog"
-          aria-label="snapshot-list"
+          aria-label={t('saveBar.restorePoints')}
           className="absolute right-0 top-[calc(100%+4px)] w-80 max-h-80 overflow-y-auto rounded-md border border-subtle bg-elevated shadow-xl z-30"
         >
           {items.length === 0 ? (
@@ -125,21 +136,25 @@ export default function SaveBar({
                       {t('saveBar.restoreEntry', { n: s.file_count, size: fmtSize(s.size) })}
                     </div>
                   </div>
-                  <button
+                  <Button
+                    variant="primary"
+                    size="sm"
                     onClick={() => restore(s.id)}
                     disabled={busyId === s.id}
-                    className="btn btn-primary btn-sm"
                   >
                     {t('common.restore')}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    iconOnly
                     onClick={() => del(s.id)}
                     disabled={busyId === s.id}
-                    className="btn btn-ghost btn-sm text-fg-tertiary hover:text-err"
+                    className="text-fg-tertiary hover:text-err"
                     aria-label={t('common.delete')}
                   >
-                    ✕
-                  </button>
+                    ×
+                  </Button>
                 </li>
               ))}
             </ul>

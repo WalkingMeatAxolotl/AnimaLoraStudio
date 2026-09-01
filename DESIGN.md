@@ -26,7 +26,7 @@ surface has identical density.
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
 | Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx` | Typed, accessible component APIs |
-| Patterns | `PageHeader`, `StepShell`, `Dialog`, `Toast`, `Field` | Repeated page and interaction structures |
+| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `Dialog`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
 A page may compose primitives with layout utilities. It must not recreate an
@@ -254,7 +254,40 @@ must wrap rather than truncate.
 
 Do not recreate feedback with local `bg-*-soft + border-* + text-*` combinations.
 
-## 9. Accessibility and resilience
+## 9. Action-area and save-pattern contract
+
+`ActionGroup` is the typed Pattern-layer entry point for related save, submit, and
+recovery controls. Its slots render in a stable order: optional status first,
+secondary or destructive actions next, and the single primary action last. The primary
+action therefore stays at the far right in left-to-right layouts. A visual divider may
+separate destructive or context-changing actions, but it does not create another
+primary action.
+
+Save and submit buttons are text-first. Do not prefix ordinary labels with floppy-disk,
+checkmark, or other decorative emoji; reserve icons for established compact utilities,
+and provide an accessible label for icon-only controls. Use `Button` loading and disabled
+states rather than replacing the label with an unrelated spinner. An explicit save may
+lose primary emphasis when nothing is dirty, but it remains in the primary slot so the
+layout does not jump.
+
+Placement follows editing scope:
+
+- Use the page or step header for short, viewport-contained edits and quick actions.
+- Use a footer action area for long or scroll-heavy forms that require deliberate review
+  before submit. Make it sticky only when the final action would otherwise be difficult
+  to reach, and reserve content space so it never obscures fields.
+- Keep actions that affect only one panel inside that panel; do not promote them to a
+  page-level bar.
+- Autosave surfaces show `SaveIndicator` status instead of a redundant Save button.
+  If an error Toast already announces the same failure, disable the indicator's error
+  announcement so assistive technology receives it only once.
+
+Status copy precedes controls and uses a stable polite live region. At narrow widths,
+action groups may wrap, but the primary action remains last and right-aligned. Snapshot
+restore, reset, and destructive actions remain secondary to saving unless that recovery
+operation is the sole purpose of the current scope.
+
+## 10. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -264,7 +297,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 10. Migration policy
+## 11. Migration policy
 
 Migration is incremental:
 

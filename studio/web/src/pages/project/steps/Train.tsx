@@ -14,6 +14,8 @@ import {
 } from '../../../api/client'
 import { parseFolderMeta } from '../../../lib/folderMeta'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
+import ActionGroup from '../../../components/ActionGroup'
+import Button from '../../../components/Button'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
 import ConfigYamlPanel from '../../../components/ConfigYamlPanel'
 import { useDialog } from '../../../components/Dialog'
@@ -621,7 +623,7 @@ export default function TrainPage() {
               「项目专属配置」，不再显示「绑定哪个预设」+「已自定义」标签 —— 这套
               判定逻辑骗人（全局模型 4 字段 fork 时被注入绝对路径，跟全局预设
               相对路径 diff 永远存在）。预设变成纯"模板起点"概念。 */}
-          <section className="flex items-center gap-2.5 shrink-0 relative">
+          <section className="flex items-center gap-2.5 shrink-0 relative flex-wrap">
             <button
               ref={pickerAnchorRef}
               onClick={() => { setPickerOpen((v) => !v); setPickerSearch('') }}
@@ -651,16 +653,20 @@ export default function TrainPage() {
               </span>
               <span className="text-fg-tertiary text-md">▾</span>
             </button>
-            <button
-              onClick={() => void onSaveAsPreset()}
-              disabled={busy || !configResp?.has_config}
-              className="btn btn-ghost btn-sm"
-              title={t('train.saveAsPresetTitle')}
-            >
-              {t('train.saveAsPreset')}
-            </button>
-            {/* 自动保存指示（Settings / Presets 页同款）：600ms debounce 落盘后显示时间 */}
-            <SaveIndicator status={saveStatus} />
+            <ActionGroup
+              status={<SaveIndicator status={saveStatus} announceError={false} />}
+              secondary={(
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void onSaveAsPreset()}
+                  disabled={busy || !configResp?.has_config}
+                  title={t('train.saveAsPresetTitle')}
+                >
+                  {t('train.saveAsPreset')}
+                </Button>
+              )}
+            />
 
             {/* popover */}
             {pickerOpen && (
