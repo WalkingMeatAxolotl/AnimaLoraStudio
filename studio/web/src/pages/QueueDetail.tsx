@@ -13,6 +13,7 @@ import { PauseProgressModal } from '../components/PauseProgressModal'
 import Badge, { type BadgeTone } from '../components/Badge'
 import Button, { buttonClassName } from '../components/Button'
 import { useDialog } from '../components/Dialog'
+import { Tabs, selectionItemId, type TabItem } from '../components/SelectionGroup'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useTaskEvalProgress } from '../lib/useEvalProgress'
@@ -337,16 +338,16 @@ export default function QueueDetailPage() {
   // 按 task_type 过滤可见 tab（task 未加载时先按 train 给全量，加载后收敛）。
   const kind = task ? taskKind(task) : 'train'
   const visibleTabs = visibleTabsFor(task, taskHasEval)
-  const allTabs: Array<{ key: Tab; label: string }> = [
-    { key: 'overview', label: t('queueDetail.tabOverview') },
-    { key: 'log',      label: t('queueDetail.tabLogs') },
-    { key: 'monitor',  label: t('queueDetail.tabMonitor') },
-    { key: 'metrics',  label: t('queueDetail.tabEval') },
-    { key: 'samples',  label: t('queueDetail.tabSamples') },
-    { key: 'outputs',  label: t('queueDetail.tabOutputs') },
-    { key: 'snapshot', label: t('queueDetail.tabSnapshot') },
+  const allTabs: TabItem<Tab>[] = [
+    { value: 'overview', label: t('queueDetail.tabOverview'), controls: 'queue-detail-panel' },
+    { value: 'log',      label: t('queueDetail.tabLogs'), controls: 'queue-detail-panel' },
+    { value: 'monitor',  label: t('queueDetail.tabMonitor'), controls: 'queue-detail-panel' },
+    { value: 'metrics',  label: t('queueDetail.tabEval'), controls: 'queue-detail-panel' },
+    { value: 'samples',  label: t('queueDetail.tabSamples'), controls: 'queue-detail-panel' },
+    { value: 'outputs',  label: t('queueDetail.tabOutputs'), controls: 'queue-detail-panel' },
+    { value: 'snapshot', label: t('queueDetail.tabSnapshot'), controls: 'queue-detail-panel' },
   ]
-  const tabs = allTabs.filter((tb) => visibleTabs.includes(tb.key))
+  const tabs = allTabs.filter((item) => visibleTabs.includes(item.value))
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
@@ -524,20 +525,22 @@ export default function QueueDetailPage() {
       </header>
 
       {/* Tabs */}
-      <nav className="flex items-center gap-0 border-b border-subtle shrink-0 px-6">
-        {tabs.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`py-2 px-[18px] text-sm border-0 bg-transparent -mb-px cursor-pointer transition-colors ${tab === key ? 'font-semibold text-accent border-b-2 border-accent' : 'font-normal text-fg-tertiary hover:text-fg-primary border-b-2 border-transparent hover:border-default'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        items={tabs}
+        value={tab}
+        onChange={setTab}
+        ariaLabel={t('queueDetail.tabsAriaLabel')}
+        idPrefix="queue-detail-tab"
+        className="shrink-0 px-page"
+      />
 
       {/* Tab body */}
-      <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+      <div
+        id="queue-detail-panel"
+        role="tabpanel"
+        aria-labelledby={selectionItemId('queue-detail-tab', tab)}
+        className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
+      >
         {tab === 'overview' && task && <OverviewTab task={task} />}
         {tab === 'overview' && !task && (
           <div className="p-6 text-center text-fg-tertiary text-sm">

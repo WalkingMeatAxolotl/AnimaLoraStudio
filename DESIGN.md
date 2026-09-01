@@ -26,7 +26,7 @@ surface has identical density.
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
 | Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx` | Typed, accessible component APIs |
-| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `Dialog`, `Toast`, `Field` | Repeated page and interaction structures |
+| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `Dialog`, `Modal`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
 A page may compose primitives with layout utilities. It must not recreate an
@@ -322,7 +322,38 @@ Toast must not duplicate an error already announced inside the modal. Toast feed
 above the modal layer when an operation keeps the dialog open. Do not recreate modal
 backdrops, panel geometry, focus listeners, or title linkage in feature code.
 
-## 11. Accessibility and resilience
+## 11. Tabs and segmented-selection contract
+
+Use `Tabs` for navigation among peer content panels and `SegmentedControl` for changing
+one mutually exclusive value or working mode. They share visual rhythm and keyboard
+behavior, but their semantics are not interchangeable: Tabs render `tablist` / `tab`
+and reference labelled `tabpanel` content; segmented values render `radiogroup` /
+`radio`. Do not use tab semantics for filters, view toggles, or actions that navigate to
+a different route.
+
+Tabs support two appearances without changing meaning:
+
+- `underline` is the default for page-width or panel-level content sections. At narrow
+  widths it scrolls horizontally instead of wrapping labels into ambiguous rows.
+- `segmented` is for compact, bounded navigation inside a workbench panel. Use the same
+  segmented appearance for mutually exclusive modes, but through `SegmentedControl`.
+
+Selection follows focus for this application: Arrow keys move to the next enabled item
+and activate it, wrapping at both ends; Home and End move to the first and last enabled
+item. Exactly one enabled item participates in the page Tab order. Disabled options are
+skipped. Every group has an accessible label, and every content tab supplies stable
+`aria-controls` / `aria-labelledby` linkage. Do not recreate local active-state class
+strings or implement feature-owned roving focus.
+
+Use `sm` for dense nested controls such as X/Y axes and sidebar sections; use `md` for
+primary panel navigation and mode choice. Compact selection labels may use `text-2xs`
+because they are peer navigation, not a primary action or required instruction. Labels
+may remain on one line in a segmented track only when the full label remains available
+as the accessible name and title. Underlined tabs keep their intrinsic width and scroll
+rather than truncating. Both appearances must preserve visible focus, disabled state,
+theme contrast, density response, and Chinese/English label stability.
+
+## 12. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -332,7 +363,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 12. Migration policy
+## 13. Migration policy
 
 Migration is incremental:
 

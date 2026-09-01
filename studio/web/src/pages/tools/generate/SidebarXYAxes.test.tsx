@@ -72,7 +72,13 @@ describe('SidebarXYAxes', () => {
     expect(screen.queryByRole('button', { name: /移除 Y 轴/ })).not.toBeInTheDocument()
 
     expect(screen.getByTestId('xy-axis-toolbar')).toBeInTheDocument()
-    expect(xTab).toHaveClass('text-2xs')
+    expect(screen.getByRole('tablist', { name: 'XY 轴' })).toHaveClass(
+      'ui-selection-segmented',
+      'ui-selection-sm',
+    )
+    expect(xTab).toHaveClass('ui-selection-item')
+    expect(xTab).toHaveAttribute('aria-controls', 'xy-active-axis-panel')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', xTab.id)
     expect(screen.getByRole('button', { name: '交换 X/Y' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /选择 LoRA|编辑 [XY] 轴/ })).not.toBeInTheDocument()
     expect(screen.getAllByText('X · LoRA')).toHaveLength(1)

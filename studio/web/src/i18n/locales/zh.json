@@ -801,6 +801,7 @@
   "queueDetail": {
     "invalidId": "无效任务 ID",
     "backToQueue": "← 队列",
+    "tabsAriaLabel": "任务详情分区",
     "tabOverview": "详情",
     "tabLogs": "日志",
     "tabMonitor": "监控",
