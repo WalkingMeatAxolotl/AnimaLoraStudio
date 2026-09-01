@@ -23,6 +23,20 @@ const response = {
 }
 
 describe('FamilySwitchDialog', () => {
+  it('marks the confirm action busy while the preview is loading', () => {
+    vi.mocked(api.switchModelFamily).mockReturnValue(new Promise(() => {}))
+    render(
+      <FamilySwitchDialog
+        target="krea2"
+        config={{ model_family: 'anima' }}
+        onApply={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: '切换' })).toHaveAttribute('aria-busy', 'true')
+  })
+
   it('renders grouped changes and applies switched config on confirm', async () => {
     vi.mocked(api.switchModelFamily).mockResolvedValue(response)
     const onApply = vi.fn()

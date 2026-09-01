@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useMatch, useNavigate, useParams } from 'react-router-dom'
 import { api, type ProjectDetail } from '../../api/client'
 import { useProjectCtxSetter, useSelectedProjectSetter } from '../../context/ProjectContext'
+import ActionGroup from '../../components/ActionGroup'
+import Button from '../../components/Button'
 import { useDialog } from '../../components/Dialog'
+import { Input, Select } from '../../components/FormControl'
+import Modal from '../../components/Modal'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
 import ExportBundleDialog, { type BundleExportOpts } from '../../components/ExportBundleDialog'
@@ -285,6 +289,7 @@ export function NewVersionDialog({
   const [label, setLabel] = useState('')
   const [forkFrom, setForkFrom] = useState<string>(initialForkFrom != null ? String(initialForkFrom) : '')
   const [err, setErr] = useState<string | null>(null)
+  const errorId = useId()
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -299,33 +304,53 @@ export function NewVersionDialog({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
-      onClick={onCancel}
+    <Modal
+      as="form"
+      title={t('layout.newVersionTitle')}
+      onClose={onCancel}
+      onSubmit={submit}
+      size="sm"
+      closeOnBackdrop={!busy}
+      closeOnEscape={!busy}
+      footer={(
+        <ActionGroup
+          secondary={(
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onCancel}
+              disabled={busy}
+            >
+              {t('common.cancel')}
+            </Button>
+          )}
+          primary={(
+            <Button type="submit" variant="primary" loading={busy}>
+              {t('common.create')}
+            </Button>
+          )}
+        />
+      )}
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-        className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[440px] p-6 flex flex-col gap-4 shadow-xl"
-      >
-        <h2 className="m-0 text-lg font-semibold">{t('layout.newVersionTitle')}</h2>
+      <div className="flex flex-col gap-section">
         <label className="flex flex-col gap-1">
           <span className="text-xs text-fg-tertiary font-mono">label</span>
-          <input
+          <Input
             autoFocus
+            mono
             value={label}
             onChange={(e) => { setLabel(e.target.value); setErr(null) }}
-            className="input input-mono"
             placeholder={t('layout.labelPlaceholder')}
+            invalid={Boolean(err)}
+            aria-describedby={err ? errorId : undefined}
           />
         </label>
         {existingVersions.length > 0 && (
           <label className="flex flex-col gap-1">
             <span className="text-xs text-fg-tertiary font-mono">{t('layout.forkFrom')}</span>
-            <select
+            <Select
               value={forkFrom}
               onChange={(e) => setForkFrom(e.target.value)}
-              className="input"
             >
               <option value="">{t('layout.forkBlank')}</option>
               {existingVersions.map((v) => (
@@ -333,7 +358,7 @@ export function NewVersionDialog({
                   {t('layout.forkFromVersion', { label: v.label })}
                 </option>
               ))}
-            </select>
+            </Select>
             {forkFrom !== '' && (
               <p className="m-0 text-xs text-fg-tertiary">
                 {t('layout.forkNote')}
@@ -341,26 +366,13 @@ export function NewVersionDialog({
             )}
           </label>
         )}
-        {err && <p className="m-0 text-sm text-err">{err}</p>}
-        <div className="flex gap-2 justify-end">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="btn btn-secondary"
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="btn btn-primary"
-          >
-            {busy ? t('layout.creatingBtn') : t('common.create')}
-          </button>
-        </div>
-      </form>
-    </div>
+        {err && (
+          <p id={errorId} className="m-0 text-sm text-err" aria-live="polite">
+            {err}
+          </p>
+        )}
+      </div>
+    </Modal>
   )
 }
 

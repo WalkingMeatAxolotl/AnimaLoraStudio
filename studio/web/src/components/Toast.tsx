@@ -41,7 +41,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm">
+      <div className="fixed bottom-4 right-4 z-[70] space-y-2 max-w-sm">
         {items.map((t) => (
           <Alert
             key={t.id}

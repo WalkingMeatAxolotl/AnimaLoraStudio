@@ -1,7 +1,7 @@
 // Dialog.tsx —— 命令式 confirm / prompt / alert,替代浏览器原生 window.* 三件套。
 //
 // 设计动机:浏览器原生对话框样式跟应用 UI 完全脱节(灰蒙蒙系统弹框),且无法
-// 支持自定义按钮文案 / 危险操作配色 / 输入校验。仓库里散落 20+ 处 confirm/
+// 支持自定义按钮文案 / 危险操作语义 / 输入校验。仓库里散落 20+ 处 confirm/
 // prompt/alert,这里集中成一个 Provider + hook 的命令式 API,call site 改动
 // 最小(`if (!confirm(...))` → `if (!await confirm(...))`)。
 //
@@ -18,16 +18,21 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
 } from 'react'
+import { useTranslation } from 'react-i18next'
+import ActionGroup from './ActionGroup'
+import Button from './Button'
 import { Input } from './FormControl'
+import Modal from './Modal'
 
 export type DialogTone = 'default' | 'danger' | 'warn'
 
 export interface ConfirmOptions {
-  /** 决定确认按钮颜色:default=accent / danger=err 红 / warn=warn 橙 */
+  /** 标记确认的紧迫语义；按钮仍遵循全局单一 primary 层级，不按 tone 改色。 */
   tone?: DialogTone
   okText?: string
   cancelText?: string
@@ -130,19 +135,6 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  // ESC 关闭(等价取消)
-  useEffect(() => {
-    if (!state) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        cancel()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [state, cancel])
-
   return (
     <Ctx.Provider value={{ confirm, prompt, alert }}>
       {children}
@@ -161,12 +153,6 @@ export function useDialog(): DialogApi {
 
 // ────────────────────────────────────────────────────────────────────────────
 
-/** 确认键恒用全局 accent 主色（btn-primary）——tone 只影响语义/文案，不换按钮
- *  底色。此前 warn/danger 换成橙/红实心底，用户点名和全 app 惯用主色不一致。 */
-function toneButtonClass(_tone: DialogTone | undefined): string {
-  return 'btn btn-primary'
-}
-
 interface RootProps {
   state: DialogState
   onCancel: () => void
@@ -174,6 +160,7 @@ interface RootProps {
 }
 
 function DialogRoot({ state, onCancel, onOk }: RootProps) {
+  const { t } = useTranslation()
   // input value 用 ref 而非 state,避免每次按键触发 DialogRoot rerender。
   // 错误信息走 state,因为要触发 re-render。
   const [inputValue, setInputValue] = useState(
@@ -181,6 +168,7 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
   )
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const errorId = useId()
 
   // Prompt 自动 focus + select 默认值,方便用户改名
   useEffect(() => {
@@ -213,76 +201,72 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
   const title =
     state.options.title ??
     (state.type === 'confirm'
-      ? '确认操作'
+      ? t('common.dialogConfirmTitle')
       : state.type === 'prompt'
-        ? '输入'
-        : '提示')
+        ? t('common.dialogPromptTitle')
+        : t('common.dialogAlertTitle'))
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
-      onMouseDown={(e) => {
-        // 只在点击在背景上时关 — 点 form 内部 mouseDown 不触发
-        if (e.target === e.currentTarget) onCancel()
-      }}
-    >
-      <form
-        onSubmit={handleSubmit}
-        className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[440px] p-6 flex flex-col gap-4 shadow-xl"
-      >
-        <h2 className="type-section-title">{title}</h2>
-
-        {state.type === 'prompt' ? (
-          <label className="flex flex-col gap-1.5">
-            <span className="type-field-label">{state.label}</span>
-            <Input
-              ref={inputRef}
-              mono
-              value={inputValue}
-              placeholder={state.options.placeholder}
-              onChange={(e) => {
-                setInputValue(e.target.value)
-                if (error) setError(null)
-              }}
-              invalid={Boolean(error)}
-            />
-            {error && (
-              <span className="text-xs text-err">{error}</span>
-            )}
-          </label>
-        ) : (
-          <p className="m-0 text-sm text-fg-secondary whitespace-pre-wrap">
-            {state.type === 'confirm' ? state.message : state.message}
-          </p>
-        )}
-
-        {/* min-w-[96px] + justify-center：两键等宽（96px 盖住 4 字 okText 的自然宽
-            ~90px，「取消」不再比「取消计划」窄一截）。 */}
-        <div className="flex gap-2 justify-end mt-1">
-          {state.type !== 'alert' && (
-            <button
+    <Modal
+      as="form"
+      title={title}
+      description={state.type === 'prompt' ? undefined : state.message}
+      onClose={onCancel}
+      onSubmit={handleSubmit}
+      size="sm"
+      role={state.options.tone && state.options.tone !== 'default' ? 'alertdialog' : 'dialog'}
+      initialFocusRef={state.type === 'prompt' ? inputRef : undefined}
+      footer={(
+        <ActionGroup
+          secondary={state.type !== 'alert' ? (
+            <Button
               type="button"
+              variant="secondary"
               onClick={onCancel}
-              className="btn btn-secondary min-w-[96px] justify-center"
+              className="min-w-[96px] justify-center"
             >
-              {state.options.cancelText ?? '取消'}
-            </button>
+              {state.options.cancelText ?? t('common.cancel')}
+            </Button>
+          ) : undefined}
+          primary={(
+            <Button
+              type="submit"
+              variant="primary"
+              className="min-w-[96px] justify-center"
+            >
+              {state.options.okText ??
+                (state.type === 'confirm'
+                  ? t('common.confirm')
+                  : state.type === 'prompt'
+                    ? t('common.ok')
+                    : t('common.gotIt'))}
+            </Button>
           )}
-          <button
-            type="submit"
-            className={`${toneButtonClass(state.options.tone)} min-w-[96px] justify-center`}
-          >
-            {state.options.okText ??
-              (state.type === 'confirm'
-                ? '确认'
-                : state.type === 'prompt'
-                  ? '确定'
-                  : '知道了')}
-          </button>
-        </div>
-      </form>
-    </div>
+        />
+      )}
+    >
+      {state.type === 'prompt' ? (
+        <label className="flex flex-col gap-1.5">
+          <span className="type-field-label">{state.label}</span>
+          <Input
+            ref={inputRef}
+            mono
+            value={inputValue}
+            placeholder={state.options.placeholder}
+            onChange={(e) => {
+              setInputValue(e.target.value)
+              if (error) setError(null)
+            }}
+            invalid={Boolean(error)}
+            aria-describedby={error ? errorId : undefined}
+          />
+          {error && (
+            <span id={errorId} className="text-xs text-err" aria-live="polite">
+              {error}
+            </span>
+          )}
+        </label>
+      ) : undefined}
+    </Modal>
   )
 }
