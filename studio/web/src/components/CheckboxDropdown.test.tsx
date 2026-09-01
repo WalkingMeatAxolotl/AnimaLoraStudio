@@ -30,6 +30,8 @@ describe('CheckboxDropdown', () => {
     fireEvent.click(trigger)
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('已选 1 / 2')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Alpha' }))
+      .toHaveClass('form-checkbox', 'form-checkbox-sm')
   })
 
   it('selects and clears the complete option set', () => {

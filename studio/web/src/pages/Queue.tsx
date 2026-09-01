@@ -8,6 +8,7 @@ import {
 import { DATA_VIEW_KINDS } from './queue/jobUtils'
 import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
+import { Input, Select } from '../components/FormControl'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -913,9 +914,9 @@ export default function QueuePage() {
           className="px-page py-related border-b border-subtle flex items-center gap-field"
           data-testid="queue-jobs-filterbar"
         >
-          <input
-            className="input"
-            style={{ width: '60%' }}
+          <Input
+            controlSize="sm"
+            className="w-3/5"
             value={jobsSearch}
             onChange={(e) => setJobsSearch(e.target.value)}
             placeholder={t('queue.jobs.searchPlaceholder')}
@@ -923,9 +924,9 @@ export default function QueuePage() {
             data-testid="jobs-search"
           />
           <span className="flex-1" />
-          <select
-            className="input"
-            style={{ width: '15%', minWidth: 150 }}
+          <Select
+            controlSize="sm"
+            className="w-[15%] min-w-[150px]"
             value={jobsKind ?? 'all'}
             onChange={(e) => {
               const v = e.target.value
@@ -938,7 +939,7 @@ export default function QueuePage() {
             {DATA_VIEW_KINDS.map((k) => (
               <option key={k} value={k}>{t(`queue.jobs.kind.${k}`)}</option>
             ))}
-          </select>
+          </Select>
         </div>
       ) : (
         // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
@@ -948,9 +949,9 @@ export default function QueuePage() {
           className="px-page py-related border-b border-subtle flex items-center gap-field"
           data-testid="queue-filterbar"
         >
-          <input
-            className="input"
-            style={{ width: '60%' }}
+          <Input
+            controlSize="sm"
+            className="w-3/5"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('queue.searchPlaceholder')}
@@ -958,9 +959,9 @@ export default function QueuePage() {
             data-testid="queue-search"
           />
           <span className="flex-1" />
-          <select
-            className="input"
-            style={{ width: '10%', minWidth: 120 }}
+          <Select
+            controlSize="sm"
+            className="w-[10%] min-w-[120px]"
             value={typeFilter ?? 'all'}
             onChange={(e) => {
               const v = e.target.value
@@ -975,10 +976,10 @@ export default function QueuePage() {
             <option value="reg_ai">{t('queue.typeReg')}</option>
             <option value="generate">{t('queue.typeGenerate')}</option>
             <option value="eval_session">{t('queue.jobs.kind.eval_session')}</option>
-          </select>
-          <select
-            className="input"
-            style={{ width: '10%', minWidth: 120 }}
+          </Select>
+          <Select
+            controlSize="sm"
+            className="w-[10%] min-w-[120px]"
             value={historyStatus ?? 'all'}
             onChange={(e) => {
               const v = e.target.value
@@ -992,7 +993,7 @@ export default function QueuePage() {
             <option value="done">{t('status.done')}</option>
             <option value="failed">{t('status.failed')}</option>
             <option value="canceled">{t('status.canceled')}</option>
-          </select>
+          </Select>
         </div>
       ))}
     >

@@ -89,6 +89,7 @@ describe('Dialog (useDialog API)', () => {
     wrap((api) => api.prompt('名称'))
     await user.click(screen.getByText('trigger'))
     const input = screen.getByRole('textbox')
+    expect(input).toHaveClass('form-control', 'form-control-mono')
     // 先 click 聚焦再 type：避免 modal 刚开 / autofocus 未 settle 时 userEvent
     // 丢首字符（CI 慢机偶发 "y-preset"）。
     await user.click(input)
@@ -121,6 +122,7 @@ describe('Dialog (useDialog API)', () => {
     await user.type(screen.getByRole('textbox'), 'ab')
     await user.click(screen.getByText('确定'))
     expect(screen.getByText('至少 3 字符')).toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-invalid', 'true')
     // 错误显示后 dialog 未关闭 — result 仍空
     expect(screen.getByTestId('result')).toHaveTextContent('')
   })

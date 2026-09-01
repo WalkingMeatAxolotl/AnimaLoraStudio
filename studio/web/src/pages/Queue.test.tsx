@@ -148,6 +148,8 @@ describe('QueuePage 分区 + 分页', () => {
     fireEvent.click(screen.getByTestId('queue-filter-toggle'))
     expect(screen.getByTestId('queue-filterbar'))
       .toHaveClass('px-page', 'py-related', 'gap-field')
+    expect(screen.getByTestId('queue-search'))
+      .toHaveClass('form-control', 'form-control-sm', 'form-control-surface')
     fireEvent.change(screen.getByTestId('queue-search'), { target: { value: 'abc' } })
 
     await waitFor(
@@ -318,6 +320,8 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('queue-filter-toggle'))
     expect(screen.getByTestId('jobs-kind-filter')).toBeInTheDocument()
+    expect(screen.getByTestId('jobs-kind-filter'))
+      .toHaveClass('form-control', 'form-control-sm', 'form-control-surface')
     expect(screen.getByTestId('jobs-search')).toBeInTheDocument()
     // 任务视图专属的搜索框不在
     expect(screen.queryByTestId('queue-search')).not.toBeInTheDocument()

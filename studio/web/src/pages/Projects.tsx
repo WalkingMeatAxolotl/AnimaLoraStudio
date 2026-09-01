@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api, type BundleImportResult, type ProjectSummary, type VersionStatus } from '../api/client'
+import { Input, Select } from '../components/FormControl'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
 import UploadProgressBar from '../components/UploadProgressBar'
@@ -405,18 +406,18 @@ function FilterBar({
   const { t } = useTranslation()
   return (
     <div className="px-page py-related border-b border-subtle flex items-center gap-field">
-      <input
-        className="input"
-        style={{ width: '60%' }}
+      <Input
+        controlSize="sm"
+        className="w-3/5"
         value={query}
         onChange={(e) => onQuery(e.target.value)}
         placeholder={t('projects.searchPlaceholder')}
         aria-label={t('common.search')}
       />
       <span className="flex-1" />
-      <select
-        className="input"
-        style={{ width: '10%', minWidth: 104 }}
+      <Select
+        controlSize="sm"
+        className="w-[10%] min-w-[104px]"
         value={status}
         onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
         aria-label={t('common.status')}
@@ -426,10 +427,10 @@ function FilterBar({
             {s === 'all' ? t('projects.statusAll') : t(`versionStatus.${s}`)}
           </option>
         ))}
-      </select>
-      <select
-        className="input"
-        style={{ width: '10%', minWidth: 104 }}
+      </Select>
+      <Select
+        controlSize="sm"
+        className="w-[10%] min-w-[104px]"
         value={sort}
         onChange={(e) => onSort(e.target.value as ProjectSortKey)}
         aria-label={t('projects.sortLabel')}
@@ -437,7 +438,7 @@ function FilterBar({
         {SORT_OPTIONS.map((s) => (
           <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
         ))}
-      </select>
+      </Select>
     </div>
   )
 }
