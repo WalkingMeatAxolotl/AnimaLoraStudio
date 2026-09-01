@@ -491,7 +491,7 @@ export default function RegularizationPage() {
       belowHeader={
         /* tab 贴到 header 下方全宽条（对齐任务详情页 nav：下划线式、active 橙字）。
            状态栏移到「生成」tab 右栏，不再横跨顶部。 */
-        <nav className="flex items-center gap-0 border-b border-subtle px-6 shrink-0">
+        <nav className="flex items-center gap-0 border-b border-subtle px-page shrink-0">
           <RegTab
             active={activeTab === 'generate'}
             onClick={() => setActiveTab('generate')}

@@ -110,8 +110,8 @@ function PaginationBar({
   const { t } = useTranslation()
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   return (
-    <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
-      <div className="flex items-center gap-2 text-fg-tertiary">
+    <div className="shrink-0 -mx-page -mb-page px-page py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-related bg-canvas text-[11px]">
+      <div className="flex items-center gap-related text-fg-tertiary">
         <span>{t('queue.pageIndicator', { page, pages: totalPages })}</span>
         <select
           value={pageSize}
@@ -910,7 +910,7 @@ export default function QueuePage() {
       belowHeader={filtersOpen && (queueTab === 'jobs' ? (
         // 0.17 P-G — 数据作业过滤行：kind 单选（与任务视图的过滤行同位）。
         <div
-          className="px-6 py-2 border-b border-subtle flex items-center gap-3"
+          className="px-page py-related border-b border-subtle flex items-center gap-field"
           data-testid="queue-jobs-filterbar"
         >
           <input
@@ -945,7 +945,7 @@ export default function QueuePage() {
         // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
         // select 是历史段终态子过滤。
         <div
-          className="px-6 py-2 border-b border-subtle flex items-center gap-3"
+          className="px-page py-related border-b border-subtle flex items-center gap-field"
           data-testid="queue-filterbar"
         >
           <input
@@ -996,7 +996,7 @@ export default function QueuePage() {
         </div>
       ))}
     >
-      <div className="flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto">
+      <div className="flex flex-col gap-field flex-1 min-h-0 overflow-y-auto">
         {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。
             hold 覆盖全队列（含数据作业派发），两个视图都显示。 */}
         {holdState?.held && (
@@ -1056,10 +1056,10 @@ export default function QueuePage() {
             description={t('queue.emptyHint')}
           />
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-section">
             {/* 进行中（running + paused） */}
             {activeItems.length > 0 && (
-              <section className="flex flex-col gap-2">
+              <section className="flex flex-col gap-related">
                 <h3 className="type-section-label">
                   {t('queue.sectionActive')} ({activeItems.length})
                 </h3>
@@ -1069,7 +1069,7 @@ export default function QueuePage() {
 
             {/* 等待入队（pending） */}
             {pendingItems.length > 0 && (
-              <section className="flex flex-col gap-2">
+              <section className="flex flex-col gap-related">
                 <h3 className="type-section-label">
                   {t('queue.sectionWaiting')} ({pendingItems.length})
                 </h3>
@@ -1079,7 +1079,7 @@ export default function QueuePage() {
 
             {/* 计划任务（scheduled，0.17 P-B）——到点自动转入等待入队 */}
             {scheduledItems.length > 0 && (
-              <section className="flex flex-col gap-2" data-testid="queue-scheduled-section">
+              <section className="flex flex-col gap-related" data-testid="queue-scheduled-section">
                 <h3 className="type-section-label">
                   {t('queue.sectionScheduled')} ({scheduledItems.length})
                 </h3>
@@ -1088,7 +1088,7 @@ export default function QueuePage() {
             )}
 
             {/* 历史（terminal，后端分页） */}
-            <section className="flex flex-col gap-2">
+            <section className="flex flex-col gap-related">
               <h3 className="type-section-label">
                 {t('queue.sectionHistory')} ({history.total})
               </h3>
@@ -1103,7 +1103,7 @@ export default function QueuePage() {
         )}
       </div>
 
-      {/* 0.17 item6：分页下沉成 fixed 底栏（-mx-6/-mb-6 抵消内容区 padding 做全宽贴底）。
+      {/* 分页下沉成 fixed 底栏（-mx-page/-mb-page 抵消语义内容 inset 做全宽贴底）。
           item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
           20）；样式压缩省空间。GPU / 数据两个视图共用同款底栏（P-G 反馈）。 */}
       {queueTab === 'tasks' && loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (

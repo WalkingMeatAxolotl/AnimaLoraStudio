@@ -115,6 +115,8 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: /进行中/ })).toBeInTheDocument())
     expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
       .toHaveClass('type-section-label')
+    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }).parentElement)
+      .toHaveClass('gap-related')
     expect(screen.getByRole('heading', { level: 3, name: /等待入队/ }))
       .toHaveClass('type-section-label')
     expect(screen.getByRole('heading', { level: 3, name: /历史/ }))
@@ -123,6 +125,8 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument()
     expect(screen.getByTestId('history-prev')).toBeDisabled()
     expect(screen.getByTestId('history-next')).not.toBeDisabled()
+    expect(screen.getByTestId('history-next').parentElement?.parentElement)
+      .toHaveClass('-mx-page', '-mb-page', 'px-page')
     historySpy.mockClear()
 
     // 点下一页 → 以 page=2 重新请求后端
@@ -142,6 +146,8 @@ describe('QueuePage 分区 + 分页', () => {
     renderQueue()
     await waitFor(() => expect(screen.getByTestId('queue-filter-toggle')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('queue-filter-toggle'))
+    expect(screen.getByTestId('queue-filterbar'))
+      .toHaveClass('px-page', 'py-related', 'gap-field')
     fireEvent.change(screen.getByTestId('queue-search'), { target: { value: 'abc' } })
 
     await waitFor(

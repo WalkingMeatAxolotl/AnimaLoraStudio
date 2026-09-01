@@ -39,12 +39,12 @@ const TAB_BASE =
  *  `/projects/:pid/v/:vid/preprocess?tool=...`——query string 让 sidebar 的
  *  `/preprocess` matcher 保持简单，同时切换工具时父路由不卸载。
  *
- *  设计为直接塞进 StepShell 的 `belowHeader`（自带 `border-b px-6` 全宽条）。 */
+ *  设计为直接塞进 StepShell 的 `belowHeader`（自带 `border-b px-page` 全宽条）。 */
 export default function PreprocessToolsBar({ current, projectId, versionId }: Props) {
   const { t } = useTranslation()
   const base = `/projects/${projectId}/v/${versionId}/preprocess`
   return (
-    <nav className="flex items-center gap-0 border-b border-subtle px-6 shrink-0">
+    <nav className="flex items-center gap-0 border-b border-subtle px-page shrink-0">
       {TOOLS.map((tool) => {
         const label = t(`preprocess.tools.${tool.i18nKey}`)
         const isActive = tool.id === current

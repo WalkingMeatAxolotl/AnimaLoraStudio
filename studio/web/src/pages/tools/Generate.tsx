@@ -1059,7 +1059,7 @@ export default function GeneratePage() {
         title={t('generate.title')}
         subtitle={t('generate.subtitle')}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-related">
             {currentTask && (
               <>
                 <span className="caption">#{currentTask.id}</span>
@@ -1098,8 +1098,8 @@ export default function GeneratePage() {
       />
 
       {/* 三列各自独立滚动，整页固定高度 = viewport。relative：进度条 absolute 叠在顶部
-          p-6 既有 gap 上、不占布局，出现/消失不推动内容（防页面抖动）。 */}
-      <div className="relative p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
+          语义 page inset 既有间隔上、不占布局，出现/消失不推动内容（防页面抖动）。 */}
+      <div className="relative p-page flex gap-section items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
         {/* 出图进度条：全宽细线（浏览器加载条式）+ 小相位文字，绝对定位叠在 header 与内容间
             的既有 gap 上；覆盖 load/clip/sample/vae 全阶段，切历史图也照常显示当前进度。 */}
         {(busy || progress.currentStep != null || progress.phase != null) && (

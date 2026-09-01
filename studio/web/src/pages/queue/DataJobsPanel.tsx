@@ -195,7 +195,7 @@ export default function DataJobsPanel({
   }
 
   return (
-    <div className="flex flex-col gap-4" data-testid="data-jobs-panel">
+    <div className="flex flex-col gap-section" data-testid="data-jobs-panel">
       {error && (
         <div className="px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
           {error}
@@ -214,7 +214,7 @@ export default function DataJobsPanel({
       ) : (
         <>
           {live.length > 0 && (
-            <section className="flex flex-col gap-2">
+            <section className="flex flex-col gap-related">
               <h3 className="type-section-label">
                 {t('queue.sectionActive')} ({live.length})
               </h3>
@@ -222,7 +222,7 @@ export default function DataJobsPanel({
             </section>
           )}
 
-          <section className="flex flex-col gap-2">
+          <section className="flex flex-col gap-related">
             <h3 className="type-section-label">
               {t('queue.sectionHistory')} ({history.total})
             </h3>

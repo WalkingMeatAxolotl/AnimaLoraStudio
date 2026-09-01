@@ -84,10 +84,35 @@ Rules:
 
 ### Spacing, radius, and depth
 
-Use the `--s-*`, `--r-*`, and `--sh-*` scales. Within one hierarchy level, use one
-radius: controls use `--r-md`, ordinary cards use `--r-lg`, and pills use
-`--r-pill`. Dense workbench panels may use `--r-md` when their compactness is part
-of the information structure.
+Use the `--s-*`, `--r-*`, and `--sh-*` scales. New shared layouts use the
+semantic Tailwind spacing aliases below instead of choosing a number by eye:
+
+| Alias | Default | Relationship |
+| --- | ---: | --- |
+| `related` | 8px | Icons, labels, and controls that form one action or datum |
+| `field` | 12px | Parts of one field or compact component |
+| `section` | 16px | Sibling groups within one region |
+| `page-start` | 20px | Page-header leading inset |
+| `page` | 24px | Page-shell inset and separation between ordinary regions |
+| `page-loose` | 32px | Major region separation where a stronger pause is required |
+
+The aliases resolve through `--space-*` to the density-aware `--s-*` scale.
+Small `related` gaps stay stable; `field` and larger relationships contract or
+expand with the selected density. Numeric spacing utilities remain a compatibility
+path and migrate by component family. Do not globally remap them in a page PR.
+
+Vertical rhythm follows content hierarchy: elements that form one control stay
+closest, fields form a tighter group than sections, and sections form a tighter
+group than page regions. A heading has more separation from the preceding region
+than from the content it introduces. Shared page chrome uses semantic spacing so
+its header, optional toolbar, and content keep aligned horizontal insets.
+
+Within one hierarchy level, use one radius: controls use `--r-md`, ordinary cards
+use `--r-lg`, and pills use `--r-pill`. Dense workbench panels may use `--r-md`
+when their compactness is part of the information structure. Fixed or arbitrary
+spacing is allowed only where it is geometry rather than rhythm—for example canvas
+coordinates, image crops, table column sizing, or sticky offsets—and must remain
+local to that specialized surface.
 
 Shadows communicate elevation. Borders communicate grouping. Do not add shadows
 merely to decorate every container.

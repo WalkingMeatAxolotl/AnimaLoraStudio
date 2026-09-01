@@ -85,6 +85,14 @@
   --s-12: 48px;
   --s-16: 64px;
 
+  /* semantic spacing — Tailwind aliases live in tailwind.config.js */
+  --space-related: var(--s-2);
+  --space-field: var(--s-3);
+  --space-section: var(--s-4);
+  --space-page-start: var(--s-5);
+  --space-page: var(--s-6);
+  --space-page-loose: var(--s-8);
+
   /* radius */
   --r-sm: 4px;
   --r-md: 6px;

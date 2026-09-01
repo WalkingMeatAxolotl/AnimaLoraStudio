@@ -299,13 +299,13 @@ export default function ProjectsPage() {
         />
       )}
 
-      <div className="p-6 pt-4">
+      <div className="px-page pb-page pt-section">
         {error && (
           <div className="mb-4 px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-sm font-mono">{error}</div>
         )}
 
         {loading ? (
-          <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+          <div className="grid gap-section" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
             {[1, 2, 3].map(i => (
               <div key={i} className="card p-[18px]" style={{ height: 140 }}>
                 <div className="w-3/5 h-4 rounded bg-overlay mb-2.5" />
@@ -323,7 +323,7 @@ export default function ProjectsPage() {
             {t('common.noResults')}
           </div>
         ) : (
-          <div className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+          <div className="grid gap-section auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
             {visible.map((p) => (
               <ProjectCard
                 key={p.id}
@@ -404,7 +404,7 @@ function FilterBar({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="px-6 py-2 border-b border-subtle flex items-center gap-3">
+    <div className="px-page py-related border-b border-subtle flex items-center gap-field">
       <input
         className="input"
         style={{ width: '60%' }}
