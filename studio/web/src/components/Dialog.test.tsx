@@ -76,10 +76,11 @@ describe('Dialog (useDialog API)', () => {
     expect(screen.getByText('算了')).toBeInTheDocument()
   })
 
-  it('confirm 确认键恒为 btn-primary（tone 不换按钮底色）', async () => {
+  it('confirm 保持单一 primary 视觉，并用 tone 暴露紧迫语义', async () => {
     const user = userEvent.setup()
     wrap((api) => api.confirm('删除？', { tone: 'danger' }))
     await user.click(screen.getByText('trigger'))
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     expect(screen.getByText('确认')).toHaveClass('btn-primary')
     expect(screen.getByText('确认')).not.toHaveClass('btn-danger')
   })
@@ -123,6 +124,7 @@ describe('Dialog (useDialog API)', () => {
     await user.click(screen.getByText('确定'))
     expect(screen.getByText('至少 3 字符')).toBeInTheDocument()
     expect(screen.getByRole('textbox')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('textbox')).toHaveAccessibleDescription('至少 3 字符')
     // 错误显示后 dialog 未关闭 — result 仍空
     expect(screen.getByTestId('result')).toHaveTextContent('')
   })

@@ -149,6 +149,9 @@ Rules:
 - Button labels name the action.
 - Icon-only buttons require an accessible label.
 - Loading buttons remain labeled, expose `aria-busy`, and cannot be activated.
+- The imperative `useDialog()` API preserves the product's single-accent confirmation
+  convention: its `tone` marks urgent dialog semantics but does not recolor the confirm
+  button. Declarative destructive action groups continue to use `danger`.
 - Toggle buttons expose `aria-pressed`.
 - Disabled, hover, active, and keyboard-focus states come from the primitive.
 - Do not combine `bg-*`, `border-*`, and `text-*` to reinvent an existing variant.
@@ -287,7 +290,39 @@ action groups may wrap, but the primary action remains last and right-aligned. S
 restore, reset, and destructive actions remain secondary to saving unless that recovery
 operation is the sole purpose of the current scope.
 
-## 10. Accessibility and resilience
+## 10. Modal-dialog contract
+
+`Modal` is the declarative Pattern-layer shell for interruptive tasks that require
+protected focus: confirmations, short forms, option selection, and structured review.
+Use the imperative `useDialog()` API for simple text-only alert, confirm, and prompt
+flows; it renders through the same shell. Use a Drawer for persistent secondary work
+that should remain available alongside page context, and do not put ordinary page
+content in a modal merely to make it prominent.
+
+Every modal has one required title, an optional concise description, one scrollable body,
+and an optional footer. Use `sm` for a short prompt, `md` for ordinary forms, and `lg`
+for structured comparisons or dense option sets. The panel is portalled above the app,
+keeps viewport-safe outer padding and a bounded height, and leaves the title and footer
+visible while long body content scrolls.
+
+Dismissal and focus are part of the Pattern rather than caller-owned behavior:
+
+- Opening moves focus into the dialog; closing restores focus to the opener.
+- Tab and Shift+Tab remain within the active dialog, and Escape dismisses unless an
+  irreversible or in-progress operation explicitly disables it.
+- A backdrop press may dismiss a reversible dialog. Pressing inside the panel, or
+  starting an interaction inside and releasing outside, must not dismiss it.
+- The shell supplies `role="dialog"`, `aria-modal`, and title/description linkage. Use
+  `alertdialog` only when an immediate decision is required before work can continue.
+- Lock background scrolling while open. Do not stack modal dialogs.
+
+Footer actions use `ActionGroup`: status first, secondary or destructive actions next,
+and the single primary action last. Keep validation near the relevant control; an error
+Toast must not duplicate an error already announced inside the modal. Toast feedback remains
+above the modal layer when an operation keeps the dialog open. Do not recreate modal
+backdrops, panel geometry, focus listeners, or title linkage in feature code.
+
+## 11. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -297,7 +332,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 11. Migration policy
+## 12. Migration policy
 
 Migration is incremental:
 

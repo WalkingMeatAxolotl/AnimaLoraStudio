@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { NewVersionDialog } from './Layout'
@@ -72,5 +72,29 @@ describe('NewVersionDialog (PP10.1)', () => {
     await user.click(screen.getByRole('button', { name: '创建' }))
     expect(onSubmit).not.toHaveBeenCalled()
     expect(screen.getByText(/label 已存在/)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/baseline/)).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByPlaceholderText(/baseline/)).toHaveAccessibleDescription(/label 已存在/)
+  })
+
+  it('locks dismissal and exposes loading semantics while creation is busy', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(
+      <NewVersionDialog
+        existingLabels={[]}
+        existingVersions={[]}
+        busy
+        onCancel={onCancel}
+        onSubmit={() => {}}
+      />,
+    )
+
+    const create = screen.getByRole('button', { name: '创建' })
+    expect(create).toBeDisabled()
+    expect(create).toHaveAttribute('aria-busy', 'true')
+
+    await user.keyboard('{Escape}')
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement!)
+    expect(onCancel).not.toHaveBeenCalled()
   })
 })

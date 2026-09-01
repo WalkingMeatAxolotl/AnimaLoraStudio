@@ -1,6 +1,10 @@
 // ExportBundleDialog — 选择 bundle.zip 导出内容后触发浏览器下载。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ActionGroup from './ActionGroup'
+import Button from './Button'
+import { Checkbox } from './FormControl'
+import Modal from './Modal'
 
 export type BundleExportDestination = 'download' | 'data_exports'
 
@@ -45,25 +49,29 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel() }}
+    <Modal
+      as="form"
+      title={t('layout.exportBundleTitle')}
+      description={t('layout.exportBundleDestinationHint')}
+      onClose={onCancel}
+      onSubmit={handleSubmit}
+      size="sm"
+      bodyClassName="flex flex-col gap-section"
+      footer={(
+        <ActionGroup
+          secondary={(
+            <Button type="button" variant="secondary" onClick={onCancel}>
+              {t('common.cancel')}
+            </Button>
+          )}
+          primary={(
+            <Button type="submit" variant="primary" disabled={nothingSelected}>
+              {t('common.export')}
+            </Button>
+          )}
+        />
+      )}
     >
-      <form
-        onSubmit={handleSubmit}
-        className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[420px] p-6 flex flex-col gap-5 shadow-xl"
-      >
-        <div>
-          <h2 className="m-0 text-lg font-semibold text-fg-primary">
-            {t('layout.exportBundleTitle')}
-          </h2>
-          <p className="mt-1 mb-0 text-sm text-fg-secondary">
-            {t('layout.exportBundleDestinationHint')}
-          </p>
-        </div>
-
         <div className="flex flex-col gap-2">
           <div className="text-sm font-medium text-fg-primary">
             {t('layout.exportBundleDestination')}
@@ -95,8 +103,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
         {/* 训练集 */}
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={train}
               onChange={(e) => setTrain(e.target.checked)}
             />
@@ -107,8 +114,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
           {train && (
             <>
               <label className="flex items-center gap-2 cursor-pointer pl-5">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={trainCaptions}
                   onChange={(e) => setTrainCaptions(e.target.checked)}
                 />
@@ -117,8 +123,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 </span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer pl-5">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={trainLatentCache}
                   onChange={(e) => setTrainLatentCache(e.target.checked)}
                 />
@@ -127,8 +132,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 </span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer pl-5">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={trainMasks}
                   onChange={(e) => setTrainMasks(e.target.checked)}
                 />
@@ -143,8 +147,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
         {/* 正则集 */}
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={reg}
               onChange={(e) => setReg(e.target.checked)}
             />
@@ -155,8 +158,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
           {reg && (
             <>
               <label className="flex items-center gap-2 cursor-pointer pl-5">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={regCaptions}
                   onChange={(e) => setRegCaptions(e.target.checked)}
                 />
@@ -165,8 +167,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 </span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer pl-5">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={regLatentCache}
                   onChange={(e) => setRegLatentCache(e.target.checked)}
                 />
@@ -180,8 +181,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
 
         {/* 训练配置 */}
         <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={includeConfig}
             onChange={(e) => setIncludeConfig(e.target.checked)}
           />
@@ -194,16 +194,6 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
         {nothingSelected && (
           <p className="text-xs text-err m-0">{t('layout.exportBundleAtLeastOne')}</p>
         )}
-
-        <div className="flex gap-2 justify-end mt-1">
-          <button type="button" onClick={onCancel} className="btn btn-secondary">
-            {t('common.cancel')}
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={nothingSelected}>
-            {t('common.export')}
-          </button>
-        </div>
-      </form>
-    </div>
+    </Modal>
   )
 }

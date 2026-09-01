@@ -6,9 +6,7 @@
 // 参数调整」两区结构化展示，确认才把切换后的完整 config 交回调用方
 // （走各页正常保存链路）。
 //
-// 不用通用 Dialog.confirm 的文本槽：变更清单是结构化数据（长路径 +
-// 新旧对照），塞纯文本里换行混乱不可读 —— 按 Dialog.tsx 自己的约定，
-// 复杂内容走声明式 JSX modal（NewVersionDialog 同款范式）。
+// 使用统一 Modal Pattern 承载结构化内容；命令式 Dialog.confirm 仍只用于纯文本确认。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -17,6 +15,9 @@ import {
   type FamilySwitchChange,
 } from '../api/client'
 import { fieldLabel, schemaEnumLabel } from '../lib/schema'
+import ActionGroup from './ActionGroup'
+import Button from './Button'
+import Modal from './Modal'
 
 interface Props {
   /** 目标族 id（用户在下拉里选的新值）。 */
@@ -69,96 +70,93 @@ export default function FamilySwitchDialog({ target, config, onApply, onCancel }
   const toLabel = schemaEnumLabel('model_family', target, t)
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
-      onClick={onCancel}
+    <Modal
+      title={t('familySwitch.title')}
+      description={t('familySwitch.intro', { from: fromLabel, to: toLabel })}
+      onClose={onCancel}
+      size="lg"
+      bodyClassName="flex flex-col gap-section"
+      footer={(
+        <ActionGroup
+          secondary={(
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onCancel}
+              className="min-w-[96px] justify-center"
+            >
+              {t('common.cancel')}
+            </Button>
+          )}
+          primary={(
+            <Button
+              type="button"
+              variant="primary"
+              loading={!preview && !error}
+              disabled={!!error}
+              onClick={() => preview && onApply(preview.config)}
+              className="min-w-[96px] justify-center"
+            >
+              {t('familySwitch.ok')}
+            </Button>
+          )}
+        />
+      )}
     >
-      <div
-        className="bg-elevated border border-dim rounded-lg w-[92%] max-w-[640px] max-h-[85vh] p-6 flex flex-col gap-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div>
-          <h3 className="m-0 text-base font-semibold text-fg-primary">
-            {t('familySwitch.title')}
-          </h3>
-          <p className="m-0 mt-1 text-sm text-fg-secondary">
-            {t('familySwitch.intro', { from: fromLabel, to: toLabel })}
-          </p>
-        </div>
-
-        {error ? (
-          <p className="m-0 text-sm text-err">{t('familySwitch.failed', { error })}</p>
-        ) : !preview ? (
-          <p className="m-0 text-sm text-fg-tertiary">{t('familySwitch.loading')}</p>
-        ) : changes.length === 0 ? (
-          <p className="m-0 text-sm text-fg-secondary">{t('familySwitch.noChanges')}</p>
-        ) : (
-          <div className="overflow-y-auto flex flex-col gap-4 pr-1">
-            {pathChanges.length > 0 && (
-              <section>
-                <div className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide mb-2">
-                  {t('familySwitch.pathsSection')}
-                </div>
-                <div className="flex flex-col gap-2.5">
-                  {pathChanges.map((c) => (
-                    <div key={c.field} className="text-sm">
-                      <div className="font-medium text-fg-secondary mb-0.5">
-                        {fieldLabel(c.field)}
-                      </div>
-                      <div className="font-mono text-xs break-all text-fg-tertiary">
-                        {fmt(c.from)}
-                      </div>
-                      <div className="font-mono text-xs break-all text-fg-primary">
-                        <span className="text-accent mr-1">→</span>
-                        {fmt(c.to)}
-                      </div>
+      {error ? (
+        <p className="m-0 text-sm text-err">{t('familySwitch.failed', { error })}</p>
+      ) : !preview ? (
+        <p className="m-0 text-sm text-fg-tertiary">{t('familySwitch.loading')}</p>
+      ) : changes.length === 0 ? (
+        <p className="m-0 text-sm text-fg-secondary">{t('familySwitch.noChanges')}</p>
+      ) : (
+        <div className="flex flex-col gap-section pr-1">
+          {pathChanges.length > 0 && (
+            <section>
+              <div className="type-section-label mb-related">
+                {t('familySwitch.pathsSection')}
+              </div>
+              <div className="flex flex-col gap-field">
+                {pathChanges.map((c) => (
+                  <div key={c.field} className="text-sm">
+                    <div className="font-medium text-fg-secondary mb-0.5">
+                      {fieldLabel(c.field)}
                     </div>
-                  ))}
-                </div>
-              </section>
-            )}
-            {paramChanges.length > 0 && (
-              <section>
-                <div className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide mb-2">
-                  {t('familySwitch.paramsSection')}
-                </div>
-                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-                  {paramChanges.map((c) => (
-                    <div key={c.field} className="contents">
-                      <div className="font-medium text-fg-secondary">
-                        {fieldLabel(c.field)}
-                      </div>
-                      <div className="text-fg-primary">
-                        <span className="text-fg-tertiary">{fmt(c.from)}</span>
-                        <span className="text-accent mx-1.5">→</span>
-                        {fmt(c.to)}
-                      </div>
+                    <div className="font-mono text-xs break-all text-fg-tertiary">
+                      {fmt(c.from)}
                     </div>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        )}
-
-        <div className="flex gap-2 justify-end mt-1">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="btn btn-secondary min-w-[96px] justify-center"
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            type="button"
-            disabled={!preview || !!error}
-            onClick={() => preview && onApply(preview.config)}
-            className="btn btn-primary min-w-[96px] justify-center"
-          >
-            {t('familySwitch.ok')}
-          </button>
+                    <div className="font-mono text-xs break-all text-fg-primary">
+                      <span className="text-accent mr-1">→</span>
+                      {fmt(c.to)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          {paramChanges.length > 0 && (
+            <section>
+              <div className="type-section-label mb-related">
+                {t('familySwitch.paramsSection')}
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-section gap-y-related text-sm">
+                {paramChanges.map((c) => (
+                  <div key={c.field} className="contents">
+                    <div className="font-medium text-fg-secondary">
+                      {fieldLabel(c.field)}
+                    </div>
+                    <div className="text-fg-primary">
+                      <span className="text-fg-tertiary">{fmt(c.from)}</span>
+                      <span className="text-accent mx-1.5">→</span>
+                      {fmt(c.to)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+    </Modal>
   )
 }
