@@ -226,9 +226,9 @@
   },
   "saveBar": {
     "tooltip": "Write local edits to disk; auto-creates a restore point before saving",
-    "save": "💾 Save ({{n}})",
-    "saved": "💾 Saved",
-    "restorePoints": "🕒 Restore points",
+    "save": "Save ({{n}})",
+    "saved": "Saved",
+    "restorePoints": "Restore points",
     "noRestorePoints": "No restore points yet. Auto-created on save.",
     "restoreEntry": "{{n}} files · {{size}}",
     "confirmRestore": "Restore will overwrite all captions (including unsaved changes). Continue?",

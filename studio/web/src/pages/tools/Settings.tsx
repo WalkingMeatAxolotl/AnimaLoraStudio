@@ -302,7 +302,7 @@ export default function SettingsPage() {
             </svg>
           </button>
         ) : undefined}
-        actions={<SaveIndicator status={saveStatus} />}
+        actions={<SaveIndicator status={saveStatus} announceError={false} />}
       />
 
       <div ref={scrollContainerRef} className="p-page pb-12 flex-1 overflow-y-auto">

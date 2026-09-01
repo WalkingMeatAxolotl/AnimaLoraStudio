@@ -7,6 +7,8 @@ import {
   type PresetSummary,
   type SchemaResponse,
 } from '../../api/client'
+import ActionGroup from '../../components/ActionGroup'
+import Button from '../../components/Button'
 import ConfigSkeleton from '../../components/ConfigSkeleton'
 import { useDialog } from '../../components/Dialog'
 import PathPicker from '../../components/PathPicker'
@@ -558,11 +560,11 @@ export default function PresetsPage() {
   return (
     <div className="fade-in flex flex-col h-full">
 
-      {/* ── 单行 header：picker + 状态 + 全部操作 ──
+      {/* ── 宽屏单行、窄屏可换行的 header：picker + 状态 + 全部操作 ──
         Topbar 已经显示「预设」面包屑，这里不再重复 h1。把上一版的页面标题
         和底部操作栏并成一行，picker 当做"当前编辑上下文"的标识，状态 +
         所有动作（导入 / 复制 / 导出 / 删除 / 保存）右侧排齐。 */}
-      <div className="py-3 px-6 border-b border-subtle bg-canvas shrink-0 flex items-center gap-3.5 relative">
+      <div className="py-3 px-6 border-b border-subtle bg-canvas shrink-0 flex flex-wrap items-center gap-3.5 relative">
         <button
           ref={pickerAnchorRef}
           onClick={() => { setPickerOpen((v) => !v); setPickerSearch('') }}
@@ -586,69 +588,64 @@ export default function PresetsPage() {
           <span className="text-fg-tertiary text-md">▾</span>
         </button>
 
-        {/* 状态指示：新建模式显示「新建中」圆点;已有 preset 走自动保存,
-            与 Settings / Train 页同款 SaveIndicator */}
-        <div className="flex items-center gap-2 min-w-0">
-          {isNew ? (
-            <>
-              <span className="inline-block w-2 h-2 rounded-full shrink-0 bg-accent" />
-              <span className="text-sm text-fg-secondary whitespace-nowrap">
-                {t('presets.creating')}
-              </span>
-            </>
-          ) : (
-            <SaveIndicator status={saveStatus} />
+        <ActionGroup
+          className="ml-auto"
+          status={(
+            <div className="flex items-center gap-2 min-w-0">
+              {isNew ? (
+                <>
+                  <span aria-hidden="true" className="inline-block w-2 h-2 rounded-full shrink-0 bg-accent" />
+                  <span className="text-sm text-fg-secondary whitespace-nowrap">
+                    {t('presets.creating')}
+                  </span>
+                </>
+              ) : (
+                <SaveIndicator status={saveStatus} announceError={false} />
+              )}
+            </div>
           )}
-        </div>
+          secondary={(
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,.yaml,.yml"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void handleImportFile(f)
+                  if (fileInputRef.current) fileInputRef.current.value = ''
+                }}
+              />
+              <Button variant="ghost" size="sm" onClick={onImportClick} disabled={busy}>
+                {t('presets.importUpload')}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowImportPathPicker(true)} disabled={busy}>
+                {t('presets.importPath')}
+              </Button>
 
-        <span style={{ flex: 1 }} />
-
-        {/* 全局动作 */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json,.yaml,.yml"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) void handleImportFile(f)
-            if (fileInputRef.current) fileInputRef.current.value = ''
-          }}
+              {!isNew && (
+                <>
+                  <span aria-hidden="true" className="h-[22px] w-px bg-subtle" />
+                  <Button variant="ghost" size="sm" onClick={handleDuplicate} disabled={busy || !config}>
+                    {t('presets.duplicate')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setExportDialogOpen(true)} disabled={busy || !config}>
+                    {t('presets.exportYaml')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleDelete} disabled={busy} className="text-err">
+                    {t('common.delete')}
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+          primary={isNew ? (
+            <Button variant="primary" size="sm" onClick={handleSave} disabled={saveDisabled}>
+              {t('common.save')}
+            </Button>
+          ) : undefined}
         />
-        <button onClick={onImportClick} disabled={busy} className="btn btn-ghost btn-sm">
-          {t('presets.importUpload')}
-        </button>
-        <button onClick={() => setShowImportPathPicker(true)} disabled={busy} className="btn btn-ghost btn-sm">
-          {t('presets.importPath')}
-        </button>
-
-        {/* 编辑模式下的预设级动作 */}
-        {!isNew && (
-          <>
-            <span style={{ width: 1, height: 22, background: 'var(--border-subtle)' }} />
-            <button onClick={handleDuplicate} disabled={busy || !config} className="btn btn-ghost btn-sm">
-              {t('presets.duplicate')}
-            </button>
-            <button onClick={() => setExportDialogOpen(true)} disabled={busy || !config} className="btn btn-ghost btn-sm">
-              {t('presets.exportYaml')}
-            </button>
-            <button onClick={handleDelete} disabled={busy} className="btn btn-ghost btn-sm" style={{ color: 'var(--err)' }}>
-              {t('common.delete')}
-            </button>
-          </>
-        )}
-
-        {/* 主操作：仅新建模式需要（已有 preset 自动保存） */}
-        {isNew && (
-          <button
-            onClick={handleSave}
-            disabled={saveDisabled}
-            className="btn btn-primary btn-sm inline-flex items-center justify-center"
-            style={{ minWidth: 0, paddingLeft: 12, paddingRight: 12 }}
-          >
-            {t('common.save')}
-          </button>
-        )}
 
         {/* popover */}
         {pickerOpen && (
