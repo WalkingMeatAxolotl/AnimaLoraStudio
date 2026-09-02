@@ -89,7 +89,11 @@
     "generating": "Generating",
     "offline": "offline"
   },
+  "appShell": {
+    "skipToContent": "Skip to main content"
+  },
   "topbar": {
+    "breadcrumbs": "Breadcrumbs",
     "search": "Search (⌘K)",
     "searchAriaLabel": "Search",
     "newVersion": "New version {{tag}} available",
@@ -137,6 +141,7 @@
     "projectItem": "Project #{{id}}"
   },
   "sidebar": {
+    "navigation": "Primary navigation",
     "title": "Anima",
     "subtitle": "lora studio",
     "newVersion": "New version",

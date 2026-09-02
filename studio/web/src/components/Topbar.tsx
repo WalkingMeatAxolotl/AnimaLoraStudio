@@ -205,11 +205,8 @@ export default function Topbar() {
 
   return (
     <>
-      <header
-        className="flex items-center gap-3 border-b border-subtle bg-canvas shrink-0 px-5"
-        style={{ height: 'var(--topbar-h)' }}
-      >
-        <div className="flex items-center gap-2 flex-1 min-w-0">
+      <header className="ui-app-shell-topbar flex shrink-0 items-center border-b border-subtle bg-canvas">
+        <nav className="ui-app-shell-breadcrumbs" aria-label={t('topbar.breadcrumbs')}>
           {crumbs.map((b, i) => {
             const isLast = i === crumbs.length - 1
             const cls =
@@ -218,22 +215,23 @@ export default function Topbar() {
                 ? 'text-fg-primary font-semibold'
                 : 'text-fg-secondary hover:text-fg-primary transition-colors')
             return (
-              <span key={i} className="flex items-center gap-2">
+              <span key={i} className="ui-app-shell-breadcrumb-item">
                 {i > 0 && <span className="text-fg-tertiary select-none">/</span>}
                 {!isLast && b.to ? (
-                  <Link to={b.to} className={cls}>{b.label}</Link>
+                  <Link to={b.to} className={`ui-app-shell-breadcrumb-label ${cls}`} title={b.label}>{b.label}</Link>
                 ) : (
-                  <span className={cls}>{b.label}</span>
+                  <span className={`ui-app-shell-breadcrumb-label ${cls}`} aria-current="page" title={b.label}>{b.label}</span>
                 )}
               </span>
             )
           })}
-        </div>
+        </nav>
 
         {runningTask && (
           <button
+            type="button"
             onClick={() => navigate(`/queue/${runningTask.id}`)}
-            className="flex items-center gap-2 px-3 py-[5px] rounded-md border border-warn bg-warn-soft cursor-pointer hover:bg-warn/10 transition-colors shrink-0 max-w-xs"
+            className="ui-app-shell-running-task flex shrink-0 items-center gap-2 rounded-md border border-warn bg-warn-soft px-3 py-[5px] cursor-pointer hover:bg-warn/10 transition-colors"
             title={t('topbar.taskId', { id: runningTask.id })}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-warn animate-pulse shrink-0" />

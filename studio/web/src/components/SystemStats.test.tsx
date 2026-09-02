@@ -41,6 +41,7 @@ describe('SystemStats', () => {
     vi.spyOn(api, 'systemStats').mockResolvedValue(makeStats())
     render(<SystemStats />)
     await waitFor(() => expect(screen.getByText('CPU')).toBeInTheDocument())
+    expect(screen.getByText('CPU').closest('.ui-app-shell-topbar-stats')).toBeInTheDocument()
     expect(screen.getByText('13%')).toBeInTheDocument()
     expect(screen.getByText('MEM')).toBeInTheDocument()
     expect(screen.getByText('8.0/32G')).toBeInTheDocument()

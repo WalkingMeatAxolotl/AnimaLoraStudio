@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   createBrowserRouter,
   Navigate,
@@ -7,6 +8,7 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom'
+import AppShell from './components/AppShell'
 import SettingsDrawer from './components/SettingsDrawer'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
@@ -68,23 +70,18 @@ function QueueDetailRedirect({ tab }: { tab: 'log' | 'monitor' }) {
   )
 }
 
-/** Sidebar + Topbar 外壳；所有路由 element 渲染进 <Outlet />。
- *  SettingsDrawer 用 fixed inset-0 铺满整个 viewport（含左侧 Sidebar）—— 这样点
- *  backdrop 的任意位置（包括 Sidebar 区域）都会收起抽屉。
- *  列父级 position:relative 保留作 <main> 内 absolute 元素（如任务日志抽屉贴底
- *  footer）的定位锚点。 */
+/** Shared desktop workspace frame; all route elements render into its main scroll owner. */
 function RootLayout() {
+  const { t } = useTranslation()
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <Sidebar />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-        <Topbar />
-        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-canvas)' }}>
-          <Outlet />
-        </main>
-        <SettingsDrawer />
-      </div>
-    </div>
+    <AppShell
+      navigation={<Sidebar />}
+      topbar={<Topbar />}
+      skipLabel={t('appShell.skipToContent')}
+      overlay={<SettingsDrawer />}
+    >
+      <Outlet />
+    </AppShell>
   )
 }
 

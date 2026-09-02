@@ -89,7 +89,11 @@
     "generating": "生成中",
     "offline": "offline"
   },
+  "appShell": {
+    "skipToContent": "跳到主要内容"
+  },
   "topbar": {
+    "breadcrumbs": "面包屑导航",
     "search": "搜索 (⌘K)",
     "searchAriaLabel": "搜索",
     "newVersion": "新版本 {{tag}} 可用",
@@ -137,6 +141,7 @@
     "projectItem": "项目 #{{id}}"
   },
   "sidebar": {
+    "navigation": "主导航",
     "title": "Anima",
     "subtitle": "lora studio",
     "newVersion": "新版本",

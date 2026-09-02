@@ -1,0 +1,139 @@
+/* Application-shell geometry. This file owns viewport tracks and scroll
+ * responsibility; page-level layout remains with each route. */
+
+html,
+body,
+#root {
+  overflow: hidden;
+}
+
+.ui-app-shell {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-canvas);
+}
+
+.ui-app-shell-workspace {
+  position: relative;
+  display: grid;
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ui-app-shell-main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: var(--bg-canvas);
+}
+
+.ui-app-shell-main:focus {
+  outline: none;
+}
+
+.ui-app-shell-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ui-app-shell-skip {
+  position: fixed;
+  top: var(--s-2);
+  left: var(--s-2);
+  z-index: 1000;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  box-shadow: var(--sh-md);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  transform: translateY(calc(-100% - var(--s-4)));
+  transition: transform 140ms ease-out;
+}
+
+.ui-app-shell-skip:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ui-app-shell-sidebar {
+  width: var(--sidebar-w);
+  min-width: 0;
+  min-height: 0;
+}
+
+.ui-app-shell-sidebar[data-collapsed='true'] {
+  width: var(--sidebar-collapsed-w);
+}
+
+.ui-app-shell-sidebar-brand,
+.ui-app-shell-topbar {
+  height: var(--topbar-h);
+}
+
+.ui-app-shell-sidebar-nav {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.ui-app-shell-topbar {
+  min-width: 0;
+  gap: var(--s-3);
+  padding-inline: var(--s-5);
+}
+
+.ui-app-shell-breadcrumbs {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--s-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.ui-app-shell-breadcrumb-item {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.ui-app-shell-breadcrumb-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-app-shell-running-task {
+  min-width: 0;
+  max-width: min(20rem, 32vw);
+}
+
+.ui-app-shell-topbar-stats {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--s-2);
+}
