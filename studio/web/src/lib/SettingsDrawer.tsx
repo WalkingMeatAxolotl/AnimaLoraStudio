@@ -11,7 +11,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useRef,
   useState,
   type ReactNode,
@@ -26,11 +25,15 @@ interface OpenOptions {
 
 interface SettingsDrawerApi {
   isOpen: boolean
-  /** 上一次 open 调用带的 section；SettingsPage 内 effect 监听它做 scrollIntoView。
+  /** Drawer 完成 opening 动画且内部滚动容器可安全定位。 */
+  isReady: boolean
+  /** 上一次 open 调用带的 section；SettingsPage 仅在 isReady 后消费。
    *  每次 open 哪怕同一 section 也会换引用，便于触发 effect。 */
   sectionRequest: { section: string; nonce: number } | null
   open: (opts?: OpenOptions) => void
   close: () => void
+  /** Drawer 壳层内部使用；业务调用方不应手动修改。 */
+  setReady: (ready: boolean) => void
   /** SettingsPage mount 时注册「当前 draft 是否 dirty」的查询函数；unmount 时传 null。 */
   registerDirtyGuard: (fn: (() => boolean) | null) => void
 }
@@ -41,6 +44,7 @@ export function SettingsDrawerProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation()
   const { confirm } = useDialog()
   const [isOpen, setIsOpen] = useState(false)
+  const [isReady, setReady] = useState(false)
   const [sectionRequest, setSectionRequest] = useState<SettingsDrawerApi['sectionRequest']>(null)
   const dirtyGuardRef = useRef<(() => boolean) | null>(null)
   const nonceRef = useRef(0)
@@ -67,6 +71,7 @@ export function SettingsDrawerProvider({ children }: { children: ReactNode }) {
       })
       if (!ok) return
     }
+    setReady(false)
     setIsOpen(false)
   }, [confirm, t])
 
@@ -74,21 +79,16 @@ export function SettingsDrawerProvider({ children }: { children: ReactNode }) {
     dirtyGuardRef.current = fn
   }, [])
 
-  // ESC 关：放在 Provider 里而非 Drawer 组件，避免 lazy 加载期间快捷键失效。
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        void close()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, close])
-
   return (
-    <Ctx.Provider value={{ isOpen, sectionRequest, open, close, registerDirtyGuard }}>
+    <Ctx.Provider value={{
+      isOpen,
+      isReady,
+      sectionRequest,
+      open,
+      close,
+      setReady,
+      registerDirtyGuard,
+    }}>
       {children}
     </Ctx.Provider>
   )

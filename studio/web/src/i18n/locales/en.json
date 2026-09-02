@@ -871,7 +871,6 @@
   "settings": {
     "drawerTitle": "Settings",
     "drawerClose": "Close settings",
-    "drawerLoading": "Loading…",
     "closeDirtyTitle": "Unsaved changes",
     "closeDirtyConfirm": "Closing the drawer will discard unsaved changes. Close anyway?",
     "closeDirtyOk": "Discard & close",

@@ -1,13 +1,13 @@
 // SettingsData.tsx —— Settings 全局数据层。
 //
 // 把 secrets / catalog / downloadBusy / SSE 订阅从 SettingsPage 提到根级 Provider，
-// 让 SettingsPage 本身可以 unmount + remount 不付重新拉数据的代价：
+// 让 SettingsPage 的展示生命周期与数据请求解耦：
 // - secrets：一次 fetch，常驻 context；save 后由 SettingsPage 调 setSecrets 更新
 // - catalog：reloadCatalog + model_download_changed SSE 订阅常驻，跟下载组件共享
 // - downloadBusy：跟 startDownload 配对的 in-flight Set
 //
-// 这层只持有数据，不渲染 UI。SettingsDrawer 关闭时 SettingsPage 卸载，
-// 第二次打开瞬间渲染——数据已经在 context 里。
+// 这层只持有数据，不渲染 UI。SettingsPage 首次打开后可在 Drawer 内保活，
+// 无论 UI 是否挂载，权威数据和订阅都继续由这里持有。
 import {
   createContext,
   useCallback,

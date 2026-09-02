@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
@@ -55,7 +55,7 @@ import WandBWorkspace from './settings/WandBWorkspace'
 export default function SettingsPage() {
   const { t } = useTranslation()
   // 共享数据层（SettingsDataProvider）：secrets / catalog / SSE / downloadBusy 都在根级常驻，
-  // 本组件 mount/unmount（抽屉开关）不再触发重拉。`server` 别名保留是为了让下方
+  // UI 首次打开后可在 Drawer 内保活；权威数据不依赖其展示状态。`server` 别名保留是为了让下方
   // 大段表单代码改动最小。
   const {
     secrets: server,
@@ -83,6 +83,7 @@ export default function SettingsPage() {
   const drawer = useSettingsDrawer()
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const consumedSectionNonceRef = useRef<number | null>(null)
 
   // 数据层 fetch secrets 失败时把错误透出到本组件 error 状态。
   useEffect(() => { if (secretsError) setError(secretsError) }, [secretsError])
@@ -102,20 +103,33 @@ export default function SettingsPage() {
     return () => drawer.registerDirtyGuard(null)
   }, [drawer])
 
-  // 抽屉以 open({ section }) 打开时跳到对应 section（取代旧的 ?section= URL 参数）。
-  // sectionRequest 带 nonce，相同 section 重复 open 也会触发 effect 重跑。
+  // 抽屉深链接：等 Drawer 完成开场后，再在它自己的滚动容器内定位。
+  // useLayoutEffect 让首次挂载和热打开都在内容显现前落到目标，避免页面先闪在顶部。
   const drawerSectionReq = drawer.sectionRequest
-  useEffect(() => {
-    if (!drawerSectionReq) return
+  useLayoutEffect(() => {
+    if (!drawerSectionReq || !drawer.isReady) return
+    if (consumedSectionNonceRef.current === drawerSectionReq.nonce) return
+
     const section = drawerSectionReq.section
     const targetTab = SECTION_TO_TAB[section]
-    if (targetTab) setTab(targetTab)
-    const t1 = setTimeout(() => {
-      const el = document.getElementById(section)
-      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
-    return () => clearTimeout(t1)
-  }, [drawerSectionReq])
+    if (targetTab && targetTab !== tab) {
+      setTab(targetTab)
+      return
+    }
+
+    consumedSectionNonceRef.current = drawerSectionReq.nonce
+    const container = scrollContainerRef.current
+    const target = container?.querySelector<HTMLElement>(`[id="${section}"]`)
+    if (!container || !target) return
+
+    const top = target.getBoundingClientRect().top -
+      container.getBoundingClientRect().top + container.scrollTop
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({ top, behavior: 'auto' })
+    } else {
+      container.scrollTop = top
+    }
+  }, [drawer.isReady, drawerSectionReq, tab])
 
   const update = <S extends Section, K extends keyof Secrets[S]>(
     section: S,
@@ -305,7 +319,7 @@ export default function SettingsPage() {
         actions={<SaveIndicator status={saveStatus} announceError={false} />}
       />
 
-      <div ref={scrollContainerRef} className="p-page pb-12 flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} data-testid="settings-scroll-container" className="p-page pb-12 flex-1 overflow-y-auto">
       <div className="grid gap-10 max-w-[1920px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
       <div className="flex flex-col gap-page-loose min-w-0">
 

@@ -764,3 +764,91 @@ select option:checked {
 /* page transitions */
 .fade-in { animation: fade-in 200ms ease; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* overlay drawer — one state machine owns shell motion; feature content never authors
+ * its own entrance. The root remains mounted so cold and warm opens share the same path. */
+.ui-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  visibility: hidden;
+  pointer-events: none;
+  isolation: isolate;
+}
+.ui-drawer-root[data-state="opening"],
+.ui-drawer-root[data-state="open"],
+.ui-drawer-root[data-state="closing"] {
+  visibility: visible;
+}
+.ui-drawer-root[data-state="opening"],
+.ui-drawer-root[data-state="open"] {
+  pointer-events: auto;
+}
+.ui-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.35);
+  opacity: 0;
+  touch-action: none;
+}
+.ui-drawer-panel {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  display: flex;
+  height: 100dvh;
+  min-width: 0;
+  max-width: 100vw;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
+  box-shadow: var(--sh-xl);
+  outline: none;
+  transform: translate3d(100%, 0, 0);
+  contain: layout paint;
+}
+.ui-drawer-size-md { width: min(100vw, 28rem); }
+.ui-drawer-size-lg { width: min(100vw, 40rem); }
+.ui-drawer-size-page { width: min(100vw, max(64rem, 70vw)); }
+.ui-drawer-root[data-state="opening"] .ui-drawer-backdrop,
+.ui-drawer-root[data-state="open"] .ui-drawer-backdrop { opacity: 1; }
+.ui-drawer-root[data-state="closing"] .ui-drawer-backdrop { opacity: 0; }
+.ui-drawer-root[data-state="opening"] .ui-drawer-panel,
+.ui-drawer-root[data-state="open"] .ui-drawer-panel { transform: translate3d(0, 0, 0); }
+.ui-drawer-root[data-state="closing"] .ui-drawer-panel { transform: translate3d(100%, 0, 0); }
+.ui-drawer-root[data-state="opening"] .ui-drawer-backdrop {
+  animation: drawer-backdrop-in 220ms ease-out both;
+}
+.ui-drawer-root[data-state="opening"] .ui-drawer-panel {
+  animation: drawer-panel-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+.ui-drawer-root[data-state="closing"] .ui-drawer-backdrop {
+  animation: drawer-backdrop-out 160ms ease-in both;
+}
+.ui-drawer-root[data-state="closing"] .ui-drawer-panel {
+  animation: drawer-panel-out 160ms cubic-bezier(0.4, 0, 1, 1) both;
+  will-change: transform;
+}
+@keyframes drawer-panel-in {
+  from { transform: translate3d(100%, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes drawer-panel-out {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(100%, 0, 0); }
+}
+@keyframes drawer-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes drawer-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-drawer-backdrop,
+  .ui-drawer-panel { animation: none !important; }
+}

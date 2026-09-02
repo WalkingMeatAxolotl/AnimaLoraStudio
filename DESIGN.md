@@ -26,7 +26,7 @@ surface has identical density.
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
 | Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx` | Typed, accessible component APIs |
-| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `Dialog`, `Modal`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
+| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `Dialog`, `Modal`, `Drawer`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
 A page may compose primitives with layout utilities. It must not recreate an
@@ -322,7 +322,43 @@ Toast must not duplicate an error already announced inside the modal. Toast feed
 above the modal layer when an operation keeps the dialog open. Do not recreate modal
 backdrops, panel geometry, focus listeners, or title linkage in feature code.
 
-## 11. Tabs and segmented-selection contract
+## 11. Overlay-drawer contract
+
+Use `Drawer` for an interruptive task that slides above the current workspace while
+preserving visible context. It is an overlay side sheet, not a generic name for every
+panel attached to an edge: bottom task logs remain page-owned footer panels, and Generate
+pickers/editors remain attached workspaces with their own keep-alive geometry.
+
+Drawer motion has one owner and one lifecycle: `closed → opening → open → closing`.
+The shell remains mounted so cold and warm opens take the same path. Feature content must
+not add a second entrance animation or independently decide when the panel becomes visible.
+Static local content mounts in the same commit as the shell and moves with the panel; once
+mounted, keep it alive across later opens. Do not insert a transient loading label or skeleton
+for a page whose code and structure are already local—it creates flicker without communicating
+real progress. Use a local skeleton only for genuinely asynchronous remote content with a
+perceptible wait, and never replace the whole Drawer shell. Reduced-motion skips the authored
+transition consistently.
+
+Geometry and interaction belong to the Pattern:
+
+- The panel is portalled above the AppShell and below Modal/Toast layers. Its width is always
+  bounded by the viewport; long content scrolls inside the panel and never widens the page.
+- The backdrop and panel animate as one authored moment. Closing is shorter than opening;
+  loading, section changes, and lazy-module timing must not alter the shell motion.
+- Opening focuses the panel or an explicit initial target. Tab remains inside, Escape and a
+  direct backdrop press request a reversible close, and closing restores focus to the opener.
+- While open, the application root is inert. Do not mutate `body` overflow for Studio drawers:
+  the AppShell owns its own scroll container, and body scrollbar changes cause layout shift.
+- A Modal opened from a Drawer is the active top layer. Escape closes the Modal first; the
+  Drawer remains until its own close request succeeds.
+- Deep links or `open({ section })` requests wait for `open` readiness, then scroll only the
+  Drawer content owner. Never call early `scrollIntoView` in parallel with panel motion.
+
+Settings is the first representative adoption. Its data and instant-save behavior remain
+outside the Drawer Pattern; only shell timing, focus, dismissal, width, and internal scroll
+readiness are shared.
+
+## 12. Tabs and segmented-selection contract
 
 Use `Tabs` for navigation among peer content panels and `SegmentedControl` for changing
 one mutually exclusive value or working mode. They share visual rhythm and keyboard
@@ -353,7 +389,7 @@ as the accessible name and title. Underlined tabs keep their intrinsic width and
 rather than truncating. Both appearances must preserve visible focus, disabled state,
 theme contrast, density response, and Chinese/English label stability.
 
-## 12. Accessibility and resilience
+## 13. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -363,7 +399,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 13. Migration policy
+## 14. Migration policy
 
 Migration is incremental:
 
