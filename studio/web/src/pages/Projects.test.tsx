@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import type { ProjectSummary } from '../api/client'
-import { filterProjects } from './Projects'
+import { filterProjects, ProjectFilterBar } from './Projects'
 
 function mk(over: Partial<ProjectSummary> & { id: number }): ProjectSummary {
   return {
@@ -58,5 +59,52 @@ describe('filterProjects', () => {
     const before = ITEMS.map((p) => p.id)
     filterProjects(ITEMS, { query: '', status: 'all', sort: 'title' })
     expect(ITEMS.map((p) => p.id)).toEqual(before)
+  })
+})
+
+describe('ProjectFilterBar', () => {
+  it('keeps a named hidden target and forwards search, filter, and sort changes', () => {
+    const onQuery = vi.fn()
+    const onStatus = vi.fn()
+    const onSort = vi.fn()
+    const { rerender } = render(
+      <ProjectFilterBar
+        hidden
+        query=""
+        onQuery={onQuery}
+        status="all"
+        onStatus={onStatus}
+        sort="updated"
+        onSort={onSort}
+      />,
+    )
+
+    const toolbar = screen.getByTestId('projects-list-toolbar')
+    expect(toolbar).toHaveAttribute('id', 'projects-list-toolbar')
+    expect(toolbar).toHaveAttribute('role', 'region')
+    expect(toolbar).toHaveAttribute('aria-label')
+    expect(toolbar).toHaveAttribute('hidden')
+
+    rerender(
+      <ProjectFilterBar
+        query=""
+        onQuery={onQuery}
+        status="all"
+        onStatus={onStatus}
+        sort="updated"
+        onSort={onSort}
+      />,
+    )
+
+    const controls = within(toolbar)
+    expect(toolbar).toHaveAccessibleName()
+    fireEvent.change(controls.getByRole('textbox'), { target: { value: 'kagu' } })
+    const selects = controls.getAllByRole('combobox')
+    fireEvent.change(selects[0], { target: { value: 'training' } })
+    fireEvent.change(selects[1], { target: { value: 'title' } })
+
+    expect(onQuery).toHaveBeenCalledWith('kagu')
+    expect(onStatus).toHaveBeenCalledWith('training')
+    expect(onSort).toHaveBeenCalledWith('title')
   })
 })
