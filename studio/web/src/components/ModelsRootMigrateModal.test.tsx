@@ -53,9 +53,14 @@ describe('ModelsRootMigrateModal', () => {
   it('confirm 态点开始迁移 → 调 startModelsRootMigrate(target, undefined) 并进入 running', async () => {
     render(<ModelsRootMigrateModal target="D:\newroot" onClose={() => {}} onDone={() => {}} />)
     await screen.findByText('开始迁移')
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-labelledby')
     await userEvent.click(screen.getByText('开始迁移'))
     expect(mockApi.startModelsRootMigrate).toHaveBeenCalledWith('D:\\newroot', undefined)
     await screen.findByText('正在复制…')
+    const progress = screen.getByRole('progressbar', { name: '正在复制…' })
+    expect(progress).not.toHaveAttribute('aria-valuenow')
+    expect(progress).toHaveAttribute('data-state', 'indeterminate')
+    expect(document.activeElement).toBe(screen.getByTestId('models-root-migration-phase'))
   })
 
   it('409 target_conflict → conflict 态展示统计，跳过已有文件 → 带 skip 重发进 running', async () => {
@@ -67,6 +72,7 @@ describe('ModelsRootMigrateModal', () => {
     await userEvent.click(screen.getByText('开始迁移'))
 
     await screen.findByText('目标目录已包含 models 数据')
+    expect(screen.getByRole('alertdialog')).toHaveAttribute('aria-labelledby')
     // 统计插值：目标路径 + 已有文件数/大小 + 同名数
     expect(screen.getByText(/已有 12 个文件（2\.0 MB），其中 3 个/)).toBeInTheDocument()
 

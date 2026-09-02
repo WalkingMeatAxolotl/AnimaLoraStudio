@@ -1743,6 +1743,8 @@
     "phaseLoad": "Loading model",
     "phaseClip": "Encoding text",
     "phaseSample": "Sampling {{step}}/{{total}}",
+    "phaseSampling": "Sampling",
+    "pipelineProgress": "Generation pipeline progress",
     "phaseVae": "VAE decode",
     "progressPreparingShort": "Preparing…",
     "progressSampling": "Sampling: step {{step}} / {{total}}",
@@ -2717,7 +2719,9 @@
     "agoDays": "{{n}} days ago"
   },
   "upload": {
+    "progressLabel": "Upload progress",
     "processing": "Server processing…",
+    "complete": "Upload complete",
     "failed": "Failed",
     "etaPrefix": "ETA"
   },

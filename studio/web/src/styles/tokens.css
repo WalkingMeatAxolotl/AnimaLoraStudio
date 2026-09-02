@@ -490,6 +490,40 @@ select option:checked {
 .badge-accent { background: var(--accent-soft); color: var(--accent-strong); }
 .badge .dot { flex-shrink: 0; }
 
+/* Async progress is a semantic indicator, not a data meter. Determinate bars own
+ * their fill width; indeterminate bars use a bounded traveling segment. */
+.ui-progress {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+  background: var(--bg-sunken);
+}
+.ui-progress-xs { height: 3px; border: 0; }
+.ui-progress-sm { height: 6px; }
+.ui-progress-md { height: 8px; }
+.ui-progress-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 200ms linear;
+}
+.ui-progress-success .ui-progress-fill { background: var(--ok); }
+.ui-progress[data-state="indeterminate"] .ui-progress-fill {
+  width: 36%;
+  transform-origin: center;
+  animation: ui-progress-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes ui-progress-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
+.ui-skeleton { animation: pulse 1.6s ease-in-out infinite; }
+
 .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .dot-ok { background: var(--ok); }
 .dot-warn { background: var(--warn); }
@@ -501,9 +535,15 @@ select option:checked {
   .btn,
   .card-hover,
   .form-control,
+  .ui-progress-fill,
   .ui-selection-item { transition: none; }
   .btn-spinner,
-  .dot-running { animation: none; }
+  .dot-running,
+  .ui-skeleton { animation: none; }
+  .ui-progress[data-state="indeterminate"] .ui-progress-fill {
+    animation: none;
+    transform: translateX(90%);
+  }
 }
 
 /* tabs + segmented selection — content navigation and mutually exclusive values share

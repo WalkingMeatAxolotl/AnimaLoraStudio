@@ -1743,6 +1743,8 @@
     "phaseLoad": "加载模型",
     "phaseClip": "文本编码",
     "phaseSample": "采样 {{step}}/{{total}}",
+    "phaseSampling": "正在采样",
+    "pipelineProgress": "生成流程进度",
     "phaseVae": "VAE 解码",
     "progressPreparingShort": "准备中…",
     "progressSampling": "采样: step {{step}} / {{total}}",
@@ -2717,7 +2719,9 @@
     "agoDays": "{{n}} 天前"
   },
   "upload": {
+    "progressLabel": "上传进度",
     "processing": "服务器处理中…",
+    "complete": "上传完成",
     "failed": "失败",
     "etaPrefix": "剩余"
   },
