@@ -90,7 +90,7 @@ export default function SystemStats() {
   const gpuLabel = gpu0 ? `${gpu0.name}${gpuTempText}${gpuExtra}` : ''
 
   return (
-    <div className="hidden md:flex items-center gap-2 shrink-0">
+    <div className="ui-app-shell-topbar-stats">
       <Pill
         label="CPU"
         value={`${stats.cpu_pct.toFixed(0)}%`}

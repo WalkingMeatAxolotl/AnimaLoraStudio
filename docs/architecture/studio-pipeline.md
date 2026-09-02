@@ -377,11 +377,22 @@ python -m studio test    # pytest + vitest
 
 ---
 
-## 11. 前端样式约定
+## 11. 前端布局与响应式约定
 
-**现阶段不做全局响应式**，布局以桌面端宽屏为主。单个页面 / 组件如有窄屏拥挤，可加简单单点适配，但必须遵守下述约定，方便未来做全局响应式时统一升级：
+Studio 仍以桌面工作台为目标，但全局 AppShell 已开始统一治理。当前支持两类
+桌面视口：宽桌面（`> 1280px`）与紧凑桌面（`<= 1280px`）。本阶段不承诺移动端
+信息架构；业务工作台的结构性适配按 Layout phase 分批实施。
 
-- 所有媒体查询集中在 `studio/web/src/styles/responsive.css`，不要散落到组件里
-- 断点统一 `max-width: 1280px`（< laptop 中屏阈值），不要自创新断点
-- 单点适配只动 padding / 尺寸 / 显隐 label，**不改布局结构**（结构性改造留给未来的全局响应式）
-- 给目标元素加专属 className（如 `.banner-shell` / `.phase-timeline-label`），CSS 用 className 命中，不写到全局选择器
+- AppShell 是唯一 viewport 外壳，负责 Sidebar、Topbar、主内容轨道与默认页面滚动；
+  路由页面不得再创建第二个 `100vh` 应用外壳。
+- `main` 是默认页面级 scroll owner；专业工作台只在自身外层完整落入 main 轨道时
+  建立明确的局部滚动区。所有 flex/grid 中间轨道必须保留 `min-width: 0` 与
+  `min-height: 0`。
+- 公共响应式媒体查询集中在 `studio/web/src/styles/responsive.css`，目标元素使用
+  专属 className。共享紧凑桌面断点为 `max-width: 1280px`，不要为普通页面自创新断点。
+- 紧凑桌面优先保留导航、当前任务与操作入口；辅助资源指标和低优先级说明先让位。
+  不允许通过遮挡、负 margin 或隐藏主操作解决拥挤。
+- Drawer/Modal/Toast 等全局 overlay 不参与 AppShell 网格尺寸计算，不得通过 body
+  scrollbar 的出现/消失改变页面宽度。
+- Generate 附着工作区、图片瀑布流等已有专用几何可保留局部阈值，但必须集中在
+  `responsive.css` 并在组件注释中说明，不能成为普通页面的默认模式。

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsDrawerProvider } from '../lib/SettingsDrawer'
 import {
   ProjectContext,
@@ -85,6 +85,10 @@ function makeCtx(versions: Version[]): ProjectCtxValue {
 }
 
 describe('Sidebar (PP0)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
   it('shows main items + tools with all 5 destinations', () => {
     renderAt('/')
     // 主导航
@@ -108,6 +112,34 @@ describe('Sidebar (PP0)', () => {
     // 设置不再是路由 link，而是打开右侧抽屉的 button；没有 href
     expect(screen.getByRole('button', { name: /设置/ })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /设置/ })).toBeNull()
+  })
+
+  it('provides a scrollable primary navigation and exposes collapse state', () => {
+    renderAt('/')
+
+    const navigation = screen.getByRole('navigation', { name: '主导航' })
+    const sidebar = navigation.closest('aside')
+    expect(navigation).toHaveAttribute('id', 'primary-navigation')
+    expect(navigation).toHaveClass('ui-app-shell-sidebar-nav')
+    expect(sidebar).toHaveAttribute('data-collapsed', 'false')
+
+    const toggle = screen.getByRole('button', { name: '折叠' })
+    expect(toggle).toHaveAttribute('aria-controls', 'primary-navigation')
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(toggle)
+
+    expect(sidebar).toHaveAttribute('data-collapsed', 'true')
+    expect(window.sessionStorage.getItem('studio.sidebar.expanded')).toBe('0')
+    expect(screen.getByRole('button', { name: '展开' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('restores the collapsed state from the current session', () => {
+    window.sessionStorage.setItem('studio.sidebar.expanded', '0')
+    renderAt('/')
+
+    const navigation = screen.getByRole('navigation', { name: '主导航' })
+    expect(navigation.closest('aside')).toHaveAttribute('data-collapsed', 'true')
+    expect(screen.getByRole('button', { name: '展开' })).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('marks the active route', () => {
@@ -165,6 +197,10 @@ describe('Sidebar (PP0)', () => {
 })
 
 describe('Sidebar version row (live / in project)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
   it('single version: new + export present, switch + delete hidden', () => {
     renderLive('/projects/3', makeCtx([MOCK_VERSION]))
     expect(screen.getByTitle('新版本')).toBeInTheDocument()

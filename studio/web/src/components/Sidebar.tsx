@@ -605,17 +605,20 @@ export default function Sidebar() {
 
   return (
     <aside
-      className="shrink-0 bg-sunken border-r border-subtle flex flex-col overflow-hidden h-full transition-[width] duration-[160ms] ease-in-out"
-      style={{ width: collapsed ? 'var(--sidebar-collapsed-w)' : 'var(--sidebar-w)' }}
+      className="ui-app-shell-sidebar shrink-0 bg-sunken border-r border-subtle flex flex-col overflow-hidden h-full"
+      data-collapsed={collapsed}
     >
       <div
-        className={`flex items-center border-b border-subtle shrink-0 px-3.5 ${collapsed ? 'justify-center' : ''}`}
-        style={{ height: 'var(--topbar-h)' }}
+        className={`ui-app-shell-sidebar-brand flex items-center border-b border-subtle shrink-0 px-3.5 ${collapsed ? 'justify-center' : ''}`}
       >
         <Logo collapsed={collapsed} />
       </div>
 
-      <nav className={`flex-1 flex flex-col gap-0.5 overflow-hidden ${collapsed ? 'px-2 py-2.5' : 'px-2 py-3.5'}`}>
+      <nav
+        id="primary-navigation"
+        aria-label={t('sidebar.navigation')}
+        className={`ui-app-shell-sidebar-nav flex-1 flex flex-col gap-0.5 ${collapsed ? 'px-2 py-2.5' : 'px-2 py-3.5'}`}
+      >
         <NavItem to="/" label={t('nav.projects')} icon={I.folder} active={location.pathname === '/'} collapsed={collapsed} prominent />
 
         {/* 当前项目下的全部内容（概览 + ①② + VersionPanel + ③-⑦）夹在 项目 / 队列 之间。
@@ -643,7 +646,11 @@ export default function Sidebar() {
         />
         <ThemeToggle collapsed={collapsed} />
         <button
+          type="button"
           onClick={toggle}
+          aria-controls="primary-navigation"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
           title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
           className={`text-fg-tertiary bg-transparent border-none rounded cursor-pointer hover:bg-overlay transition-colors ${collapsed ? 'flex justify-center p-2 mt-1' : 'flex items-center gap-1.5 p-2 mt-1 text-xs'}`}
         >

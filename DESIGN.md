@@ -27,6 +27,7 @@ surface has identical density.
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
 | Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx`, `ProgressBar.tsx` | Typed, accessible component APIs |
 | Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `ListToolbar`, `Dialog`, `Modal`, `Drawer`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
+| Layout | `studio/web/src/components/AppShell.tsx`, `studio/web/src/styles/app-shell.css` | Viewport tracks, landmarks, and scroll ownership |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
 A page may compose primitives with layout utilities. It must not recreate an
@@ -455,7 +456,46 @@ transitions, refreshes where content can remain visible, or as an entrance anima
 Skeleton and indeterminate motion become a stable static indicator under
 `prefers-reduced-motion`; meaning cannot depend on pulsing or travel.
 
-## 15. Accessibility and resilience
+## 15. App-shell and viewport contract
+
+`AppShell` is the single desktop workspace frame. It owns the viewport, Sidebar
+track, Topbar track, default main landmark, and the page-level scroll container.
+Routes render inside its `main`; they must not recreate a second viewport-height
+application shell. The Studio supports a wide desktop class above 1280px and a
+compact desktop class at or below the shared 1280px breakpoint. This phase does
+not define a mobile information architecture.
+
+Geometry and scroll responsibility are fixed:
+
+- The shell uses `100dvh` with a `100vh` fallback, `minmax(0, 1fr)` for the
+  workspace track, and explicit `min-width: 0` / `min-height: 0` boundaries.
+  `html`, `body`, and `#root` fill the viewport and do not become competing
+  document scroll owners.
+- The main landmark is the default page scroll owner and reserves a stable
+  scrollbar gutter. A full-height workbench may add local panel scrolling only
+  when its outer route still fits the main track; nested scroll regions must be
+  deliberate and keyboard reachable.
+- Sidebar width and Topbar height come from layout tokens. Sidebar branding and
+  footer actions remain fixed while the named primary navigation region scrolls
+  internally, so long project workflows never push collapse/settings actions
+  outside the viewport.
+- Topbar breadcrumb, active-task status, global notices, and search preserve that
+  priority order. At compact desktop widths, auxiliary system resource meters
+  yield before navigation or actions; breadcrumb labels truncate visually while
+  their full title and accessible name remain available.
+- A visible-on-focus skip link targets the main landmark. Sidebar, breadcrumb,
+  main, and overlay components retain native landmark/dialog semantics; route
+  changes do not steal focus automatically.
+- Modal, Drawer, Toast, command surfaces, and image preview remain portalled
+  overlay layers and never consume AppShell grid space. Drawers may inert the app
+  root; overlays must not alter shell width or introduce a second body scrollbar.
+
+App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
+1280px breakpoint. Route-specific workbench restructuring is a later Layout
+adoption concern, not permission to hide primary actions or add arbitrary
+component-local breakpoints.
+
+## 16. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -465,7 +505,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 16. Migration policy
+## 17. Migration policy
 
 Migration is incremental:
 

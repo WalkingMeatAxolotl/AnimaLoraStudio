@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api, type CaptionEntry, type PresetSummary, type ProjectSummary } from '../api/client'
@@ -273,7 +274,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
 
   if (!open) return null
 
-  return (
+  return createPortal(
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
 
@@ -355,6 +356,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
