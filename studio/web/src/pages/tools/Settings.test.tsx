@@ -6,7 +6,7 @@ import { DialogProvider } from '../../components/Dialog'
 import { ToastProvider } from '../../components/Toast'
 import { AnnouncementsProvider } from '../../lib/Announcements'
 import { SettingsDataProvider } from '../../lib/SettingsData'
-import { SettingsDrawerProvider } from '../../lib/SettingsDrawer'
+import { SettingsDrawerProvider, useSettingsDrawer } from '../../lib/SettingsDrawer'
 import SettingsPage from './Settings'
 
 const initialServerState = {
@@ -441,7 +441,17 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderPage() {
+function DrawerTestControls() {
+  const drawer = useSettingsDrawer()
+  return (
+    <>
+      <button type="button" onClick={() => drawer.open({ section: 'models' })}>Open model settings</button>
+      <button type="button" onClick={() => drawer.setReady(true)}>Finish drawer motion</button>
+    </>
+  )
+}
+
+function renderPage({ withDrawerControls = false } = {}) {
   return render(
     <MemoryRouter>
       <ToastProvider>
@@ -449,6 +459,7 @@ function renderPage() {
           <AnnouncementsProvider>
             <SettingsDataProvider>
               <SettingsDrawerProvider>
+                {withDrawerControls && <DrawerTestControls />}
                 <SettingsPage />
               </SettingsDrawerProvider>
             </SettingsDataProvider>
@@ -460,6 +471,25 @@ function renderPage() {
 }
 
 describe('SettingsPage (PP0)', () => {
+  it('waits for drawer readiness before positioning a deep-linked section', async () => {
+    const user = userEvent.setup()
+    renderPage({ withDrawerControls: true })
+    const scrollContainer = screen.getByTestId('settings-scroll-container')
+    const scrollTo = vi.fn()
+    scrollContainer.scrollTo = scrollTo
+
+    await user.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Finish drawer motion' }))
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'auto' }))
+    expect(screen.getByRole('button', { name: '训练' })).toHaveClass('border-accent')
+
+    await user.click(screen.getByRole('button', { name: '测试' }))
+    expect(screen.getByRole('button', { name: '测试' })).toHaveClass('border-accent')
+    expect(screen.getByRole('button', { name: '训练' })).not.toHaveClass('border-accent')
+  })
+
   it('测试页底部管理非项目 LoRA 来源：默认目录无移除按钮，额外目录即时保存', async () => {
     const user = userEvent.setup()
     renderPage()
