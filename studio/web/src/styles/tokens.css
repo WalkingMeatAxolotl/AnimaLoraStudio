@@ -759,6 +759,67 @@ select option:checked {
   outline-offset: 2px;
 }
 
+/* Ordinary list filtering — one dominant query track followed by compact facets.
+ * Business state and disclosure stay page-owned; this Pattern owns shell rhythm,
+ * DOM order, and the single approved narrow-desktop wrap. */
+.list-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-field);
+  padding: var(--space-related) var(--space-page);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
+}
+.list-toolbar[hidden] { display: none; }
+.list-toolbar-search {
+  min-width: min(18rem, 100%);
+  flex: 1 1 60%;
+}
+.list-toolbar-search > * { width: 100%; }
+.list-toolbar-controls {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-related);
+  margin-inline-start: auto;
+}
+.list-toolbar-filters,
+.list-toolbar-sort {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-related);
+}
+.list-toolbar-filters > *,
+.list-toolbar-sort > * {
+  min-width: 8.5rem;
+  max-width: 14rem;
+  flex: 1 1 8.5rem;
+}
+@media (max-width: 1280px) {
+  .list-toolbar {
+    flex-wrap: wrap;
+    row-gap: var(--space-related);
+  }
+  .list-toolbar-search {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+  .list-toolbar-controls {
+    flex: 1 1 100%;
+    margin-inline-start: 0;
+  }
+  .list-toolbar-filters { flex: 1 1 auto; justify-content: flex-start; }
+  .list-toolbar-filters > *,
+  .list-toolbar-sort > * { max-width: none; }
+}
+
 .divider { height: 1px; background: var(--border-subtle); }
 
 /* page transitions */

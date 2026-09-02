@@ -9,8 +9,7 @@ interface Props {
   actions?: ReactNode
   topRight?: ReactNode
   children: ReactNode
-  /** header 与内容区之间的全宽条（如过滤 / 排序行），不随内容滚动。与项目页
-   *  FilterBar 一致：使用 `px-page py-related border-b` 保持壳层水平对齐。 */
+  /** header 与内容区之间的全宽 Pattern（如 ListToolbar），不随内容滚动。 */
   belowHeader?: ReactNode
   /** 本页任务日志源（issue #251 统一抽屉）；falsy 项自动过滤，全空时不渲染。 */
   logSources?: Array<LogSource | null | undefined | false>

@@ -11,6 +11,7 @@ import Button from '../components/Button'
 import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
 import { Input, Select } from '../components/FormControl'
+import ListToolbar from '../components/ListToolbar'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -48,6 +49,8 @@ export function taskKind(task: Task): TaskKind {
 const HISTORY_PAGE_SIZES = [20, 50, 100]
 // 0.17 P-F — 队列默认只看训练（generate/reg_ai 短任务多、会淹没列表）。
 const DEFAULT_TYPE_FILTER: TaskKind = 'train'
+const QUEUE_TASKS_LIST_TOOLBAR_ID = 'queue-tasks-list-toolbar'
+const QUEUE_JOBS_LIST_TOOLBAR_ID = 'queue-jobs-list-toolbar'
 
 function fmtAgo(ts: number): string {
   const sec = Math.max(0, Date.now() / 1000 - ts)
@@ -812,6 +815,7 @@ export default function QueuePage() {
               className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
               onClick={() => setFiltersOpen((o) => !o)}
               aria-expanded={filtersOpen}
+              aria-controls={QUEUE_JOBS_LIST_TOOLBAR_ID}
               aria-label={t('queue.filters')}
               title={t('queue.filters')}
               data-testid="queue-filter-toggle"
@@ -836,6 +840,7 @@ export default function QueuePage() {
             className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
             onClick={() => setFiltersOpen((o) => !o)}
             aria-expanded={filtersOpen}
+            aria-controls={QUEUE_TASKS_LIST_TOOLBAR_ID}
             aria-label={t('queue.filters')}
             title={t('queue.filters')}
             data-testid="queue-filter-toggle"
@@ -910,94 +915,95 @@ export default function QueuePage() {
           </button>
         </>
       }
-      belowHeader={filtersOpen && (queueTab === 'jobs' ? (
-        // 0.17 P-G — 数据作业过滤行：kind 单选（与任务视图的过滤行同位）。
-        <div
-          className="px-page py-related border-b border-subtle flex items-center gap-field"
+      belowHeader={queueTab === 'jobs' ? (
+        <ListToolbar
+          id={QUEUE_JOBS_LIST_TOOLBAR_ID}
+          hidden={!filtersOpen}
+          ariaLabel={t('queue.filters')}
           data-testid="queue-jobs-filterbar"
-        >
-          <Input
-            controlSize="sm"
-            className="w-3/5"
-            value={jobsSearch}
-            onChange={(e) => setJobsSearch(e.target.value)}
-            placeholder={t('queue.jobs.searchPlaceholder')}
-            aria-label={t('common.search')}
-            data-testid="jobs-search"
-          />
-          <span className="flex-1" />
-          <Select
-            controlSize="sm"
-            className="w-[15%] min-w-[150px]"
-            value={jobsKind ?? 'all'}
-            onChange={(e) => {
-              const v = e.target.value
-              setJobsKind(v === 'all' ? null : (v as TaskType))
-            }}
-            aria-label={t('queue.typeFilterLabel')}
-            data-testid="jobs-kind-filter"
-          >
-            <option value="all">{t('queue.filterAll')}</option>
-            {DATA_VIEW_KINDS.map((k) => (
-              <option key={k} value={k}>{t(`queue.jobs.kind.${k}`)}</option>
-            ))}
-          </Select>
-        </div>
+          search={(
+            <Input
+              controlSize="sm"
+              value={jobsSearch}
+              onChange={(e) => setJobsSearch(e.target.value)}
+              placeholder={t('queue.jobs.searchPlaceholder')}
+              aria-label={t('common.search')}
+              data-testid="jobs-search"
+            />
+          )}
+          filters={(
+            <Select
+              controlSize="sm"
+              value={jobsKind ?? 'all'}
+              onChange={(e) => {
+                const v = e.target.value
+                setJobsKind(v === 'all' ? null : (v as TaskType))
+              }}
+              aria-label={t('queue.typeFilterLabel')}
+              data-testid="jobs-kind-filter"
+            >
+              <option value="all">{t('queue.filterAll')}</option>
+              {DATA_VIEW_KINDS.map((k) => (
+                <option key={k} value={k}>{t(`queue.jobs.kind.${k}`)}</option>
+              ))}
+            </Select>
+          )}
+        />
       ) : (
-        // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
-        // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
-        // select 是历史段终态子过滤。
-        <div
-          className="px-page py-related border-b border-subtle flex items-center gap-field"
+        <ListToolbar
+          id={QUEUE_TASKS_LIST_TOOLBAR_ID}
+          hidden={!filtersOpen}
+          ariaLabel={t('queue.filters')}
           data-testid="queue-filterbar"
-        >
-          <Input
-            controlSize="sm"
-            className="w-3/5"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('queue.searchPlaceholder')}
-            aria-label={t('common.search')}
-            data-testid="queue-search"
-          />
-          <span className="flex-1" />
-          <Select
-            controlSize="sm"
-            className="w-[10%] min-w-[120px]"
-            value={typeFilter ?? 'all'}
-            onChange={(e) => {
-              const v = e.target.value
-              setTypeFilter(v === 'all' ? null : (v as TaskKind))
-              setHistoryPage(1)
-            }}
-            aria-label={t('queue.typeFilterLabel')}
-            data-testid="queue-type-filter"
-          >
-            <option value="all">{t('queue.filterAll')}</option>
-            <option value="train">{t('queue.typeTrain')}</option>
-            <option value="reg_ai">{t('queue.typeReg')}</option>
-            <option value="generate">{t('queue.typeGenerate')}</option>
-            <option value="eval_session">{t('queue.jobs.kind.eval_session')}</option>
-          </Select>
-          <Select
-            controlSize="sm"
-            className="w-[10%] min-w-[120px]"
-            value={historyStatus ?? 'all'}
-            onChange={(e) => {
-              const v = e.target.value
-              setHistoryStatus(v === 'all' ? null : (v as TaskStatus))
-              setHistoryPage(1)
-            }}
-            aria-label={t('common.status')}
-            data-testid="history-status-filter"
-          >
-            <option value="all">{t('queue.filterAll')}</option>
-            <option value="done">{t('status.done')}</option>
-            <option value="failed">{t('status.failed')}</option>
-            <option value="canceled">{t('status.canceled')}</option>
-          </Select>
-        </div>
-      ))}
+          search={(
+            <Input
+              controlSize="sm"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t('queue.searchPlaceholder')}
+              aria-label={t('common.search')}
+              data-testid="queue-search"
+            />
+          )}
+          filters={(
+            <>
+              <Select
+                controlSize="sm"
+                value={typeFilter ?? 'all'}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setTypeFilter(v === 'all' ? null : (v as TaskKind))
+                  setHistoryPage(1)
+                }}
+                aria-label={t('queue.typeFilterLabel')}
+                data-testid="queue-type-filter"
+              >
+                <option value="all">{t('queue.filterAll')}</option>
+                <option value="train">{t('queue.typeTrain')}</option>
+                <option value="reg_ai">{t('queue.typeReg')}</option>
+                <option value="generate">{t('queue.typeGenerate')}</option>
+                <option value="eval_session">{t('queue.jobs.kind.eval_session')}</option>
+              </Select>
+              <Select
+                controlSize="sm"
+                value={historyStatus ?? 'all'}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setHistoryStatus(v === 'all' ? null : (v as TaskStatus))
+                  setHistoryPage(1)
+                }}
+                aria-label={t('common.status')}
+                data-testid="history-status-filter"
+              >
+                <option value="all">{t('queue.filterAll')}</option>
+                <option value="done">{t('status.done')}</option>
+                <option value="failed">{t('status.failed')}</option>
+                <option value="canceled">{t('status.canceled')}</option>
+              </Select>
+            </>
+          )}
+        />
+      )}
     >
       <div className="flex flex-col gap-field flex-1 min-h-0 overflow-y-auto">
         {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。

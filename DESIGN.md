@@ -26,7 +26,7 @@ surface has identical density.
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
 | Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx` | Typed, accessible component APIs |
-| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `Dialog`, `Modal`, `Drawer`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
+| Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `ListToolbar`, `Dialog`, `Modal`, `Drawer`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
 A page may compose primitives with layout utilities. It must not recreate an
@@ -389,7 +389,31 @@ as the accessible name and title. Underlined tabs keep their intrinsic width and
 rather than truncating. Both appearances must preserve visible focus, disabled state,
 theme contrast, density response, and Chinese/English label stability.
 
-## 13. Accessibility and resilience
+## 13. List-toolbar contract
+
+Use `ListToolbar` for an ordinary list's collapsible search, facet-filter, and sort
+region immediately below its page header. It is not the page action area, a bulk
+mutation bar, or a professional workbench toolbar. `PageHeader` continues to own the
+disclosure and refresh actions; Gallery autocomplete, draft filter popovers, Eval axis
+selection, and tag bulk editing retain their domain-specific composition.
+
+The Pattern owns a named region and stable slot order: dominant search first, filters
+second, and sort last. This is also the DOM and keyboard order. At wide desktop widths,
+the query owns the flexible primary track while compact facets remain trailing. At the
+project's approved narrow-desktop breakpoint, the query takes a full first row and the
+trailing controls wrap below it without changing order. Page-aligned padding, borders,
+gaps, theme colors, and density response come from semantic tokens; callers must not
+restore fixed percentage widths.
+
+The disclosure button supplies `aria-expanded` and `aria-controls`. Keep the current
+region mounted with `hidden` while collapsed so the ID reference remains valid and the
+row takes no layout space. Every region has a localized accessible name, and each input
+or select retains its own label. The Pattern is presentational: query debounce,
+persistence, active-filter dots, sorting, API parameters, paging resets, result counts,
+refresh, clear behavior, and list mutations remain page-owned. Do not add unused result
+or clear slots until a repeated product behavior has been established.
+
+## 14. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -399,7 +423,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 14. Migration policy
+## 15. Migration policy
 
 Migration is incremental:
 

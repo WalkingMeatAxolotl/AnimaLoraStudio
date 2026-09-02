@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, type BundleImportResult, type ProjectSummary, type VersionStatus } from '../api/client'
 import Alert from '../components/Alert'
 import { Input, Select } from '../components/FormControl'
+import ListToolbar from '../components/ListToolbar'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
 import UploadProgressBar from '../components/UploadProgressBar'
@@ -22,6 +23,7 @@ const STATUS_OPTIONS: ProjectStatusFilter[] = [
   'all', 'preparing', 'training', 'completed', 'failed', 'canceled',
 ]
 const SORT_OPTIONS: ProjectSortKey[] = ['updated', 'created', 'title']
+const PROJECTS_LIST_TOOLBAR_ID = 'projects-list-toolbar'
 
 /** 过滤 + 排序（纯函数，单测覆盖）。query 匹配 title / slug / note。 */
 export function filterProjects(
@@ -253,6 +255,7 @@ export default function ProjectsPage() {
               className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
               onClick={() => setFiltersOpen((o) => !o)}
               aria-expanded={filtersOpen}
+              aria-controls={PROJECTS_LIST_TOOLBAR_ID}
               aria-label={t('projects.filters')}
               title={t('projects.filters')}
             >
@@ -290,16 +293,15 @@ export default function ProjectsPage() {
         }
       />
 
-      {filtersOpen && (
-        <FilterBar
-          query={query}
-          onQuery={setQuery}
-          status={statusFilter}
-          onStatus={setStatusFilter}
-          sort={sortKey}
-          onSort={setSortKey}
-        />
-      )}
+      <ProjectFilterBar
+        hidden={!filtersOpen}
+        query={query}
+        onQuery={setQuery}
+        status={statusFilter}
+        onStatus={setStatusFilter}
+        sort={sortKey}
+        onSort={setSortKey}
+      />
 
       <div className="px-page pb-page pt-section">
         {error && (
@@ -388,10 +390,10 @@ export default function ProjectsPage() {
   )
 }
 
-/** Header 下方的过滤 / 排序行（仅 filtersOpen 时渲染，折叠完全不占空间；
- * 开关在 PageHeader 的过滤 icon 上）。单行：搜索 60% 居左，状态 / 排序
- * 各 10% 推到最右。 */
-function FilterBar({
+/** Header 下方的普通列表过滤区。折叠时以 hidden 保留关联目标，
+ * 搜索 / 状态 / 排序的业务状态仍由 Projects 页面持有。 */
+export function ProjectFilterBar({
+  hidden,
   query,
   onQuery,
   status,
@@ -399,6 +401,7 @@ function FilterBar({
   sort,
   onSort,
 }: {
+  hidden?: boolean
   query: string
   onQuery: (v: string) => void
   status: ProjectStatusFilter
@@ -408,41 +411,47 @@ function FilterBar({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="px-page py-related border-b border-subtle flex items-center gap-field">
-      <Input
-        controlSize="sm"
-        className="w-3/5"
-        value={query}
-        onChange={(e) => onQuery(e.target.value)}
-        placeholder={t('projects.searchPlaceholder')}
-        aria-label={t('common.search')}
-      />
-      <span className="flex-1" />
-      <Select
-        controlSize="sm"
-        className="w-[10%] min-w-[104px]"
-        value={status}
-        onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
-        aria-label={t('common.status')}
-      >
-        {STATUS_OPTIONS.map((s) => (
-          <option key={s} value={s}>
-            {s === 'all' ? t('projects.statusAll') : t(`versionStatus.${s}`)}
-          </option>
-        ))}
-      </Select>
-      <Select
-        controlSize="sm"
-        className="w-[10%] min-w-[104px]"
-        value={sort}
-        onChange={(e) => onSort(e.target.value as ProjectSortKey)}
-        aria-label={t('projects.sortLabel')}
-      >
-        {SORT_OPTIONS.map((s) => (
-          <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
-        ))}
-      </Select>
-    </div>
+    <ListToolbar
+      id={PROJECTS_LIST_TOOLBAR_ID}
+      hidden={hidden}
+      ariaLabel={t('projects.filters')}
+      data-testid="projects-list-toolbar"
+      search={(
+        <Input
+          controlSize="sm"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          placeholder={t('projects.searchPlaceholder')}
+          aria-label={t('common.search')}
+        />
+      )}
+      filters={(
+        <Select
+          controlSize="sm"
+          value={status}
+          onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
+          aria-label={t('common.status')}
+        >
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {s === 'all' ? t('projects.statusAll') : t(`versionStatus.${s}`)}
+            </option>
+          ))}
+        </Select>
+      )}
+      sort={(
+        <Select
+          controlSize="sm"
+          value={sort}
+          onChange={(e) => onSort(e.target.value as ProjectSortKey)}
+          aria-label={t('projects.sortLabel')}
+        >
+          {SORT_OPTIONS.map((s) => (
+            <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
+          ))}
+        </Select>
+      )}
+    />
   )
 }
 
