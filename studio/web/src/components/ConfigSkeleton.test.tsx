@@ -32,7 +32,17 @@ describe('ConfigSkeleton', () => {
     render(<ConfigSkeleton label="加载训练配置中" />)
     const status = screen.getByRole('status')
     expect(status.getAttribute('aria-label')).toBe('加载训练配置中')
+    expect(status).toHaveAttribute('aria-busy', 'true')
     expect(screen.getByText('加载训练配置中...')).toBeInTheDocument()
+  })
+
+  it('uses the shared motion-safe skeleton class', () => {
+    const { container, rerender } = render(<ConfigSkeleton groups={[1]} />)
+    expect(container.querySelector('.ui-skeleton')).toBeInTheDocument()
+    expect(container.querySelector('.animate-pulse')).not.toBeInTheDocument()
+
+    rerender(<ConfigSkeleton variant="flat" groups={[1]} />)
+    expect(screen.getByRole('status')).toHaveClass('ui-skeleton')
   })
 
   it('defaults to 4 groups when groups prop is omitted', () => {

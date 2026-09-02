@@ -25,7 +25,7 @@ surface has identical density.
 | --- | --- | --- |
 | Foundation | `studio/web/src/styles/tokens.css` | Color, type, spacing, radius, shadow, motion, control states |
 | Utility bridge | `studio/web/tailwind.config.js` | Maps CSS tokens into Tailwind utilities |
-| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx` | Typed, accessible component APIs |
+| Primitives | `studio/web/src/components/Button.tsx`, `Badge.tsx`, `Card.tsx`, `EmptyState.tsx`, `FormControl.tsx`, `Alert.tsx`, `ProgressBar.tsx` | Typed, accessible component APIs |
 | Patterns | `PageHeader`, `StepShell`, `ActionGroup`, `SaveIndicator`, `SaveBar`, `ListToolbar`, `Dialog`, `Modal`, `Drawer`, `Tabs`, `SegmentedControl`, `Toast`, `Field` | Repeated page and interaction structures |
 | Product surfaces | `studio/web/src/pages/` | Business state and composition, not new visual primitives |
 
@@ -413,7 +413,49 @@ persistence, active-filter dots, sorting, API parameters, paging resets, result 
 refresh, clear behavior, and list mutations remain page-owned. Do not add unused result
 or clear slots until a repeated product behavior has been established.
 
-## 14. Accessibility and resilience
+## 14. Async-state and progress contract
+
+Async UI describes real work; it must not fabricate a waiting phase for local static
+content. Use `Button` loading for one pending action, `ConfigSkeleton` for a genuine
+initial remote schema/config fetch, and `ProgressBar` for an operation with duration.
+A spinner or progress bar is not a substitute for the page's ordinary empty state.
+
+`ProgressBar` is the typed visual and accessibility primitive. Every instance has a
+localized accessible label. Pass `value` and `max` only when the application has a
+meaningful quantity; the primitive clamps it and exposes `aria-valuemin`,
+`aria-valuemax`, and `aria-valuenow`. Omit `value` when work is real but its amount is
+unknown—the indeterminate state must not display a fabricated `0%` or a pretend ETA.
+`aria-valuetext` may add phase, batch, file, or step context. The primitive owns track,
+fill, sizes, motion, and reduced-motion fallback; it never owns SSE, polling, upload
+state, cancellation, retry, or business estimates.
+
+Use `xs` for an edge-aligned workbench pipeline, `sm` for ordinary inline/background
+work, and `md` for a blocking transfer dialog. Percentage text and byte/step metadata
+use tabular mono numerals beside the bar rather than inside a narrow fill. Progress
+color means active or complete work; errors move to `Alert`/Toast instead of leaving a
+red bar that still claims to be progressing. Capacity, utilization, scores, and crop
+ratios are data visualizations and do not use this async contract.
+
+Announcements are event-based, not frame-based:
+
+- Do not put rapidly changing percentages, bytes, or steps in a polite live region.
+  The progressbar value remains available to assistive technology without announcing
+  every tick.
+- Announce a phase boundary such as processing, completion, or failure once through a
+  stable atomic status/alert. Avoid duplicating the same event in inline feedback and
+  a Toast.
+- A blocking operation uses `Modal`; disable Escape/backdrop only while interruption
+  would be unsafe. A background operation must not steal focus merely because progress
+  updates.
+
+A skeleton reserves the expected geometry of remote content and carries `aria-busy`.
+Use it only while the initial remote structure is unavailable and the wait is
+perceptible. Do not insert skeletons for local Settings/static pages, short state
+transitions, refreshes where content can remain visible, or as an entrance animation.
+Skeleton and indeterminate motion become a stable static indicator under
+`prefers-reduced-motion`; meaning cannot depend on pulsing or travel.
+
+## 15. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -423,7 +465,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 15. Migration policy
+## 16. Migration policy
 
 Migration is incremental:
 

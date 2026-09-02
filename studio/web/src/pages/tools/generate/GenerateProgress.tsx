@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next'
 
+import ProgressBar from '../../../components/ProgressBar'
+
 /** 出图进度：细条 + 相位标签，覆盖**全流程**（不再只有采样 step）。
  *
  * 来源：daemon 推 SSE
@@ -52,11 +54,13 @@ export default function GenerateProgressBar({
   else if (progress.phase) frac = PHASE_BASE[progress.phase]
   else frac = stepFrac > 0 ? PHASE_BASE.sample + stepFrac * 0.72 : 0
 
-  // 多图（batch / XY）：把当前图的 frac 摊进整体
+  // 多图（batch / XY）：把当前图的 frac 摊进整体。尚未收到阶段/step 时
+  // 工作量未知，应保持 indeterminate，不能把「准备中」伪装成 0%。
   const bt = progress.batchTotal
   const bi = progress.batchIdx
+  const determinate = progress.phase != null || stepFrac > 0
   const overall = bt && bt > 1 && bi != null ? Math.min(1, (bi + frac) / bt) : frac
-  const pct = Math.round(overall * 100)
+  const pct = determinate ? Math.round(overall * 100) : null
 
   // 相位文字
   let phaseLabel: string
@@ -67,25 +71,37 @@ export default function GenerateProgressBar({
     phaseLabel = t('generate.phaseSample', { step: progress.currentStep ?? 0, total: progress.totalSteps ?? 0 })
   else phaseLabel = t('generate.progressPreparing')
 
-  const batchTag = bt && bt > 1 && bi != null ? `${bi + 1}/${bt} · ` : ''
+  const phaseAnnouncement = progress.phase === 'sample' || (progress.phase == null && stepFrac > 0)
+    ? t('generate.phaseSampling')
+    : phaseLabel
+  const batchTag = bt && bt > 1 && bi != null ? `${bi + 1}/${bt}` : ''
+  const valueText = [
+    batchTag,
+    phaseLabel,
+    pct == null ? null : t('generate.totalProgress', { pct }),
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="shrink-0">
-      {/* 浏览器加载条式：贴页面 header 下沿的全宽细线（2px） */}
-      <div style={{ height: 2, background: 'var(--bg-sunken)', overflow: 'hidden' }}>
-        <div
-          style={{
-            width: `${pct}%`,
-            height: '100%',
-            background: 'var(--accent)',
-            transition: 'width 150ms linear',
-          }}
-        />
-      </div>
-      {/* 小相位文字（与页面内容 p-6 对齐） */}
-      <div className="flex items-center justify-between px-6 font-mono text-2xs" style={{ paddingTop: 2, paddingBottom: 2 }}>
-        <span className="text-fg-secondary truncate">{batchTag}{phaseLabel}</span>
-        <span className="text-fg-tertiary shrink-0 ml-2">{pct}%</span>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {phaseAnnouncement}
+      </span>
+      <ProgressBar
+        label={t('generate.pipelineProgress')}
+        value={pct}
+        valueText={valueText}
+        size="xs"
+      />
+      <div className="flex items-center justify-between gap-related px-page py-1 font-mono text-2xs">
+        <span className="truncate text-fg-secondary">
+          {batchTag && <>{batchTag} · </>}
+          {phaseLabel}
+        </span>
+        {pct != null && (
+          <span className="shrink-0 text-fg-tertiary">
+            {t('generate.totalProgress', { pct })}
+          </span>
+        )}
       </div>
     </div>
   )

@@ -32,9 +32,9 @@ export default function ConfigSkeleton({
   const Wrapper = isCard ? 'section' : 'div'
   const wrapperClass = isCard
     ? 'flex-1 min-h-0 overflow-y-auto pr-1 space-y-3'
-    : 'flex flex-col gap-3 animate-pulse'
+    : 'flex flex-col gap-3 ui-skeleton'
   const groupClass = isCard
-    ? 'animate-pulse rounded-md border border-subtle bg-surface p-3.5'
+    ? 'ui-skeleton rounded-md border border-subtle bg-surface p-3.5'
     : 'flex flex-col gap-2'
   const titleBarClass = isCard
     ? 'h-3.5 w-32 rounded-sm bg-sunken mb-2.5'
@@ -53,7 +53,7 @@ export default function ConfigSkeleton({
     : 'h-[26px] rounded-sm border border-subtle bg-canvas'
 
   return (
-    <Wrapper className={wrapperClass} role="status" aria-label={label}>
+    <Wrapper className={wrapperClass} role="status" aria-label={label} aria-busy="true">
       {groups.map((rows, gi) => (
         <div key={gi} className={groupClass}>
           <div className={titleBarClass} />

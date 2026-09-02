@@ -7,9 +7,14 @@
  * 不引入"后台迁移中再重开看进度"的游离状态）。完成后新位置**重启 server
  * 生效**（指针文件 import 时求值），done 态给「立即重启」。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import ActionGroup from './ActionGroup'
+import Alert from './Alert'
+import Button from './Button'
+import Modal from './Modal'
+import ProgressBar from './ProgressBar'
 import { api, type StudioDataInfo } from '../api/client'
 import { formatBytes } from '../lib/useUploadProgress'
 import { useEventStream } from '../lib/useEventStream'
@@ -43,6 +48,11 @@ export default function StudioDataMigrateModal({ target, onClose, onRestart }: {
   const [info, setInfo] = useState<StudioDataInfo | null>(null)
   const [progress, setProgress] = useState<Progress>(EMPTY_PROGRESS)
   const [error, setError] = useState('')
+  const phaseContentRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (phase === 'running') phaseContentRef.current?.focus()
+  }, [phase])
 
   useEffect(() => {
     let cancelled = false
@@ -105,130 +115,143 @@ export default function StudioDataMigrateModal({ target, onClose, onRestart }: {
   const closable = phase !== 'running'
   const pct = progress.totalBytes > 0
     ? Math.min(100, Math.round((progress.doneBytes / progress.totalBytes) * 100))
-    : 0
+    : null
+  const progressDetail = progress.totalBytes > 0
+    ? `${progress.doneFiles}/${progress.totalFiles} · ${formatBytes(progress.doneBytes)}/${formatBytes(progress.totalBytes)} · ${pct}%`
+    : null
+
+  const footer = (() => {
+    if (phase === 'loading') {
+      return (
+        <ActionGroup
+          secondary={<Button variant="ghost" onClick={onClose}>{t('common.close')}</Button>}
+        />
+      )
+    }
+    if (phase === 'confirm') {
+      return (
+        <ActionGroup
+          secondary={<Button variant="ghost" onClick={onClose}>{t('common.cancel')}</Button>}
+          primary={(
+            <Button variant="primary" onClick={() => void handleStart()}>
+              {t('settings.storage.startMigrate')}
+            </Button>
+          )}
+        />
+      )
+    }
+    if (phase === 'done') {
+      return (
+        <ActionGroup
+          secondary={<Button variant="ghost" onClick={onClose}>{t('common.close')}</Button>}
+          primary={(
+            <Button variant="primary" onClick={onRestart}>
+              {t('settings.storage.restartNow')}
+            </Button>
+          )}
+        />
+      )
+    }
+    if (phase === 'error') {
+      return (
+        <ActionGroup
+          primary={<Button variant="primary" onClick={onClose}>{t('common.close')}</Button>}
+        />
+      )
+    }
+    return undefined
+  })()
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
-      onClick={closable ? onClose : undefined}
+    <Modal
+      title={t('settings.storage.migrateTitle')}
+      onClose={onClose}
+      closeOnBackdrop={closable}
+      closeOnEscape={closable}
+      footer={footer}
+      size="md"
     >
       <div
-        className="bg-elevated border border-dim rounded-lg shadow-xl w-[560px] max-h-[80vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
+        ref={phaseContentRef}
+        data-testid="studio-data-migration-phase"
+        tabIndex={-1}
+        className="flex flex-col gap-field focus:outline-none"
+        aria-busy={phase === 'loading' || phase === 'running'}
       >
-        <header className="px-4 py-3 border-b border-subtle flex items-center gap-2 shrink-0">
-          <h3 className="m-0 text-sm font-semibold flex-1 text-fg-primary">
-            {t('settings.storage.migrateTitle')}
-          </h3>
-          {closable && (
-            <button className="btn btn-ghost text-xs" onClick={onClose} aria-label={t('common.close')}>×</button>
-          )}
-        </header>
+        {phase === 'loading' && (
+          <div className="flex flex-col gap-related" role="status" aria-live="polite">
+            <div className="text-sm text-fg-secondary">{t('settings.storage.scanning')}</div>
+            <ProgressBar label={t('settings.storage.scanning')} value={null} />
+          </div>
+        )}
 
-        <div className="p-4 flex flex-col gap-3 overflow-y-auto">
-          {phase === 'loading' && (
-            <div className="text-sm text-fg-tertiary py-6 text-center">
-              {t('settings.storage.scanning')}
+        {phase === 'confirm' && info?.scan && (
+          <>
+            <div className="flex flex-col gap-1 text-xs text-fg-secondary">
+              <div>
+                <span className="text-fg-tertiary">{t('settings.storage.from')}</span>{' '}
+                <code className="font-mono">{info.current}</code>
+              </div>
+              <div>
+                <span className="text-fg-tertiary">{t('settings.storage.to')}</span>{' '}
+                <code className="font-mono">{destination}</code>
+              </div>
             </div>
-          )}
-
-          {phase === 'confirm' && info?.scan && (
-            <>
-              <div className="text-xs text-fg-secondary flex flex-col gap-1">
-                <div>
-                  <span className="text-fg-tertiary">{t('settings.storage.from')}</span>{' '}
-                  <code className="font-mono">{info.current}</code>
-                </div>
-                <div>
-                  <span className="text-fg-tertiary">{t('settings.storage.to')}</span>{' '}
-                  <code className="font-mono">{destination}</code>
-                </div>
-              </div>
-              <div className="text-sm font-semibold">
-                {t('settings.storage.totalLine', {
-                  files: info.scan.total_files,
-                  size: formatBytes(info.scan.total_bytes),
-                })}
-              </div>
-              <div
-                className="bg-sunken border border-subtle rounded-md text-xs font-mono overflow-y-auto"
-                style={{ maxHeight: 200 }}
-              >
-                {info.scan.entries.map((e) => (
-                  <div key={e.name} className="flex justify-between gap-2 px-2.5 py-1 border-b border-subtle last:border-b-0">
-                    <span className="truncate">{e.is_dir ? `${e.name}/` : e.name}</span>
-                    <span className="text-fg-tertiary shrink-0">
-                      {t('settings.storage.entryMeta', { files: e.files, size: formatBytes(e.bytes) })}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="text-xs text-fg-tertiary">
-                {t('settings.storage.keepOriginalNote')}
-              </div>
-            </>
-          )}
-
-          {phase === 'running' && (
-            <>
-              <div className="text-sm">{t('settings.storage.migrating')}</div>
-              <div className="h-2 rounded-full bg-sunken border border-subtle overflow-hidden">
-                <div
-                  className="h-full rounded-full"
-                  style={{
-                    width: `${pct}%`,
-                    background: 'var(--accent)',
-                    transition: 'width 200ms linear',
-                  }}
-                />
-              </div>
-              <div className="text-xs text-fg-tertiary font-mono flex justify-between gap-2">
-                <span className="truncate">{progress.currentFile}</span>
-                <span className="shrink-0">
-                  {progress.doneFiles}/{progress.totalFiles} · {formatBytes(progress.doneBytes)}/{formatBytes(progress.totalBytes)} · {pct}%
-                </span>
-              </div>
-            </>
-          )}
-
-          {phase === 'done' && (
-            <>
-              <div className="text-sm text-ok">{t('settings.storage.doneTitle')}</div>
-              <div className="text-xs text-fg-secondary">
-                {t('settings.storage.doneRestartNote')}
-              </div>
-            </>
-          )}
-
-          {phase === 'error' && (
-            <div className="text-sm text-err break-all">
-              {t('settings.storage.failed', { error })}
+            <div className="text-sm font-semibold">
+              {t('settings.storage.totalLine', {
+                files: info.scan.total_files,
+                size: formatBytes(info.scan.total_bytes),
+              })}
             </div>
-          )}
-        </div>
+            <div
+              className="overflow-y-auto rounded-md border border-subtle bg-sunken font-mono text-xs"
+              style={{ maxHeight: 200 }}
+            >
+              {info.scan.entries.map((entry) => (
+                <div key={entry.name} className="flex justify-between gap-related border-b border-subtle px-2.5 py-1 last:border-b-0">
+                  <span className="truncate">{entry.is_dir ? `${entry.name}/` : entry.name}</span>
+                  <span className="shrink-0 text-fg-tertiary">
+                    {t('settings.storage.entryMeta', { files: entry.files, size: formatBytes(entry.bytes) })}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-fg-tertiary">
+              {t('settings.storage.keepOriginalNote')}
+            </div>
+          </>
+        )}
 
-        <footer className="px-4 py-3 border-t border-subtle flex justify-end gap-2 shrink-0">
-          {phase === 'confirm' && (
-            <>
-              <button className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-              <button className="btn btn-primary" onClick={() => void handleStart()}>
-                {t('settings.storage.startMigrate')}
-              </button>
-            </>
-          )}
-          {phase === 'done' && (
-            <>
-              <button className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
-              <button className="btn btn-primary" onClick={onRestart}>
-                {t('settings.storage.restartNow')}
-              </button>
-            </>
-          )}
-          {phase === 'error' && (
-            <button className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
-          )}
-        </footer>
+        {phase === 'running' && (
+          <>
+            <div className="text-sm text-fg-secondary" role="status" aria-live="polite">
+              {t('settings.storage.migrating')}
+            </div>
+            <ProgressBar
+              label={t('settings.storage.migrating')}
+              value={pct}
+              valueText={progressDetail ?? undefined}
+              size="md"
+            />
+            <div className="flex justify-between gap-related font-mono text-xs text-fg-tertiary">
+              <span className="truncate">{progress.currentFile}</span>
+              {progressDetail && <span className="shrink-0">{progressDetail}</span>}
+            </div>
+          </>
+        )}
+
+        {phase === 'done' && (
+          <Alert tone="success" size="sm" role="status" aria-live="polite" title={t('settings.storage.doneTitle')}>
+            {t('settings.storage.doneRestartNote')}
+          </Alert>
+        )}
+
+        {phase === 'error' && (
+          <Alert tone="danger" size="sm" role="alert">
+            <span className="break-all">{t('settings.storage.failed', { error })}</span>
+          </Alert>
+        )}
       </div>
-    </div>
+    </Modal>
   )
 }
