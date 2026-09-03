@@ -14,6 +14,10 @@ export interface ImageGridItem {
 interface Props {
   items: ImageGridItem[]
   selected: Set<string>
+  /** Classes for the stable height-constrained grid wrapper. */
+  className?: string
+  /** Classes for grid content inside Virtuoso's scrollport (for example panel inset). */
+  contentClassName?: string
   /** 单击 = checkbox 切换；shift+click = 区间选；详见 applySelection。 */
   onSelect: (name: string, e: React.MouseEvent) => void
   /** 鼠标悬停时回调：用于驱动外部「大图预览面板」。 */
@@ -96,10 +100,18 @@ export default function ImageGrid({
   ariaLabel,
   columnsClass = DEFAULT_COLUMNS,
   activeName,
+  className = '',
+  contentClassName = '',
 }: Props) {
   const { t } = useTranslation()
   if (items.length === 0) {
-    return <p className="text-fg-tertiary text-sm py-2">{emptyHint ?? t('imageGrid.noImages')}</p>
+    return (
+      <div className={`h-full min-h-0 ${className}`.trim()}>
+        <p className={`text-fg-tertiary text-sm py-2 ${contentClassName}`.trim()}>
+          {emptyHint ?? t('imageGrid.noImages')}
+        </p>
+      </div>
+    )
   }
   const decoupled = activeName !== undefined
 
@@ -108,12 +120,16 @@ export default function ImageGrid({
   // style；外层 wrapper 是稳定的。getAllByRole('gridcell') 会穿透中间 div 找到
   // Cell 上的 role="gridcell"，AT / 测试都不受影响。
   return (
-    <div role="grid" aria-label={ariaLabel} className="h-full">
+    <div
+      role="grid"
+      aria-label={ariaLabel}
+      className={`h-full min-h-0 ${className}`.trim()}
+    >
       <VirtuosoGrid
         style={{ height: '100%' }}
         totalCount={items.length}
         overscan={OVERSCAN_PX}
-        listClassName={`grid ${columnsClass} gap-1`}
+        listClassName={`grid ${columnsClass} gap-1 ${contentClassName}`.trim()}
         itemContent={(index) => {
           const it = items[index]
           const isSel = selected.has(it.name)

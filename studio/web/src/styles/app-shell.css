@@ -39,6 +39,11 @@ body,
   background: var(--bg-canvas);
 }
 
+.ui-app-shell-main:has(> [data-app-shell-scroll='contained']) {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
 .ui-app-shell-main:focus {
   outline: none;
 }

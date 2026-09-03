@@ -349,7 +349,6 @@ export default function TagEditPage() {
 
   return (
     <StepShell
-      idx={4}
       title={t('tagEdit.title')}
       subtitle={t('tagEdit.subtitle')}
       actions={

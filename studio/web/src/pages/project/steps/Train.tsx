@@ -519,7 +519,6 @@ export default function TrainPage() {
 
   return (
     <StepShell
-      idx={6}
       title={t('steps.train.title')}
       subtitle={t('steps.train.subtitle')}
       actions={
@@ -611,7 +610,7 @@ export default function TrainPage() {
         </>
       }
     >
-      <div className="flex flex-col h-full gap-3">
+      <div className="flex flex-col h-full gap-3 min-h-0">
 
         {/* 两栏布局：左（预设 + config 编辑） / 右（估算面板） */}
         <div className="flex gap-3 flex-1 min-h-0">

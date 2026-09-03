@@ -152,7 +152,6 @@ export default function PreprocessDuplicatesPage() {
 
   return (
     <StepShell
-      idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('duplicates.subtitle')}
       actions={

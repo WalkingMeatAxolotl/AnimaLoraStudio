@@ -197,7 +197,6 @@ export default function DownloadPage() {
 
   return (
     <StepShell
-      idx={1}
       title={t('steps.download.title')}
       subtitle={t('steps.download.subtitle')}
       logSources={[

@@ -231,7 +231,6 @@ export default function PreprocessOverviewPage() {
 
   return (
     <StepShell
-      idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('preprocessOverview.subtitle')}
       belowHeader={<PreprocessToolsBar current="overview" projectId={project.id} versionId={vid} />}

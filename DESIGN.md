@@ -495,7 +495,41 @@ App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
 adoption concern, not permission to hide primary actions or add arbitrary
 component-local breakpoints.
 
-## 16. Responsive-layout contract
+## 16. Page and workflow shell contract
+
+Routes use one of three explicit compositions; do not introduce a universal shell
+that hides scroll ownership.
+
+A **document page** follows `PageHeader` → optional full-bleed toolbar/subnav →
+page-inset body. `AppShell` main remains its only vertical scroll owner. Document
+routes must not add `h-full`, `overflow-hidden`, or a second page-level
+`overflow-y-auto`. The header may be sticky because it shares the main scroller.
+Projects is the representative ordinary list-page contract.
+
+A **bounded list page** is reserved for high-frequency lists whose persistent
+controls must remain visible while many items scroll. Its route fills the AppShell
+main track and composes `PageHeader` → optional full-bleed toolbar → named,
+keyboard-focusable list scrollport → persistent footer. Header, toolbar, and footer
+are siblings outside the scrollport; the route marks AppShell scrolling as contained
+so the outer stable scrollbar gutter is released, and content inset belongs to an
+inner wrapper so the active browser scrollbar reaches the route edge. Queue is the
+representative contract. Do not use `StepShell` for this composition or add nested
+scrolling inside list rows.
+
+A **workspace step** uses `StepShell`. It fills the route track, keeps page scrolling
+locked, and delegates scrolling to explicit inner panels. Its order is `PageHeader`
+→ optional `belowHeader` → workspace content → optional `TaskLogDrawer` footer.
+The workspace header is not sticky because the shell itself does not scroll.
+`belowHeader` is full bleed and owns its own padding. Content defaults to the shared
+page inset; specialized canvas geometry may choose `inset="none"` only when the
+caller also owns its boundaries and keyboard-reachable scroll regions.
+
+`StepShell` is not a workflow-state machine: it does not receive step indexes,
+change routes, save data, or own business status. `SaveBar` remains a header action,
+not an invented sticky footer. Settings Drawer, Generate, Gallery, evaluation
+matrices, and image editors retain their documented specialized scroll geometry.
+
+## 17. Responsive-layout contract
 
 The responsive layer distinguishes **wide desktop** (`> 1280px`) from
 **compact desktop** (`<= 1280px`). It adapts content hierarchy inside the
@@ -529,7 +563,7 @@ stacking mechanically. Any later restructuring requires a representative pilot
 and content-driven evidence; `md`/`lg`/`xl` utility classes are not an independent
 breakpoint policy.
 
-## 17. Accessibility and resilience
+## 18. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -539,7 +573,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 18. Migration policy
+## 19. Migration policy
 
 Migration is incremental:
 

@@ -37,6 +37,19 @@
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
 }
 
+/* Queue is a viewport-contained list page: its chrome and persistent pager stay
+ * fixed while this named region owns the only route-local vertical scrolling. */
+.ui-queue-scroll-region {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.ui-queue-scroll-region:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
+
 /* Dense queue rows preserve identity, kind, state, progress, and actions. The
  * auxiliary timestamp yields first at compact desktop. */
 .ui-queue-task-grid {
