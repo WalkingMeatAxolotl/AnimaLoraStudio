@@ -121,6 +121,50 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
   })
 })
 
+describe('ProjectOverview 内容 surfaces', () => {
+  it('详情统计使用共享 Card，任务与输出空态使用 EmptyState', async () => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([])
+
+    renderOverview(makeProject())
+
+    expect(screen.getByRole('heading', { level: 3, name: '训练集' }).closest('.card')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 3, name: '标签分布' }).closest('.card')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    expect((await screen.findByText('本项目还没有训练任务')).closest('.empty-state-sm')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'LoRA 文件' }))
+    expect((await screen.findByText('此版本尚未产出 LoRA 模型')).closest('.empty-state-sm')).toBeInTheDocument()
+  })
+
+  it('任务表使用语义链接与共享状态 Badge', async () => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([
+      { ...makeTrainTask(false), status: 'done', finished_at: 1200 },
+    ])
+
+    renderOverview(makeProject())
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+
+    const taskLink = await screen.findByRole('link', { name: '#42 train' })
+    expect(taskLink).toHaveAttribute('href', '/queue/42')
+    const taskRow = taskLink.closest('tr')
+    const taskBadge = taskRow?.querySelector('.badge')
+    expect(taskBadge).toHaveClass('badge', 'badge-ok', 'badge-sm')
+    expect(taskBadge).toHaveTextContent('完成')
+    expect(taskRow).not.toHaveClass('cursor-pointer')
+  })
+
+  it('任务读取失败显示 Alert，不伪装为空状态', async () => {
+    vi.spyOn(api, 'listQueue').mockRejectedValue(new Error('offline'))
+
+    renderOverview(makeProject())
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务列表读取失败：offline')
+    expect(screen.queryByText('本项目还没有训练任务')).not.toBeInTheDocument()
+  })
+})
+
 describe('ProjectOverview 评估 tab', () => {
   beforeEach(() => {
     vi.spyOn(api, 'listQueue').mockResolvedValue([])

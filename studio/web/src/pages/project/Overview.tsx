@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useOutletContext } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
   type CurationView,
@@ -39,6 +39,10 @@ import { useToast } from '../../components/Toast'
 import Button from '../../components/Button'
 import ProgressBar from '../../components/ProgressBar'
 import { Tabs, selectionItemId, type TabItem } from '../../components/SelectionGroup'
+import Card from '../../components/Card'
+import EmptyState from '../../components/EmptyState'
+import Alert from '../../components/Alert'
+import Badge, { type BadgeTone } from '../../components/Badge'
 
 type OverviewTab = 'details' | 'tasks' | 'output' | 'eval'
 
@@ -673,52 +677,34 @@ function HeroCard({
   children: ReactNode
 }) {
   return (
-    <div style={{
-      padding: 16,
-      background: 'var(--bg-surface)',
-      border: '1px solid var(--border-subtle)',
-      borderRadius: 'var(--r-lg)',
-      display: 'flex', flexDirection: 'column', gap: 12,
-      height: '100%', minHeight: 0,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 'var(--t-sm)', fontWeight: 600, color: 'var(--fg-primary)' }}>{title}</h3>
-        <span style={{ flex: 1 }} />
+    <Card padding="md" className="flex h-full min-h-0 flex-col gap-section">
+      <div className="flex items-baseline gap-field">
+        <h3 className="m-0 text-sm font-semibold text-fg-primary">{title}</h3>
+        <span className="flex-1" />
         {count != null && (
-          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontFamily: 'var(--font-mono)' }}>
-            <span style={{ fontSize: 'var(--t-lg)', fontWeight: 600, color: 'var(--fg-primary)' }}>{count}</span>
-            {countSub && <span style={{ fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)' }}>{countSub}</span>}
+          <span className="inline-flex items-baseline gap-related font-mono">
+            <span className="text-lg font-semibold text-fg-primary">{count}</span>
+            {countSub && <span className="text-xs text-fg-tertiary">{countSub}</span>}
           </span>
         )}
       </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflow: 'hidden' }}>{children}</div>
+      <div className="flex flex-1 min-h-0 flex-col gap-field overflow-hidden">{children}</div>
       {action && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, paddingTop: 8,
-          borderTop: '1px dashed var(--border-subtle)',
-        }}>
+        <div className="flex items-center gap-related border-t border-dashed border-subtle pt-related">
           {phase && (
-            <span style={{
-              fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
-              color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1,
-            }}>{phase}</span>
+            <span className="flex-1 font-mono text-2xs uppercase tracking-wider text-fg-tertiary">
+              {phase}
+            </span>
           )}
-          <button
-            onClick={() => { if (!action.disabled) action.onClick() }}
+          <Button
+            onClick={action.onClick}
             disabled={action.disabled}
-            style={{
-              padding: '4px 10px',
-              fontSize: 'var(--t-xs)', color: 'var(--fg-primary)',
-              background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--r-sm)',
-              cursor: action.disabled ? 'not-allowed' : 'pointer',
-              opacity: action.disabled ? 0.4 : 1,
-              fontWeight: 500,
-            }}
-          >{action.label} →</button>
+            variant="ghost"
+            size="xs"
+          >{action.label} →</Button>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -784,17 +770,10 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
   const phaseLine = `① ${t('nav.download')} → ② ${t('nav.preprocess')} → ③ ${t('nav.curate')}`
 
   return (
-    <div style={{
-      padding: 16,
-      background: 'var(--bg-surface)',
-      border: '1px solid var(--border-subtle)',
-      borderRadius: 'var(--r-lg)',
-      display: 'flex', flexDirection: 'column', gap: 12,
-      height: '100%', minHeight: 0,
-    }}>
+    <Card className="flex h-full min-h-0 flex-col gap-field">
       {/* Header: title + folder chips on right */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <h3 className="m-0 text-sm font-semibold" style={{ color: 'var(--fg-primary)' }}>
+      <div className="flex flex-wrap items-center gap-field px-section pt-section">
+        <h3 className="m-0 text-sm font-semibold text-fg-primary">
           {t('overview.detail.folders')}
         </h3>
         <span className="flex-1" />
@@ -822,7 +801,7 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
       {/* Body: ImageGrid 或 empty */}
       <div className="flex-1 min-h-0">
         {!version || items.length === 0 ? (
-          <p className="m-0 text-xs text-fg-tertiary italic">{t('overview.detail.emptyCurate')}</p>
+          <p className="m-0 px-section pb-section text-xs italic text-fg-tertiary">{t('overview.detail.emptyCurate')}</p>
         ) : (
           <ImageGrid
             items={items}
@@ -831,34 +810,24 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
             clickMode="activate"
             onActivate={(name) => setPreviewIdx(items.findIndex((i) => i.name === name))}
             onPreview={(name) => setPreviewIdx(items.findIndex((i) => i.name === name))}
-            ariaLabel="overview-train-grid"
+            ariaLabel={t('overview.detail.trainGridLabel')}
+            contentClassName="px-section pb-section"
           />
         )}
       </div>
 
       {/* Action row */}
       {version && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, paddingTop: 8,
-          borderTop: '1px dashed var(--border-subtle)',
-        }}>
-          <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
-            color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1,
-          }}>{phaseLine}</span>
-          <button
-            onClick={() => { if (!actionDisabled) navigate(`/projects/${project.id}/v/${version.id}/curate`) }}
+        <div className="mx-section mb-section flex items-center gap-related border-t border-dashed border-subtle pt-related">
+          <span className="flex-1 font-mono text-2xs uppercase tracking-wider text-fg-tertiary">
+            {phaseLine}
+          </span>
+          <Button
+            onClick={() => navigate(`/projects/${project.id}/v/${version.id}/curate`)}
             disabled={actionDisabled}
-            style={{
-              padding: '4px 10px',
-              fontSize: 'var(--t-xs)', color: 'var(--fg-primary)',
-              background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--r-sm)',
-              cursor: actionDisabled ? 'not-allowed' : 'pointer',
-              opacity: actionDisabled ? 0.4 : 1,
-              fontWeight: 500,
-            }}
-          >③ {t('nav.curate')} · {t('overview.detail.reorganize')} →</button>
+            variant="ghost"
+            size="xs"
+          >③ {t('nav.curate')} · {t('overview.detail.reorganize')} →</Button>
         </div>
       )}
 
@@ -876,7 +845,7 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
           onNext={() => setPreviewIdx((i) => (i != null && i < items.length - 1 ? i + 1 : i))}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -885,8 +854,10 @@ function FolderChip({
 }: { label: string; count: number; active: boolean; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`px-2 py-0.5 rounded-md font-mono transition-colors ${
+      aria-pressed={active}
+      className={`px-2 py-0.5 rounded-md font-mono transition-colors motion-reduce:transition-none ${
         active
           ? 'border border-accent bg-accent-soft text-accent'
           : 'border border-dim bg-surface text-fg-secondary hover:bg-overlay'
@@ -1152,16 +1123,22 @@ function DetailGrid({ project, version }: { project: ProjectDetail; version: Ver
 
 // ── Tasks / Output 面板（version scope，沿用） ───────────────────────────
 
-const TASK_STATUS_BADGE: Record<string, string> = {
-  pending: 'neutral', running: 'accent', paused: 'warn',
-  done: 'ok', failed: 'err', canceled: 'neutral', scheduled: 'neutral',
+const TASK_STATUS_TONE: Record<string, BadgeTone> = {
+  pending: 'neutral', running: 'accent', paused: 'warning',
+  done: 'success', failed: 'danger', canceled: 'neutral', scheduled: 'neutral',
+}
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  pending: 'status.pending', running: 'status.running', paused: 'status.paused',
+  done: 'status.done', failed: 'status.failed', canceled: 'status.canceled',
+  scheduled: 'status.scheduled',
 }
 
 function VersionTasksPanel({ projectId, versionId }: { projectId: number; versionId: number | null }) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1173,43 +1150,72 @@ function VersionTasksPanel({ projectId, versionId }: { projectId: number; versio
           .filter((tk) => tk.project_id === projectId && (versionId == null || tk.version_id === versionId))
           .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
         setTasks(filtered)
+        setError(null)
       })
-      .catch(() => { if (!cancelled) setTasks([]) })
+      .catch((reason: unknown) => {
+        if (cancelled) return
+        setTasks([])
+        setError(reason instanceof Error ? reason.message : String(reason))
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [projectId, versionId])
 
-  if (loading) return <div className="p-6 text-fg-tertiary text-sm">{t('common.loading')}</div>
-  if (tasks.length === 0) return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.tasksEmpty')}</div>
+  if (loading) {
+    return (
+      <div role="status" aria-busy="true" className="p-page text-sm text-fg-tertiary">
+        {t('common.loading')}
+      </div>
+    )
+  }
+  if (error) {
+    return (
+      <Alert role="alert" tone="danger" size="sm" className="m-page">
+        {t('overview.tasksLoadFailed', { error })}
+      </Alert>
+    )
+  }
+  if (tasks.length === 0) {
+    return <EmptyState size="sm" description={t('overview.tasksEmpty')} className="m-page" />
+  }
 
   const fmtTime = (ts: number | null) => ts ? new Date(ts * 1000).toLocaleString() : '—'
 
   return (
-    <div className="p-6">
-      <table className="w-full text-sm">
-        <thead className="text-fg-tertiary text-xs">
-          <tr className="border-b border-subtle">
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.name')}</th>
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.status')}</th>
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.started')}</th>
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.finished')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((tk) => (
-            <tr
-              key={tk.id}
-              className="border-b border-subtle cursor-pointer hover:bg-overlay"
-              onClick={() => navigate(`/queue/${tk.id}`)}
-            >
-              <td className="py-2 px-3 font-mono">#{tk.id} {tk.name}</td>
-              <td className="py-2 px-3"><span className={`badge badge-${TASK_STATUS_BADGE[tk.status] ?? 'neutral'}`}>{tk.status}</span></td>
-              <td className="py-2 px-3 text-fg-tertiary text-xs">{fmtTime(tk.started_at ?? null)}</td>
-              <td className="py-2 px-3 text-fg-tertiary text-xs">{fmtTime(tk.finished_at ?? null)}</td>
+    <div className="p-page">
+      <Card className="overflow-x-auto">
+        <table className="w-full text-sm" aria-label={t('overview.tasksAriaLabel')}>
+          <thead className="text-xs text-fg-tertiary">
+            <tr className="border-b border-subtle">
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.name')}</th>
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.status')}</th>
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.started')}</th>
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.finished')}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {tasks.map((tk) => (
+              <tr key={tk.id} className="border-b border-subtle hover:bg-overlay">
+                <td className="px-3 py-2 font-mono">
+                  <Link
+                    to={`/queue/${tk.id}`}
+                    className="text-fg-primary underline-offset-2 hover:text-accent hover:underline"
+                  >#{tk.id} {tk.name}</Link>
+                </td>
+                <td className="px-3 py-2">
+                  <Badge
+                    tone={TASK_STATUS_TONE[tk.status] ?? 'neutral'}
+                    size="sm"
+                    active={tk.status === 'running'}
+                  >{t(TASK_STATUS_LABEL[tk.status] ?? tk.status)}</Badge>
+                </td>
+                <td className="px-3 py-2 text-xs text-fg-tertiary">{fmtTime(tk.started_at ?? null)}</td>
+                <td className="px-3 py-2 text-xs text-fg-tertiary">{fmtTime(tk.finished_at ?? null)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
     </div>
   )
 }
@@ -1221,8 +1227,8 @@ function VersionOutputPanel({
   latestTask: Task | null
 }) {
   const { t } = useTranslation()
-  if (!version) return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.outputEmpty')}</div>
-  if (!latestTask) return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.outputEmptyVersion')}</div>
+  if (!version) return <EmptyState size="sm" description={t('overview.outputEmpty')} className="m-page" />
+  if (!latestTask) return <EmptyState size="sm" description={t('overview.outputEmptyVersion')} className="m-page" />
   // 复用 QueueDetail OutputsTab：列表 + 排序 + 单文件下载 + 批量打 zip + 打开
   // 文件夹 + 导出 data_exports（跟 task 详情页同款行为）
   return <OutputsTab taskId={latestTask.id} />

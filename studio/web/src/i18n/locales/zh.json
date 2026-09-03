@@ -1813,6 +1813,8 @@
     "tasksPlaceholder": "本项目的训练任务列表（待实现）",
     "outputPlaceholder": "本项目下产出的 LoRA 模型列表（待实现）",
     "tasksEmpty": "本项目还没有训练任务",
+    "tasksAriaLabel": "当前版本的任务",
+    "tasksLoadFailed": "任务列表读取失败：{{error}}",
     "tasksTable": {
       "name": "任务",
       "status": "状态",
@@ -1823,6 +1825,7 @@
     "outputOpenTrain": "打开训练页",
     "detail": {
       "folders": "训练集",
+      "trainGridLabel": "当前版本训练集图片",
       "foldersTotal": "共 {{n}} 张",
       "tagDist": "标签分布",
       "tagCoverage": "{{tagged}} / {{total}} 已打标",
