@@ -191,7 +191,7 @@ function VersionRail({
     <div className="flex flex-wrap items-center gap-related border-t border-subtle pt-section pb-related">
       <div
         role="radiogroup"
-        aria-label={t('overview.rail.label')}
+        aria-label={t('overview.rail.accessibleLabel')}
         className="flex flex-wrap items-center gap-related"
       >
         <span className="mr-related font-mono text-2xs uppercase tracking-wider text-fg-tertiary" aria-hidden="true">
@@ -709,7 +709,7 @@ function HeroCard({
             onClick={action.onClick}
             disabled={action.disabled}
             variant="ghost"
-            size="xs"
+            size="sm"
           >{action.label} →</Button>
         </div>
       )}
@@ -835,7 +835,7 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
             onClick={() => navigate(`/projects/${project.id}/v/${version.id}/curate`)}
             disabled={actionDisabled}
             variant="ghost"
-            size="xs"
+            size="sm"
           >③ {t('nav.curate')} · {t('overview.detail.reorganize')} →</Button>
         </div>
       )}
@@ -1214,7 +1214,6 @@ function VersionTasksPanel({ projectId, versionId }: { projectId: number; versio
                 <td className="px-3 py-2">
                   <Badge
                     tone={TASK_STATUS_TONE[tk.status] ?? 'neutral'}
-                    size="sm"
                     active={tk.status === 'running'}
                   >{t(TASK_STATUS_LABEL[tk.status] ?? tk.status)}</Badge>
                 </td>

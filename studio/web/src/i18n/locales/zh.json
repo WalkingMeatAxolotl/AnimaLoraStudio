@@ -1855,7 +1855,8 @@
       "createdLabel": "创建"
     },
     "rail": {
-      "label": "版本"
+      "label": "版本",
+      "accessibleLabel": "项目版本"
     },
     "banner": {
       "skippableHint": "可跳过",

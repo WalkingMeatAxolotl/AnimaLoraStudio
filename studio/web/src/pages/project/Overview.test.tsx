@@ -133,7 +133,7 @@ describe('ProjectOverview 版本选择', () => {
 
     renderOverview(project)
 
-    expect(screen.getByRole('radiogroup', { name: '版本' })).toBeInTheDocument()
+    expect(screen.getByRole('radiogroup', { name: '项目版本' })).toBeInTheDocument()
     const v1 = screen.getByRole('radio', { name: 'v1 训练中' })
     const v2 = screen.getByRole('radio', { name: 'v2 已完成' })
     expect(v1).toHaveAttribute('aria-checked', 'true')
@@ -179,7 +179,8 @@ describe('ProjectOverview 内容 surfaces', () => {
     expect(taskLink).toHaveAttribute('href', '/queue/42')
     const taskRow = taskLink.closest('tr')
     const taskBadge = taskRow?.querySelector('.badge')
-    expect(taskBadge).toHaveClass('badge', 'badge-ok', 'badge-sm')
+    expect(taskBadge).toHaveClass('badge', 'badge-ok')
+    expect(taskBadge).not.toHaveClass('badge-sm')
     expect(taskBadge).toHaveTextContent('完成')
     expect(taskRow).not.toHaveClass('cursor-pointer')
   })

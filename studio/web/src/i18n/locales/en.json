@@ -1855,7 +1855,8 @@
       "createdLabel": "Created"
     },
     "rail": {
-      "label": "VERSION"
+      "label": "VERSION",
+      "accessibleLabel": "Project versions"
     },
     "banner": {
       "skippableHint": "skippable",
