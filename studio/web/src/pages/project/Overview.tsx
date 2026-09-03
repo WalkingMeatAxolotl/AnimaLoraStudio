@@ -36,6 +36,9 @@ import { computePixelHist } from '../../lib/pixelBins'
 import { useProjectCtx } from '../../context/ProjectContext'
 import { useEventStream } from '../../lib/useEventStream'
 import { useToast } from '../../components/Toast'
+import Button from '../../components/Button'
+import ProgressBar from '../../components/ProgressBar'
+import { Tabs, selectionItemId, type TabItem } from '../../components/SelectionGroup'
 
 type OverviewTab = 'details' | 'tasks' | 'output' | 'eval'
 
@@ -127,12 +130,14 @@ function StatusDotMini({ status }: { status: VersionStatus }) {
   const running = status === 'training'
   return (
     <span
+      className={running ? 'dot dot-running' : 'dot'}
       style={{
-        width: 7, height: 7, borderRadius: '50%',
-        background: cmap[status] ?? 'var(--fg-disabled)',
-        animation: running ? 'pulse 1.6s infinite' : 'none',
+        width: 7,
+        height: 7,
+        background: running ? undefined : (cmap[status] ?? 'var(--fg-disabled)'),
         flexShrink: 0,
       }}
+      aria-hidden="true"
     />
   )
 }
@@ -209,21 +214,23 @@ function VersionRail({
       >+ {t('overview.versionSelector.newVersion')}</button>
       <span style={{ flex: 1 }} />
       {deleteEnabled && (
-        <button
+        <Button
           onClick={onDelete}
-          className="btn btn-ghost btn-sm"
-          style={{ color: 'var(--err)' }}
+          variant="danger"
+          size="sm"
         >
           {t('overview.banner.deleteVersion')}
-        </button>
+        </Button>
       )}
-      <button
+      <Button
         onClick={onExport}
-        disabled={!exportEnabled || exporting}
-        className={`btn btn-secondary btn-sm ${!exportEnabled ? 'opacity-40' : ''}`}
+        disabled={!exportEnabled}
+        loading={exporting}
+        variant="secondary"
+        size="sm"
       >
         {exporting ? t('sidebar.exporting') : t('sidebar.export')}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -299,31 +306,8 @@ function BannerShell({
   )
 }
 
-function BannerProgress({
-  now, total, running, muted, fail,
-}: { now: number; total: number; running?: boolean; muted?: boolean; fail?: boolean }) {
-  const pct = total > 0 ? Math.min(100, (now / total) * 100) : 0
-  const color = fail ? 'var(--err)' : muted ? 'var(--fg-disabled)' : 'var(--accent)'
-  return (
-    <div style={{
-      height: 6, borderRadius: 'var(--r-pill)',
-      background: 'var(--bg-sunken)',
-      overflow: 'hidden', position: 'relative',
-    }}>
-      <div style={{
-        width: `${pct}%`, height: '100%',
-        background: color,
-        animation: running ? 'pulse 2s infinite' : 'none',
-        borderRadius: 'var(--r-pill)',
-      }}/>
-      {muted && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-          background: 'repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 8px)',
-        }}/>
-      )}
-    </div>
-  )
+function BannerProgress({ label }: { label: string }) {
+  return <ProgressBar label={label} value={null} size="sm" />
 }
 
 const PHASE_ORDER_TIMELINE: { id: VersionPhase; n: string; key: string }[] = [
@@ -442,15 +426,17 @@ function StatusBanner({
         <div style={{ ...bannerMetaRow, alignItems: 'center' }}>
           <BannerMeta k={t('overview.banner.metaTime')} v={fmtTime(latestTask?.finished_at)} />
           <span style={{ flex: 1 }} />
-          {taskId && <button onClick={goLog} className="btn btn-ghost btn-sm">{t('overview.banner.viewLog')} →</button>}
-          <button
+          {taskId && <Button onClick={goLog} variant="ghost" size="sm">{t('overview.banner.viewLog')} →</Button>}
+          <Button
             onClick={() => ctx && void ctx.onDeleteVersion(version.id)}
-            className="btn btn-secondary btn-sm"
-          >{t('overview.banner.deleteVersion')}</button>
-          <button
+            variant="danger"
+            size="sm"
+          >{t('overview.banner.deleteVersion')}</Button>
+          <Button
             onClick={() => ctx?.onCreateVersion(version.id)}
-            className="btn btn-primary btn-sm"
-          >+ {t('overview.banner.forkConfigNew')}</button>
+            variant="primary"
+            size="sm"
+          >+ {t('overview.banner.forkConfigNew')}</Button>
         </div>
       </BannerShell>
     )
@@ -467,18 +453,20 @@ function StatusBanner({
         <div style={{ ...bannerMetaRow, alignItems: 'center' }}>
           <BannerMeta k={t('overview.banner.metaTime')} v={fmtTime(latestTask?.finished_at)} />
           <span style={{ flex: 1 }} />
-          {taskId && <button onClick={goLog} className="btn btn-ghost btn-sm">{t('overview.banner.viewLog')} →</button>}
-          <button
+          {taskId && <Button onClick={goLog} variant="ghost" size="sm">{t('overview.banner.viewLog')} →</Button>}
+          <Button
             onClick={() => ctx && void ctx.onDeleteVersion(version.id)}
-            className="btn btn-secondary btn-sm"
-          >{t('overview.banner.deleteVersion')}</button>
-          <button
+            variant="danger"
+            size="sm"
+          >{t('overview.banner.deleteVersion')}</Button>
+          <Button
             onClick={() => {
               ctx?.onCreateVersion(version.id)
               toast(t('overview.banner.smallerBatchHint'), 'info')
             }}
-            className="btn btn-primary btn-sm"
-          >{t('overview.banner.smallerBatchRetry')} ↻</button>
+            variant="primary"
+            size="sm"
+          >{t('overview.banner.smallerBatchRetry')} ↻</Button>
         </div>
       </BannerShell>
     )
@@ -498,16 +486,18 @@ function StatusBanner({
         >
           <div style={bannerActions}>
             {taskId && (
-              <button
+              <Button
                 onClick={() => api.startTaskNow(taskId).catch((e) => toast(String(e), 'error'))}
-                className="btn btn-primary btn-sm"
-              >{t('queue.startNow')}</button>
+                variant="primary"
+                size="sm"
+              >{t('queue.startNow')}</Button>
             )}
             {taskId && (
-              <button
+              <Button
                 onClick={() => api.cancelTask(taskId).catch((e) => toast(String(e), 'error'))}
-                className="btn btn-secondary btn-sm"
-              >{t('queue.cancelScheduled')}</button>
+                variant="secondary"
+                size="sm"
+              >{t('queue.cancelScheduled')}</Button>
             )}
           </div>
         </BannerShell>
@@ -520,7 +510,7 @@ function StatusBanner({
         title={`${version.label} · ${t('versionStatus.training')}`}
         sub={startedAt ? `${t('overview.banner.startedAt')} ${fmtTime(startedAt)}` : undefined}
       >
-        <BannerProgress now={0} total={1} running />
+        <BannerProgress label={t('overview.banner.trainingProgress', { version: version.label })} />
         <div style={bannerMetaRow}>
           <BannerMeta k={t('overview.banner.metaStarted')} v={fmtTime(startedAt)} />
           {latestTask?.is_pausable && (
@@ -529,18 +519,20 @@ function StatusBanner({
         </div>
         <div style={bannerActions}>
           {latestTask?.is_pausable && (
-            <button
+            <Button
               onClick={() => taskId && api.pauseTask(taskId).catch((e) => toast(String(e), 'error'))}
-              className="btn btn-ghost btn-sm"
-            >{t('overview.banner.pause')}</button>
+              variant="ghost"
+              size="sm"
+            >{t('overview.banner.pause')}</Button>
           )}
           {taskId && (
-            <button
+            <Button
               onClick={() => api.cancelTask(taskId).catch((e) => toast(String(e), 'error'))}
-              className="btn btn-secondary btn-sm"
-            >{t('overview.banner.cancelTraining')}</button>
+              variant="secondary"
+              size="sm"
+            >{t('overview.banner.cancelTraining')}</Button>
           )}
-          {taskId && <button onClick={goMonitor} className="btn btn-primary btn-sm">{t('overview.banner.openMonitor')} →</button>}
+          {taskId && <Button onClick={goMonitor} variant="primary" size="sm">{t('overview.banner.openMonitor')} →</Button>}
         </div>
       </BannerShell>
     )
@@ -566,11 +558,12 @@ function StatusBanner({
             />
           )}
           <span style={{ flex: 1 }} />
-          <button
+          <Button
             onClick={() => ctx?.onCreateVersion(version.id)}
-            className="btn btn-ghost btn-sm"
-          >{t('overview.banner.copyAsNew')}</button>
-          <button
+            variant="ghost"
+            size="sm"
+          >{t('overview.banner.copyAsNew')}</Button>
+          <Button
             onClick={() => {
               if (!loraPathForTest) {
                 toast(t('overview.banner.noArtifact'), 'error')
@@ -582,12 +575,14 @@ function StatusBanner({
               sp.set('versionId', String(version.id))
               navigate(`/tools/generate?${sp.toString()}`)
             }}
-            className="btn btn-secondary btn-sm"
-          >{t('overview.banner.loadInTest')} →</button>
-          <button
+            variant="secondary"
+            size="sm"
+          >{t('overview.banner.loadInTest')} →</Button>
+          <Button
             onClick={onOpenOutput}
-            className="btn btn-primary btn-sm"
-          >{t('overview.banner.downloadLora')} ↓</button>
+            variant="primary"
+            size="sm"
+          >{t('overview.banner.downloadLora')} ↓</Button>
         </div>
       </BannerShell>
     )
@@ -632,10 +627,11 @@ function StatusBanner({
         )}
         <span style={{ flex: 1 }} />
         {continueTarget && (
-          <button
+          <Button
             onClick={() => void handleContinue()}
-            className="btn btn-primary btn-sm"
-          >{t('overview.banner.continueLabel')} {continueTarget.n} {t(continueTarget.key)} →</button>
+            variant="primary"
+            size="sm"
+          >{t('overview.banner.continueLabel')} {continueTarget.n} {t(continueTarget.key)} →</Button>
         )}
       </div>
     </BannerShell>
@@ -1329,13 +1325,13 @@ export default function ProjectOverview() {
   }, [])
 
   const [activeTab, setActiveTab] = useState<OverviewTab>(deepLink.tab ?? 'details')
-
-  const tabBtnCls = (tab: OverviewTab) => [
-    'px-4 py-2 text-sm border-none bg-transparent cursor-pointer border-b-2 transition-colors',
-    activeTab === tab
-      ? 'text-fg-primary font-semibold border-accent'
-      : 'text-fg-secondary border-transparent hover:text-fg-primary',
-  ].join(' ')
+  const overviewPanelId = 'project-overview-panel'
+  const overviewTabs: TabItem<OverviewTab>[] = [
+    { value: 'details', label: t('overview.tabDetails'), controls: overviewPanelId },
+    { value: 'tasks', label: t('overview.tabTasks'), controls: overviewPanelId },
+    { value: 'output', label: t('overview.tabOutput'), controls: overviewPanelId },
+    { value: 'eval', label: t('overview.tabEval'), controls: overviewPanelId },
+  ]
 
   return (
     <div className="fade-in flex flex-col h-full min-h-0">
@@ -1371,45 +1367,41 @@ export default function ProjectOverview() {
       </div>
 
       {/* ── Tabs ──── */}
-      <div className="border-b border-subtle px-6 shrink-0">
-        <div className="flex gap-1">
-          <button className={tabBtnCls('details')} onClick={() => setActiveTab('details')}>
-            {t('overview.tabDetails')}
-          </button>
-          <button className={tabBtnCls('tasks')} onClick={() => setActiveTab('tasks')}>
-            {t('overview.tabTasks')}
-          </button>
-          <button className={tabBtnCls('output')} onClick={() => setActiveTab('output')}>
-            {t('overview.tabOutput')}
-          </button>
-          {/* 评估的对象是 output/ 里的那些 LoRA 文件，所以紧挨着「LoRA 文件」。
-              它不是流水线 phase —— 训练完随时能跑、能跑很多次，没有「做完往下走」
-              的语义，所以不进 sidebar 的编号步骤。 */}
-          <button className={tabBtnCls('eval')} onClick={() => setActiveTab('eval')}>
-            {t('overview.tabEval')}
-          </button>
-        </div>
-      </div>
+      <Tabs
+        items={overviewTabs}
+        value={activeTab}
+        onChange={setActiveTab}
+        ariaLabel={t('overview.tabsAriaLabel')}
+        idPrefix="project-overview-tab"
+        className="shrink-0 px-6"
+      />
 
       {/* ── Tab body ──── */}
-      {activeTab === 'details' && (
-        <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto">
-          <DetailGrid project={project} version={selectedVersion} />
-        </div>
-      )}
-      {activeTab === 'tasks' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <VersionTasksPanel projectId={project.id} versionId={selectedVid} />
-        </div>
-      )}
-      {activeTab === 'output' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <VersionOutputPanel version={selectedVersion} latestTask={latestTask} />
-        </div>
-      )}
-      {activeTab === 'eval' && (
-        <EvalJobsPanel pid={project.id} vid={selectedVid} />
-      )}
+      <div
+        id={overviewPanelId}
+        role="tabpanel"
+        aria-labelledby={selectionItemId('project-overview-tab', activeTab)}
+        className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden"
+      >
+        {activeTab === 'details' && (
+          <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto">
+            <DetailGrid project={project} version={selectedVersion} />
+          </div>
+        )}
+        {activeTab === 'tasks' && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <VersionTasksPanel projectId={project.id} versionId={selectedVid} />
+          </div>
+        )}
+        {activeTab === 'output' && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <VersionOutputPanel version={selectedVersion} latestTask={latestTask} />
+          </div>
+        )}
+        {activeTab === 'eval' && (
+          <EvalJobsPanel pid={project.id} vid={selectedVid} />
+        )}
+      </div>
     </div>
   )
 }

@@ -106,6 +106,7 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
     // 训练 banner 已渲染（取消训练按钮随 taskId 出现），但 is_pausable=false →
     // 暂停按钮不在。
     await waitFor(() => expect(screen.getByText('取消训练')).toBeInTheDocument())
+    expect(screen.getByRole('progressbar', { name: 'v1 训练进度' })).toHaveAttribute('data-state', 'indeterminate')
     expect(screen.queryByText('暂停')).not.toBeInTheDocument()
     const callsBefore = listSpy.mock.calls.length
 
@@ -126,9 +127,28 @@ describe('ProjectOverview 评估 tab', () => {
     vi.spyOn(api, 'listEvalSessions').mockResolvedValue({ sessions: [] } as never)
   })
 
+  it('共享 Tabs 暴露 tablist/panel 关联并支持方向键切换', async () => {
+    renderOverview(makeProject())
+
+    const tabs = screen.getByRole('tablist', { name: '项目概览内容' })
+    const detailsTab = screen.getByRole('tab', { name: '详情' })
+    const tasksTab = screen.getByRole('tab', { name: '任务' })
+    const panel = screen.getByRole('tabpanel')
+
+    expect(tabs).toContainElement(detailsTab)
+    expect(detailsTab).toHaveAttribute('aria-selected', 'true')
+    expect(detailsTab).toHaveAttribute('aria-controls', panel.id)
+
+    fireEvent.keyDown(detailsTab, { key: 'ArrowRight' })
+
+    await waitFor(() => expect(tasksTab).toHaveAttribute('aria-selected', 'true'))
+    expect(tasksTab).toHaveFocus()
+    expect(panel).toHaveAttribute('aria-labelledby', tasksTab.id)
+  })
+
   it('点「评估」tab → 列该 version 的评估作业（不带 task_id）', async () => {
     renderOverview(makeProject())
-    fireEvent.click(await screen.findByRole('button', { name: '评估' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '评估' }))
 
     await waitFor(() => expect(api.listEvalSessions).toHaveBeenCalledWith(3, 7))
     expect(await screen.findByText('创建新评估')).toBeInTheDocument()
