@@ -9,6 +9,7 @@ describe('PageHeader', () => {
     )
 
     expect(container.firstElementChild).toHaveClass(
+      'ui-page-header',
       'px-page',
       'pt-page-start',
       'pb-section',
@@ -49,10 +50,12 @@ describe('PageHeader', () => {
 
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Refresh' }).parentElement)
-      .toHaveClass('gap-related')
+      .toHaveClass('ui-page-header-actions')
+    expect(screen.getByRole('button', { name: 'Refresh' }).parentElement?.parentElement)
+      .toHaveClass('ui-page-header-layout')
     expect(screen.getByText('Phase 2')).toBeInTheDocument()
     expect(screen.getByText('Phase 2').parentElement)
-      .toHaveClass('top-field', 'right-page')
+      .toHaveClass('ui-page-header-top-right')
     expect(screen.getByRole('heading', { name: 'Queue' }).closest('.sticky')).toBeInTheDocument()
   })
 })

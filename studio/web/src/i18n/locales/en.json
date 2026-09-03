@@ -813,6 +813,8 @@
     "tabEval": "Metrics",
     "tabSamples": "Samples",
     "tabOutputs": "Outputs",
+    "outputFiles": "Output files",
+    "trainingStates": "Training states",
     "tabSnapshot": "Snapshot config",
     "viewInGenerate": "View render →",
     "viewInReg": "View reg set →",

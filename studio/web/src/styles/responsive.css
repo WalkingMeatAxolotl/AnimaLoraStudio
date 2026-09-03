@@ -5,6 +5,70 @@
 .banner-shell { padding: 16px 18px; }
 .banner-shell-icon { width: 32px; height: 32px; font-size: 16px; }
 
+/* Ordinary route chrome may reflow at compact desktop, but its title, helper
+ * navigation, and primary actions all remain visible and keep DOM order. */
+.ui-page-header { position: relative; }
+.ui-page-header-layout {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-section);
+}
+.ui-page-header-copy { min-width: 0; flex: 1 1 24rem; }
+.ui-page-header-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-related);
+}
+.ui-page-header-top-right {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: var(--space-field);
+  inset-inline-end: var(--space-page);
+}
+
+/* Container-safe cards never force the AppShell main track wider than its
+ * available inline size. */
+.ui-project-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+
+/* Dense queue rows preserve identity, kind, state, progress, and actions. The
+ * auxiliary timestamp yields first at compact desktop. */
+.ui-queue-task-grid {
+  grid-template-columns: 48px minmax(0, 1fr) 88px 96px 150px 128px 176px;
+}
+.ui-queue-job-grid {
+  grid-template-columns: 48px minmax(0, 1fr) 96px 150px 120px;
+}
+.ui-queue-detail-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ui-queue-detail-title {
+  min-width: 0;
+  max-width: min(24rem, 32vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-queue-output-actions { flex-wrap: wrap; }
+.ui-queue-output-path { flex: 1 1 20rem; }
+.ui-queue-output-table {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.ui-queue-output-table:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
+.ui-queue-output-grid {
+  min-width: 34rem;
+  grid-template-columns: minmax(0, 1fr) 100px 160px 80px;
+}
+
 @media (max-width: 1280px) {
   /* AppShell keeps primary navigation and actions visible while auxiliary
      resource meters yield at the compact-desktop breakpoint. */
@@ -14,6 +78,26 @@
   }
   .ui-app-shell-topbar-stats { display: none; }
   .ui-app-shell-running-task { max-width: min(14rem, 30vw); }
+
+  .ui-page-header-layout { align-items: flex-start; }
+  .ui-page-header-actions { flex: 1 1 100%; }
+  .ui-page-header-top-right {
+    position: static;
+    display: flex;
+    justify-content: flex-end;
+    margin-block-end: var(--space-related);
+  }
+
+  .ui-queue-task-grid {
+    grid-template-columns: 48px minmax(9rem, 1fr) 80px 88px minmax(7rem, 0.75fr) minmax(9rem, auto);
+  }
+  .ui-queue-job-grid {
+    grid-template-columns: 48px minmax(9rem, 1fr) 88px minmax(7rem, auto);
+  }
+  .ui-queue-task-timing,
+  .ui-queue-job-timing { display: none; }
+  .ui-queue-detail-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ui-queue-detail-title { max-width: min(18rem, 40vw); }
 
   .banner-shell { padding: 10px 14px; }
   .banner-shell-icon { width: 26px; height: 26px; font-size: 13px; }

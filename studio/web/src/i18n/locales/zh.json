@@ -813,6 +813,8 @@
     "tabEval": "指标",
     "tabSamples": "样图",
     "tabOutputs": "输出",
+    "outputFiles": "输出文件",
+    "trainingStates": "训练状态",
     "tabSnapshot": "关联配置",
     "viewInGenerate": "查看出图结果 →",
     "viewInReg": "查看正则集 →",
