@@ -13,7 +13,7 @@ import {
 import Button from '../../../components/Button'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
-import PaneResizer from '../../../components/PaneResizer'
+import PaneResizer, { clampPaneValue } from '../../../components/PaneResizer'
 import StepShell from '../../../components/StepShell'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
@@ -36,6 +36,9 @@ const DEFAULT_SORT: SortMode = 'id-asc'
 // 右栏目标桶：训练集（默认，现行为）/ 验证集（held-out，扁平无文件夹）
 type Bucket = 'train' | 'validation'
 const BUCKET_STORAGE_KEY = 'curation:bucket'
+const CURATION_PANE_MIN = 25
+const CURATION_PANE_MAX = 70
+const CURATION_DOWNLOAD_PANE_ID = 'curation-download-pane'
 
 function compareItems(a: CurationItem, b: CurationItem, mode: SortMode): number {
   switch (mode) {
@@ -126,6 +129,12 @@ export default function CurationPage() {
   // 默认 50 = 改造前的 xl:grid-cols-2 等分。窄屏（<1280px）堆叠时该值不生效。
   const rowRef = useRef<HTMLDivElement>(null)
   const [leftPct, setLeftPct] = useLocalStorageState('studio:curate:left_pct', 50)
+  const boundedLeftPct = clampPaneValue(leftPct, CURATION_PANE_MIN, CURATION_PANE_MAX)
+
+  // Repair stale/corrupt persisted ratios before they can collapse the flexible pane.
+  useEffect(() => {
+    if (leftPct !== boundedLeftPct) setLeftPct(boundedLeftPct)
+  }, [boundedLeftPct, leftPct, setLeftPct])
 
   const [leftSel, setLeftSel] = useState<Set<string>>(new Set())
   const [leftAnchor, setLeftAnchor] = useState<string | null>(null)
@@ -642,9 +651,10 @@ export default function CurationPage() {
       <div
         ref={rowRef}
         className="split-row gap-3 items-stretch flex-1 min-h-0"
-        style={{ '--split-pct': `${leftPct}%` } as React.CSSProperties}
+        style={{ '--split-pct': `${boundedLeftPct}%` } as React.CSSProperties}
       >
         <PanelCard
+          id={CURATION_DOWNLOAD_PANE_ID}
           className="split-pane-fixed"
           accent="emerald"
           title={t('curate.downloadPanelTitle')}
@@ -703,11 +713,12 @@ export default function CurationPage() {
 
         <PaneResizer
           containerRef={rowRef}
-          value={leftPct}
+          value={boundedLeftPct}
           onChange={setLeftPct}
-          min={25}
-          max={70}
+          min={CURATION_PANE_MIN}
+          max={CURATION_PANE_MAX}
           ariaLabel={t('curate.resizePanels')}
+          ariaControls={CURATION_DOWNLOAD_PANE_ID}
           className="split-resizer"
         />
 
@@ -951,8 +962,9 @@ const ACCENT_BAR_CLS: Record<'emerald' | 'cyan', string> = {
 }
 
 function PanelCard({
-  accent, title, subtitle, actions, children, className = '',
+  id, accent, title, subtitle, actions, children, className = '',
 }: {
+  id?: string
   accent: 'emerald' | 'cyan'
   title: string
   subtitle: string
@@ -961,7 +973,7 @@ function PanelCard({
   className?: string
 }) {
   return (
-    <section className={`flex flex-col min-h-0 rounded-md border border-subtle bg-surface overflow-hidden ${className}`}>
+    <section id={id} className={`flex flex-col min-h-0 rounded-md border border-subtle bg-surface overflow-hidden ${className}`}>
       <div className={`h-0.5 ${ACCENT_BAR_CLS[accent]}`} />
       <header className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 border-b border-subtle text-sm">
         <h3 className="font-semibold">{title}</h3>

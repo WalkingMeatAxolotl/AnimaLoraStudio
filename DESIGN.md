@@ -563,7 +563,40 @@ stacking mechanically. Any later restructuring requires a representative pilot
 and content-driven evidence; `md`/`lg`/`xl` utility classes are not an independent
 breakpoint policy.
 
-## 18. Accessibility and resilience
+## 18. Split-workspace and pane-geometry contract
+
+A split workspace preserves simultaneous context for a task; it is not an ordinary
+responsive grid and there is no universal split-shell component. `PaneResizer` is
+the shared interaction primitive only for authored, user-resizable horizontal
+separators. The parent remains authoritative for pane DOM order, percentage state,
+persistence, compact behavior, and local scroll owners.
+
+Pane geometry follows these rules:
+
+- Persisted percentages are untrusted input. The same bounded effective value must
+  drive pane geometry, separator ARIA, pointer drag, and keyboard changes. Invalid
+  two-fixed-pane state is repaired against one shared width budget so a flexible
+  middle pane retains its declared minimum.
+- A separator names its controlled pane with `aria-controls`, exposes min/current/max
+  percentage values, supports Left/Right plus Home/End, and restores body cursor and
+  text-selection styles after pointer up, cancellation, capture loss, or unmount.
+- Every bounded flex pane and every link in its height chain uses `min-width: 0` /
+  `min-height: 0`. Exactly one descendant owns overflow for each axis. Virtualized
+  media grids remain direct bounded children of their pane; visual inset belongs to
+  the virtual list content, never to a wrapper that breaks measured height or moves
+  the browser scrollbar inward.
+- Curation is the representative responsive two-pane workspace: at compact desktop
+  it stacks panes and removes the inactive separator; at wide desktop the fixed pane
+  uses the bounded persisted percentage. Tag Edit is the representative authored
+  three-pane workspace: the two fixed panes share one budget and reserve the middle
+  preview minimum even when stored values are stale or corrupt. If the three authored
+  panes no longer fit, its named workspace establishes one keyboard-focusable
+  horizontal boundary rather than shrinking tools below useful widths or clipping them.
+- Train preview, Tagging status, Generate canvas and attached drawers, preprocessing
+  editors, and evaluation matrices retain their specialist topology. Do not add
+  resize handles or migrate them to `PaneResizer` without task-specific evidence.
+
+## 19. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -573,7 +606,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 19. Migration policy
+## 20. Migration policy
 
 Migration is incremental:
 

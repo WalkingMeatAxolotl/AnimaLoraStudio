@@ -1,13 +1,13 @@
 /**
  * PaneResizer —— 横向 flex 布局里两栏之间的竖向拖动分隔条（受控组件）。
  *
- * value = 左栏占 containerRef 宽度的百分比，拖动 / 方向键改 value，
- * 持久化交给父层（本组件不碰 localStorage）。
+ * value = anchor 所指固定栏占 containerRef 宽度的百分比，拖动 / 方向键改 value，
+ * 持久化与最终 pane geometry 交给父层（本组件不碰 localStorage）。
  *
  * 用 pointer capture 而不是 window 监听：拖过 canvas / img 等子元素时事件
  * 仍回到 handle 上，不会中途丢失。
  */
-import type { RefObject } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 interface Props {
   /** 百分比基准容器（两栏 + 本 handle 的共同父节点） */
@@ -24,10 +24,54 @@ interface Props {
    */
   anchor?: 'start' | 'end'
   ariaLabel?: string
+  /** ID of the pane whose size this separator controls. */
+  ariaControls?: string
   className?: string
 }
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+export const clampPaneValue = (value: number, min: number, max: number): number => {
+  const lo = Math.min(min, max)
+  const hi = Math.max(min, max)
+  if (!Number.isFinite(value)) return lo
+  return Math.min(hi, Math.max(lo, value))
+}
+
+export interface PanePairBounds {
+  startMin: number
+  endMin: number
+  flexibleMin: number
+}
+
+/**
+ * Repairs two persisted fixed-pane percentages while reserving a flexible middle pane.
+ * Valid values pass through unchanged. If the pair exceeds the shared budget, only
+ * the space above each pane's minimum is reduced, proportionally.
+ */
+export function normalizePanePair(
+  start: number,
+  end: number,
+  { startMin, endMin, flexibleMin }: PanePairBounds,
+): { start: number; end: number } {
+  const fixedBudget = 100 - flexibleMin
+  if (startMin + endMin > fixedBudget) {
+    throw new RangeError('Pane minimums exceed the available width budget')
+  }
+
+  const boundedStart = clampPaneValue(start, startMin, fixedBudget - endMin)
+  const boundedEnd = clampPaneValue(end, endMin, fixedBudget - startMin)
+  if (boundedStart + boundedEnd <= fixedBudget) {
+    return { start: boundedStart, end: boundedEnd }
+  }
+
+  const extraBudget = fixedBudget - startMin - endMin
+  const startExtra = boundedStart - startMin
+  const endExtra = boundedEnd - endMin
+  const scale = extraBudget / (startExtra + endExtra)
+  return {
+    start: startMin + startExtra * scale,
+    end: endMin + endExtra * scale,
+  }
+}
 
 /** 方向键单步（%） */
 const KEY_STEP = 2
@@ -40,9 +84,16 @@ export default function PaneResizer({
   max = 60,
   anchor = 'start',
   ariaLabel,
+  ariaControls,
   className = '',
 }: Props) {
   const dir = anchor === 'end' ? -1 : 1
+  const boundedMin = Math.min(min, max)
+  const boundedMax = Math.max(min, max)
+  const boundedValue = clampPaneValue(value, boundedMin, boundedMax)
+  const activeDragCleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => activeDragCleanupRef.current?.(), [])
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const container = containerRef.current
@@ -52,36 +103,58 @@ export default function PaneResizer({
     e.preventDefault()
 
     const startX = e.clientX
-    const startPct = value
+    const startPct = boundedValue
     const el = e.currentTarget
+    activeDragCleanupRef.current?.()
     el.setPointerCapture(e.pointerId)
 
-    // 拖动期间全局锁光标 + 禁选中，否则划过文字会拖出选区
+    // 拖动期间全局锁光标 + 禁选中，否则划过文字会拖出选区。
+    // cleanup 同时覆盖 pointercancel、capture 丢失和组件卸载，避免 body 永久锁住。
     const prevCursor = document.body.style.cursor
     const prevSelect = document.body.style.userSelect
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
 
+    let cleaned = false
     const move = (ev: PointerEvent) => {
-      onChange(clamp(startPct + (dir * (ev.clientX - startX) * 100) / width, min, max))
+      onChange(clampPaneValue(
+        startPct + (dir * (ev.clientX - startX) * 100) / width,
+        boundedMin,
+        boundedMax,
+      ))
     }
-    const up = () => {
-      el.releasePointerCapture?.(e.pointerId)
+    const cleanup = () => {
+      if (cleaned) return
+      cleaned = true
       el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerup', up)
-      el.removeEventListener('pointercancel', up)
+      el.removeEventListener('pointerup', cleanup)
+      el.removeEventListener('pointercancel', cleanup)
+      el.removeEventListener('lostpointercapture', cleanup)
+      if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture?.(e.pointerId)
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevSelect
+      if (activeDragCleanupRef.current === cleanup) activeDragCleanupRef.current = null
     }
+    activeDragCleanupRef.current = cleanup
     el.addEventListener('pointermove', move)
-    el.addEventListener('pointerup', up)
-    el.addEventListener('pointercancel', up)
+    el.addEventListener('pointerup', cleanup)
+    el.addEventListener('pointercancel', cleanup)
+    el.addEventListener('lostpointercapture', cleanup)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      onChange(e.key === 'Home' ? boundedMin : boundedMax)
+      return
+    }
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
-    onChange(clamp(value + dir * (e.key === 'ArrowLeft' ? -KEY_STEP : KEY_STEP), min, max))
+    onChange(clampPaneValue(
+      boundedValue + dir * (e.key === 'ArrowLeft' ? -KEY_STEP : KEY_STEP),
+      boundedMin,
+      boundedMax,
+    ))
   }
 
   return (
@@ -89,9 +162,11 @@ export default function PaneResizer({
       role="separator"
       aria-orientation="vertical"
       aria-label={ariaLabel}
-      aria-valuenow={Math.round(value)}
-      aria-valuemin={min}
-      aria-valuemax={max}
+      aria-controls={ariaControls}
+      aria-valuenow={Math.round(boundedValue)}
+      aria-valuemin={boundedMin}
+      aria-valuemax={boundedMax}
+      aria-valuetext={`${Math.round(boundedValue)}%`}
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}

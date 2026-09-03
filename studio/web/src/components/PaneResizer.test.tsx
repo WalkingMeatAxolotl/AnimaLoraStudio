@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import PaneResizer from './PaneResizer'
+import PaneResizer, { clampPaneValue, normalizePanePair } from './PaneResizer'
 
 // jsdom 无 layout & 无 pointer capture：容器宽度和 capture API 都得自己补，
 // 否则 onPointerDown 直接 early-return（width <= 0）。
@@ -24,7 +24,7 @@ if (!w.PointerEvent) {
 function setup(props: Partial<React.ComponentProps<typeof PaneResizer>> = {}) {
   const onChange = vi.fn()
   const ref = createRef<HTMLDivElement>()
-  render(
+  const view = render(
     <div ref={ref}>
       <PaneResizer
         containerRef={ref}
@@ -38,7 +38,7 @@ function setup(props: Partial<React.ComponentProps<typeof PaneResizer>> = {}) {
   vi.spyOn(ref.current!, 'getBoundingClientRect').mockReturnValue({
     width: CONTAINER_WIDTH,
   } as DOMRect)
-  return { onChange, handle: screen.getByRole('separator') }
+  return { onChange, handle: screen.getByRole('separator'), unmount: view.unmount }
 }
 
 /** 从 startX 拖到 endX（按下 → 移动 → 抬起） */
@@ -49,9 +49,36 @@ function drag(handle: HTMLElement, startX: number, endX: number) {
 }
 
 beforeEach(() => {
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
   Object.assign(HTMLElement.prototype, {
     setPointerCapture: vi.fn(),
+    hasPointerCapture: vi.fn(() => true),
     releasePointerCapture: vi.fn(),
+  })
+})
+
+describe('pane value bounds', () => {
+  it('clamps invalid persisted values to the declared range', () => {
+    expect(clampPaneValue(90, 25, 70)).toBe(70)
+    expect(clampPaneValue(Number.NaN, 25, 70)).toBe(25)
+  })
+
+  it('repairs a three-pane budget proportionally while preserving valid values', () => {
+    expect(normalizePanePair(40, 32, {
+      startMin: 15,
+      endMin: 20,
+      flexibleMin: 15,
+    })).toEqual({ start: 40, end: 32 })
+
+    const repaired = normalizePanePair(90, 90, {
+      startMin: 15,
+      endMin: 20,
+      flexibleMin: 15,
+    })
+    expect(repaired.start + repaired.end).toBeCloseTo(85)
+    expect(repaired.start).toBeGreaterThanOrEqual(15)
+    expect(repaired.end).toBeGreaterThanOrEqual(20)
   })
 })
 
@@ -76,12 +103,16 @@ describe('PaneResizer', () => {
     expect(onChange).toHaveBeenLastCalledWith(20)
   })
 
-  it('方向键调整，同样受 min / max 约束', () => {
-    const { onChange, handle } = setup({ value: 41, max: 42 })
+  it('方向键与 Home / End 调整，同样受 min / max 约束', () => {
+    const { onChange, handle } = setup({ value: 41, min: 15, max: 42 })
     fireEvent.keyDown(handle, { key: 'ArrowRight' })
     expect(onChange).toHaveBeenLastCalledWith(42)
     fireEvent.keyDown(handle, { key: 'ArrowLeft' })
     expect(onChange).toHaveBeenLastCalledWith(39)
+    fireEvent.keyDown(handle, { key: 'Home' })
+    expect(onChange).toHaveBeenLastCalledWith(15)
+    fireEvent.keyDown(handle, { key: 'End' })
+    expect(onChange).toHaveBeenLastCalledWith(42)
   })
 
   it('抬起后继续移动不再改值', () => {
@@ -92,11 +123,28 @@ describe('PaneResizer', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('暴露 separator 语义供辅助技术读数', () => {
-    const { handle } = setup({ min: 15, max: 55 })
+  it('pointer cancel 或卸载时恢复全局 cursor 与文字选择', () => {
+    const { handle, unmount } = setup()
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500, pointerId: 1 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+    fireEvent.pointerCancel(handle, { pointerId: 1 })
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500, pointerId: 2 })
+    unmount()
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+  })
+
+  it('暴露 separator 语义、受控 pane 关联与修复后的当前值', () => {
+    const { handle } = setup({ value: 80, min: 15, max: 55, ariaControls: 'start-pane' })
     expect(handle).toHaveAttribute('aria-orientation', 'vertical')
-    expect(handle).toHaveAttribute('aria-valuenow', '40')
+    expect(handle).toHaveAttribute('aria-controls', 'start-pane')
+    expect(handle).toHaveAttribute('aria-valuenow', '55')
     expect(handle).toHaveAttribute('aria-valuemin', '15')
     expect(handle).toHaveAttribute('aria-valuemax', '55')
+    expect(handle).toHaveAttribute('aria-valuetext', '55%')
   })
 })
