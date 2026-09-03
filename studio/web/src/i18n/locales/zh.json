@@ -594,6 +594,7 @@
     "newProject": "新建项目",
     "noProjects": "还没有项目",
     "noProjectsHint": "点右上角「新建项目」开始一个新的 LoRA 训练",
+    "openProject": "打开项目 {{title}}",
     "continueBtn": "继续 →",
     "moveToTrash": "移到回收站",
     "deleteProject": "删除",

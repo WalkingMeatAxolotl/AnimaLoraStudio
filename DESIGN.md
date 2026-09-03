@@ -192,6 +192,12 @@ Use `EmptyState` when a list or page region has no content to present:
 - Actions are optional and must use the appropriate Button or link primitive.
 - Loading, errors, and warnings are not empty states and require their own semantics.
 
+A composite card with a primary open action and local actions must not nest buttons or
+links. Use a semantic `Card` container, a sibling full-surface native link/button for
+the primary action, and local `Button` controls above that hit area. Name the Card from
+its visible title, name the primary action explicitly, and keep hidden local actions
+non-pointer-interactive until hover or keyboard focus reveals them.
+
 Do not reproduce `rounded-* + border-subtle + bg-surface` for an ordinary card or
 hand-build centered zero-state typography on product pages.
 

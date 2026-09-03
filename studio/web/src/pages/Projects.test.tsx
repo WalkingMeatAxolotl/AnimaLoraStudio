@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ProjectSummary } from '../api/client'
-import { filterProjects, ProjectFilterBar } from './Projects'
+import i18n from '../i18n'
+import {
+  filterProjects,
+  ProjectCard,
+  ProjectFilterBar,
+  ProjectsCollectionSurface,
+} from './Projects'
 
 function mk(over: Partial<ProjectSummary> & { id: number }): ProjectSummary {
   return {
@@ -59,6 +65,138 @@ describe('filterProjects', () => {
     const before = ITEMS.map((p) => p.id)
     filterProjects(ITEMS, { query: '', status: 'all', sort: 'title' })
     expect(ITEMS.map((p) => p.id)).toEqual(before)
+  })
+})
+
+describe('ProjectCard', () => {
+  it('uses a composite card without nested controls and isolates local actions', () => {
+    const onOpen = vi.fn()
+    const onEdit = vi.fn()
+    const onArchive = vi.fn()
+    render(
+      <ProjectCard
+        project={ITEMS[0]}
+        onClick={onOpen}
+        onEdit={onEdit}
+        onArchive={onArchive}
+      />,
+    )
+
+    const card = screen.getByRole('article', { name: 'Kaguya' })
+    expect(card).toHaveClass('card', 'card-hover', 'card-pad-md')
+    expect(card.querySelector('button button')).toBeNull()
+
+    const [openButton, editButton, archiveButton] = within(card).getAllByRole('button')
+    const title = within(card).getByRole('heading', { level: 2, name: 'Kaguya' })
+    expect(title).toHaveAttribute('title', 'Kaguya')
+    expect(title.parentElement).toHaveClass('flex-col', 'gap-related')
+    expect(openButton).toHaveAccessibleName(i18n.t('projects.openProject', { title: 'Kaguya' }))
+    expect(openButton).toHaveClass(
+      'absolute',
+      'inset-0',
+      'z-0',
+      'focus-visible:ring-inset',
+    )
+    expect(openButton).not.toContainElement(editButton)
+    expect(editButton).toHaveClass('btn', 'btn-ghost', 'btn-xs', 'btn-icon')
+    expect(editButton.parentElement).toHaveClass(
+      'pointer-events-none',
+      'gap-related',
+      'motion-reduce:transition-none',
+      'group-hover:pointer-events-auto',
+      'group-focus-within:pointer-events-auto',
+    )
+
+    openButton.focus()
+    expect(openButton).toHaveFocus()
+    editButton.focus()
+    expect(editButton).toHaveFocus()
+    fireEvent.click(openButton)
+    fireEvent.click(editButton)
+    fireEvent.click(archiveButton)
+
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    expect(onArchive).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps archived restore and delete actions outside the primary card action', () => {
+    const onOpen = vi.fn()
+    const onUnarchive = vi.fn()
+    const onDelete = vi.fn()
+    render(
+      <ProjectCard
+        project={ITEMS[0]}
+        archived
+        onClick={onOpen}
+        onUnarchive={onUnarchive}
+        onDelete={onDelete}
+      />,
+    )
+
+    const buttons = within(screen.getByRole('article', { name: 'Kaguya' })).getAllByRole('button')
+    expect(buttons).toHaveLength(4)
+    fireEvent.click(buttons[2])
+    fireEvent.click(buttons[3])
+
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(onUnarchive).toHaveBeenCalledTimes(1)
+    expect(onDelete).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ProjectsCollectionSurface', () => {
+  function surface(
+    props: Partial<{
+      loading: boolean
+      error: string | null
+      itemCount: number
+      visibleCount: number
+    }> = {},
+  ) {
+    return (
+      <ProjectsCollectionSurface
+        loading={false}
+        error={null}
+        itemCount={0}
+        visibleCount={0}
+        {...props}
+      >
+        <div data-testid="project-content">projects</div>
+      </ProjectsCollectionSurface>
+    )
+  }
+
+  it('keeps loading, error, empty, no-match, and content states mutually exclusive', () => {
+    const { container, rerender } = render(surface({ loading: true }))
+    expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true')
+    expect(container.querySelectorAll('.ui-project-card-skeleton')).toHaveLength(3)
+    expect(container.querySelector('.ui-project-card-skeleton')).toHaveClass('ui-skeleton')
+    expect(screen.queryByTestId('project-content')).not.toBeInTheDocument()
+
+    rerender(surface({ error: 'network unavailable' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('network unavailable')
+    expect(container.querySelector('.empty-state')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('project-content')).not.toBeInTheDocument()
+
+    rerender(surface())
+    expect(screen.getByText(i18n.t('projects.noProjects'))).toBeInTheDocument()
+    expect(container.querySelector('.empty-state')).toBeInTheDocument()
+
+    rerender(surface({ itemCount: 2, visibleCount: 0 }))
+    expect(screen.getByText(i18n.t('common.noResults'))).toBeInTheDocument()
+    expect(container.querySelector('.empty-state-sm')).toBeInTheDocument()
+
+    rerender(surface({ itemCount: 2, visibleCount: 2 }))
+    expect(screen.getByTestId('project-content')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('keeps stale visible content available alongside a refresh error', () => {
+    render(surface({ error: 'refresh failed', itemCount: 2, visibleCount: 1 }))
+    expect(screen.getByRole('alert')).toHaveTextContent('refresh failed')
+    expect(screen.getByTestId('project-content')).toBeInTheDocument()
+    expect(document.querySelector('.empty-state')).not.toBeInTheDocument()
   })
 })
 

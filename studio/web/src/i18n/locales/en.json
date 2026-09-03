@@ -594,6 +594,7 @@
     "newProject": "New project",
     "noProjects": "No projects yet",
     "noProjectsHint": "Click \"New project\" to start a LoRA training",
+    "openProject": "Open project {{title}}",
     "continueBtn": "Continue →",
     "moveToTrash": "Move to trash",
     "deleteProject": "Delete",

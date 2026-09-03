@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api, type BundleImportResult, type ProjectSummary, type VersionStatus } from '../api/client'
 import Alert from '../components/Alert'
+import Button from '../components/Button'
+import Card from '../components/Card'
+import EmptyState from '../components/EmptyState'
 import { Input, Select } from '../components/FormControl'
 import ListToolbar from '../components/ListToolbar'
 import PageHeader from '../components/PageHeader'
@@ -248,47 +251,49 @@ export default function ProjectsPage() {
         sticky
         actions={
           <>
-            {/* btn 词汇与 Queue / Generate 页 header 统一：轻操作 ghost、
-             * 激活态 secondary、全部 btn-sm；唯一 primary 留给页面 CTA。 */}
             {/* 过滤 icon：折叠态完全不占行，开关过滤行；有筛选生效且收起时带小圆点 */}
-            <button
-              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+            <Button
+              variant={filtersOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              iconOnly
               onClick={() => setFiltersOpen((o) => !o)}
               aria-expanded={filtersOpen}
               aria-controls={PROJECTS_LIST_TOOLBAR_ID}
-              aria-label={t('projects.filters')}
+              aria-label={`${t('projects.filters')}${!filtersOpen && filtering ? `, ${t('projects.filtersActive')}` : ''}`}
               title={t('projects.filters')}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
               </svg>
               {!filtersOpen && filtering && (
-                <span className="dot dot-running" aria-label={t('projects.filtersActive')} />
+                <span className="dot dot-running" aria-hidden="true" />
               )}
-            </button>
+            </Button>
             {/* 已归档视图开关（radio 语义：开 = 列表只显示已归档项目） */}
-            <button
-              className={`btn btn-sm ${showArchived ? 'btn-secondary' : 'btn-ghost'}`}
+            <Button
+              variant={showArchived ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={() => setShowArchived((v) => !v)}
               aria-pressed={showArchived}
               title={t('projects.archivedToggleHint')}
             >
               {t('projects.archivedToggle', { n: archivedItems.length })}
-            </button>
-            <button
-              className="btn btn-ghost btn-sm"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setShowImportDialog(true)}
               disabled={importing}
               title={importing ? t('projects.importing') : t('projects.importZipHint')}
             >
               {importing ? t('projects.importing') : t('projects.importZip')}
-            </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <path d="M12 5v14M5 12h14" />
               </svg>
               <span>{t('projects.newProject')}</span>
-            </button>
+            </Button>
           </>
         }
       />
@@ -303,48 +308,27 @@ export default function ProjectsPage() {
         onSort={setSortKey}
       />
 
-      <div className="px-page pb-page pt-section">
-        {error && (
-          <Alert tone="danger" role="alert" className="mb-section font-mono">
-            {error}
-          </Alert>
-        )}
-
-        {loading ? (
-          <div className="ui-project-grid grid gap-section">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="card p-[18px]" style={{ height: 140 }}>
-                <div className="w-3/5 h-4 rounded bg-overlay mb-2.5" />
-                <div className="w-2/5 h-[11px] rounded-sm bg-overlay" />
-              </div>
-            ))}
-          </div>
-        ) : items.length === 0 ? (
-          <div className="mt-20 text-center text-fg-tertiary">
-            <div className="text-lg mb-2">{t('projects.noProjects')}</div>
-            <div className="text-sm">{t('projects.noProjectsHint')}</div>
-          </div>
-        ) : visible.length === 0 ? (
-          <div className="mt-20 text-center text-fg-tertiary text-sm">
-            {t('common.noResults')}
-          </div>
-        ) : (
-          <div className="ui-project-grid grid gap-section auto-rows-fr">
-            {visible.map((p) => (
-              <ProjectCard
-                key={p.id}
-                project={p}
-                archived={showArchived}
-                onClick={() => openProject(p)}
-                onEdit={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(p) }}
-                onArchive={(e) => handleArchive(p, e)}
-                onUnarchive={(e) => handleUnarchive(p, e)}
-                onDelete={(e) => handleDelete(p, e)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      <ProjectsCollectionSurface
+        loading={loading}
+        error={error}
+        itemCount={items.length}
+        visibleCount={visible.length}
+      >
+        <div className="ui-project-grid grid gap-section auto-rows-fr">
+          {visible.map((p) => (
+            <ProjectCard
+              key={p.id}
+              project={p}
+              archived={showArchived}
+              onClick={() => openProject(p)}
+              onEdit={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(p) }}
+              onArchive={(e) => handleArchive(p, e)}
+              onUnarchive={(e) => handleUnarchive(p, e)}
+              onDelete={(e) => handleDelete(p, e)}
+            />
+          ))}
+        </div>
+      </ProjectsCollectionSurface>
 
       {creating && (
         <NewProjectDialog
@@ -524,7 +508,69 @@ function BundleImportDialog({
   )
 }
 
-function ProjectCard({
+export function ProjectsCollectionSurface({
+  loading,
+  error,
+  itemCount,
+  visibleCount,
+  children,
+}: {
+  loading: boolean
+  error: string | null
+  itemCount: number
+  visibleCount: number
+  children: ReactNode
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div className="px-page pb-page pt-section">
+      {error && (
+        <Alert tone="danger" role="alert" className="mb-section font-mono">
+          {error}
+        </Alert>
+      )}
+
+      {loading ? (
+        <div
+          className="ui-project-grid grid gap-section"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <span className="sr-only">{t('common.loading')}</span>
+          {[1, 2, 3].map(i => (
+            <Card
+              key={i}
+              padding="md"
+              className="ui-project-card-skeleton ui-skeleton"
+              aria-hidden="true"
+            >
+              <div className="flex flex-col gap-related">
+                <div className="h-[var(--t-base)] w-3/5 rounded bg-overlay" />
+                <div className="h-[var(--t-xs)] w-2/5 rounded-sm bg-overlay" />
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : error && visibleCount === 0 ? null : itemCount === 0 ? (
+        <EmptyState
+          className="mt-section"
+          title={t('projects.noProjects')}
+          description={t('projects.noProjectsHint')}
+        />
+      ) : visibleCount === 0 ? (
+        <EmptyState
+          className="mt-section"
+          size="sm"
+          description={t('common.noResults')}
+        />
+      ) : children}
+    </div>
+  )
+}
+
+export function ProjectCard({
   project: p,
   archived = false,
   onClick,
@@ -543,88 +589,109 @@ function ProjectCard({
   onDelete?: (e: React.MouseEvent) => void
 }) {
   const { t } = useTranslation()
-  const [hovered, setHovered] = useState(false)
+  const titleId = `project-${p.id}-title`
 
   return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={`group p-[18px] text-left rounded-lg cursor-pointer flex flex-col gap-3.5 relative w-full ${hovered ? 'border-dim shadow-sm bg-surface' : 'border border-subtle bg-surface'} ${archived ? 'opacity-70' : ''}`}
-      style={{ transition: 'border-color 0.15s, box-shadow 0.15s, opacity 0.15s' }}
+    <Card
+      as="article"
+      interactive
+      padding="md"
+      aria-labelledby={titleId}
+      className={`group relative flex w-full flex-col gap-field text-left ${archived ? 'opacity-70' : ''}`}
     >
-      {/* ADR-0007 §11.8-E: 右上角 = active version status；去 stage badge / 时间 / 产物 */}
-      <div className="flex justify-between items-start gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="text-md font-semibold overflow-hidden text-ellipsis whitespace-nowrap" style={{ letterSpacing: '-0.01em' }}>
-            {p.title}
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={t('projects.openProject', { title: p.title })}
+        className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] border-0 bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      />
+
+      <div className="pointer-events-none relative z-[1] flex flex-1 flex-col gap-field">
+        {/* ADR-0007 §11.8-E: 右上角 = active version status；去 stage badge / 时间 / 产物 */}
+        <div className="flex items-start justify-between gap-related">
+          <div className="flex min-w-0 flex-1 flex-col gap-related">
+            <h2
+              id={titleId}
+              title={p.title}
+              className="m-0 truncate text-base font-semibold text-fg-primary"
+            >
+              {p.title}
+            </h2>
+            <div className="mono text-xs text-fg-tertiary">
+              {p.slug}
+            </div>
           </div>
-          <div className="mono text-xs text-fg-tertiary mt-0.5">
-            {p.slug}
+          <VersionStatusBadge status={p.active_version_status} phase={p.active_version_phase} />
+        </div>
+
+        {p.note && (
+          <p className="m-0 text-sm text-fg-secondary overflow-hidden line-clamp-2">
+            {p.note}
+          </p>
+        )}
+
+        <div className="mt-auto flex items-center gap-section text-sm text-fg-secondary">
+          {/* active version 名（直接版本，无前缀文本） */}
+          {p.active_version_label ? (
+            <span className="font-mono text-fg-primary">{p.active_version_label}</span>
+          ) : (
+            <span className="text-fg-tertiary italic text-xs">{t('projects.noActiveVersion')}</span>
+          )}
+          <span className="flex-1" />
+          {/* 操作图标默认隐藏，hover / 键盘聚焦卡片时淡入，减少常驻视觉噪声 */}
+          <div className="pointer-events-none flex gap-related items-center opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+            <Button
+              variant="ghost"
+              size="xs"
+              iconOnly
+              onClick={onEdit}
+              title={t('projects.editProject')}
+              aria-label={`${t('projects.editProject')} ${p.title}`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+              </svg>
+            </Button>
+            {archived ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  iconOnly
+                  onClick={onUnarchive}
+                  title={t('projects.unarchiveTitle')}
+                  aria-label={`${t('projects.unarchiveTitle')} ${p.title}`}
+                >
+                  ↺
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  iconOnly
+                  onClick={onDelete}
+                  title={t('projects.deleteProjectTitle')}
+                  aria-label={`${t('projects.deleteProjectTitle')} ${p.title}`}
+                >
+                  ×
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="ghost"
+                size="xs"
+                iconOnly
+                onClick={onArchive}
+                title={t('projects.archiveProjectTitle')}
+                aria-label={`${t('projects.archiveProjectTitle')} ${p.title}`}
+              >
+                ×
+              </Button>
+            )}
           </div>
         </div>
-        <VersionStatusBadge status={p.active_version_status} phase={p.active_version_phase} />
       </div>
-
-      {p.note && (
-        <p className="m-0 text-sm text-fg-secondary overflow-hidden line-clamp-2">
-          {p.note}
-        </p>
-      )}
-
-      <div className="flex gap-4 text-sm text-fg-secondary mt-auto items-center">
-        {/* active version 名（直接版本，无前缀文本） */}
-        {p.active_version_label ? (
-          <span className="font-mono text-fg-primary">{p.active_version_label}</span>
-        ) : (
-          <span className="text-fg-tertiary italic text-xs">{t('projects.noActiveVersion')}</span>
-        )}
-        <span className="flex-1" />
-        {/* 操作图标默认隐藏，hover / 键盘聚焦卡片时淡入，减少常驻视觉噪声 */}
-        <div className="flex gap-3 items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-        <button
-          onClick={onEdit}
-          className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
-          title={t('projects.editProject')}
-          aria-label={`${t('projects.editProject')} ${p.title}`}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 20h9" />
-            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-          </svg>
-        </button>
-        {archived ? (
-          <>
-            <button
-              onClick={onUnarchive}
-              className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
-              title={t('projects.unarchiveTitle')}
-              aria-label={`${t('projects.unarchiveTitle')} ${p.title}`}
-            >
-              ↺
-            </button>
-            <button
-              onClick={onDelete}
-              className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
-              title={t('projects.deleteProjectTitle')}
-              aria-label={`${t('projects.deleteProjectTitle')} ${p.title}`}
-            >
-              ×
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={onArchive}
-            className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
-            title={t('projects.archiveProjectTitle')}
-            aria-label={`${t('projects.archiveProjectTitle')} ${p.title}`}
-          >
-            ×
-          </button>
-        )}
-        </div>
-      </div>
-    </button>
+    </Card>
   )
 }
 
