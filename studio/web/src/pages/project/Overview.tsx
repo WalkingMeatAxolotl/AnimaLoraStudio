@@ -88,32 +88,24 @@ function Identity({
     ? new Date(project.created_at * 1000).toLocaleDateString()
     : '—'
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+    <div className="flex items-center gap-field">
       <ProjectGlyph slug={project.slug} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <h1 style={{
-          margin: 0, fontSize: 'var(--t-2xl)', fontWeight: 600,
-          letterSpacing: '-0.025em', lineHeight: 1.1,
-          display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
-        }}>
+      <div className="min-w-0 flex-1">
+        <h1 className="type-page-title m-0 flex flex-wrap items-baseline gap-related">
           <span>{project.title}</span>
           {version && (
             <>
-              <span style={{ color: 'var(--fg-tertiary)', fontWeight: 300, fontSize: 'var(--t-xl)' }}>/</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xl)', color: 'var(--accent)' }}>{version.label}</span>
+              <span className="text-xl font-light text-fg-tertiary">/</span>
+              <span className="font-mono text-xl text-accent">{version.label}</span>
               <VersionStatusBadge status={version.status} />
             </>
           )}
         </h1>
-        <div style={{
-          marginTop: 6, display: 'flex', alignItems: 'center', gap: 10,
-          fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)',
-          flexWrap: 'wrap',
-        }}>
-          <span><span style={{ color: 'var(--fg-secondary)' }}>{project.download_image_count ?? 0}</span> {t('overview.identity.datasetSuffix')}</span>
-          <span>·</span>
-          <span><span style={{ color: 'var(--fg-secondary)' }}>{totalVersions}</span> {t('overview.identity.versionSuffix')}</span>
-          <span>·</span>
+        <div className="mt-related flex flex-wrap items-center gap-field font-mono text-xs text-fg-tertiary">
+          <span><span className="text-fg-secondary">{project.download_image_count ?? 0}</span> {t('overview.identity.datasetSuffix')}</span>
+          <span aria-hidden="true">·</span>
+          <span><span className="text-fg-secondary">{totalVersions}</span> {t('overview.identity.versionSuffix')}</span>
+          <span aria-hidden="true">·</span>
           <span>{t('overview.identity.createdLabel')} {created}</span>
         </div>
       </div>
@@ -169,54 +161,71 @@ function VersionRail({
   deleteEnabled: boolean
 }) {
   const { t } = useTranslation()
+  const selectVersionAt = (index: number) => {
+    const target = versions[index]
+    if (!target) return
+    onSelect(target.id)
+    window.requestAnimationFrame(() => {
+      document.getElementById(`overview-version-${target.id}`)?.focus()
+    })
+  }
+
+  const handleVersionKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return
+    let targetIndex: number | null = null
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      targetIndex = (index + 1) % versions.length
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      targetIndex = (index - 1 + versions.length) % versions.length
+    } else if (event.key === 'Home') {
+      targetIndex = 0
+    } else if (event.key === 'End') {
+      targetIndex = versions.length - 1
+    }
+    if (targetIndex == null) return
+    event.preventDefault()
+    selectVersionAt(targetIndex)
+  }
+
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-      paddingTop: 14, paddingBottom: 2,
-      borderTop: '1px solid var(--border-subtle)',
-    }}>
-      <span style={{
-        fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
-        color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em',
-        marginRight: 4,
-      }}>{t('overview.rail.label')}</span>
-      {versions.map((v) => {
-        const isCurrent = v.id === currentVid
-        return (
-          <button
-            key={v.id}
-            onClick={() => onSelect(v.id)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-              padding: '5px 10px 5px 8px',
-              background: isCurrent ? 'var(--bg-surface)' : 'transparent',
-              border: '1px solid ' + (isCurrent ? 'var(--accent)' : 'var(--border-subtle)'),
-              borderRadius: 'var(--r-md)',
-              cursor: 'pointer',
-              color: 'var(--fg-primary)',
-              boxShadow: isCurrent ? '0 0 0 3px var(--accent-soft)' : 'none',
-            }}
-          >
-            <StatusDotMini status={v.status} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', fontWeight: 600 }}>{v.label}</span>
-            <span style={{ fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)' }}>{t(STATUS_LABEL[v.status])}</span>
-          </button>
-        )
-      })}
-      <button
-        onClick={onCreate}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          padding: '5px 10px',
-          background: 'transparent',
-          border: '1px dashed var(--border-default)',
-          borderRadius: 'var(--r-md)',
-          cursor: 'pointer',
-          color: 'var(--fg-tertiary)',
-          fontSize: 'var(--t-sm)',
-        }}
-      >+ {t('overview.versionSelector.newVersion')}</button>
-      <span style={{ flex: 1 }} />
+    <div className="flex flex-wrap items-center gap-related border-t border-subtle pt-section pb-related">
+      <div
+        role="radiogroup"
+        aria-label={t('overview.rail.label')}
+        className="flex flex-wrap items-center gap-related"
+      >
+        <span className="mr-related font-mono text-2xs uppercase tracking-wider text-fg-tertiary" aria-hidden="true">
+          {t('overview.rail.label')}
+        </span>
+        {versions.map((v, index) => {
+          const isCurrent = v.id === currentVid
+          return (
+            <button
+              key={v.id}
+              id={`overview-version-${v.id}`}
+              type="button"
+              role="radio"
+              aria-checked={isCurrent}
+              tabIndex={isCurrent || (currentVid == null && index === 0) ? 0 : -1}
+              onClick={() => onSelect(v.id)}
+              onKeyDown={(event) => handleVersionKeyDown(event, index)}
+              className={`inline-flex items-center gap-related rounded-md border px-field py-related text-fg-primary outline-none transition-colors motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-accent ${
+                isCurrent
+                  ? 'border-accent bg-surface ring-2 ring-accent-soft'
+                  : 'border-subtle bg-transparent hover:bg-overlay'
+              }`}
+            >
+              <StatusDotMini status={v.status} />
+              <span className="font-mono text-sm font-semibold">{v.label}</span>
+              <span className="text-xs text-fg-tertiary">{t(STATUS_LABEL[v.status])}</span>
+            </button>
+          )
+        })}
+      </div>
+      <Button onClick={onCreate} variant="secondary" size="sm">
+        + {t('overview.versionSelector.newVersion')}
+      </Button>
+      <span className="flex-1" />
       {deleteEnabled && (
         <Button
           onClick={onDelete}
@@ -1342,10 +1351,7 @@ export default function ProjectOverview() {
   return (
     <div className="fade-in flex flex-col h-full min-h-0">
       {/* ── 顶部三段：Identity / VersionRail / StatusBanner ──── */}
-      <div
-        className="shrink-0 border-b border-subtle"
-        style={{ padding: '14px 24px 10px', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-canvas)' }}
-      >
+      <div className="shrink-0 border-b border-subtle bg-canvas px-page pt-section pb-related flex flex-col gap-related">
         <Identity
           project={project}
           version={selectedVersion}
@@ -1379,7 +1385,7 @@ export default function ProjectOverview() {
         onChange={setActiveTab}
         ariaLabel={t('overview.tabsAriaLabel')}
         idPrefix="project-overview-tab"
-        className="shrink-0 px-6"
+        className="shrink-0 px-page"
       />
 
       {/* ── Tab body ──── */}
@@ -1390,7 +1396,7 @@ export default function ProjectOverview() {
         className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden"
       >
         {activeTab === 'details' && (
-          <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto">
+          <div className="px-page pt-related pb-page flex-1 min-h-0 overflow-y-auto">
             <DetailGrid project={project} version={selectedVersion} />
           </div>
         )}

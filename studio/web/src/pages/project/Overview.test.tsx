@@ -121,6 +121,36 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
   })
 })
 
+describe('ProjectOverview 版本选择', () => {
+  it('VersionRail 使用 radiogroup、roving tabindex 与方向键导航', async () => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([])
+    const project = makeProject({
+      versions: [
+        makeVersion(),
+        makeVersion({ id: 8, label: 'v2', status: 'completed', phase: 'ready' }),
+      ],
+    })
+
+    renderOverview(project)
+
+    expect(screen.getByRole('radiogroup', { name: '版本' })).toBeInTheDocument()
+    const v1 = screen.getByRole('radio', { name: 'v1 训练中' })
+    const v2 = screen.getByRole('radio', { name: 'v2 已完成' })
+    expect(v1).toHaveAttribute('aria-checked', 'true')
+    expect(v1).toHaveAttribute('tabindex', '0')
+    expect(v2).toHaveAttribute('tabindex', '-1')
+
+    fireEvent.keyDown(v1, { key: 'ArrowRight' })
+    await waitFor(() => expect(v2).toHaveAttribute('aria-checked', 'true'))
+    expect(v2).toHaveAttribute('tabindex', '0')
+    await waitFor(() => expect(v2).toHaveFocus())
+
+    fireEvent.keyDown(v2, { key: 'Home' })
+    await waitFor(() => expect(v1).toHaveAttribute('aria-checked', 'true'))
+    expect(screen.getByRole('button', { name: '+ 新版本' })).toHaveClass('btn', 'btn-secondary', 'btn-sm')
+  })
+})
+
 describe('ProjectOverview 内容 surfaces', () => {
   it('详情统计使用共享 Card，任务与输出空态使用 EmptyState', async () => {
     vi.spyOn(api, 'listQueue').mockResolvedValue([])
