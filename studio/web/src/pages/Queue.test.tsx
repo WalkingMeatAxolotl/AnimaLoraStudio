@@ -111,12 +111,13 @@ describe('QueuePage 分区 + 分页', () => {
     renderQueue()
 
     const banner = await screen.findByTestId('queue-hold-banner')
-    expect(banner).toHaveClass('alert', 'alert-warning', 'alert-sm', 'sticky')
+    expect(banner).toHaveClass('alert', 'alert-warning', 'alert-sm')
+    expect(banner).not.toHaveClass('sticky')
     expect(within(banner).getByRole('button', { name: '恢复调度' }))
       .toHaveClass('btn', 'btn-ghost', 'btn-xs')
   })
 
-  it('渲染进行中/等待/历史三分区，历史超过一页时出分页器', async () => {
+  it('渲染进行中/等待/历史三分区，历史超过一页时固定分页器', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
       makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
@@ -128,6 +129,25 @@ describe('QueuePage 分区 + 分页', () => {
     })
 
     renderQueue()
+
+    expect(screen.getByTestId('queue-page'))
+      .toHaveClass('h-full', 'min-h-0', 'flex', 'flex-col', 'overflow-hidden')
+    expect(screen.getByTestId('queue-page'))
+      .toHaveAttribute('data-app-shell-scroll', 'contained')
+    expect(screen.getByTestId('queue-page')).not.toHaveClass('min-h-full')
+    expect(screen.getByTestId('queue-scroll-region'))
+      .toHaveClass('ui-queue-scroll-region', 'flex-1', 'min-h-0')
+    expect(screen.getByTestId('queue-scroll-region'))
+      .toHaveAttribute('role', 'region')
+    expect(screen.getByTestId('queue-scroll-region'))
+      .toHaveAccessibleName(/任务队列/)
+    expect(screen.getByTestId('queue-scroll-region')).toHaveAttribute('tabindex', '0')
+    expect(screen.getByTestId('queue-page-content'))
+      .toHaveClass('px-page', 'py-section')
+    expect(screen.getByTestId('queue-page-content'))
+      .not.toHaveClass('overflow-y-auto', 'overflow-hidden')
+    expect(screen.getByRole('heading', { level: 1 }).closest('.ui-page-header'))
+      .not.toHaveClass('sticky')
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: /进行中/ })).toBeInTheDocument())
     expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
@@ -146,8 +166,11 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument()
     expect(screen.getByTestId('history-prev')).toBeDisabled()
     expect(screen.getByTestId('history-next')).not.toBeDisabled()
-    expect(screen.getByTestId('history-next').parentElement?.parentElement)
-      .toHaveClass('-mx-page', '-mb-page', 'px-page')
+    const pagination = screen.getByTestId('queue-pagination')
+    expect(pagination).toHaveClass('shrink-0', 'px-page', 'border-t')
+    expect(pagination).not.toHaveClass('mt-section', '-mx-page', '-mb-page')
+    expect(screen.getByTestId('queue-scroll-region').nextElementSibling)
+      .toBe(pagination)
     historySpy.mockClear()
 
     // 点下一页 → 以 page=2 重新请求后端

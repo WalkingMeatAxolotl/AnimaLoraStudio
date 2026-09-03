@@ -419,7 +419,6 @@ export default function RegularizationPage() {
 
   return (
     <StepShell
-      idx={5}
       title={t('steps.reg.title')}
       subtitle={t('steps.reg.subtitle')}
       logSources={[

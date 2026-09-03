@@ -378,7 +378,6 @@ export default function PreprocessPage() {
 
   return (
     <StepShell
-      idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('steps.preprocess.subtitle')}
       actions={

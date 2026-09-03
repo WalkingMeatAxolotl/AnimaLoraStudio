@@ -371,7 +371,6 @@ export default function TaggingPage() {
 
   return (
     <StepShell
-      idx={3}
       title={t('steps.tag.title')}
       subtitle={t('steps.tag.subtitle')}
       logSources={[
@@ -406,7 +405,7 @@ export default function TaggingPage() {
         </button>
       }
     >
-    <div className="flex flex-col h-full gap-3">
+    <div className="flex flex-col h-full gap-3 min-h-0">
 
       <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
 

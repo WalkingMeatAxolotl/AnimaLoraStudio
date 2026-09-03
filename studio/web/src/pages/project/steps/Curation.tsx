@@ -92,8 +92,6 @@ type Focus =
 
 const FOLDER_PATTERN = /^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$/
 
-const SCROLL_BOX = 'flex-1 min-h-0 overflow-y-auto pr-1'
-
 export default function CurationPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -601,7 +599,6 @@ export default function CurationPage() {
 
   return (
     <StepShell
-      idx={2}
       title={t('steps.curate.title')}
       subtitle={t('steps.curate.subtitle')}
       actions={
@@ -640,7 +637,7 @@ export default function CurationPage() {
         </>
       }
     >
-    <div className="flex flex-col h-full gap-3">
+    <div className="flex flex-col h-full gap-3 min-h-0">
 
       <div
         ref={rowRef}
@@ -688,20 +685,20 @@ export default function CurationPage() {
             </>
           }
         >
-          <div className={SCROLL_BOX}>
-            <ImageGrid
-              items={leftItems}
-              selected={leftSel}
-              activeName={preview?.side === 'left' ? preview.name : undefined}
-              onSelect={handleLeftClick}
-              onHover={onLeftHover}
-              onPreview={openLeftPreview}
-              onActivate={openLeftPreview}
-              clickMode="activate"
-              ariaLabel="download-grid"
-              emptyHint={t('curate.downloadEmptyHint')}
-            />
-          </div>
+          <ImageGrid
+            className="flex-1 min-h-0"
+            contentClassName="p-2"
+            items={leftItems}
+            selected={leftSel}
+            activeName={preview?.side === 'left' ? preview.name : undefined}
+            onSelect={handleLeftClick}
+            onHover={onLeftHover}
+            onPreview={openLeftPreview}
+            onActivate={openLeftPreview}
+            clickMode="activate"
+            ariaLabel="download-grid"
+            emptyHint={t('curate.downloadEmptyHint')}
+          />
         </PanelCard>
 
         <PaneResizer
@@ -767,21 +764,23 @@ export default function CurationPage() {
           }
         >
           {isVal ? (
-            <p className="text-xs text-fg-tertiary">{t('curate.valHint')}</p>
+            <p className="px-2 pt-2 text-xs text-fg-tertiary">{t('curate.valHint')}</p>
           ) : (
             <>
-              <FolderSummary
-                folders={folderNames}
-                counts={Object.fromEntries(folderNames.map((f) => [f, view?.right[f]?.length ?? 0]))}
-                activeFolder={rightFolder}
-                busy={busy}
-                onSwitch={switchRightFolder}
-                onRename={(name) => setRenaming({ target: name, value: name })}
-                onDelete={doDeleteFolder}
-              />
+              <div className="px-2 pt-2">
+                <FolderSummary
+                  folders={folderNames}
+                  counts={Object.fromEntries(folderNames.map((f) => [f, view?.right[f]?.length ?? 0]))}
+                  activeFolder={rightFolder}
+                  busy={busy}
+                  onSwitch={switchRightFolder}
+                  onRename={(name) => setRenaming({ target: name, value: name })}
+                  onDelete={doDeleteFolder}
+                />
+              </div>
 
               {renaming && (
-                <div className="flex items-center gap-2 my-3 text-sm">
+                <div className="flex items-center gap-2 mx-2 my-3 text-sm">
                   <span className="text-fg-secondary">{t('curate.renameLabel', { name: renaming.target })}</span>
                   <input
                     autoFocus
@@ -805,28 +804,28 @@ export default function CurationPage() {
             </>
           )}
 
-          <div className={`${SCROLL_BOX} mt-3`}>
-            <ImageGrid
-              items={rightItems}
-              selected={rightSel}
-              activeName={preview?.side === 'right' ? preview.name : undefined}
-              onSelect={handleRightClick}
-              onHover={onRightHover}
-              onPreview={openRightPreview}
-              onActivate={openRightPreview}
-              clickMode="activate"
-              ariaLabel={isVal ? 'validation-grid' : 'train-grid'}
-              emptyHint={
-                rightLoading
-                  ? t('curate.loading')
-                  : isVal
-                    ? t('curate.valEmpty')
-                    : rightFolder
-                      ? t('curate.trainEmptyFolder', { folder: rightFolder })
-                      : t('curate.trainNoFolder')
-              }
-            />
-          </div>
+          <ImageGrid
+            className="flex-1 min-h-0 mt-3"
+            contentClassName="px-2 pb-2"
+            items={rightItems}
+            selected={rightSel}
+            activeName={preview?.side === 'right' ? preview.name : undefined}
+            onSelect={handleRightClick}
+            onHover={onRightHover}
+            onPreview={openRightPreview}
+            onActivate={openRightPreview}
+            clickMode="activate"
+            ariaLabel={isVal ? 'validation-grid' : 'train-grid'}
+            emptyHint={
+              rightLoading
+                ? t('curate.loading')
+                : isVal
+                  ? t('curate.valEmpty')
+                  : rightFolder
+                    ? t('curate.trainEmptyFolder', { folder: rightFolder })
+                    : t('curate.trainNoFolder')
+            }
+          />
         </PanelCard>
       </div>
 
@@ -970,7 +969,7 @@ function PanelCard({
         <span className="flex-1" />
         {actions}
       </header>
-      <div className="flex-1 min-h-0 flex flex-col p-2">{children}</div>
+      <div className="flex-1 min-h-0 flex flex-col">{children}</div>
     </section>
   )
 }

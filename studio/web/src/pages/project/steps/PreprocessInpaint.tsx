@@ -365,7 +365,6 @@ export default function PreprocessInpaintPage() {
 
   return (
     <StepShell
-      idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('preprocessInpaint.subtitle')}
       actions={
