@@ -1963,6 +1963,7 @@
   "tagEdit": {
     "title": "Tag edit",
     "subtitle": "Batch edit tags · stage locally · write on save",
+    "workspaceLabel": "Resizable image and tag editing workspace",
     "taggedBadge": "{{tagged}}/{{total}} tagged",
     "downloadZip": "Download dataset",
     "zipping": "Packing…",

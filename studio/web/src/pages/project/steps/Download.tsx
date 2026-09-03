@@ -412,18 +412,18 @@ function DownloadedGrid({
           {deleting ? t('download.deleting') : t('download.deleteBtn', { n: selected.size })}
         </button>
       </header>
-      <div className="flex-1 min-h-0 overflow-y-auto p-2">
-        <ImageGrid
-          items={items}
-          selected={selected}
-          onSelect={onSelect}
-          onActivate={onPreview}
-          onPreview={onPreview}
-          clickMode="activate"
-          ariaLabel="downloaded-grid"
-          emptyHint={t('download.emptyHint')}
-        />
-      </div>
+      <ImageGrid
+        className="flex-1 min-h-0"
+        contentClassName="p-2"
+        items={items}
+        selected={selected}
+        onSelect={onSelect}
+        onActivate={onPreview}
+        onPreview={onPreview}
+        clickMode="activate"
+        ariaLabel="downloaded-grid"
+        emptyHint={t('download.emptyHint')}
+      />
     </section>
   )
 }

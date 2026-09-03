@@ -1963,6 +1963,7 @@
   "tagEdit": {
     "title": "标签编辑",
     "subtitle": "批量编辑标签 · 暂存本地 · 保存后写盘",
+    "workspaceLabel": "可调整宽度的图片与标签编辑工作区",
     "taggedBadge": "{{tagged}}/{{total}} 已打标",
     "downloadZip": "下载训练集",
     "zipping": "打包中…",

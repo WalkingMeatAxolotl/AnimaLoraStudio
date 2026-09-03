@@ -10,7 +10,7 @@ import {
 import BulkActionBar from '../../../components/BulkActionBar'
 import { useDialog } from '../../../components/Dialog'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
-import PaneResizer from '../../../components/PaneResizer'
+import PaneResizer, { normalizePanePair } from '../../../components/PaneResizer'
 import SaveBar from '../../../components/SaveBar'
 import StepShell from '../../../components/StepShell'
 import TagEditor from '../../../components/TagEditor'
@@ -29,6 +29,12 @@ interface Ctx {
 }
 
 const keyOf = (folder: string, name: string) => `${folder}/${name}`
+
+const TAG_EDIT_GRID_MIN = 15
+const TAG_EDIT_SIDE_MIN = 20
+const TAG_EDIT_PREVIEW_MIN = 15
+const TAG_EDIT_GRID_PANE_ID = 'tag-edit-grid-pane'
+const TAG_EDIT_SIDE_PANE_ID = 'tag-edit-side-pane'
 
 interface CaptionMeta {
   folder: string
@@ -66,11 +72,23 @@ export default function TagEditPage() {
   const rowRef = useRef<HTMLDivElement>(null)
   const [gridPct, setGridPct] = useLocalStorageState('studio:tagEdit:grid_pct', 40)
   const [sidePct, setSidePct] = useLocalStorageState('studio:tagEdit:side_pct', 32)
+  const normalizedPanes = normalizePanePair(gridPct, sidePct, {
+    startMin: TAG_EDIT_GRID_MIN,
+    endMin: TAG_EDIT_SIDE_MIN,
+    flexibleMin: TAG_EDIT_PREVIEW_MIN,
+  })
+  const boundedGridPct = normalizedPanes.start
+  const boundedSidePct = normalizedPanes.end
 
-  // 两栏共享同一条宽度预算，各自的上限得看对方吃掉多少，否则中间预览栏会被挤没。
-  const MIN_PREVIEW_PCT = 15
-  const gridMax = Math.max(15, 100 - sidePct - MIN_PREVIEW_PCT)
-  const sideMax = Math.max(20, 100 - gridPct - MIN_PREVIEW_PCT)
+  // The two persisted fixed panes share one width budget. Repair invalid old values
+  // together so the flexible preview pane always retains its declared minimum.
+  useEffect(() => {
+    if (gridPct !== boundedGridPct) setGridPct(boundedGridPct)
+    if (sidePct !== boundedSidePct) setSidePct(boundedSidePct)
+  }, [boundedGridPct, boundedSidePct, gridPct, setGridPct, setSidePct, sidePct])
+
+  const gridMax = 100 - boundedSidePct - TAG_EDIT_PREVIEW_MIN
+  const sideMax = 100 - boundedGridPct - TAG_EDIT_PREVIEW_MIN
 
   const reloadCache = useCallback(async () => {
     if (versionId == null) return
@@ -374,11 +392,18 @@ export default function TagEditPage() {
         </>
       }
     >
-      <div ref={rowRef} className="flex flex-1 min-h-0 gap-2.5">
+      <div
+        ref={rowRef}
+        role="region"
+        aria-label={t('tagEdit.workspaceLabel')}
+        tabIndex={0}
+        className="flex flex-1 min-h-0 gap-2.5 overflow-x-auto overflow-y-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      >
 
         <section
-          className="rounded-md border border-subtle bg-surface flex flex-col min-w-0 overflow-hidden"
-          style={{ flex: isEditing ? `0 0 ${gridPct}%` : 1 }}
+          id={TAG_EDIT_GRID_PANE_ID}
+          className="rounded-md border border-subtle bg-surface flex flex-col min-w-[240px] overflow-hidden"
+          style={{ flex: isEditing ? `0 0 ${boundedGridPct}%` : 1 }}
         >
           {folderNames.length > 1 && (
             <div className="px-2 pt-2 pb-1.5 flex items-center gap-1 flex-wrap shrink-0 border-b border-subtle">
@@ -404,37 +429,38 @@ export default function TagEditPage() {
               })}
             </div>
           )}
-          <div className="flex-1 overflow-y-auto p-2">
-            <ImageGrid
-              items={captionItems}
-              selected={sel}
-              activeName={activeKey || undefined}
-              onSelect={handleClick}
-              onActivate={setActiveKey}
-              clickMode="activate"
-              ariaLabel="tag-edit-grid"
-              emptyHint={
-                folderFilter
-                  ? t('tagEdit.noImagesInFolder', { folder: folderFilter })
-                  : t('tagEdit.noImagesHint')
-              }
-            />
-          </div>
+          <ImageGrid
+            className="flex-1 min-h-0"
+            contentClassName="p-2"
+            items={captionItems}
+            selected={sel}
+            activeName={activeKey || undefined}
+            onSelect={handleClick}
+            onActivate={setActiveKey}
+            clickMode="activate"
+            ariaLabel="tag-edit-grid"
+            emptyHint={
+              folderFilter
+                ? t('tagEdit.noImagesInFolder', { folder: folderFilter })
+                : t('tagEdit.noImagesHint')
+            }
+          />
         </section>
 
         {isEditing && (
           <PaneResizer
             containerRef={rowRef}
-            value={gridPct}
+            value={boundedGridPct}
             onChange={setGridPct}
-            min={15}
+            min={TAG_EDIT_GRID_MIN}
             max={gridMax}
             ariaLabel={t('tagEdit.resizeGrid')}
+            ariaControls={TAG_EDIT_GRID_PANE_ID}
           />
         )}
 
         {isEditing && (
-          <section className="flex-1 rounded-md border border-subtle bg-surface flex flex-col min-w-0 overflow-hidden">
+          <section className="flex-1 min-w-[240px] rounded-md border border-subtle bg-surface flex flex-col overflow-hidden">
             <div className="px-3 py-2 border-b border-subtle shrink-0 flex items-center gap-2">
               <span className="text-xs text-fg-tertiary">{t('tagEdit.singleEdit')}</span>
               <code className="flex-1 min-w-0 text-xs font-mono text-fg-secondary truncate">
@@ -456,15 +482,20 @@ export default function TagEditPage() {
 
         <PaneResizer
           containerRef={rowRef}
-          value={sidePct}
+          value={boundedSidePct}
           onChange={setSidePct}
-          min={20}
+          min={TAG_EDIT_SIDE_MIN}
           max={sideMax}
           anchor="end"
           ariaLabel={t('tagEdit.resizeSide')}
+          ariaControls={TAG_EDIT_SIDE_PANE_ID}
         />
 
-        <div className="flex flex-col gap-2.5 min-w-0 min-h-0" style={{ flex: `0 0 ${sidePct}%` }}>
+        <div
+          id={TAG_EDIT_SIDE_PANE_ID}
+          className="flex flex-col gap-2.5 min-w-[260px] min-h-0"
+          style={{ flex: `0 0 ${boundedSidePct}%` }}
+        >
           {isEditing ? (
             // editing 时：bulk + 标签分布 都和"调单图标签"无关，整个侧栏让位给
             // TagEditor。退出 editing 后自动回来，sel / folderFilter 等 state
