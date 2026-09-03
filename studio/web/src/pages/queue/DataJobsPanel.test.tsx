@@ -84,6 +84,10 @@ describe('DataJobsPanel', () => {
 
     await waitFor(() => expect(screen.getByTestId('job-row-10')).toBeInTheDocument())
     expect(screen.getByTestId('data-jobs-panel')).toHaveClass('gap-section')
+    expect(screen.getByTestId('job-row-10').firstElementChild)
+      .toHaveClass('ui-queue-job-grid')
+    expect(screen.getByTestId('job-row-10').querySelector('.ui-queue-job-timing'))
+      .toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
       .toHaveClass('type-section-label')
     expect(screen.getByRole('heading', { level: 3, name: /进行中/ }).parentElement)

@@ -311,7 +311,7 @@ export default function ProjectsPage() {
         )}
 
         {loading ? (
-          <div className="grid gap-section" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+          <div className="ui-project-grid grid gap-section">
             {[1, 2, 3].map(i => (
               <div key={i} className="card p-[18px]" style={{ height: 140 }}>
                 <div className="w-3/5 h-4 rounded bg-overlay mb-2.5" />
@@ -329,7 +329,7 @@ export default function ProjectsPage() {
             {t('common.noResults')}
           </div>
         ) : (
-          <div className="grid gap-section auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+          <div className="ui-project-grid grid gap-section auto-rows-fr">
             {visible.map((p) => (
               <ProjectCard
                 key={p.id}

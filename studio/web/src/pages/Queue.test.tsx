@@ -138,6 +138,10 @@ describe('QueuePage 分区 + 分页', () => {
       .toHaveClass('type-section-label')
     expect(screen.getByRole('heading', { level: 3, name: /历史/ }))
       .toHaveClass('type-section-label')
+    expect(screen.getByTestId('queue-task-grid-10'))
+      .toHaveClass('ui-queue-task-grid')
+    expect(screen.getByTestId('queue-task-grid-10').querySelector('.ui-queue-task-timing'))
+      .toBeInTheDocument()
     // 历史 total=25 > page_size=20 → 分页器 + 页码指示
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument()
     expect(screen.getByTestId('history-prev')).toBeDisabled()

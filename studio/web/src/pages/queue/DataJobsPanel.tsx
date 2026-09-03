@@ -131,10 +131,7 @@ export default function DataJobsPanel({
         className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${task.status === 'running' ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
         data-testid={`job-row-${task.id}`}
       >
-        <div
-          className="px-[22px] py-4 grid gap-3 items-center"
-          style={{ gridTemplateColumns: '48px minmax(0,1fr) 96px 150px 120px' }}
-        >
+        <div className="ui-queue-job-grid px-[22px] py-4 grid gap-3 items-center">
           <span className={`font-mono text-sm ${task.status === 'running' ? 'text-accent font-semibold' : 'text-fg-tertiary'}`}>
             #{task.id}
           </span>
@@ -150,7 +147,7 @@ export default function DataJobsPanel({
             {task.status === 'running' && <span className="dot dot-running" />}
             {STATUS_LABEL[task.status] ?? task.status}
           </span>
-          <span className="font-mono text-xs text-fg-tertiary text-right">
+          <span className="ui-queue-job-timing font-mono text-xs text-fg-tertiary text-right">
             {task.status === 'running' ? (
               fmtJobDuration(task.started_at, null)
             ) : task.finished_at ? (

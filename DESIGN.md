@@ -495,7 +495,41 @@ App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
 adoption concern, not permission to hide primary actions or add arbitrary
 component-local breakpoints.
 
-## 16. Accessibility and resilience
+## 16. Responsive-layout contract
+
+The responsive layer distinguishes **wide desktop** (`> 1280px`) from
+**compact desktop** (`<= 1280px`). It adapts content hierarchy inside the
+AppShell; it does not invent a mobile navigation model. Shared responsive rules
+live in `styles/responsive.css`, while business state and DOM order remain owned
+by the page.
+
+Ordinary pages follow these rules:
+
+- Page headers keep title, helper navigation, and primary actions visible. At
+  compact desktop, the action slot may take a full row and `topRight` helpers
+  rejoin normal flow instead of overlapping title or actions.
+- Auto-fill card grids use a container-safe minimum such as
+  `minmax(min(100%, <preferred-width>), 1fr)`, so the grid never forces the main
+  track wider than the available content area.
+- Dense list rows preserve identity, type/state, live progress, and actions.
+  Auxiliary timestamps or duplicated metadata yield first at compact desktop;
+  hidden visual metadata must remain available in the row's accessible name,
+  title, or detail route.
+- Summary cards may reduce column count. Action rows wrap without changing DOM
+  order. A genuinely tabular fixed-width region establishes its own labelled,
+  keyboard-focusable horizontal scroll boundary instead of overflowing the page.
+- Truncation is limited to secondary labels and long paths, with the full value
+  available through `title` or an equivalent disclosure. Density and translated
+  copy must not remove controls or alter action priority.
+
+Professional split workspaces (Generate canvas, media curation, evaluation
+matrices, image editors, and similar surfaces) preserve their task-specific
+geometry and explicit local scroll owners. They must not inherit ordinary-page
+stacking mechanically. Any later restructuring requires a representative pilot
+and content-driven evidence; `md`/`lg`/`xl` utility classes are not an independent
+breakpoint policy.
+
+## 17. Accessibility and resilience
 
 Every primitive must work with keyboard focus, disabled state, light/dark themes,
 all three density modes, and both Chinese and English labels. Focus is always visible.
@@ -505,7 +539,7 @@ full value is available through an established disclosure pattern.
 Respect `prefers-reduced-motion`; status information must remain understandable when
 animation is disabled.
 
-## 17. Migration policy
+## 18. Migration policy
 
 Migration is incremental:
 

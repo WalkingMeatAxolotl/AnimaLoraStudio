@@ -110,12 +110,13 @@ function StatCard({ label, value, sub, mono, large, tone }: {
 }) {
   const toneClass = tone ? `text-${tone}` : 'text-fg-primary'
   return (
-    <div className="flex flex-col gap-1 px-[18px] py-3.5 bg-surface rounded-md border border-subtle">
+    <div className="flex min-w-0 flex-col gap-1 px-[18px] py-3.5 bg-surface rounded-md border border-subtle">
       <span className="text-xs text-fg-tertiary font-mono tracking-widest uppercase">
         {label}
       </span>
       <span
-        className={`${large ? 'text-3xl' : 'text-xl'} font-semibold ${mono ? 'font-mono' : 'font-sans'} tabular-nums ${toneClass}`}
+        className={`${large ? 'text-3xl' : 'text-xl'} overflow-hidden text-ellipsis whitespace-nowrap font-semibold ${mono ? 'font-mono' : 'font-sans'} tabular-nums ${toneClass}`}
+        title={value}
         style={{ letterSpacing: '-0.02em', lineHeight: 1.1 }}
       >
         {value}
@@ -366,8 +367,8 @@ export default function QueueDetailPage() {
           </h1>
           {task && (
             <>
-              <span className="text-fg-secondary text-md">{task.name}</span>
-              <code className="text-xs text-fg-tertiary font-mono">{task.config_name}.yaml</code>
+              <span className="ui-queue-detail-title text-fg-secondary text-md" title={task.name}>{task.name}</span>
+              <code className="ui-queue-detail-title text-xs text-fg-tertiary font-mono" title={`${task.config_name}.yaml`}>{task.config_name}.yaml</code>
             </>
           )}
           {status && (
@@ -515,7 +516,7 @@ export default function QueueDetailPage() {
 
         {/* Stat cards for running tasks */}
         {task && task.status === 'running' && (
-          <div className="grid grid-cols-4 gap-2.5 mt-1">
+          <div className="ui-queue-detail-stats grid gap-2.5 mt-1" data-testid="queue-detail-stats">
             <StatCard label={t('queueDetail.duration')} value={fmtDuration(task.started_at, null)} mono large tone="accent" />
             <StatCard label={t('queueDetail.startTime')} value={fmtTime(task.started_at)} mono />
             <StatCard label="Config" value={task.config_name} mono />
@@ -1082,8 +1083,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
       <div
         key={f.path}
         onClick={selectMode ? () => toggleOne(f.path) : undefined}
-        className={`grid gap-2 px-4 py-2 items-center border-b border-subtle text-xs transition-colors ${selectMode ? `cursor-pointer ${isSel ? 'bg-accent-soft' : 'hover:bg-overlay'}` : 'hover:bg-overlay'}`}
-        style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
+        className={`ui-queue-output-grid grid gap-2 px-4 py-2 items-center border-b border-subtle text-xs transition-colors ${selectMode ? `cursor-pointer ${isSel ? 'bg-accent-soft' : 'hover:bg-overlay'}` : 'hover:bg-overlay'}`}
       >
         <div className="flex items-center gap-1.5 min-w-0">
           <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{f.path || f.name}</code>
@@ -1114,11 +1114,15 @@ export function OutputsTab({ taskId }: { taskId: number }) {
     )
   })
 
-  const renderFileTable = (files: typeof sortedFiles) => (
-    <div className="card overflow-hidden p-0">
+  const renderFileTable = (files: typeof sortedFiles, label: string) => (
+    <div
+      className="ui-queue-output-table card p-0"
+      role="region"
+      aria-label={label}
+      tabIndex={0}
+    >
       <div
-        className="grid gap-2 px-4 py-2 text-xs text-fg-tertiary border-b border-subtle font-mono"
-        style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
+        className="ui-queue-output-grid grid gap-2 px-4 py-2 text-xs text-fg-tertiary border-b border-subtle font-mono"
       >
         <button
           onClick={() => onHeaderClick('name')}
@@ -1152,9 +1156,14 @@ export function OutputsTab({ taskId }: { taskId: number }) {
   return (
     <div className="flex flex-col flex-1 min-h-0 p-4 gap-2.5">
       {data?.output_dir ? (
-        <div className="flex items-center gap-2 text-xs shrink-0 border-b border-subtle pb-2.5">
+        <div className="ui-queue-output-actions flex items-center gap-2 text-xs shrink-0 border-b border-subtle pb-2.5" data-testid="queue-output-actions">
           <span className="text-fg-tertiary shrink-0">{t('common.directory')}</span>
-          <code className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-fg-primary font-mono">{data.output_dir}</code>
+          <code
+            className="ui-queue-output-path min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-fg-primary font-mono"
+            title={data.output_dir}
+          >
+            {data.output_dir}
+          </code>
           <Button variant="ghost" size="sm" onClick={copyPath}>{t('queueDetail.copyPath')}</Button>
           {data.supports_open_folder ? (
             <Button variant="ghost" size="sm" onClick={openFolder} disabled={busy || !data.exists}>
@@ -1222,14 +1231,14 @@ export function OutputsTab({ taskId }: { taskId: number }) {
           <div className="flex flex-col gap-3">
             {regularFiles.length > 0 && (
               <section className="flex flex-col gap-1.5">
-                <div className="px-1 text-xs font-semibold text-fg-secondary">输出文件</div>
-                {renderFileTable(regularFiles)}
+                <div className="px-1 text-xs font-semibold text-fg-secondary">{t('queueDetail.outputFiles')}</div>
+                {renderFileTable(regularFiles, t('queueDetail.outputFiles'))}
               </section>
             )}
             {stateFiles.length > 0 && (
               <section className="flex flex-col gap-1.5">
-                <div className="px-1 text-xs font-semibold text-warn">训练状态</div>
-                {renderFileTable(stateFiles)}
+                <div className="px-1 text-xs font-semibold text-warn">{t('queueDetail.trainingStates')}</div>
+                {renderFileTable(stateFiles, t('queueDetail.trainingStates'))}
               </section>
             )}
           </div>

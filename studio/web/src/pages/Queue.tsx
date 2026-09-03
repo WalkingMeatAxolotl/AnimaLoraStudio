@@ -222,8 +222,8 @@ function QueueTaskRow({
       className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${isRunning ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
     >
       <div
-        className="px-[22px] py-4 grid gap-3 items-center"
-        style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 176px' }}
+        className="ui-queue-task-grid px-[22px] py-4 grid gap-3 items-center"
+        data-testid={`queue-task-grid-${task.id}`}
       >
         <span className={`font-mono text-sm ${isRunning ? 'text-accent font-semibold' : 'text-fg-tertiary font-normal'}`}>
           #{task.id}
@@ -315,7 +315,7 @@ function QueueTaskRow({
           )}
         </div>
 
-        <span className="font-mono text-sm text-fg-tertiary text-right">
+        <span className="ui-queue-task-timing font-mono text-sm text-fg-tertiary text-right">
           {isRunning ? (
             <>
               {eta && <span className="text-accent">{eta}</span>}
@@ -1048,8 +1048,7 @@ export default function QueuePage() {
             {Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
-                className={`py-[18px] px-[22px] grid gap-3 items-center opacity-40 ${i < 2 ? 'border-b border-subtle' : 'border-b-0'}`}
-                style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 176px' }}
+                className={`ui-queue-task-grid py-[18px] px-[22px] grid gap-3 items-center opacity-40 ${i < 2 ? 'border-b border-subtle' : 'border-b-0'}`}
               >
                 <div className="h-3.5 rounded bg-overlay" />
                 <div className="flex flex-col gap-1">
@@ -1059,7 +1058,7 @@ export default function QueuePage() {
                 <div className="h-2.5 rounded bg-overlay" />
                 <div className="h-5 rounded bg-overlay" />
                 <div className="h-2.5 rounded bg-overlay" />
-                <div className="h-2.5 rounded bg-overlay" />
+                <div className="ui-queue-task-timing h-2.5 rounded bg-overlay" />
                 <div className="h-6 rounded bg-overlay" />
               </div>
             ))}
