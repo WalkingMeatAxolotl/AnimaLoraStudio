@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useOutletContext } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
   type CurationView,
@@ -36,6 +36,13 @@ import { computePixelHist } from '../../lib/pixelBins'
 import { useProjectCtx } from '../../context/ProjectContext'
 import { useEventStream } from '../../lib/useEventStream'
 import { useToast } from '../../components/Toast'
+import Button from '../../components/Button'
+import ProgressBar from '../../components/ProgressBar'
+import { Tabs, selectionItemId, type TabItem } from '../../components/SelectionGroup'
+import Card from '../../components/Card'
+import EmptyState from '../../components/EmptyState'
+import Alert from '../../components/Alert'
+import Badge, { type BadgeTone } from '../../components/Badge'
 
 type OverviewTab = 'details' | 'tasks' | 'output' | 'eval'
 
@@ -81,32 +88,24 @@ function Identity({
     ? new Date(project.created_at * 1000).toLocaleDateString()
     : '—'
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+    <div className="flex items-center gap-field">
       <ProjectGlyph slug={project.slug} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <h1 style={{
-          margin: 0, fontSize: 'var(--t-2xl)', fontWeight: 600,
-          letterSpacing: '-0.025em', lineHeight: 1.1,
-          display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
-        }}>
+      <div className="min-w-0 flex-1">
+        <h1 className="type-page-title m-0 flex flex-wrap items-baseline gap-related">
           <span>{project.title}</span>
           {version && (
             <>
-              <span style={{ color: 'var(--fg-tertiary)', fontWeight: 300, fontSize: 'var(--t-xl)' }}>/</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xl)', color: 'var(--accent)' }}>{version.label}</span>
+              <span className="text-xl font-light text-fg-tertiary">/</span>
+              <span className="font-mono text-xl text-accent">{version.label}</span>
               <VersionStatusBadge status={version.status} />
             </>
           )}
         </h1>
-        <div style={{
-          marginTop: 6, display: 'flex', alignItems: 'center', gap: 10,
-          fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)',
-          flexWrap: 'wrap',
-        }}>
-          <span><span style={{ color: 'var(--fg-secondary)' }}>{project.download_image_count ?? 0}</span> {t('overview.identity.datasetSuffix')}</span>
-          <span>·</span>
-          <span><span style={{ color: 'var(--fg-secondary)' }}>{totalVersions}</span> {t('overview.identity.versionSuffix')}</span>
-          <span>·</span>
+        <div className="mt-related flex flex-wrap items-center gap-field font-mono text-xs text-fg-tertiary">
+          <span><span className="text-fg-secondary">{project.download_image_count ?? 0}</span> {t('overview.identity.datasetSuffix')}</span>
+          <span aria-hidden="true">·</span>
+          <span><span className="text-fg-secondary">{totalVersions}</span> {t('overview.identity.versionSuffix')}</span>
+          <span aria-hidden="true">·</span>
           <span>{t('overview.identity.createdLabel')} {created}</span>
         </div>
       </div>
@@ -127,12 +126,14 @@ function StatusDotMini({ status }: { status: VersionStatus }) {
   const running = status === 'training'
   return (
     <span
+      className={running ? 'dot dot-running' : 'dot'}
       style={{
-        width: 7, height: 7, borderRadius: '50%',
-        background: cmap[status] ?? 'var(--fg-disabled)',
-        animation: running ? 'pulse 1.6s infinite' : 'none',
+        width: 7,
+        height: 7,
+        background: running ? undefined : (cmap[status] ?? 'var(--fg-disabled)'),
         flexShrink: 0,
       }}
+      aria-hidden="true"
     />
   )
 }
@@ -160,70 +161,89 @@ function VersionRail({
   deleteEnabled: boolean
 }) {
   const { t } = useTranslation()
+  const selectVersionAt = (index: number) => {
+    const target = versions[index]
+    if (!target) return
+    onSelect(target.id)
+    window.requestAnimationFrame(() => {
+      document.getElementById(`overview-version-${target.id}`)?.focus()
+    })
+  }
+
+  const handleVersionKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return
+    let targetIndex: number | null = null
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      targetIndex = (index + 1) % versions.length
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      targetIndex = (index - 1 + versions.length) % versions.length
+    } else if (event.key === 'Home') {
+      targetIndex = 0
+    } else if (event.key === 'End') {
+      targetIndex = versions.length - 1
+    }
+    if (targetIndex == null) return
+    event.preventDefault()
+    selectVersionAt(targetIndex)
+  }
+
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-      paddingTop: 14, paddingBottom: 2,
-      borderTop: '1px solid var(--border-subtle)',
-    }}>
-      <span style={{
-        fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
-        color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em',
-        marginRight: 4,
-      }}>{t('overview.rail.label')}</span>
-      {versions.map((v) => {
-        const isCurrent = v.id === currentVid
-        return (
-          <button
-            key={v.id}
-            onClick={() => onSelect(v.id)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-              padding: '5px 10px 5px 8px',
-              background: isCurrent ? 'var(--bg-surface)' : 'transparent',
-              border: '1px solid ' + (isCurrent ? 'var(--accent)' : 'var(--border-subtle)'),
-              borderRadius: 'var(--r-md)',
-              cursor: 'pointer',
-              color: 'var(--fg-primary)',
-              boxShadow: isCurrent ? '0 0 0 3px var(--accent-soft)' : 'none',
-            }}
-          >
-            <StatusDotMini status={v.status} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', fontWeight: 600 }}>{v.label}</span>
-            <span style={{ fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)' }}>{t(STATUS_LABEL[v.status])}</span>
-          </button>
-        )
-      })}
-      <button
-        onClick={onCreate}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          padding: '5px 10px',
-          background: 'transparent',
-          border: '1px dashed var(--border-default)',
-          borderRadius: 'var(--r-md)',
-          cursor: 'pointer',
-          color: 'var(--fg-tertiary)',
-          fontSize: 'var(--t-sm)',
-        }}
-      >+ {t('overview.versionSelector.newVersion')}</button>
-      <span style={{ flex: 1 }} />
+    <div className="flex flex-wrap items-center gap-related border-t border-subtle pt-section pb-related">
+      <div
+        role="radiogroup"
+        aria-label={t('overview.rail.accessibleLabel')}
+        className="flex flex-wrap items-center gap-related"
+      >
+        <span className="mr-related font-mono text-2xs uppercase tracking-wider text-fg-tertiary" aria-hidden="true">
+          {t('overview.rail.label')}
+        </span>
+        {versions.map((v, index) => {
+          const isCurrent = v.id === currentVid
+          return (
+            <button
+              key={v.id}
+              id={`overview-version-${v.id}`}
+              type="button"
+              role="radio"
+              aria-checked={isCurrent}
+              tabIndex={isCurrent || (currentVid == null && index === 0) ? 0 : -1}
+              onClick={() => onSelect(v.id)}
+              onKeyDown={(event) => handleVersionKeyDown(event, index)}
+              className={`inline-flex items-center gap-related rounded-md border px-field py-related text-fg-primary outline-none transition-colors motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-accent ${
+                isCurrent
+                  ? 'border-accent bg-surface ring-2 ring-accent-soft'
+                  : 'border-subtle bg-transparent hover:bg-overlay'
+              }`}
+            >
+              <StatusDotMini status={v.status} />
+              <span className="font-mono text-sm font-semibold">{v.label}</span>
+              <span className="text-xs text-fg-tertiary">{t(STATUS_LABEL[v.status])}</span>
+            </button>
+          )
+        })}
+      </div>
+      <Button onClick={onCreate} variant="secondary" size="sm">
+        + {t('overview.versionSelector.newVersion')}
+      </Button>
+      <span className="flex-1" />
       {deleteEnabled && (
-        <button
+        <Button
           onClick={onDelete}
-          className="btn btn-ghost btn-sm"
-          style={{ color: 'var(--err)' }}
+          variant="danger"
+          size="sm"
         >
           {t('overview.banner.deleteVersion')}
-        </button>
+        </Button>
       )}
-      <button
+      <Button
         onClick={onExport}
-        disabled={!exportEnabled || exporting}
-        className={`btn btn-secondary btn-sm ${!exportEnabled ? 'opacity-40' : ''}`}
+        disabled={!exportEnabled}
+        loading={exporting}
+        variant="secondary"
+        size="sm"
       >
         {exporting ? t('sidebar.exporting') : t('sidebar.export')}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -299,31 +319,8 @@ function BannerShell({
   )
 }
 
-function BannerProgress({
-  now, total, running, muted, fail,
-}: { now: number; total: number; running?: boolean; muted?: boolean; fail?: boolean }) {
-  const pct = total > 0 ? Math.min(100, (now / total) * 100) : 0
-  const color = fail ? 'var(--err)' : muted ? 'var(--fg-disabled)' : 'var(--accent)'
-  return (
-    <div style={{
-      height: 6, borderRadius: 'var(--r-pill)',
-      background: 'var(--bg-sunken)',
-      overflow: 'hidden', position: 'relative',
-    }}>
-      <div style={{
-        width: `${pct}%`, height: '100%',
-        background: color,
-        animation: running ? 'pulse 2s infinite' : 'none',
-        borderRadius: 'var(--r-pill)',
-      }}/>
-      {muted && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-          background: 'repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 8px)',
-        }}/>
-      )}
-    </div>
-  )
+function BannerProgress({ label }: { label: string }) {
+  return <ProgressBar label={label} value={null} size="sm" />
 }
 
 const PHASE_ORDER_TIMELINE: { id: VersionPhase; n: string; key: string }[] = [
@@ -442,15 +439,17 @@ function StatusBanner({
         <div style={{ ...bannerMetaRow, alignItems: 'center' }}>
           <BannerMeta k={t('overview.banner.metaTime')} v={fmtTime(latestTask?.finished_at)} />
           <span style={{ flex: 1 }} />
-          {taskId && <button onClick={goLog} className="btn btn-ghost btn-sm">{t('overview.banner.viewLog')} →</button>}
-          <button
+          {taskId && <Button onClick={goLog} variant="ghost" size="sm">{t('overview.banner.viewLog')} →</Button>}
+          <Button
             onClick={() => ctx && void ctx.onDeleteVersion(version.id)}
-            className="btn btn-secondary btn-sm"
-          >{t('overview.banner.deleteVersion')}</button>
-          <button
+            variant="danger"
+            size="sm"
+          >{t('overview.banner.deleteVersion')}</Button>
+          <Button
             onClick={() => ctx?.onCreateVersion(version.id)}
-            className="btn btn-primary btn-sm"
-          >+ {t('overview.banner.forkConfigNew')}</button>
+            variant="primary"
+            size="sm"
+          >+ {t('overview.banner.forkConfigNew')}</Button>
         </div>
       </BannerShell>
     )
@@ -467,18 +466,20 @@ function StatusBanner({
         <div style={{ ...bannerMetaRow, alignItems: 'center' }}>
           <BannerMeta k={t('overview.banner.metaTime')} v={fmtTime(latestTask?.finished_at)} />
           <span style={{ flex: 1 }} />
-          {taskId && <button onClick={goLog} className="btn btn-ghost btn-sm">{t('overview.banner.viewLog')} →</button>}
-          <button
+          {taskId && <Button onClick={goLog} variant="ghost" size="sm">{t('overview.banner.viewLog')} →</Button>}
+          <Button
             onClick={() => ctx && void ctx.onDeleteVersion(version.id)}
-            className="btn btn-secondary btn-sm"
-          >{t('overview.banner.deleteVersion')}</button>
-          <button
+            variant="danger"
+            size="sm"
+          >{t('overview.banner.deleteVersion')}</Button>
+          <Button
             onClick={() => {
               ctx?.onCreateVersion(version.id)
               toast(t('overview.banner.smallerBatchHint'), 'info')
             }}
-            className="btn btn-primary btn-sm"
-          >{t('overview.banner.smallerBatchRetry')} ↻</button>
+            variant="primary"
+            size="sm"
+          >{t('overview.banner.smallerBatchRetry')} ↻</Button>
         </div>
       </BannerShell>
     )
@@ -498,16 +499,18 @@ function StatusBanner({
         >
           <div style={bannerActions}>
             {taskId && (
-              <button
+              <Button
                 onClick={() => api.startTaskNow(taskId).catch((e) => toast(String(e), 'error'))}
-                className="btn btn-primary btn-sm"
-              >{t('queue.startNow')}</button>
+                variant="primary"
+                size="sm"
+              >{t('queue.startNow')}</Button>
             )}
             {taskId && (
-              <button
+              <Button
                 onClick={() => api.cancelTask(taskId).catch((e) => toast(String(e), 'error'))}
-                className="btn btn-secondary btn-sm"
-              >{t('queue.cancelScheduled')}</button>
+                variant="secondary"
+                size="sm"
+              >{t('queue.cancelScheduled')}</Button>
             )}
           </div>
         </BannerShell>
@@ -520,7 +523,7 @@ function StatusBanner({
         title={`${version.label} · ${t('versionStatus.training')}`}
         sub={startedAt ? `${t('overview.banner.startedAt')} ${fmtTime(startedAt)}` : undefined}
       >
-        <BannerProgress now={0} total={1} running />
+        <BannerProgress label={t('overview.banner.trainingProgress', { version: version.label })} />
         <div style={bannerMetaRow}>
           <BannerMeta k={t('overview.banner.metaStarted')} v={fmtTime(startedAt)} />
           {latestTask?.is_pausable && (
@@ -529,18 +532,20 @@ function StatusBanner({
         </div>
         <div style={bannerActions}>
           {latestTask?.is_pausable && (
-            <button
+            <Button
               onClick={() => taskId && api.pauseTask(taskId).catch((e) => toast(String(e), 'error'))}
-              className="btn btn-ghost btn-sm"
-            >{t('overview.banner.pause')}</button>
+              variant="ghost"
+              size="sm"
+            >{t('overview.banner.pause')}</Button>
           )}
           {taskId && (
-            <button
+            <Button
               onClick={() => api.cancelTask(taskId).catch((e) => toast(String(e), 'error'))}
-              className="btn btn-secondary btn-sm"
-            >{t('overview.banner.cancelTraining')}</button>
+              variant="secondary"
+              size="sm"
+            >{t('overview.banner.cancelTraining')}</Button>
           )}
-          {taskId && <button onClick={goMonitor} className="btn btn-primary btn-sm">{t('overview.banner.openMonitor')} →</button>}
+          {taskId && <Button onClick={goMonitor} variant="primary" size="sm">{t('overview.banner.openMonitor')} →</Button>}
         </div>
       </BannerShell>
     )
@@ -566,11 +571,12 @@ function StatusBanner({
             />
           )}
           <span style={{ flex: 1 }} />
-          <button
+          <Button
             onClick={() => ctx?.onCreateVersion(version.id)}
-            className="btn btn-ghost btn-sm"
-          >{t('overview.banner.copyAsNew')}</button>
-          <button
+            variant="ghost"
+            size="sm"
+          >{t('overview.banner.copyAsNew')}</Button>
+          <Button
             onClick={() => {
               if (!loraPathForTest) {
                 toast(t('overview.banner.noArtifact'), 'error')
@@ -582,12 +588,14 @@ function StatusBanner({
               sp.set('versionId', String(version.id))
               navigate(`/tools/generate?${sp.toString()}`)
             }}
-            className="btn btn-secondary btn-sm"
-          >{t('overview.banner.loadInTest')} →</button>
-          <button
+            variant="secondary"
+            size="sm"
+          >{t('overview.banner.loadInTest')} →</Button>
+          <Button
             onClick={onOpenOutput}
-            className="btn btn-primary btn-sm"
-          >{t('overview.banner.downloadLora')} ↓</button>
+            variant="primary"
+            size="sm"
+          >{t('overview.banner.downloadLora')} ↓</Button>
         </div>
       </BannerShell>
     )
@@ -632,10 +640,11 @@ function StatusBanner({
         )}
         <span style={{ flex: 1 }} />
         {continueTarget && (
-          <button
+          <Button
             onClick={() => void handleContinue()}
-            className="btn btn-primary btn-sm"
-          >{t('overview.banner.continueLabel')} {continueTarget.n} {t(continueTarget.key)} →</button>
+            variant="primary"
+            size="sm"
+          >{t('overview.banner.continueLabel')} {continueTarget.n} {t(continueTarget.key)} →</Button>
         )}
       </div>
     </BannerShell>
@@ -677,52 +686,34 @@ function HeroCard({
   children: ReactNode
 }) {
   return (
-    <div style={{
-      padding: 16,
-      background: 'var(--bg-surface)',
-      border: '1px solid var(--border-subtle)',
-      borderRadius: 'var(--r-lg)',
-      display: 'flex', flexDirection: 'column', gap: 12,
-      height: '100%', minHeight: 0,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 'var(--t-sm)', fontWeight: 600, color: 'var(--fg-primary)' }}>{title}</h3>
-        <span style={{ flex: 1 }} />
+    <Card padding="md" className="flex h-full min-h-0 flex-col gap-section">
+      <div className="flex items-baseline gap-field">
+        <h3 className="m-0 text-sm font-semibold text-fg-primary">{title}</h3>
+        <span className="flex-1" />
         {count != null && (
-          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontFamily: 'var(--font-mono)' }}>
-            <span style={{ fontSize: 'var(--t-lg)', fontWeight: 600, color: 'var(--fg-primary)' }}>{count}</span>
-            {countSub && <span style={{ fontSize: 'var(--t-xs)', color: 'var(--fg-tertiary)' }}>{countSub}</span>}
+          <span className="inline-flex items-baseline gap-related font-mono">
+            <span className="text-lg font-semibold text-fg-primary">{count}</span>
+            {countSub && <span className="text-xs text-fg-tertiary">{countSub}</span>}
           </span>
         )}
       </div>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflow: 'hidden' }}>{children}</div>
+      <div className="flex flex-1 min-h-0 flex-col gap-field overflow-hidden">{children}</div>
       {action && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, paddingTop: 8,
-          borderTop: '1px dashed var(--border-subtle)',
-        }}>
+        <div className="flex items-center gap-related border-t border-dashed border-subtle pt-related">
           {phase && (
-            <span style={{
-              fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
-              color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1,
-            }}>{phase}</span>
+            <span className="flex-1 font-mono text-2xs uppercase tracking-wider text-fg-tertiary">
+              {phase}
+            </span>
           )}
-          <button
-            onClick={() => { if (!action.disabled) action.onClick() }}
+          <Button
+            onClick={action.onClick}
             disabled={action.disabled}
-            style={{
-              padding: '4px 10px',
-              fontSize: 'var(--t-xs)', color: 'var(--fg-primary)',
-              background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--r-sm)',
-              cursor: action.disabled ? 'not-allowed' : 'pointer',
-              opacity: action.disabled ? 0.4 : 1,
-              fontWeight: 500,
-            }}
-          >{action.label} →</button>
+            variant="ghost"
+            size="sm"
+          >{action.label} →</Button>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -788,17 +779,10 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
   const phaseLine = `① ${t('nav.download')} → ② ${t('nav.preprocess')} → ③ ${t('nav.curate')}`
 
   return (
-    <div style={{
-      padding: 16,
-      background: 'var(--bg-surface)',
-      border: '1px solid var(--border-subtle)',
-      borderRadius: 'var(--r-lg)',
-      display: 'flex', flexDirection: 'column', gap: 12,
-      height: '100%', minHeight: 0,
-    }}>
+    <Card className="flex h-full min-h-0 flex-col gap-field">
       {/* Header: title + folder chips on right */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <h3 className="m-0 text-sm font-semibold" style={{ color: 'var(--fg-primary)' }}>
+      <div className="flex flex-wrap items-center gap-field px-section pt-section">
+        <h3 className="m-0 text-sm font-semibold text-fg-primary">
           {t('overview.detail.folders')}
         </h3>
         <span className="flex-1" />
@@ -826,7 +810,7 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
       {/* Body: ImageGrid 或 empty */}
       <div className="flex-1 min-h-0">
         {!version || items.length === 0 ? (
-          <p className="m-0 text-xs text-fg-tertiary italic">{t('overview.detail.emptyCurate')}</p>
+          <p className="m-0 px-section pb-section text-xs italic text-fg-tertiary">{t('overview.detail.emptyCurate')}</p>
         ) : (
           <ImageGrid
             items={items}
@@ -835,34 +819,24 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
             clickMode="activate"
             onActivate={(name) => setPreviewIdx(items.findIndex((i) => i.name === name))}
             onPreview={(name) => setPreviewIdx(items.findIndex((i) => i.name === name))}
-            ariaLabel="overview-train-grid"
+            ariaLabel={t('overview.detail.trainGridLabel')}
+            contentClassName="px-section pb-section"
           />
         )}
       </div>
 
       {/* Action row */}
       {version && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, paddingTop: 8,
-          borderTop: '1px dashed var(--border-subtle)',
-        }}>
-          <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
-            color: 'var(--fg-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1,
-          }}>{phaseLine}</span>
-          <button
-            onClick={() => { if (!actionDisabled) navigate(`/projects/${project.id}/v/${version.id}/curate`) }}
+        <div className="mx-section mb-section flex items-center gap-related border-t border-dashed border-subtle pt-related">
+          <span className="flex-1 font-mono text-2xs uppercase tracking-wider text-fg-tertiary">
+            {phaseLine}
+          </span>
+          <Button
+            onClick={() => navigate(`/projects/${project.id}/v/${version.id}/curate`)}
             disabled={actionDisabled}
-            style={{
-              padding: '4px 10px',
-              fontSize: 'var(--t-xs)', color: 'var(--fg-primary)',
-              background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--r-sm)',
-              cursor: actionDisabled ? 'not-allowed' : 'pointer',
-              opacity: actionDisabled ? 0.4 : 1,
-              fontWeight: 500,
-            }}
-          >③ {t('nav.curate')} · {t('overview.detail.reorganize')} →</button>
+            variant="ghost"
+            size="sm"
+          >③ {t('nav.curate')} · {t('overview.detail.reorganize')} →</Button>
         </div>
       )}
 
@@ -880,7 +854,7 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
           onNext={() => setPreviewIdx((i) => (i != null && i < items.length - 1 ? i + 1 : i))}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -889,8 +863,10 @@ function FolderChip({
 }: { label: string; count: number; active: boolean; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`px-2 py-0.5 rounded-md font-mono transition-colors ${
+      aria-pressed={active}
+      className={`px-2 py-0.5 rounded-md font-mono transition-colors motion-reduce:transition-none ${
         active
           ? 'border border-accent bg-accent-soft text-accent'
           : 'border border-dim bg-surface text-fg-secondary hover:bg-overlay'
@@ -1156,16 +1132,22 @@ function DetailGrid({ project, version }: { project: ProjectDetail; version: Ver
 
 // ── Tasks / Output 面板（version scope，沿用） ───────────────────────────
 
-const TASK_STATUS_BADGE: Record<string, string> = {
-  pending: 'neutral', running: 'accent', paused: 'warn',
-  done: 'ok', failed: 'err', canceled: 'neutral', scheduled: 'neutral',
+const TASK_STATUS_TONE: Record<string, BadgeTone> = {
+  pending: 'neutral', running: 'accent', paused: 'warning',
+  done: 'success', failed: 'danger', canceled: 'neutral', scheduled: 'neutral',
+}
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  pending: 'status.pending', running: 'status.running', paused: 'status.paused',
+  done: 'status.done', failed: 'status.failed', canceled: 'status.canceled',
+  scheduled: 'status.scheduled',
 }
 
 function VersionTasksPanel({ projectId, versionId }: { projectId: number; versionId: number | null }) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1177,43 +1159,71 @@ function VersionTasksPanel({ projectId, versionId }: { projectId: number; versio
           .filter((tk) => tk.project_id === projectId && (versionId == null || tk.version_id === versionId))
           .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
         setTasks(filtered)
+        setError(null)
       })
-      .catch(() => { if (!cancelled) setTasks([]) })
+      .catch((reason: unknown) => {
+        if (cancelled) return
+        setTasks([])
+        setError(reason instanceof Error ? reason.message : String(reason))
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [projectId, versionId])
 
-  if (loading) return <div className="p-6 text-fg-tertiary text-sm">{t('common.loading')}</div>
-  if (tasks.length === 0) return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.tasksEmpty')}</div>
+  if (loading) {
+    return (
+      <div role="status" aria-busy="true" className="p-page text-sm text-fg-tertiary">
+        {t('common.loading')}
+      </div>
+    )
+  }
+  if (error) {
+    return (
+      <Alert role="alert" tone="danger" size="sm" className="m-page">
+        {t('overview.tasksLoadFailed', { error })}
+      </Alert>
+    )
+  }
+  if (tasks.length === 0) {
+    return <EmptyState size="sm" description={t('overview.tasksEmpty')} className="m-page" />
+  }
 
   const fmtTime = (ts: number | null) => ts ? new Date(ts * 1000).toLocaleString() : '—'
 
   return (
-    <div className="p-6">
-      <table className="w-full text-sm">
-        <thead className="text-fg-tertiary text-xs">
-          <tr className="border-b border-subtle">
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.name')}</th>
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.status')}</th>
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.started')}</th>
-            <th className="text-left py-2 px-3 font-normal">{t('overview.tasksTable.finished')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((tk) => (
-            <tr
-              key={tk.id}
-              className="border-b border-subtle cursor-pointer hover:bg-overlay"
-              onClick={() => navigate(`/queue/${tk.id}`)}
-            >
-              <td className="py-2 px-3 font-mono">#{tk.id} {tk.name}</td>
-              <td className="py-2 px-3"><span className={`badge badge-${TASK_STATUS_BADGE[tk.status] ?? 'neutral'}`}>{tk.status}</span></td>
-              <td className="py-2 px-3 text-fg-tertiary text-xs">{fmtTime(tk.started_at ?? null)}</td>
-              <td className="py-2 px-3 text-fg-tertiary text-xs">{fmtTime(tk.finished_at ?? null)}</td>
+    <div className="p-page">
+      <Card className="overflow-x-auto">
+        <table className="w-full text-sm" aria-label={t('overview.tasksAriaLabel')}>
+          <thead className="text-xs text-fg-tertiary">
+            <tr className="border-b border-subtle">
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.name')}</th>
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.status')}</th>
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.started')}</th>
+              <th className="px-3 py-2 text-left font-normal">{t('overview.tasksTable.finished')}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {tasks.map((tk) => (
+              <tr key={tk.id} className="border-b border-subtle hover:bg-overlay">
+                <td className="px-3 py-2 font-mono">
+                  <Link
+                    to={`/queue/${tk.id}`}
+                    className="text-fg-primary underline-offset-2 hover:text-accent hover:underline"
+                  >#{tk.id} {tk.name}</Link>
+                </td>
+                <td className="px-3 py-2">
+                  <Badge
+                    tone={TASK_STATUS_TONE[tk.status] ?? 'neutral'}
+                    active={tk.status === 'running'}
+                  >{t(TASK_STATUS_LABEL[tk.status] ?? tk.status)}</Badge>
+                </td>
+                <td className="px-3 py-2 text-xs text-fg-tertiary">{fmtTime(tk.started_at ?? null)}</td>
+                <td className="px-3 py-2 text-xs text-fg-tertiary">{fmtTime(tk.finished_at ?? null)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
     </div>
   )
 }
@@ -1225,8 +1235,8 @@ function VersionOutputPanel({
   latestTask: Task | null
 }) {
   const { t } = useTranslation()
-  if (!version) return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.outputEmpty')}</div>
-  if (!latestTask) return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.outputEmptyVersion')}</div>
+  if (!version) return <EmptyState size="sm" description={t('overview.outputEmpty')} className="m-page" />
+  if (!latestTask) return <EmptyState size="sm" description={t('overview.outputEmptyVersion')} className="m-page" />
   // 复用 QueueDetail OutputsTab：列表 + 排序 + 单文件下载 + 批量打 zip + 打开
   // 文件夹 + 导出 data_exports（跟 task 详情页同款行为）
   return <OutputsTab taskId={latestTask.id} />
@@ -1329,21 +1339,18 @@ export default function ProjectOverview() {
   }, [])
 
   const [activeTab, setActiveTab] = useState<OverviewTab>(deepLink.tab ?? 'details')
-
-  const tabBtnCls = (tab: OverviewTab) => [
-    'px-4 py-2 text-sm border-none bg-transparent cursor-pointer border-b-2 transition-colors',
-    activeTab === tab
-      ? 'text-fg-primary font-semibold border-accent'
-      : 'text-fg-secondary border-transparent hover:text-fg-primary',
-  ].join(' ')
+  const overviewPanelId = 'project-overview-panel'
+  const overviewTabs: TabItem<OverviewTab>[] = [
+    { value: 'details', label: t('overview.tabDetails'), controls: overviewPanelId },
+    { value: 'tasks', label: t('overview.tabTasks'), controls: overviewPanelId },
+    { value: 'output', label: t('overview.tabOutput'), controls: overviewPanelId },
+    { value: 'eval', label: t('overview.tabEval'), controls: overviewPanelId },
+  ]
 
   return (
     <div className="fade-in flex flex-col h-full min-h-0">
       {/* ── 顶部三段：Identity / VersionRail / StatusBanner ──── */}
-      <div
-        className="shrink-0 border-b border-subtle"
-        style={{ padding: '14px 24px 10px', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-canvas)' }}
-      >
+      <div className="shrink-0 border-b border-subtle bg-canvas px-page pt-section pb-related flex flex-col gap-related">
         <Identity
           project={project}
           version={selectedVersion}
@@ -1371,45 +1378,41 @@ export default function ProjectOverview() {
       </div>
 
       {/* ── Tabs ──── */}
-      <div className="border-b border-subtle px-6 shrink-0">
-        <div className="flex gap-1">
-          <button className={tabBtnCls('details')} onClick={() => setActiveTab('details')}>
-            {t('overview.tabDetails')}
-          </button>
-          <button className={tabBtnCls('tasks')} onClick={() => setActiveTab('tasks')}>
-            {t('overview.tabTasks')}
-          </button>
-          <button className={tabBtnCls('output')} onClick={() => setActiveTab('output')}>
-            {t('overview.tabOutput')}
-          </button>
-          {/* 评估的对象是 output/ 里的那些 LoRA 文件，所以紧挨着「LoRA 文件」。
-              它不是流水线 phase —— 训练完随时能跑、能跑很多次，没有「做完往下走」
-              的语义，所以不进 sidebar 的编号步骤。 */}
-          <button className={tabBtnCls('eval')} onClick={() => setActiveTab('eval')}>
-            {t('overview.tabEval')}
-          </button>
-        </div>
-      </div>
+      <Tabs
+        items={overviewTabs}
+        value={activeTab}
+        onChange={setActiveTab}
+        ariaLabel={t('overview.tabsAriaLabel')}
+        idPrefix="project-overview-tab"
+        className="shrink-0 px-page"
+      />
 
       {/* ── Tab body ──── */}
-      {activeTab === 'details' && (
-        <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto">
-          <DetailGrid project={project} version={selectedVersion} />
-        </div>
-      )}
-      {activeTab === 'tasks' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <VersionTasksPanel projectId={project.id} versionId={selectedVid} />
-        </div>
-      )}
-      {activeTab === 'output' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <VersionOutputPanel version={selectedVersion} latestTask={latestTask} />
-        </div>
-      )}
-      {activeTab === 'eval' && (
-        <EvalJobsPanel pid={project.id} vid={selectedVid} />
-      )}
+      <div
+        id={overviewPanelId}
+        role="tabpanel"
+        aria-labelledby={selectionItemId('project-overview-tab', activeTab)}
+        className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden"
+      >
+        {activeTab === 'details' && (
+          <div className="px-page pt-related pb-page flex-1 min-h-0 overflow-y-auto">
+            <DetailGrid project={project} version={selectedVersion} />
+          </div>
+        )}
+        {activeTab === 'tasks' && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <VersionTasksPanel projectId={project.id} versionId={selectedVid} />
+          </div>
+        )}
+        {activeTab === 'output' && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <VersionOutputPanel version={selectedVersion} latestTask={latestTask} />
+          </div>
+        )}
+        {activeTab === 'eval' && (
+          <EvalJobsPanel pid={project.id} vid={selectedVid} />
+        )}
+      </div>
     </div>
   )
 }

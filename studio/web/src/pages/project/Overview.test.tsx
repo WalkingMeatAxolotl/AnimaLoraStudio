@@ -106,6 +106,7 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
     // 训练 banner 已渲染（取消训练按钮随 taskId 出现），但 is_pausable=false →
     // 暂停按钮不在。
     await waitFor(() => expect(screen.getByText('取消训练')).toBeInTheDocument())
+    expect(screen.getByRole('progressbar', { name: 'v1 训练进度' })).toHaveAttribute('data-state', 'indeterminate')
     expect(screen.queryByText('暂停')).not.toBeInTheDocument()
     const callsBefore = listSpy.mock.calls.length
 
@@ -120,15 +121,109 @@ describe('ProjectOverview 训练态暂停按钮 SSE 刷新', () => {
   })
 })
 
+describe('ProjectOverview 版本选择', () => {
+  it('VersionRail 使用 radiogroup、roving tabindex 与方向键导航', async () => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([])
+    const project = makeProject({
+      versions: [
+        makeVersion(),
+        makeVersion({ id: 8, label: 'v2', status: 'completed', phase: 'ready' }),
+      ],
+    })
+
+    renderOverview(project)
+
+    expect(screen.getByRole('radiogroup', { name: '项目版本' })).toBeInTheDocument()
+    const v1 = screen.getByRole('radio', { name: 'v1 训练中' })
+    const v2 = screen.getByRole('radio', { name: 'v2 已完成' })
+    expect(v1).toHaveAttribute('aria-checked', 'true')
+    expect(v1).toHaveAttribute('tabindex', '0')
+    expect(v2).toHaveAttribute('tabindex', '-1')
+
+    fireEvent.keyDown(v1, { key: 'ArrowRight' })
+    await waitFor(() => expect(v2).toHaveAttribute('aria-checked', 'true'))
+    expect(v2).toHaveAttribute('tabindex', '0')
+    await waitFor(() => expect(v2).toHaveFocus())
+
+    fireEvent.keyDown(v2, { key: 'Home' })
+    await waitFor(() => expect(v1).toHaveAttribute('aria-checked', 'true'))
+    expect(screen.getByRole('button', { name: '+ 新版本' })).toHaveClass('btn', 'btn-secondary', 'btn-sm')
+  })
+})
+
+describe('ProjectOverview 内容 surfaces', () => {
+  it('详情统计使用共享 Card，任务与输出空态使用 EmptyState', async () => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([])
+
+    renderOverview(makeProject())
+
+    expect(screen.getByRole('heading', { level: 3, name: '训练集' }).closest('.card')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 3, name: '标签分布' }).closest('.card')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    expect((await screen.findByText('本项目还没有训练任务')).closest('.empty-state-sm')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'LoRA 文件' }))
+    expect((await screen.findByText('此版本尚未产出 LoRA 模型')).closest('.empty-state-sm')).toBeInTheDocument()
+  })
+
+  it('任务表使用语义链接与共享状态 Badge', async () => {
+    vi.spyOn(api, 'listQueue').mockResolvedValue([
+      { ...makeTrainTask(false), status: 'done', finished_at: 1200 },
+    ])
+
+    renderOverview(makeProject())
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+
+    const taskLink = await screen.findByRole('link', { name: '#42 train' })
+    expect(taskLink).toHaveAttribute('href', '/queue/42')
+    const taskRow = taskLink.closest('tr')
+    const taskBadge = taskRow?.querySelector('.badge')
+    expect(taskBadge).toHaveClass('badge', 'badge-ok')
+    expect(taskBadge).not.toHaveClass('badge-sm')
+    expect(taskBadge).toHaveTextContent('完成')
+    expect(taskRow).not.toHaveClass('cursor-pointer')
+  })
+
+  it('任务读取失败显示 Alert，不伪装为空状态', async () => {
+    vi.spyOn(api, 'listQueue').mockRejectedValue(new Error('offline'))
+
+    renderOverview(makeProject())
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务列表读取失败：offline')
+    expect(screen.queryByText('本项目还没有训练任务')).not.toBeInTheDocument()
+  })
+})
+
 describe('ProjectOverview 评估 tab', () => {
   beforeEach(() => {
     vi.spyOn(api, 'listQueue').mockResolvedValue([])
     vi.spyOn(api, 'listEvalSessions').mockResolvedValue({ sessions: [] } as never)
   })
 
+  it('共享 Tabs 暴露 tablist/panel 关联并支持方向键切换', async () => {
+    renderOverview(makeProject())
+
+    const tabs = screen.getByRole('tablist', { name: '项目概览内容' })
+    const detailsTab = screen.getByRole('tab', { name: '详情' })
+    const tasksTab = screen.getByRole('tab', { name: '任务' })
+    const panel = screen.getByRole('tabpanel')
+
+    expect(tabs).toContainElement(detailsTab)
+    expect(detailsTab).toHaveAttribute('aria-selected', 'true')
+    expect(detailsTab).toHaveAttribute('aria-controls', panel.id)
+
+    fireEvent.keyDown(detailsTab, { key: 'ArrowRight' })
+
+    await waitFor(() => expect(tasksTab).toHaveAttribute('aria-selected', 'true'))
+    expect(tasksTab).toHaveFocus()
+    expect(panel).toHaveAttribute('aria-labelledby', tasksTab.id)
+  })
+
   it('点「评估」tab → 列该 version 的评估作业（不带 task_id）', async () => {
     renderOverview(makeProject())
-    fireEvent.click(await screen.findByRole('button', { name: '评估' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '评估' }))
 
     await waitFor(() => expect(api.listEvalSessions).toHaveBeenCalledWith(3, 7))
     expect(await screen.findByText('创建新评估')).toBeInTheDocument()

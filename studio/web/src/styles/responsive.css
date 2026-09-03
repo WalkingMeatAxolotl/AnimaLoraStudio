@@ -36,6 +36,9 @@
 .ui-project-grid {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
 }
+.ui-project-card-skeleton {
+  min-height: calc(var(--space-page-loose) * 4);
+}
 
 /* Queue is a viewport-contained list page: its chrome and persistent pager stay
  * fixed while this named region owns the only route-local vertical scrolling. */

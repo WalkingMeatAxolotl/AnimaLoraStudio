@@ -594,6 +594,7 @@
     "newProject": "New project",
     "noProjects": "No projects yet",
     "noProjectsHint": "Click \"New project\" to start a LoRA training",
+    "openProject": "Open project {{title}}",
     "continueBtn": "Continue →",
     "moveToTrash": "Move to trash",
     "deleteProject": "Delete",
@@ -1808,9 +1809,12 @@
     "tabTasks": "Tasks",
     "tabOutput": "LoRA files",
     "tabEval": "Evaluation",
+    "tabsAriaLabel": "Project overview content",
     "tasksPlaceholder": "Training tasks for this project (to be implemented)",
     "outputPlaceholder": "LoRA artifacts produced by this project (to be implemented)",
     "tasksEmpty": "No training tasks for this project yet",
+    "tasksAriaLabel": "Tasks for the current version",
+    "tasksLoadFailed": "Failed to load tasks: {{error}}",
     "tasksTable": {
       "name": "Task",
       "status": "Status",
@@ -1821,6 +1825,7 @@
     "outputOpenTrain": "Open train page",
     "detail": {
       "folders": "Train set",
+      "trainGridLabel": "Training images for the current version",
       "foldersTotal": "{{n}} images total",
       "tagDist": "Tag distribution",
       "tagCoverage": "{{tagged}} / {{total}} tagged",
@@ -1850,7 +1855,8 @@
       "createdLabel": "Created"
     },
     "rail": {
-      "label": "VERSION"
+      "label": "VERSION",
+      "accessibleLabel": "Project versions"
     },
     "banner": {
       "skippableHint": "skippable",
@@ -1870,6 +1876,7 @@
       "forkConfigNew": "Fork config to new version",
       "smallerBatchRetry": "Fork config · smaller batch",
       "startedAt": "Started at",
+      "trainingProgress": "{{version}} training progress",
       "scheduledTitle": "Training scheduled",
       "scheduledFor": "Scheduled for",
       "pause": "Pause",

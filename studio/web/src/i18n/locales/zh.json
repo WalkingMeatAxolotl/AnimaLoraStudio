@@ -594,6 +594,7 @@
     "newProject": "新建项目",
     "noProjects": "还没有项目",
     "noProjectsHint": "点右上角「新建项目」开始一个新的 LoRA 训练",
+    "openProject": "打开项目 {{title}}",
     "continueBtn": "继续 →",
     "moveToTrash": "移到回收站",
     "deleteProject": "删除",
@@ -1808,9 +1809,12 @@
     "tabTasks": "任务",
     "tabOutput": "LoRA 文件",
     "tabEval": "评估",
+    "tabsAriaLabel": "项目概览内容",
     "tasksPlaceholder": "本项目的训练任务列表（待实现）",
     "outputPlaceholder": "本项目下产出的 LoRA 模型列表（待实现）",
     "tasksEmpty": "本项目还没有训练任务",
+    "tasksAriaLabel": "当前版本的任务",
+    "tasksLoadFailed": "任务列表读取失败：{{error}}",
     "tasksTable": {
       "name": "任务",
       "status": "状态",
@@ -1821,6 +1825,7 @@
     "outputOpenTrain": "打开训练页",
     "detail": {
       "folders": "训练集",
+      "trainGridLabel": "当前版本训练集图片",
       "foldersTotal": "共 {{n}} 张",
       "tagDist": "标签分布",
       "tagCoverage": "{{tagged}} / {{total}} 已打标",
@@ -1850,7 +1855,8 @@
       "createdLabel": "创建"
     },
     "rail": {
-      "label": "版本"
+      "label": "版本",
+      "accessibleLabel": "项目版本"
     },
     "banner": {
       "skippableHint": "可跳过",
@@ -1870,6 +1876,7 @@
       "forkConfigNew": "复制配置开新版本",
       "smallerBatchRetry": "复制配置 · 调小 batch",
       "startedAt": "开始于",
+      "trainingProgress": "{{version}} 训练进度",
       "scheduledTitle": "已排程训练",
       "scheduledFor": "计划",
       "pause": "暂停",
