@@ -1,21 +1,14 @@
-"""lycoris-lora 3.4.0 的 LokrModule.get_weight rank_dropout device bug patch。
+"""Patch LyCORIS LoKr rank-dropout masks onto the weight device.
 
-上游 bug：`torch.rand(weight.size(0))` 没传 `device=`，生成 CPU mask，
-与 CUDA weight 相乘时报 device mismatch。仅在 `rank_dropout > 0` 且
-模块处于 training 模式时触发。
+Affected releases create the rank-dropout mask on CPU and multiply it into a
+CUDA weight.  The compatibility wrapper delegates weight construction to the
+installed LyCORIS implementation (preserving the v3 implementation or the v4
+kernel dispatcher), then applies the same dropout semantics on the output
+weight's device.
 
-为什么不只靠 lycoris_adapter.py 的 model.train() hijack：
-- hijack 只保证 sample/eval 时 network 进 eval 模式（不触发 rank_dropout 分支）
-- 但用户若配置 `rank_dropout > 0`，正常 training step 仍走 rank_dropout 分支 ——
-  hijack 不覆盖这条路径，仍会撞 bug
-- 因此从根上把 LokrModule.get_weight 替换成带 `device=` 的版本
-
-版本守卫：
-- 只对 KNOWN_AFFECTED_VERSIONS 内的版本 patch
-- 其他版本（包括上游已修的版本）log warn 并跳过；避免覆盖上游已 fix 的实现
-- 上游 fix 后请把对应 KNOWN_AFFECTED_VERSIONS 项删掉
-
-上游 issue：https://github.com/KohakuBlueleaf/LyCORIS/issues —— 待提
+The patch is exact-version guarded.  Add a release only after reproducing the
+bug against that artifact, and remove releases once their upstream
+implementation is fixed.
 """
 from __future__ import annotations
 
@@ -25,48 +18,42 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-# 已知确认受 rank_dropout device bug 影响的 lycoris-lora 版本。
-# 经实测：3.4.0 的 `lycoris/modules/lokr.py:get_weight` 走
-# `torch.rand(weight.size(0))`（CPU mask），与 CUDA weight 相乘失败。
-KNOWN_AFFECTED_VERSIONS: frozenset[str] = frozenset({"3.4.0"})
+# Confirmed by source inspection and CUDA reproduction.  Production installs
+# are pinned to 4.0.0; the audited dev build remains listed so the same fixture
+# can detect regressions while the next stable artifact is evaluated.
+KNOWN_AFFECTED_VERSIONS: frozenset[str] = frozenset(
+    {
+        "3.4.0",
+        "4.0.0",
+        "4.0.1.dev20260902072855",
+    }
+)
 
 PatchStatus = Literal[
-    "applied",  # 命中受影响版本，已 patch
-    "skipped_not_installed",  # 没装 lycoris
-    "skipped_version_unknown",  # 装了但版本不在已知受影响集合（warn）
-    "skipped_already_patched",  # 同进程内已 patch，幂等返回
+    "applied",
+    "skipped_not_installed",
+    "skipped_version_unknown",
+    "skipped_already_patched",
 ]
 
 _PATCHED_FLAG = "_anima_lokr_device_patched"
+_ORIGINAL_GET_WEIGHT_ATTR = "_anima_lokr_original_get_weight"
 
 
 def apply_lokr_device_patch() -> PatchStatus:
-    """检查 lycoris-lora 版本并按需 patch LokrModule.get_weight。
+    """Patch known-affected ``LokrModule.get_weight`` implementations.
 
-    幂等：同进程内多次调用只 patch 一次。
+    The wrapper intentionally avoids importing v3 private helpers removed by
+    v4.  Rebuild work remains owned by the installed LyCORIS implementation;
+    only rank dropout is temporarily disabled there and reapplied on-device.
+    Repeated calls are idempotent.
     """
     try:
         installed = version("lycoris-lora")
     except PackageNotFoundError:
         return "skipped_not_installed"
 
-    try:
-        from lycoris.modules.lokr import LokrModule, make_kron, rebuild_tucker
-    except Exception as exc:  # pragma: no cover - 装了 lycoris-lora 但 import 异常的边界
-        logger.warning(
-            "lycoris-lora %s is installed but lycoris.modules.lokr could not be "
-            "imported (%s); the rank_dropout device patch was skipped",
-            installed,
-            exc,
-        )
-        return "skipped_not_installed"
-
-    if getattr(LokrModule, _PATCHED_FLAG, False):
-        return "skipped_already_patched"
-
     if installed not in KNOWN_AFFECTED_VERSIONS:
-        # R4：这是「什么都没做」的正常路径，所有新版用户每次训练吃一条 WARNING
-        # 属误报 —— 降 DEBUG。
         logger.debug(
             "lycoris-lora %s is not in the known-affected set %s; rank_dropout "
             "device patch skipped",
@@ -75,35 +62,48 @@ def apply_lokr_device_patch() -> PatchStatus:
         )
         return "skipped_version_unknown"
 
-    import torch  # noqa: PLC0415  延迟到此处避免顶层 import 副作用
+    try:
+        from lycoris.modules.lokr import LokrModule
+    except Exception as exc:  # pragma: no cover - corrupt/incompatible install
+        logger.warning(
+            "lycoris-lora %s is installed but LokrModule could not be imported "
+            "(%s); the rank_dropout device patch was skipped",
+            installed,
+            exc,
+        )
+        return "skipped_not_installed"
+
+    if getattr(LokrModule, _PATCHED_FLAG, False):
+        return "skipped_already_patched"
+
+    import torch  # noqa: PLC0415 - avoid a torch import when LyCORIS is absent
+
+    original_get_weight = LokrModule.get_weight
 
     def _get_weight_fixed(self, shape):  # type: ignore[no-untyped-def]
-        weight = make_kron(
-            self.lokr_w1 if self.use_w1 else self.lokr_w1_a @ self.lokr_w1_b,
-            (
-                self.lokr_w2
-                if self.use_w2
-                else (
-                    rebuild_tucker(self.lokr_t2, self.lokr_w2_a, self.lokr_w2_b)
-                    if self.tucker
-                    else self.lokr_w2_a @ self.lokr_w2_b
-                )
-            ),
-            self.scale,
-        )
-        dtype = weight.dtype
-        if shape is not None:
-            weight = weight.view(shape)
-        if self.training and self.rank_dropout:
-            drop = (
-                torch.rand(weight.size(0), device=weight.device) > self.rank_dropout
-            ).to(dtype)
-            drop = drop.view(-1, *[1] * len(weight.shape[1:]))
-            if self.rank_dropout_scale:
-                drop /= drop.mean()
-            weight *= drop
+        rank_dropout = self.rank_dropout
+        if not (self.training and rank_dropout):
+            return original_get_weight(self, shape)
+
+        # Delegate reconstruction to the installed release.  In v4 this keeps
+        # kron_weight and its selected backend intact instead of copying a
+        # private implementation into Studio.
+        self.rank_dropout = 0.0
+        try:
+            weight = original_get_weight(self, shape)
+        finally:
+            self.rank_dropout = rank_dropout
+
+        drop = (
+            torch.rand(weight.size(0), device=weight.device) > rank_dropout
+        ).to(weight.dtype)
+        drop = drop.view(-1, *[1] * len(weight.shape[1:]))
+        if self.rank_dropout_scale:
+            drop /= drop.mean()
+        weight *= drop
         return weight
 
+    setattr(LokrModule, _ORIGINAL_GET_WEIGHT_ATTR, original_get_weight)
     LokrModule.get_weight = _get_weight_fixed
     setattr(LokrModule, _PATCHED_FLAG, True)
     logger.debug(

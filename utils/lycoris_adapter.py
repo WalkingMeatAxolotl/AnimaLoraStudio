@@ -27,6 +27,10 @@ from safetensors.torch import save_file
 from safetensors import safe_open
 
 from studio.infrastructure.log_messages import msg
+from utils.lycoris_backend import (
+    configure_lycoris_backend,
+    log_lycoris_runtime_once,
+)
 from utils.lycoris_patch import apply_lokr_device_patch
 
 logger = logging.getLogger(__name__)
@@ -34,9 +38,14 @@ logger = logging.getLogger(__name__)
 _FP8_DTYPES = frozenset({torch.float8_e4m3fn, torch.float8_e5m2})
 _ADAPTER_DTYPES = frozenset({torch.float16, torch.bfloat16, torch.float32, torch.float64})
 
-# lycoris-lora 3.4.0 LokrModule.get_weight rank_dropout device bug 一次性修复。
-# 模块级调用：任何路径走到 lycoris_adapter（CLI 训练 / Studio worker / 测试）
-# 都会先 patch 一次。返回值供测试断言；正常 import 路径下结果落到 logger。
+# LyCORIS v4 的 auto 会在无 Triton 的 CUDA 环境选择 per-op compile；Windows 上
+# 该路径可能在首次 forward 抛 TritonMissing。必须在任何 LyCORIS module import
+# 前设置安全默认值；显式环境变量仍可用于 opt-in benchmark。
+_LYCORIS_KERNEL_BACKEND = configure_lycoris_backend()
+
+# 已知 LyCORIS 版本的 LokrModule.get_weight rank_dropout device bug 一次性修复。
+# 模块级调用保证 CLI 训练、Studio worker 与测试在首次 LyCORIS import 前采用
+# 同一 backend 配置，再由版本守卫决定是否应用 patch。
 _LOKR_PATCH_STATUS = apply_lokr_device_patch()
 
 # lycoris 的 LokrModule/LohaModule 在 dropout>0 时，每个模块实例都会 print 一行
@@ -151,6 +160,8 @@ class LycorisAdapter:
     def inject(self, model: nn.Module) -> dict[str, nn.Module]:
         """注入 lycoris 适配器到模型。"""
         from lycoris import LycorisNetwork
+
+        log_lycoris_runtime_once()
 
         if self._preset is None:
             raise ValueError(
@@ -307,7 +318,8 @@ class LycorisAdapter:
                     t = _lora.lora_mid.weight
                     wa_t = wa.view(wa.size(0), -1).transpose(0, 1)
                     wb_t = wb.view(wb.size(0), -1)
-                    from lycoris.modules.locon import rebuild_tucker
+                    from lycoris.functional.general import rebuild_tucker
+
                     weight = rebuild_tucker(t, wa_t, wb_t)
                 else:
                     weight = wa.view(wa.size(0), -1) @ wb.view(wb.size(0), -1)

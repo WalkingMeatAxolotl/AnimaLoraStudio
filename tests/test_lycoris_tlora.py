@@ -294,3 +294,56 @@ def test_tlora_inject_never_sets_bypass_mode() -> None:
             f" bypass，让 make_weight 路径静默失效。"
             f" 上下文：\n{ctx[-200:]}"
         )
+
+
+class _InjectableDiT(nn.Module):
+    """匹配 ANIMA_PRESET 的最小线性模块，用于真实 LyCORIS 注入。"""
+
+    def __init__(self, dim: int = 16) -> None:
+        super().__init__()
+        self.q_proj = nn.Linear(dim, dim, bias=False)
+        self.k_proj = nn.Linear(dim, dim, bias=False)
+        self.v_proj = nn.Linear(dim, dim, bias=False)
+        self.output_proj = nn.Linear(dim, dim, bias=False)
+
+
+def test_tlora_inject_forward_backward_keeps_legacy_weight_format() -> None:
+    """项目 T-LoRA 在 v3/v4 都保持 LoCon 权重键并真正影响 forward/backward。"""
+    torch.manual_seed(17)
+    model = _InjectableDiT()
+    adapter = AnimaLycorisAdapter(
+        preset=ANIMA_PRESET,
+        algo="tlora",
+        rank=8,
+        alpha=8,
+        tlora_min_rank=2,
+    )
+
+    try:
+        modules = adapter.inject(model)
+        assert modules
+        assert adapter._tlora_modules
+        assert not any(bool(getattr(m, "bypass_mode", False)) for m in modules.values())
+
+        with torch.no_grad():
+            for module in adapter._tlora_modules:
+                module.lora_up.weight.fill_(0.05)
+                module.lora_down.weight.fill_(0.05)
+
+        x = torch.randn(2, 3, 16)
+        adapter._set_tlora_mask(torch.tensor([1.0]))
+        min_rank_output = model.q_proj(x).detach().clone()
+        adapter.clear_timestep_mask()
+        full_rank_output = model.q_proj(x)
+
+        assert not torch.allclose(min_rank_output, full_rank_output)
+        full_rank_output.square().mean().backward()
+        grads = [p.grad for p in adapter.get_params() if p.grad is not None]
+        assert grads and all(torch.isfinite(grad).all() for grad in grads)
+
+        state_keys = set(adapter.state_dict())
+        assert any(key.endswith(".lora_up.weight") for key in state_keys)
+        assert any(key.endswith(".lora_down.weight") for key in state_keys)
+        assert not any("q_layer" in key or "p_layer" in key for key in state_keys)
+    finally:
+        adapter.detach()
