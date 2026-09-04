@@ -101,7 +101,19 @@
     "pendingCount": "{{n}} 排队中",
     "taskId": "任务 #{{id}}",
     "runningETA": "~{{time}}",
-    "running": "运行 {{elapsed}}"
+    "running": "运行 {{elapsed}}",
+    "runningTaskAria": "任务 #{{id}}：训练中 · {{label}}{{suffix}}",
+    "systemStats": {
+      "cpuLabel": "CPU",
+      "memoryLabel": "内存",
+      "gpuLabel": "GPU",
+      "vramLabel": "显存",
+      "cpu": "CPU 占用 {{percent}}%",
+      "memory": "内存 {{used}} / {{total}} GB（{{percent}}%）",
+      "gpu": "GPU 利用率 {{percent}}% · {{gpu}}",
+      "vram": "显存 {{used}} / {{total}} GB（{{percent}}%）· {{gpu}}",
+      "moreGpus": "（另有 {{count}} 张显卡）"
+    }
   },
   "breadcrumb": {
     "projects": "项目",
@@ -2745,6 +2757,7 @@
     "close": "关闭",
     "empty": "暂无公告",
     "bellTitle": "公告 / 更新",
+    "bellUnread": "{{count}} 条未读公告",
     "updateAvailable": "新版本 {{tag}}",
     "tags": {
       "all": "全部",

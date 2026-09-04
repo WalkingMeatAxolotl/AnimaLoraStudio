@@ -486,9 +486,13 @@ Geometry and scroll responsibility are fixed:
   internally, so long project workflows never push collapse/settings actions
   outside the viewport.
 - Topbar breadcrumb, active-task status, global notices, and search preserve that
-  priority order. At compact desktop widths, auxiliary system resource meters
-  yield before navigation or actions; breadcrumb labels truncate visually while
-  their full title and accessible name remain available.
+  priority order. Active-task and queued-task status are native navigation links
+  styled by the shared button recipe; notice and search triggers use icon-only
+  `Button`s with dialog disclosure state. System resource pills expose bounded
+  `meter` semantics and localized value descriptions rather than relying on color,
+  width, or hover-only tooltips. At compact desktop widths, auxiliary system
+  resource meters yield before navigation or actions; breadcrumb labels truncate
+  visually while their full title and accessible name remain available.
 - A visible-on-focus skip link targets the main landmark. Sidebar, breadcrumb,
   main, and overlay components retain native landmark/dialog semantics; route
   changes do not steal focus automatically.

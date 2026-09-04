@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, type SystemStats as SystemStatsData } from '../api/client'
 import { useEventStream } from '../lib/useEventStream'
 
@@ -14,9 +15,10 @@ function fmtGb(used: number, total: number): string {
 
 interface PillProps {
   label: string
+  accessibleLabel: string
   value: string
   pct: number
-  tooltip: string
+  description: string
 }
 
 /** 进度条胶囊 — 整个 pill 背景按占用百分比填色 (>=70% warn, >=90% err)，
@@ -26,17 +28,23 @@ interface PillProps {
  *  字符（"CPU 13%"），MEM/VRAM 占 11 字符（"MEM 35.6/63G"），auto-width 下
  *  宽度差近 1 倍。固定下界 96px (够 "VRAM 80.0/128G" 之类最长情况)，label 左
  *  value 右两端对齐，bg 填充自然居于中间。 */
-function Pill({ label, value, pct, tooltip }: PillProps) {
+function Pill({ label, accessibleLabel, value, pct, description }: PillProps) {
   const tone = toneClasses(pct)
   const clamped = Math.min(100, Math.max(0, pct))
   return (
     <div
+      role="meter"
+      aria-label={accessibleLabel}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={clamped}
+      aria-valuetext={description}
       className="relative flex items-center justify-between gap-1.5 h-8 min-w-[96px] px-2 rounded-md border border-dim bg-surface overflow-hidden shrink-0"
-      title={tooltip}
+      title={description}
     >
       <div
-        aria-hidden
-        className={`absolute inset-y-0 left-0 ${tone.bg} transition-[width] duration-500 ease-out`}
+        aria-hidden="true"
+        className={`absolute inset-y-0 left-0 ${tone.bg} transition-[width] duration-500 ease-out motion-reduce:transition-none`}
         style={{ width: `${clamped}%` }}
       />
       <span className="relative z-10 text-2xs uppercase tracking-wider text-fg-tertiary">{label}</span>
@@ -46,6 +54,7 @@ function Pill({ label, value, pct, tooltip }: PillProps) {
 }
 
 export default function SystemStats() {
+  const { t } = useTranslation()
   const [stats, setStats] = useState<SystemStatsData | null>(null)
 
   // mount 时拉一次冷启动 (避免空白等 2.5s 首个 SSE 事件)，之后纯靠后端
@@ -84,7 +93,7 @@ export default function SystemStats() {
   const vramPct = gpu0 && gpu0.vram_total_gb > 0 ? (gpu0.vram_used_gb / gpu0.vram_total_gb) * 100 : 0
 
   const gpuExtra = stats.gpu && stats.gpu.length > 1
-    ? ` (+${stats.gpu.length - 1} more)`
+    ? t('topbar.systemStats.moreGpus', { count: stats.gpu.length - 1 })
     : ''
   const gpuTempText = gpu0?.temp_c != null ? ` · ${gpu0.temp_c}°C` : ''
   const gpuLabel = gpu0 ? `${gpu0.name}${gpuTempText}${gpuExtra}` : ''
@@ -93,29 +102,45 @@ export default function SystemStats() {
     <div className="ui-app-shell-topbar-stats">
       <Pill
         label="CPU"
+        accessibleLabel={t('topbar.systemStats.cpuLabel')}
         value={`${stats.cpu_pct.toFixed(0)}%`}
         pct={stats.cpu_pct}
-        tooltip={`CPU 占用 ${stats.cpu_pct.toFixed(1)}%`}
+        description={t('topbar.systemStats.cpu', { percent: stats.cpu_pct.toFixed(1) })}
       />
       <Pill
         label="MEM"
+        accessibleLabel={t('topbar.systemStats.memoryLabel')}
         value={fmtGb(stats.ram_used_gb, stats.ram_total_gb)}
         pct={ramPct}
-        tooltip={`内存 ${stats.ram_used_gb.toFixed(1)} / ${stats.ram_total_gb.toFixed(1)} GB (${ramPct.toFixed(0)}%)`}
+        description={t('topbar.systemStats.memory', {
+          used: stats.ram_used_gb.toFixed(1),
+          total: stats.ram_total_gb.toFixed(1),
+          percent: ramPct.toFixed(0),
+        })}
       />
       {gpu0 && (
         <>
           <Pill
             label="GPU"
+            accessibleLabel={t('topbar.systemStats.gpuLabel')}
             value={`${gpu0.util_pct}%`}
             pct={gpu0.util_pct}
-            tooltip={`GPU 利用率 · ${gpuLabel}`}
+            description={t('topbar.systemStats.gpu', {
+              percent: gpu0.util_pct,
+              gpu: gpuLabel,
+            })}
           />
           <Pill
             label="VRAM"
+            accessibleLabel={t('topbar.systemStats.vramLabel')}
             value={fmtGb(gpu0.vram_used_gb, gpu0.vram_total_gb)}
             pct={vramPct}
-            tooltip={`显存 ${gpu0.vram_used_gb.toFixed(1)} / ${gpu0.vram_total_gb.toFixed(1)} GB (${vramPct.toFixed(0)}%) · ${gpuLabel}`}
+            description={t('topbar.systemStats.vram', {
+              used: gpu0.vram_used_gb.toFixed(1),
+              total: gpu0.vram_total_gb.toFixed(1),
+              percent: vramPct.toFixed(0),
+              gpu: gpuLabel,
+            })}
           />
         </>
       )}
