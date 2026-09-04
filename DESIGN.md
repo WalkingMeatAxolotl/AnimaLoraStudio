@@ -490,7 +490,11 @@ Geometry and scroll responsibility are fixed:
 - Sidebar width and Topbar height come from layout tokens. Sidebar branding and
   footer actions remain fixed while the named primary navigation region scrolls
   internally, so long project workflows never push collapse/settings actions
-  outside the viewport.
+  outside the viewport. Current route links expose `aria-current`; theme uses the
+  navigation-row recipe and collapse uses the shared `Button`. The project version row is a
+  named control group: icon-only mutations use `Button`, while the switch trigger
+  controls a named single-select listbox with initial focus, arrows, Home/End,
+  Escape return, and explicit selected state.
 - Topbar breadcrumb, active-task status, global notices, and search preserve that
   priority order. Active-task and queued-task status are native navigation links
   styled by the shared button recipe; notice and search triggers use icon-only
