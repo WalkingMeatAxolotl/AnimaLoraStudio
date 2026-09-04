@@ -1,13 +1,11 @@
-"""utils.lycoris_patch — lycoris-lora 3.4.0 LokrModule.get_weight device patch。
+"""utils.lycoris_patch — LyCORIS v3/v4 LoKr rank-dropout device patch。
 
 覆盖：
-- 命中受影响版本（3.4.0）→ patch 真实生效（torch.rand 调用得到 device=weight.device 的 mask）
+- 每个已确认受影响版本都会 patch 真实 LokrModule.get_weight
+- patch 委托原始 weight builder，并在 weight.device 上重放 rank dropout
 - 未装 lycoris → skipped_not_installed
-- 未知版本 → skipped_version_unknown + warn
+- 未知版本 → skipped_version_unknown + debug
 - 同进程内幂等 → skipped_already_patched
-
-测试用 monkeypatch 改写 importlib.metadata.version 与 KNOWN_AFFECTED_VERSIONS
-模拟不同环境，避免真实重新安装 lycoris。
 """
 from __future__ import annotations
 
@@ -36,31 +34,47 @@ def fresh_patch_module(monkeypatch: pytest.MonkeyPatch):
         from lycoris.modules.lokr import LokrModule
         orig_get_weight = LokrModule.get_weight
         had_flag = getattr(LokrModule, mod._PATCHED_FLAG, False)
+        had_original = hasattr(LokrModule, mod._ORIGINAL_GET_WEIGHT_ATTR)
+        original_attr = getattr(LokrModule, mod._ORIGINAL_GET_WEIGHT_ATTR, None)
         if had_flag:
             delattr(LokrModule, mod._PATCHED_FLAG)
     except Exception:
         LokrModule = None  # type: ignore[assignment]
         orig_get_weight = None
         had_flag = False
+        had_original = False
+        original_attr = None
 
     yield mod
 
     # 还原
     if LokrModule is not None and orig_get_weight is not None:
         LokrModule.get_weight = orig_get_weight
-        if hasattr(LokrModule, mod._PATCHED_FLAG):
+        if had_flag:
+            setattr(LokrModule, mod._PATCHED_FLAG, True)
+        elif hasattr(LokrModule, mod._PATCHED_FLAG):
             delattr(LokrModule, mod._PATCHED_FLAG)
+        if had_original:
+            setattr(LokrModule, mod._ORIGINAL_GET_WEIGHT_ATTR, original_attr)
+        elif hasattr(LokrModule, mod._ORIGINAL_GET_WEIGHT_ATTR):
+            delattr(LokrModule, mod._ORIGINAL_GET_WEIGHT_ATTR)
 
 
+@pytest.mark.parametrize(
+    "affected_version",
+    ["3.4.0", "4.0.0", "4.0.1.dev20260902072855"],
+)
 def test_apply_on_known_affected_version_patches_get_weight(
-    fresh_patch_module, monkeypatch: pytest.MonkeyPatch
+    fresh_patch_module,
+    monkeypatch: pytest.MonkeyPatch,
+    affected_version: str,
 ) -> None:
-    """3.4.0 安装时 patch 应替换 LokrModule.get_weight 且生成的 mask 在 weight.device 上。"""
+    """每个确认受影响版本都应 patch，并在 weight.device 上创建 mask。"""
     pytest.importorskip("lycoris.modules.lokr")
     import torch
     from lycoris.modules.lokr import LokrModule
 
-    monkeypatch.setattr(fresh_patch_module, "version", lambda _: "3.4.0")
+    monkeypatch.setattr(fresh_patch_module, "version", lambda _: affected_version)
 
     status = fresh_patch_module.apply_lokr_device_patch()
     assert status == "applied"
@@ -92,7 +106,8 @@ def test_apply_on_known_affected_version_patches_get_weight(
     fake = _FakeSelf()
     # 直接调被替换后的 get_weight；shape=None 让 weight 保持原状
     LokrModule.get_weight(fake, None)
-    assert captured["device"] is not None, "patched get_weight 没把 device 传给 torch.rand"
+    assert captured["device"] == fake.lokr_w1.device
+    assert fake.rank_dropout == 0.5
 
 
 def test_apply_when_not_installed_returns_skipped(
@@ -131,3 +146,23 @@ def test_apply_idempotent(
     monkeypatch.setattr(fresh_patch_module, "version", lambda _: "3.4.0")
     assert fresh_patch_module.apply_lokr_device_patch() == "applied"
     assert fresh_patch_module.apply_lokr_device_patch() == "skipped_already_patched"
+
+
+def test_patch_restores_rank_dropout_when_weight_build_fails(
+    fresh_patch_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """上游 weight builder 抛错时也不能把模块永久留在 rank_dropout=0。"""
+    pytest.importorskip("lycoris.modules.lokr")
+    from lycoris.modules.lokr import LokrModule
+
+    monkeypatch.setattr(fresh_patch_module, "version", lambda _: "3.4.0")
+    assert fresh_patch_module.apply_lokr_device_patch() == "applied"
+
+    class _BrokenSelf:
+        training = True
+        rank_dropout = 0.5
+
+    broken = _BrokenSelf()
+    with pytest.raises(AttributeError):
+        LokrModule.get_weight(broken, None)
+    assert broken.rank_dropout == 0.5

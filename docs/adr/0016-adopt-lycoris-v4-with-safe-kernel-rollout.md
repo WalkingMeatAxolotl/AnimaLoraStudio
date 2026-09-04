@@ -33,8 +33,14 @@ v4 的主要新增价值不是项目第一次获得 bypass mode：本项目的�
   `tests/test_lycoris_patch.py` 的旧私有 import，dev wheel 没有改变这个兼容面。
 - v3.4 与 v4.0.0 生成的 LoRA / LoKr safetensors 已做双向 bit-exact 加载验证。
 - v3.4 LoKr 训练 checkpoint（含 AdamW optimizer state）可由 v4.0.0 恢复。
-- 强制 `LYCORIS_KERNEL_BACKEND=torch` 后，RTX 5090 上 LoRA、LoKr、LoHa 的
-  bf16 CUDA forward/backward 冒烟测试通过。
+- 强制 `LYCORIS_KERNEL_BACKEND=torch` 后，RTX 5090、Torch 2.11.0 + CUDA 12.8
+  上 v4.0.0 与 `4.0.1.dev20260902072855` 的 LoRA、LoKr、LoHa bf16 CUDA
+  forward/backward 冒烟测试均通过；dev wheel 实测解析为 `available=('compile', 'torch')`、
+  `fused=()`、`resolved='torch'`。
+- 本分支的兼容原型改为安全默认 backend 并包装原始 `LokrModule.get_weight` 后，
+  v4.0.0 与上述 dev wheel 的扩展聚焦套件均为 **155 passed / 0 failed**；在不设置
+  backend 环境变量的独立 CUDA 进程中，两版均自动得到 `requested='torch'`、
+  `resolved='torch'`，且 `rank_dropout=0.5` 的 LoKr backward 梯度有限。
 - Krea 2 FP8 推理的 `runtime/training/families/krea2/lora_fp8_merge.py` 按权重键
   自行 merge，不依赖 v4 kernel backend；现有权重格式未变。
 
