@@ -497,8 +497,13 @@ Geometry and scroll responsibility are fixed:
   main, and overlay components retain native landmark/dialog semantics; route
   changes do not steal focus automatically.
 - Modal, Drawer, Toast, command surfaces, and image preview remain portalled
-  overlay layers and never consume AppShell grid space. Drawers may inert the app
-  root; overlays must not alter shell width or introduce a second body scrollbar.
+  overlay layers and never consume AppShell grid space. The anchored command
+  palette is a modal command surface: its named combobox controls a listbox,
+  keeps DOM focus in the query field, exposes the active option through
+  `aria-activedescendant`, supports wrapping arrows plus Home/End, traps Tab,
+  and restores the invoking search control after Escape or backdrop close.
+  Drawers may inert the app root; overlays must not alter shell width or
+  introduce a second body scrollbar.
 
 App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
 1280px breakpoint. Route-specific workbench restructuring is a later Layout

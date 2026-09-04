@@ -130,6 +130,9 @@
     "download": "下载"
   },
   "commandPalette": {
+    "dialogLabel": "命令面板",
+    "inputLabel": "搜索命令",
+    "resultsLabel": "命令搜索结果",
     "placeholder": "搜索页面、项目、预设、标签…",
     "searchingTags": "搜索标签…",
     "noResults": "无匹配结果",

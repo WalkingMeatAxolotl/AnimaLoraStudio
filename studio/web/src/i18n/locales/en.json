@@ -130,6 +130,9 @@
     "download": "Download"
   },
   "commandPalette": {
+    "dialogLabel": "Command palette",
+    "inputLabel": "Search commands",
+    "resultsLabel": "Command search results",
     "placeholder": "Search pages, projects, presets, tags…",
     "searchingTags": "Searching tags…",
     "noResults": "No results",
