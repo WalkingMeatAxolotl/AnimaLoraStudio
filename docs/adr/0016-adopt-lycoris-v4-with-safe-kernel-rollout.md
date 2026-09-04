@@ -1,8 +1,8 @@
 # 0016 — 分阶段升级 LyCORIS v4 并隔离实验性 kernel backend
 
-**状态**：Proposed
+**状态**：Accepted
 **日期**：2026-09-04
-**决策者**：仓库 maintainer（待确认）
+**决策者**：@WalkingMeatAxolotl
 
 ## 背景
 
@@ -18,8 +18,9 @@ v4 的主要新增价值不是项目第一次获得 bypass mode：本项目的�
 `bypass_mode=True`，Krea 2 FP8 LoKr 也因量化底模强制走 bypass。v4 新增的是在这些路径
 及重建路径上自动调度 Triton、TileLang、`torch.compile` 或 eager Torch kernel。
 
-本 ADR 记录正式升级前需要修改的兼容面、风险隔离方式和验收门槛。它不批准把 4.0.0
-直接交付给用户。
+本 ADR 记录 v4 基础兼容所需的修改、风险隔离方式和验收门槛。经 CPU 聚焦测试、
+Windows CUDA 冒烟和 v3/v4 checkpoint 互操作验证后，项目决定以精确固定的 4.0.0
+作为第一阶段 runtime，同时继续隔离尚未验证的 fused kernel 与原生 T-LoRA。
 
 ## 已验证事实
 
@@ -44,7 +45,7 @@ v4 的主要新增价值不是项目第一次获得 bypass mode：本项目的�
 - Krea 2 FP8 推理的 `runtime/training/families/krea2/lora_fp8_merge.py` 按权重键
   自行 merge，不依赖 v4 kernel backend；现有权重格式未变。
 
-### v4.0.0 的阻塞问题
+### v4.0.0 的已知风险与隔离措施
 
 1. **现有 LoKr device patch 无法导入。**
    `utils/lycoris_patch.py` 从 `lycoris.modules.lokr` 导入私有符号
@@ -103,18 +104,24 @@ TileLang / compile 路径。
 **优点**：当前已知稳定。
 **缺点**：无法使用 v4 kernel 和后续 upstream 修复；本地私有 patch 长期背负。
 
-## 暂定决策
+## 决策
 
-采用 **A 的分阶段方案**，但只有下列 Phase 1 验收完成且存在包含 PR #286 的正式稳定版
-后，才将本 ADR 改为 Accepted 并合并依赖升级。
+采用 **A 的分阶段方案**，并将第一阶段生产依赖精确固定为
+`lycoris-lora==4.0.0`：默认 eager Torch backend，保留项目既有 T-LoRA 语义和
+checkpoint 格式，不安装或自动选择 fused kernel。精确 pin 防止环境漂移到未经验证的
+后续版本。
+
+PR #286 修复的是 4.0.0 的可选 LoKr fused-kernel shape 问题；第一阶段不会安装
+`[kernels]` extras，且默认 backend 为 `torch`，因此该问题不阻塞基础兼容上线。
+原生 T-LoRA 与 kernel acceleration 分别作为后续功能验证，不与 runtime major 升级绑定。
 
 ## 需要修改的内容
 
 ### Phase 1 — v4 兼容基线（不承诺 kernel 加速）
 
 1. **依赖与守卫**
-   - 稳定版本目标暂定 `lycoris-lora>=4.0.1,<5.0`；不得依赖 dev/nightly。
-   - 更新 `tests/test_dependency_constraints.py`，继续禁止无上界 major 漂移。
+   - 精确固定 `lycoris-lora==4.0.0`，不得使用开放式 v4 范围或 dev/nightly。
+   - 更新 `tests/test_dependency_constraints.py`，防止安装结果漂移到未经验证的 artifact。
 2. **backend 生命周期**
    - 在任何 `lycoris` module import 前解析 backend。
    - 未显式设置时默认 `torch`；保留外部 `LYCORIS_KERNEL_BACKEND` 覆盖能力。
@@ -155,12 +162,22 @@ TileLang / compile 路径。
 
 ## 验收门槛
 
-- upstream 发布包含 PR #286 的正式稳定版。
-- CPU CI 全绿；CUDA 至少覆盖普通安装（无 kernels extra）和 Triton opt-in 两组。
-- 无 Triton 环境不得触发 `TritonMissing`。
-- 所有支持算法 forward/backward 梯度有限，rank/module/dropout 语义有测试。
-- v3 权重与训练 checkpoint 能继续加载；升级失败可通过依赖约束回滚到 v3.4。
+### Phase 1 — v4 eager 基础兼容
+
+- 依赖精确固定到已审计的 `4.0.0`，升级不会自动进入后续未知版本。
+- CPU CI 全绿；Windows CUDA 覆盖 LoRA、LoKr、LoHa 及 rank-dropout
+  forward/backward，梯度有限。
+- 无 Triton 环境不得触发 `TritonMissing`，默认必须解析为 eager `torch`。
+- v3 权重与训练 checkpoint 能在 v4 继续加载；项目 T-LoRA 的算法语义和权重键保持不变。
+- 合入 `dev` 后，由 maintainer 完成真实 Anima / Krea 2 训练与 resume 验证，作为下一正式
+  版本的发布 gate；验证失败则恢复 v3 pin，不把问题带入 `master`。
+
+### Phase 2 — 可选 kernel acceleration
+
+- 只使用包含 PR #286 或等价修复的稳定版本。
+- CUDA 同时覆盖普通安装和 Triton opt-in，capability probe 失败时必须回退到 `torch`。
 - 真实训练基准单独报告 kernel device time 与全训练 `it/s`，不以官方算子微基准替代。
+- 只有安装矩阵、数值正确性、冷启动和稳态收益均达标后，才考虑推荐或默认启用。
 
 ## 后果
 

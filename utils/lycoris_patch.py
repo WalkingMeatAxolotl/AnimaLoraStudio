@@ -18,8 +18,9 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-# Confirmed by source inspection and CUDA reproduction.  The dev build is used
-# only by the migration branch while waiting for the first post-4.0.0 stable.
+# Confirmed by source inspection and CUDA reproduction.  Production installs
+# are pinned to 4.0.0; the audited dev build remains listed so the same fixture
+# can detect regressions while the next stable artifact is evaluated.
 KNOWN_AFFECTED_VERSIONS: frozenset[str] = frozenset(
     {
         "3.4.0",
