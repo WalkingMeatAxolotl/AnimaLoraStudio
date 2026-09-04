@@ -306,11 +306,12 @@ flows; it renders through the same shell. Use a Drawer for persistent secondary 
 that should remain available alongside page context, and do not put ordinary page
 content in a modal merely to make it prominent.
 
-Every modal has one required title, an optional concise description, one scrollable body,
-and an optional footer. Use `sm` for a short prompt, `md` for ordinary forms, and `lg`
-for structured comparisons or dense option sets. The panel is portalled above the app,
-keeps viewport-safe outer padding and a bounded height, and leaves the title and footer
-visible while long body content scrolls.
+Every modal has one required title, an optional concise description, optional header
+utilities, one scrollable body, and an optional footer. Use `sm` for a short prompt, `md`
+for ordinary forms, `lg` for structured comparisons or dense option sets, and `wide`
+only for a genuine master-detail surface such as Announcement Center. The panel is
+portalled above the app, keeps viewport-safe outer padding and a bounded height, and
+leaves the title, header utilities, and footer visible while long body content scrolls.
 
 Dismissal and focus are part of the Pattern rather than caller-owned behavior:
 
@@ -322,6 +323,11 @@ Dismissal and focus are part of the Pattern rather than caller-owned behavior:
 - The shell supplies `role="dialog"`, `aria-modal`, and title/description linkage. Use
   `alertdialog` only when an immediate decision is required before work can continue.
 - Lock background scrolling while open. Do not stack modal dialogs.
+- Announcement Center is the representative `wide` master-detail modal. Its tag filter
+  uses `SegmentedControl`; its announcement list is a labelled single-select listbox with
+  wrapping vertical arrows plus Home/End; and the article region owns its own scroll.
+  Announcement data, read-state persistence, update checks, and settings deep links remain
+  feature-owned.
 
 Footer actions use `ActionGroup`: status first, secondary or destructive actions next,
 and the single primary action last. Keep validation near the relevant control; an error

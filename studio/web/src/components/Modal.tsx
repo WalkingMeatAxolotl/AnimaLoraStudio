@@ -8,13 +8,14 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 
-export type ModalSize = 'sm' | 'md' | 'lg'
+export type ModalSize = 'sm' | 'md' | 'lg' | 'wide'
 
 interface ModalBaseProps {
   title: ReactNode
   description?: ReactNode
   children?: ReactNode
   footer?: ReactNode
+  headerActions?: ReactNode
   onClose: () => void
   size?: ModalSize
   role?: 'dialog' | 'alertdialog'
@@ -41,6 +42,7 @@ const SIZE_CLASS: Record<ModalSize, string> = {
   sm: 'max-w-[440px]',
   md: 'max-w-[560px]',
   lg: 'max-w-[720px]',
+  wide: 'w-[80vw] max-w-[1440px]',
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -82,6 +84,7 @@ export default function Modal({
   description,
   children,
   footer,
+  headerActions,
   onClose,
   size = 'md',
   role = 'dialog',
@@ -172,12 +175,21 @@ export default function Modal({
   const content = (
     <>
       <header className="shrink-0 px-page pt-page">
-        <h2 id={titleId} className="type-section-title">{title}</h2>
-        {description && (
-          <p id={descriptionId} className="type-page-description mt-related">
-            {description}
-          </p>
-        )}
+        <div className="flex min-w-0 items-start gap-related">
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="type-section-title">{title}</h2>
+            {description && (
+              <p id={descriptionId} className="type-page-description mt-related">
+                {description}
+              </p>
+            )}
+          </div>
+          {headerActions && (
+            <div className="flex shrink-0 items-center gap-related">
+              {headerActions}
+            </div>
+          )}
+        </div>
       </header>
       {children && (
         <div className={`min-h-0 overflow-y-auto px-page pt-section ${footer ? 'pb-0' : 'pb-page'} ${bodyClassName}`}>

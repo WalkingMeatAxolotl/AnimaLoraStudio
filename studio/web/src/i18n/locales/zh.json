@@ -2759,6 +2759,8 @@
     "title": "公告",
     "close": "关闭",
     "empty": "暂无公告",
+    "filterLabel": "筛选公告",
+    "postsLabel": "公告列表",
     "bellTitle": "公告 / 更新",
     "bellUnread": "{{count}} 条未读公告",
     "updateAvailable": "新版本 {{tag}}",

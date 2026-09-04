@@ -2759,6 +2759,8 @@
     "title": "Announcements",
     "close": "Close",
     "empty": "No announcements",
+    "filterLabel": "Filter announcements",
+    "postsLabel": "Announcement list",
     "bellTitle": "Announcements / Updates",
     "bellUnread": "{{count}} unread announcements",
     "updateAvailable": "New version {{tag}}",
