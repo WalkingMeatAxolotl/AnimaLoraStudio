@@ -18,19 +18,19 @@ interface Item {
 }
 
 const SEARCH_ICON = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
     <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
   </svg>
 )
 
 const ENTER_ICON = (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="9 10 4 15 9 20" /><path d="M20 4v7a4 4 0 0 1-4 4H4" />
   </svg>
 )
 
 const TAG_ICON = (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.41 0l7.3-7.3a1 1 0 0 0 0-1.41L12 2z" />
     <path d="M7 7h.01" />
   </svg>
@@ -49,7 +49,9 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
   const ctx = useProjectCtx()
   const settingsDrawer = useSettingsDrawer()
   const inputRef = useRef<HTMLInputElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
   const [query, setQuery] = useState('')
   const [activeIdx, setActiveIdx] = useState(0)
 
@@ -66,6 +68,14 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties>({
     position: 'fixed', top: 56, right: 20, width: 520,
   })
+
+  const restoreQueryFocus = useCallback(() => {
+    requestAnimationFrame(() => {
+      const panel = panelRef.current
+      const input = inputRef.current
+      if (panel?.isConnected && input && document.activeElement !== input) input.focus()
+    })
+  }, [])
 
   useLayoutEffect(() => {
     if (!open) return
@@ -86,12 +96,60 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
     if (open) {
       setQuery('')
       setActiveIdx(0)
-      setTimeout(() => inputRef.current?.focus(), 40)
     } else {
       setProjectsLoaded(false)
       setPresetsLoaded(false)
     }
   }, [open])
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    if (!open) return
+
+    const previousFocus = document.activeElement as HTMLElement | null
+    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 0)
+    const handleDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const panel = panelRef.current
+      if (!panel) return
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute('hidden'))
+      if (focusable.length === 0) {
+        event.preventDefault()
+        panel.focus()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || active === panel || !panel.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || active === panel || !panel.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleDialogKeyDown)
+    return () => {
+      window.clearTimeout(focusTimer)
+      document.removeEventListener('keydown', handleDialogKeyDown)
+      const focusTarget = anchorEl ?? previousFocus
+      if (focusTarget?.isConnected) focusTarget.focus()
+    }
+  }, [open, anchorEl])
 
   useEffect(() => {
     if (!open || projectsLoaded) return
@@ -251,34 +309,56 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
   )
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (flatItems.length === 0) return
+
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setActiveIdx((i) => Math.min(i + 1, flatItems.length - 1))
+      setActiveIdx((i) => (i + 1) % flatItems.length)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setActiveIdx((i) => Math.max(i - 1, 0))
+      setActiveIdx((i) => (i - 1 + flatItems.length) % flatItems.length)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      setActiveIdx(0)
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      setActiveIdx(flatItems.length - 1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (flatItems[activeIdx]) select(flatItems[activeIdx])
-    } else if (e.key === 'Escape') {
-      onClose()
     }
   }
+
+  useEffect(() => {
+    setActiveIdx((current) => (
+      flatItems.length === 0 ? 0 : Math.min(current, flatItems.length - 1)
+    ))
+  }, [flatItems.length])
 
   useEffect(() => {
     const el = listRef.current
     if (!el) return
     const active = el.querySelector(`[data-palette-idx="${activeIdx}"]`) as HTMLElement | null
-    if (active) active.scrollIntoView({ block: 'nearest' })
+    active?.scrollIntoView?.({ block: 'nearest' })
   }, [activeIdx])
 
   if (!open) return null
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        aria-hidden="true"
+        className="fixed inset-0 z-40"
+        data-testid="command-palette-backdrop"
+        onClick={onClose}
+      />
 
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('commandPalette.dialogLabel')}
+        tabIndex={-1}
         className="z-50 rounded-lg border border-subtle bg-overlay shadow-xl flex flex-col overflow-hidden"
         style={{
           ...panelStyle,
@@ -292,24 +372,45 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-label={t('commandPalette.inputLabel')}
+            aria-autocomplete="list"
+            aria-haspopup="listbox"
+            aria-expanded="true"
+            aria-controls="command-palette-listbox"
+            aria-activedescendant={flatItems[activeIdx]
+              ? `command-palette-option-${activeIdx}`
+              : undefined}
             className="flex-1 bg-transparent border-none outline-none text-sm text-fg-primary placeholder:text-fg-tertiary"
             placeholder={t('commandPalette.placeholder')}
             value={query}
             onChange={(e) => { setQuery(e.target.value); setActiveIdx(0) }}
             onKeyDown={handleKeyDown}
+            onBlur={restoreQueryFocus}
           />
           {captionsLoading && (
-            <span className="text-2xs text-fg-tertiary animate-pulse">{t('commandPalette.searchingTags')}</span>
+            <span role="status" aria-live="polite" className="text-2xs text-fg-tertiary animate-pulse motion-reduce:animate-none">
+              {t('commandPalette.searchingTags')}
+            </span>
           )}
           <kbd className="kbd">esc</kbd>
         </div>
 
-        <div ref={listRef} className="flex-1 overflow-y-auto p-1.5">
+        <div
+          ref={listRef}
+          id="command-palette-listbox"
+          role="listbox"
+          aria-label={t('commandPalette.resultsLabel')}
+          aria-busy={captionsLoading}
+          className="flex-1 overflow-y-auto p-1.5"
+        >
           {filtered.length === 0 ? (
-            <div className="text-sm text-fg-tertiary text-center py-8">{t('commandPalette.noResults')}</div>
+            <div role="status" aria-live="polite" className="text-sm text-fg-tertiary text-center py-8">
+              {t('commandPalette.noResults')}
+            </div>
           ) : (
             [...grouped.entries()].map(([group, items]) => (
-              <div key={group} className="mb-1">
+              <div key={group} role="group" aria-label={group} className="mb-1">
                 <div className="flex items-center gap-1.5 px-3 py-1.5">
                   {group === t('commandPalette.tags') && <span className="text-fg-tertiary">{TAG_ICON}</span>}
                   <span className="text-2xs text-fg-tertiary font-semibold uppercase tracking-wider">
@@ -320,11 +421,16 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
                   const idx = flatItems.indexOf(item)
                   const isActive = idx === activeIdx
                   return (
-                    <button
+                    <div
                       key={item.id}
+                      id={`command-palette-option-${idx}`}
+                      role="option"
+                      aria-selected={isActive}
                       data-palette-idx={idx}
+                      onMouseEnter={() => setActiveIdx(idx)}
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={() => select(item)}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-sm text-left border-none cursor-pointer transition-colors ${
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-sm text-left cursor-pointer transition-colors ${
                         isActive ? 'bg-accent-soft text-accent' : 'bg-transparent text-fg-primary hover:bg-surface'
                       }`}
                     >
@@ -339,7 +445,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
                         </span>
                       )}
                       {isActive && <span className="text-fg-tertiary shrink-0">{ENTER_ICON}</span>}
-                    </button>
+                    </div>
                   )
                 })}
               </div>

@@ -1,29 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useProjectCtx } from '../context/ProjectContext'
 import { api, type Task } from '../api/client'
 import { useEventStream, type StudioEvent } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useAnnouncements } from '../lib/Announcements'
 import CommandPalette from './CommandPalette'
+import Button, { buttonClassName } from './Button'
 import SystemStats from './SystemStats'
 
 const SearchIcon = (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+  <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
     <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
   </svg>
 )
 
 const QueueIcon = (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+  <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
     <rect x="2" y="3" width="20" height="14" rx="2" />
     <path d="M8 21h8M12 17v4" />
   </svg>
 )
 
 const BellIcon = (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
     <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
   </svg>
@@ -112,9 +113,8 @@ function useBreadcrumbs(): Crumb[] {
 export default function Topbar() {
   const { t } = useTranslation()
   const crumbs = useBreadcrumbs()
-  const navigate = useNavigate()
   const ctx = useProjectCtx()
-  const { unreadCount, updateInfo, openCenter } = useAnnouncements()
+  const { unreadCount, updateInfo, open, openCenter } = useAnnouncements()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const searchBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -228,58 +228,79 @@ export default function Topbar() {
         </nav>
 
         {runningTask && (
-          <button
-            type="button"
-            onClick={() => navigate(`/queue/${runningTask.id}`)}
-            className="ui-app-shell-running-task flex shrink-0 items-center gap-2 rounded-md border border-warn bg-warn-soft px-3 py-[5px] cursor-pointer hover:bg-warn/10 transition-colors"
+          <Link
+            to={`/queue/${runningTask.id}`}
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'sm',
+              className: 'ui-app-shell-running-task justify-start',
+            })}
             title={t('topbar.taskId', { id: runningTask.id })}
+            aria-label={t('topbar.runningTaskAria', {
+              id: runningTask.id,
+              label: taskLabel,
+              suffix: progressSuffix,
+            })}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-warn animate-pulse shrink-0" />
-            <span className="text-xs font-mono text-warn overflow-hidden text-ellipsis whitespace-nowrap">
+            <span className="dot dot-running shrink-0" aria-hidden="true" />
+            <span className="font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap">
               {t('topbar.trainingCapsule', { label: taskLabel, suffix: progressSuffix })}
             </span>
-          </button>
+          </Link>
         )}
 
         {!runningTask && pendingCount > 0 && (
-          <button
-            onClick={() => navigate('/queue')}
-            className="flex items-center gap-1.5 px-2.5 py-[5px] rounded-md text-xs font-mono text-warn bg-warn-soft border border-warn cursor-pointer hover:bg-warn/10 transition-colors shrink-0"
+          <Link
+            to="/queue"
+            className={buttonClassName({ variant: 'secondary', size: 'sm' })}
           >
             {QueueIcon}
             <span>{t('topbar.pendingCount', { n: pendingCount })}</span>
-          </button>
+          </Link>
         )}
 
         <SystemStats />
 
         {/* 版本更新入口已并入右侧公告栏铃铛（D8） */}
 
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          iconOnly
           onClick={openCenter}
           title={t('announcements.bellTitle')}
-          aria-label={t('announcements.bellTitle')}
-          className="relative flex items-center justify-center text-fg-tertiary bg-surface border border-dim rounded-md cursor-pointer w-8 h-8 hover:border-bold hover:text-fg-secondary transition-colors shrink-0"
+          aria-label={unreadCount > 0
+            ? t('announcements.bellUnread', { count: unreadCount })
+            : t('announcements.bellTitle')}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          className="relative shrink-0"
           data-testid="announcement-bell"
         >
           {BellIcon}
           {(unreadCount > 0 || updateInfo?.has_update) && (
             <span
+              aria-hidden="true"
               className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-err border border-canvas"
               data-testid="announcement-bell-dot"
             />
           )}
-        </button>
+        </Button>
 
-        <button
+        <Button
           ref={searchBtnRef}
+          variant="secondary"
+          size="sm"
+          iconOnly
           onClick={() => setPaletteOpen(true)}
           title={t('topbar.search')}
           aria-label={t('topbar.searchAriaLabel')}
-          className="flex items-center justify-center text-fg-tertiary bg-surface border border-dim rounded-md cursor-pointer w-8 h-8 hover:border-bold hover:text-fg-secondary transition-colors shrink-0"
+          aria-haspopup="dialog"
+          aria-expanded={paletteOpen}
+          className="shrink-0"
         >
           {SearchIcon}
-        </button>
+        </Button>
       </header>
 
       <CommandPalette

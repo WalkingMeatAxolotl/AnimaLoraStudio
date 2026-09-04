@@ -84,10 +84,10 @@ describe('AnnouncementCenter', () => {
     renderCenter()
     await waitFor(() =>
       expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
-    const noticeFilter = screen.getByTestId('announcement-filter-notice')
-    expect(noticeFilter).toHaveClass('btn', 'btn-secondary', 'btn-xs')
+    const noticeFilter = screen.getByRole('radio', { name: '公告' })
+    expect(noticeFilter).toHaveClass('ui-selection-item')
     fireEvent.click(noticeFilter)
-    expect(noticeFilter).toHaveAttribute('aria-pressed', 'true')
+    expect(noticeFilter).toHaveAttribute('aria-checked', 'true')
     expect(screen.queryByTestId('announcement-item-p-migration')).toBeNull()
     expect(screen.getByTestId('announcement-item-p-notice')).toBeInTheDocument()
   })
@@ -100,10 +100,45 @@ describe('AnnouncementCenter', () => {
     // 点面板内部（某篇）→ 不关
     fireEvent.click(screen.getByTestId('announcement-item-p-notice'))
     expect(screen.getByTestId('announcement-center')).toBeInTheDocument()
-    // 点蒙版（外层）→ 关
-    fireEvent.click(screen.getByTestId('announcement-center'))
+    // 在蒙版按下指针 → 关闭
+    fireEvent.mouseDown(screen.getByTestId('announcement-center'))
     await waitFor(() =>
       expect(screen.queryByTestId('announcement-center')).toBeNull())
+  })
+
+  it('公告列表支持单选语义与方向键导航', async () => {
+    localStorage.setItem('studio.announcements.lastVersion', '0.15.0')
+    renderCenter()
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: '公告' })).toBeInTheDocument())
+
+    const options = screen.getAllByRole('option')
+    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+    options[0].focus()
+    fireEvent.keyDown(options[0], { key: 'ArrowDown' })
+
+    await waitFor(() => {
+      expect(options[1]).toHaveAttribute('aria-selected', 'true')
+      expect(options[1]).toHaveFocus()
+    })
+    expect(screen.getByText('公告正文')).toBeInTheDocument()
+  })
+
+  it('Escape 关闭后恢复先前焦点', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = 'Open announcements'
+    document.body.append(opener)
+    opener.focus()
+    localStorage.setItem('studio.announcements.lastVersion', '0.15.0')
+
+    renderCenter()
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: '公告' })).toBeInTheDocument())
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '公告' })).toBeNull())
+    expect(opener).toHaveFocus()
+    opener.remove()
   })
 
   it('正文按 markdown 渲染（### → 标题、- → 列表，而非原文）', async () => {

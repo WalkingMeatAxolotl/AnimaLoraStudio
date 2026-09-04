@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsDrawerProvider } from '../lib/SettingsDrawer'
@@ -126,11 +127,15 @@ describe('Sidebar (PP0)', () => {
     const toggle = screen.getByRole('button', { name: '折叠' })
     expect(toggle).toHaveAttribute('aria-controls', 'primary-navigation')
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    toggle.focus()
     fireEvent.click(toggle)
 
     expect(sidebar).toHaveAttribute('data-collapsed', 'true')
     expect(window.sessionStorage.getItem('studio.sidebar.expanded')).toBe('0')
-    expect(screen.getByRole('button', { name: '展开' })).toHaveAttribute('aria-expanded', 'false')
+    const expand = screen.getByRole('button', { name: '展开' })
+    expect(expand).toBe(toggle)
+    expect(expand).toHaveAttribute('aria-expanded', 'false')
+    expect(expand).toHaveFocus()
   })
 
   it('restores the collapsed state from the current session', () => {
@@ -148,10 +153,12 @@ describe('Sidebar (PP0)', () => {
     // 活跃 link：bg-surface + font-semibold（重设计 token 化后的活跃态）
     expect(link.className).toMatch(/bg-surface/)
     expect(link.className).toMatch(/font-semibold/)
+    expect(link).toHaveAttribute('aria-current', 'page')
     // 非活跃 link 没有这俩
     const queue = screen.getByRole('link', { name: /队列/ })
     expect(queue.className).not.toMatch(/bg-surface/)
     expect(queue.className).not.toMatch(/font-semibold/)
+    expect(queue).not.toHaveAttribute('aria-current')
   })
 
   it('does not include the removed Datasets link', () => {
@@ -203,8 +210,13 @@ describe('Sidebar version row (live / in project)', () => {
 
   it('single version: new + export present, switch + delete hidden', () => {
     renderLive('/projects/3', makeCtx([MOCK_VERSION]))
-    expect(screen.getByTitle('新版本')).toBeInTheDocument()
-    expect(screen.getByTitle('打包导出当前版本训练集')).toBeInTheDocument()
+    const group = screen.getByRole('group', { name: 'v1 的版本操作' })
+    expect(group).not.toHaveAttribute('tabindex')
+    const newVersion = screen.getByTitle('新版本')
+    expect(newVersion).toHaveClass('btn', 'btn-ghost', 'btn-xs', 'btn-icon')
+    newVersion.focus()
+    expect(newVersion).toHaveFocus()
+    expect(screen.getByTitle('打包导出当前版本训练集')).toHaveClass('btn', 'btn-ghost', 'btn-xs', 'btn-icon')
     // 切换 / 删除只在多版本时出现
     expect(screen.queryByTitle('切换版本')).toBeNull()
     expect(screen.queryByTitle('删除此版本（移到回收站）')).toBeNull()
@@ -219,21 +231,52 @@ describe('Sidebar version row (live / in project)', () => {
     expect(ctx.onExportTrain).toHaveBeenCalled()
   })
 
-  it('multi version: switch opens popover and picks a version', () => {
+  it('multi version: switch exposes a named listbox and supports keyboard selection', async () => {
+    const user = userEvent.setup()
     const ctx = makeCtx([MOCK_VERSION, V2])
     renderLive('/projects/3', ctx)
-    const sw = screen.getByTitle('切换版本')
-    expect(sw).toBeInTheDocument()
-    fireEvent.click(sw)
-    // popover 列出两版本，点非当前的 v2-exp → onSelectVersion(8)
-    fireEvent.click(screen.getByRole('button', { name: 'v2-exp' }))
+    const sw = screen.getByRole('button', { name: '切换版本' })
+    expect(sw).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(sw)
+    expect(sw).toHaveAttribute('aria-expanded', 'true')
+    expect(sw).toHaveAttribute('aria-controls', 'sidebar-version-listbox')
+    const listbox = screen.getByRole('listbox', { name: '项目版本' })
+    const active = screen.getByRole('option', { name: /v1/ })
+    const next = screen.getByRole('option', { name: /v2-exp/ })
+    expect(listbox).toContainElement(active)
+    expect(active).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(active).toHaveFocus())
+
+    await user.keyboard('{ArrowDown}')
+    await waitFor(() => expect(next).toHaveFocus())
+    await user.keyboard('{Enter}')
+
     expect(ctx.onSelectVersion).toHaveBeenCalledWith(8)
+    await waitFor(() => expect(sw).toHaveFocus())
+    expect(screen.queryByRole('listbox', { name: '项目版本' })).toBeNull()
+  })
+
+  it('Escape closes the version list and restores the switch control', async () => {
+    const user = userEvent.setup()
+    renderLive('/projects/3', makeCtx([MOCK_VERSION, V2]))
+    const sw = screen.getByRole('button', { name: '切换版本' })
+    await user.click(sw)
+    await waitFor(() => expect(screen.getByRole('option', { name: /v1/ })).toHaveFocus())
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('listbox', { name: '项目版本' })).toBeNull()
+    await waitFor(() => expect(sw).toHaveFocus())
+    expect(sw).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('multi version: delete calls onDeleteVersion with active id', () => {
     const ctx = makeCtx([MOCK_VERSION, V2])
     renderLive('/projects/3', ctx)
-    fireEvent.click(screen.getByTitle('删除此版本（移到回收站）'))
+    const deleteButton = screen.getByTitle('删除此版本（移到回收站）')
+    expect(deleteButton).toHaveClass('btn-danger')
+    fireEvent.click(deleteButton)
     expect(ctx.onDeleteVersion).toHaveBeenCalledWith(7)
   })
 })

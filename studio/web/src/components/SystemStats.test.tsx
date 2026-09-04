@@ -49,6 +49,24 @@ describe('SystemStats', () => {
     expect(screen.getByText('50%')).toBeInTheDocument()
     expect(screen.getByText('VRAM')).toBeInTheDocument()
     expect(screen.getByText('4.0/24G')).toBeInTheDocument()
+
+    const cpu = screen.getByRole('meter', { name: 'CPU' })
+    expect(cpu).toHaveAttribute('aria-valuemin', '0')
+    expect(cpu).toHaveAttribute('aria-valuemax', '100')
+    expect(cpu).toHaveAttribute('aria-valuenow', '12.5')
+    expect(cpu).toHaveAttribute('aria-valuetext', 'CPU 占用 12.5%')
+    expect(screen.getByRole('meter', { name: '内存' })).toHaveAttribute(
+      'aria-valuetext',
+      '内存 8.0 / 32.0 GB（25%）',
+    )
+    expect(screen.getByRole('meter', { name: 'GPU' })).toHaveAttribute(
+      'aria-valuetext',
+      expect.stringMatching(/GPU 利用率 50% · Test GPU/),
+    )
+    expect(screen.getByRole('meter', { name: '显存' })).toHaveAttribute(
+      'aria-valuetext',
+      expect.stringMatching(/显存 4.0 \/ 24.0 GB（17%）· Test GPU/),
+    )
   })
 
   it('hides GPU / VRAM when stats.gpu is null', async () => {
@@ -87,6 +105,10 @@ describe('SystemStats', () => {
     expect(screen.getByText('80%')).toBeInTheDocument()
     expect(screen.getByText('12.0/16G')).toBeInTheDocument()
     expect(screen.queryByText('1.1/8G')).toBeNull()
+    expect(screen.getByRole('meter', { name: 'GPU' })).toHaveAttribute(
+      'aria-valuetext',
+      expect.stringMatching(/GPU 利用率 80% · RTX 3070 · 43°C（另有 1 张显卡）/),
+    )
   })
 
   it('multi-GPU: falls back to gpu[0] when no card is marked active', async () => {

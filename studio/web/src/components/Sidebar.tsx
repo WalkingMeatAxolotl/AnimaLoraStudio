@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, PHASE_ORDER, PHASE_SKIPPABLE, type Version, type VersionPhase, type VersionStatus } from '../api/client'
 import { useSettingsDrawer } from '../lib/SettingsDrawer'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
+import Button from './Button'
 import { useToast } from './Toast'
 
 /** ADR-0007 §11.2 / §11.5: cursor 派生 step 完成态。
@@ -135,6 +136,7 @@ function NavItem({ to, label, icon, active, collapsed, prominent = false }: {
   return (
     <Link
       to={to}
+      aria-current={active ? 'page' : undefined}
       title={collapsed ? label : undefined}
       className={navItemClass(active, collapsed, prominent)}
     >
@@ -148,15 +150,16 @@ function NavItem({ to, label, icon, active, collapsed, prominent = false }: {
 }
 
 /** NavItem 的 button 变体 —— 给设置抽屉用，不走路由。 */
-function NavButton({ onClick, label, icon, active, collapsed, prominent = false }: {
-  onClick: () => void; label: string; icon: React.ReactNode; active: boolean; collapsed: boolean
+function NavButton({ onClick, label, accessibleLabel, icon, active, collapsed, prominent = false }: {
+  onClick: () => void; label: string; accessibleLabel?: string; icon: React.ReactNode; active: boolean; collapsed: boolean
   prominent?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={collapsed ? label : undefined}
+      aria-label={accessibleLabel}
+      title={collapsed ? (accessibleLabel ?? label) : undefined}
       className={navItemClass(active, collapsed, prominent) + ' text-left'}
     >
       {active && !collapsed && (
@@ -196,13 +199,15 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation()
   const view = useProjectView()
   const [switching, setSwitching] = useState(false)
+  const closeSwitching = useCallback(() => setSwitching(false), [])
   const rowRef = useRef<HTMLDivElement | null>(null)
+  const switchButtonRef = useRef<HTMLButtonElement | null>(null)
   if (!view) return null
   if (collapsed) return null // 折叠态不显示（版本没有独立页面）
   const { project, activeVersion } = view
   const multiVersion = project.versions.length > 1
 
-  const idIcon = <span className="w-5 h-5 rounded-full bg-overlay grid place-items-center text-fg-tertiary shrink-0">{I.branch}</span>
+  const idIcon = <span aria-hidden="true" className="w-5 h-5 rounded-full bg-overlay grid place-items-center text-fg-tertiary shrink-0">{I.branch}</span>
   const label = (
     <span
       className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-fg-primary"
@@ -218,7 +223,11 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
       <div className="flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary">
         {idIcon}
         {label}
-        {activeVersion && <span className={STATUS_DOT[activeVersion.status] ?? 'dot dot-neutral'} />}
+        {activeVersion && (
+          <span className={STATUS_DOT[activeVersion.status] ?? 'dot dot-neutral'}>
+            <span className="sr-only">{t(`versionStatus.${activeVersion.status}`)}</span>
+          </span>
+        )}
       </div>
     )
   }
@@ -228,15 +237,17 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
   return (
     <div
       ref={rowRef}
-      className="group relative flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors"
+      role="group"
+      aria-label={t('sidebar.versionControlsLabel', { label: activeVersion?.label ?? '—' })}
+      className="group relative flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors motion-reduce:transition-none"
     >
       {idIcon}
       {label}
 
       <div className="flex items-center gap-0.5 shrink-0">
-        {/* 新建 / 导出 / 删除：hover（或键盘 focus）才浮现。用 hidden→flex（而非
-            opacity）让它们平时不占位，版本名 flex-1 得以伸展；hover 时才挤占空间。 */}
-        <span className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+        {/* 新建 / 导出 / 删除：平时保留稳定宽度但视觉隐藏；键盘 Tab 聚焦首个
+            action 时由 group-focus-within 显现，避免用无动作的 focusable group 当跳板。 */}
+        <span className="flex pointer-events-none items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 motion-reduce:transition-none">
           <VerAction icon={I.plus} title={t('sidebar.newVersion')} onClick={() => onCreateVersion()} />
           <VerAction icon={I.download} title={t('sidebar.exportTitle')} onClick={onExportTrain} disabled={exporting} />
           {multiVersion && (
@@ -251,9 +262,11 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
         {/* 切换：常驻（多版本才有意义）。 */}
         {multiVersion && (
           <VerAction
+            buttonRef={switchButtonRef}
             icon={I.swap}
             title={t('sidebar.switchVersion')}
             active={switching}
+            controls="sidebar-version-listbox"
             onClick={() => setSwitching((v) => !v)}
           />
         )}
@@ -264,8 +277,13 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
           versions={project.versions}
           activeId={project.active_version_id}
           anchorRef={rowRef}
-          onPick={(vid) => { onSelectVersion(vid); setSwitching(false) }}
-          onClose={() => setSwitching(false)}
+          triggerRef={switchButtonRef}
+          onPick={(vid) => {
+            onSelectVersion(vid)
+            setSwitching(false)
+            requestAnimationFrame(() => switchButtonRef.current?.focus())
+          }}
+          onClose={closeSwitching}
         />
       )}
     </div>
@@ -273,72 +291,141 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
 }
 
 /** 版本行的 icon-only action 按钮。 */
-function VerAction({ icon, title, onClick, disabled = false, active = false, danger = false }: {
-  icon: React.ReactNode; title: string; onClick: () => void
-  disabled?: boolean; active?: boolean; danger?: boolean
+function VerAction({
+  icon,
+  title,
+  onClick,
+  buttonRef,
+  disabled = false,
+  active = false,
+  danger = false,
+  controls,
+}: {
+  icon: React.ReactNode
+  title: string
+  onClick: () => void
+  buttonRef?: Ref<HTMLButtonElement>
+  disabled?: boolean
+  active?: boolean
+  danger?: boolean
+  controls?: string
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      ref={buttonRef}
+      variant={danger ? 'danger' : 'ghost'}
+      size="xs"
+      iconOnly
       onClick={onClick}
       disabled={disabled}
+      aria-label={title}
+      aria-expanded={controls ? active : undefined}
+      aria-controls={controls}
+      aria-haspopup={controls ? 'listbox' : undefined}
       title={title}
-      className={[
-        'w-6 h-6 grid place-items-center rounded-sm bg-transparent border-none transition-colors shrink-0',
-        disabled ? 'opacity-40 cursor-default' : 'cursor-pointer',
-        active ? 'text-accent bg-surface' : 'text-fg-tertiary',
-        !disabled && !active ? (danger ? 'hover:bg-surface hover:text-err' : 'hover:bg-surface hover:text-fg-primary') : '',
-      ].join(' ')}
+      className={active ? 'bg-surface text-accent' : undefined}
     >
       {icon}
-    </button>
+    </Button>
   )
 }
 
 /** 切换版本 popover（照 ResumeFieldPicker 范式：点外 / Esc 关闭，anchor 到版本行）。 */
-function VersionSwitchPopover({ versions, activeId, anchorRef, onPick, onClose }: {
+function VersionSwitchPopover({ versions, activeId, anchorRef, triggerRef, onPick, onClose }: {
   versions: Version[]
   activeId: number | null
   anchorRef: React.RefObject<HTMLElement | null>
+  triggerRef: React.RefObject<HTMLButtonElement | null>
   onPick: (vid: number) => void
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const popRef = useRef<HTMLDivElement | null>(null)
+  const optionRefs = useRef(new Map<number, HTMLButtonElement>())
+  const activeIndex = Math.max(0, versions.findIndex((version) => version.id === activeId))
+  const activeVersionId = versions[activeIndex]?.id
+  const [focusIndex, setFocusIndex] = useState(activeIndex)
+
+  const focusAt = (index: number) => {
+    const version = versions[index]
+    if (!version) return
+    setFocusIndex(index)
+    requestAnimationFrame(() => optionRefs.current.get(version.id)?.focus())
+  }
+
   useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (popRef.current?.contains(e.target as Node)) return
-      if (anchorRef.current?.contains(e.target as Node)) return
+    setFocusIndex(activeIndex)
+    const frame = requestAnimationFrame(() => {
+      if (activeVersionId != null) optionRefs.current.get(activeVersionId)?.focus()
+    })
+    const onDocClick = (event: MouseEvent) => {
+      if (popRef.current?.contains(event.target as Node)) return
+      if (anchorRef.current?.contains(event.target as Node)) return
       onClose()
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose()
+      requestAnimationFrame(() => triggerRef.current?.focus())
+    }
     document.addEventListener('mousedown', onDocClick)
     document.addEventListener('keydown', onKey)
     return () => {
+      cancelAnimationFrame(frame)
       document.removeEventListener('mousedown', onDocClick)
       document.removeEventListener('keydown', onKey)
     }
-  }, [onClose, anchorRef])
+  }, [activeIndex, activeVersionId, anchorRef, onClose, triggerRef])
+
+  const handleOptionKeyDown = (event: ReactKeyboardEvent, index: number) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      focusAt((index + 1) % versions.length)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      focusAt((index - 1 + versions.length) % versions.length)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      focusAt(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      focusAt(versions.length - 1)
+    }
+  }
 
   return (
     <div
       ref={popRef}
-      className="absolute z-40 left-2 right-2 top-full mt-1 max-h-[300px] overflow-y-auto rounded-md border border-dim bg-elevated shadow-xl py-1"
+      id="sidebar-version-listbox"
+      role="listbox"
+      aria-label={t('sidebar.versionsLabel')}
+      className="absolute z-40 left-2 right-2 top-full mt-related max-h-[300px] overflow-y-auto rounded-md border border-dim bg-elevated shadow-xl py-related"
     >
-      {versions.map((v) => {
-        const isActive = v.id === activeId
+      {versions.map((version, index) => {
+        const isActive = version.id === activeId
         return (
           <button
-            key={v.id}
+            key={version.id}
+            ref={(node) => {
+              if (node) optionRefs.current.set(version.id, node)
+              else optionRefs.current.delete(version.id)
+            }}
             type="button"
-            onClick={() => onPick(v.id)}
+            role="option"
+            aria-selected={isActive}
+            tabIndex={index === focusIndex ? 0 : -1}
+            onClick={() => onPick(version.id)}
+            onKeyDown={(event) => handleOptionKeyDown(event, index)}
             className={[
-              'w-full text-left px-2.5 py-1.5 font-mono text-xs flex items-center gap-2 border-none cursor-pointer transition-colors',
-              isActive ? 'bg-accent-soft text-accent font-semibold' : 'text-fg-secondary bg-transparent hover:bg-overlay',
+              'flex w-full cursor-pointer items-center gap-related border-none px-field py-related text-left font-mono text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none',
+              isActive ? 'bg-accent-soft text-accent font-semibold' : 'bg-transparent text-fg-secondary hover:bg-overlay',
             ].join(' ')}
           >
-            <span className={STATUS_DOT[v.status] ?? 'dot dot-neutral'} />
-            <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</span>
-            {isActive && <span className="text-accent shrink-0">{I.check}</span>}
+            <span aria-hidden="true" className={STATUS_DOT[version.status] ?? 'dot dot-neutral'} />
+            <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap" title={version.label}>{version.label}</span>
+            <span className="sr-only">{t(`versionStatus.${version.status}`)}</span>
+            {isActive && <span className="text-accent shrink-0" aria-hidden="true">{I.check}</span>}
           </button>
         )
       })}
@@ -421,6 +508,7 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed, in
 
       <Link
         to={`/projects/${pid}`}
+        aria-current={overviewActive ? 'page' : undefined}
         title={collapsed ? t('nav.overview') : undefined}
         className={linkCls(overviewActive)}
       >
@@ -507,6 +595,7 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed, in
             <Link
               key={s.key}
               to={href}
+              aria-current={isActive ? 'step' : undefined}
               title={collapsed ? (s.idx ? `${s.idx}. ${label}` : label) : undefined}
               className={linkCls(isActive, indent)}
             >
@@ -542,18 +631,14 @@ function ThemeToggle({ collapsed }: { collapsed: boolean }) {
 
   const isDark = theme === 'dark'
   return (
-    <button
+    <NavButton
       onClick={handleToggle}
-      title={isDark ? t('sidebar.switchToLight') : t('sidebar.switchToDark')}
-      className={[
-        'flex items-center gap-2.5 rounded-md text-sm no-underline transition-colors bg-transparent border-none cursor-pointer w-full',
-        collapsed ? 'py-[9px] px-0 justify-center' : 'py-2 px-3 justify-start',
-        'text-fg-secondary font-medium hover:bg-overlay',
-      ].join(' ')}
-    >
-      {isDark ? I.sun : I.moon}
-      {!collapsed && <span>{isDark ? t('sidebar.themeLight') : t('sidebar.themeDark')}</span>}
-    </button>
+      label={isDark ? t('sidebar.themeLight') : t('sidebar.themeDark')}
+      accessibleLabel={isDark ? t('sidebar.switchToLight') : t('sidebar.switchToDark')}
+      icon={isDark ? I.sun : I.moon}
+      active={false}
+      collapsed={collapsed}
+    />
   )
 }
 
@@ -645,17 +730,20 @@ export default function Sidebar() {
           collapsed={collapsed}
         />
         <ThemeToggle collapsed={collapsed} />
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly={collapsed}
           onClick={toggle}
           aria-controls="primary-navigation"
           aria-expanded={!collapsed}
           aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
           title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
-          className={`text-fg-tertiary bg-transparent border-none rounded cursor-pointer hover:bg-overlay transition-colors ${collapsed ? 'flex justify-center p-2 mt-1' : 'flex items-center gap-1.5 p-2 mt-1 text-xs'}`}
+          className={`mt-related w-full ${collapsed ? '' : 'justify-start'}`}
         >
-          {collapsed ? I.chevR : <>{I.chevL}<span>{t('sidebar.collapseLabel')}</span></>}
-        </button>
+          {collapsed ? I.chevR : I.chevL}
+          {!collapsed && <span>{t('sidebar.collapseLabel')}</span>}
+        </Button>
       </div>
     </aside>
   )

@@ -44,6 +44,24 @@ describe('Modal', () => {
     expect(dialog).toHaveClass('max-w-[560px]')
   })
 
+  it('supports a wide master-detail panel with header actions', () => {
+    render(
+      <Modal
+        title="Announcements"
+        size="wide"
+        headerActions={<button type="button">Close announcements</button>}
+        onClose={() => {}}
+      >
+        <p>News</p>
+      </Modal>,
+    )
+
+    const dialog = screen.getByRole('dialog', { name: 'Announcements' })
+    expect(dialog).toHaveClass('w-[80vw]', 'max-w-[1440px]')
+    expect(dialog).not.toHaveClass('w-full')
+    expect(screen.getByRole('button', { name: 'Close announcements' })).toBeInTheDocument()
+  })
+
   it('locks and restores body scrolling for the mounted lifetime', () => {
     document.body.style.overflow = 'auto'
     const { unmount } = render(

@@ -101,7 +101,19 @@
     "pendingCount": "{{n}} 排队中",
     "taskId": "任务 #{{id}}",
     "runningETA": "~{{time}}",
-    "running": "运行 {{elapsed}}"
+    "running": "运行 {{elapsed}}",
+    "runningTaskAria": "任务 #{{id}}：训练中 · {{label}}{{suffix}}",
+    "systemStats": {
+      "cpuLabel": "CPU",
+      "memoryLabel": "内存",
+      "gpuLabel": "GPU",
+      "vramLabel": "显存",
+      "cpu": "CPU 占用 {{percent}}%",
+      "memory": "内存 {{used}} / {{total}} GB（{{percent}}%）",
+      "gpu": "GPU 利用率 {{percent}}% · {{gpu}}",
+      "vram": "显存 {{used}} / {{total}} GB（{{percent}}%）· {{gpu}}",
+      "moreGpus": "（另有 {{count}} 张显卡）"
+    }
   },
   "breadcrumb": {
     "projects": "项目",
@@ -118,6 +130,9 @@
     "download": "下载"
   },
   "commandPalette": {
+    "dialogLabel": "命令面板",
+    "inputLabel": "搜索命令",
+    "resultsLabel": "命令搜索结果",
     "placeholder": "搜索页面、项目、预设、标签…",
     "searchingTags": "搜索标签…",
     "noResults": "无匹配结果",
@@ -148,7 +163,8 @@
     "export": "导出",
     "exportTitle": "打包导出当前版本训练集",
     "deleteVersionTitle": "删除此版本（移到回收站）",
-    "versionsLabel": "Version",
+    "versionsLabel": "项目版本",
+    "versionControlsLabel": "{{label}} 的版本操作",
     "switchVersion": "切换版本",
     "advanceToTitle": "推进到下一步：{{label}}",
     "advanceFailed": "无法推进到下一步",
@@ -2744,7 +2760,10 @@
     "title": "公告",
     "close": "关闭",
     "empty": "暂无公告",
+    "filterLabel": "筛选公告",
+    "postsLabel": "公告列表",
     "bellTitle": "公告 / 更新",
+    "bellUnread": "{{count}} 条未读公告",
     "updateAvailable": "新版本 {{tag}}",
     "tags": {
       "all": "全部",

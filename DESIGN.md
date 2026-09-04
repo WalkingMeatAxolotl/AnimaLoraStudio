@@ -306,11 +306,12 @@ flows; it renders through the same shell. Use a Drawer for persistent secondary 
 that should remain available alongside page context, and do not put ordinary page
 content in a modal merely to make it prominent.
 
-Every modal has one required title, an optional concise description, one scrollable body,
-and an optional footer. Use `sm` for a short prompt, `md` for ordinary forms, and `lg`
-for structured comparisons or dense option sets. The panel is portalled above the app,
-keeps viewport-safe outer padding and a bounded height, and leaves the title and footer
-visible while long body content scrolls.
+Every modal has one required title, an optional concise description, optional header
+utilities, one scrollable body, and an optional footer. Use `sm` for a short prompt, `md`
+for ordinary forms, `lg` for structured comparisons or dense option sets, and `wide`
+only for a genuine master-detail surface such as Announcement Center. The panel is
+portalled above the app, keeps viewport-safe outer padding and a bounded height, and
+leaves the title, header utilities, and footer visible while long body content scrolls.
 
 Dismissal and focus are part of the Pattern rather than caller-owned behavior:
 
@@ -322,6 +323,11 @@ Dismissal and focus are part of the Pattern rather than caller-owned behavior:
 - The shell supplies `role="dialog"`, `aria-modal`, and title/description linkage. Use
   `alertdialog` only when an immediate decision is required before work can continue.
 - Lock background scrolling while open. Do not stack modal dialogs.
+- Announcement Center is the representative `wide` master-detail modal. Its tag filter
+  uses `SegmentedControl`; its announcement list is a labelled single-select listbox with
+  wrapping vertical arrows plus Home/End; and the article region owns its own scroll.
+  Announcement data, read-state persistence, update checks, and settings deep links remain
+  feature-owned.
 
 Footer actions use `ActionGroup`: status first, secondary or destructive actions next,
 and the single primary action last. Keep validation near the relevant control; an error
@@ -484,17 +490,30 @@ Geometry and scroll responsibility are fixed:
 - Sidebar width and Topbar height come from layout tokens. Sidebar branding and
   footer actions remain fixed while the named primary navigation region scrolls
   internally, so long project workflows never push collapse/settings actions
-  outside the viewport.
+  outside the viewport. Current route links expose `aria-current`; theme uses the
+  navigation-row recipe and collapse uses the shared `Button`. The project version row is a
+  named control group: icon-only mutations use `Button`, while the switch trigger
+  controls a named single-select listbox with initial focus, arrows, Home/End,
+  Escape return, and explicit selected state.
 - Topbar breadcrumb, active-task status, global notices, and search preserve that
-  priority order. At compact desktop widths, auxiliary system resource meters
-  yield before navigation or actions; breadcrumb labels truncate visually while
-  their full title and accessible name remain available.
+  priority order. Active-task and queued-task status are native navigation links
+  styled by the shared button recipe; notice and search triggers use icon-only
+  `Button`s with dialog disclosure state. System resource pills expose bounded
+  `meter` semantics and localized value descriptions rather than relying on color,
+  width, or hover-only tooltips. At compact desktop widths, auxiliary system
+  resource meters yield before navigation or actions; breadcrumb labels truncate
+  visually while their full title and accessible name remain available.
 - A visible-on-focus skip link targets the main landmark. Sidebar, breadcrumb,
   main, and overlay components retain native landmark/dialog semantics; route
   changes do not steal focus automatically.
 - Modal, Drawer, Toast, command surfaces, and image preview remain portalled
-  overlay layers and never consume AppShell grid space. Drawers may inert the app
-  root; overlays must not alter shell width or introduce a second body scrollbar.
+  overlay layers and never consume AppShell grid space. The anchored command
+  palette is a modal command surface: its named combobox controls a listbox,
+  keeps DOM focus in the query field, exposes the active option through
+  `aria-activedescendant`, supports wrapping arrows plus Home/End, traps Tab,
+  and restores the invoking search control after Escape or backdrop close.
+  Drawers may inert the app root; overlays must not alter shell width or
+  introduce a second body scrollbar.
 
 App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
 1280px breakpoint. Route-specific workbench restructuring is a later Layout

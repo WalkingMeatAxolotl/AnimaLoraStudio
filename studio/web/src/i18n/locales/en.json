@@ -101,7 +101,19 @@
     "pendingCount": "{{n}} queued",
     "taskId": "Task #{{id}}",
     "runningETA": "~{{time}}",
-    "running": "Running {{elapsed}}"
+    "running": "Running {{elapsed}}",
+    "runningTaskAria": "Task #{{id}}: Training · {{label}}{{suffix}}",
+    "systemStats": {
+      "cpuLabel": "CPU",
+      "memoryLabel": "Memory",
+      "gpuLabel": "GPU",
+      "vramLabel": "VRAM",
+      "cpu": "CPU usage {{percent}}%",
+      "memory": "Memory {{used}} / {{total}} GB ({{percent}}%)",
+      "gpu": "GPU utilization {{percent}}% · {{gpu}}",
+      "vram": "VRAM {{used}} / {{total}} GB ({{percent}}%) · {{gpu}}",
+      "moreGpus": " (+{{count}} more)"
+    }
   },
   "breadcrumb": {
     "projects": "Projects",
@@ -118,6 +130,9 @@
     "download": "Download"
   },
   "commandPalette": {
+    "dialogLabel": "Command palette",
+    "inputLabel": "Search commands",
+    "resultsLabel": "Command search results",
     "placeholder": "Search pages, projects, presets, tags…",
     "searchingTags": "Searching tags…",
     "noResults": "No results",
@@ -148,7 +163,8 @@
     "export": "Export",
     "exportTitle": "Export the active version's train set",
     "deleteVersionTitle": "Delete this version (move to trash)",
-    "versionsLabel": "Version",
+    "versionsLabel": "Project versions",
+    "versionControlsLabel": "Version controls for {{label}}",
     "switchVersion": "Switch version",
     "advanceToTitle": "Advance to: {{label}}",
     "advanceFailed": "Cannot advance to next phase",
@@ -2744,7 +2760,10 @@
     "title": "Announcements",
     "close": "Close",
     "empty": "No announcements",
+    "filterLabel": "Filter announcements",
+    "postsLabel": "Announcement list",
     "bellTitle": "Announcements / Updates",
+    "bellUnread": "{{count}} unread announcements",
     "updateAvailable": "New version {{tag}}",
     "tags": {
       "all": "All",
