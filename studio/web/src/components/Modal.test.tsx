@@ -58,6 +58,7 @@ describe('Modal', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Announcements' })
     expect(dialog).toHaveClass('w-[80vw]', 'max-w-[1440px]')
+    expect(dialog).not.toHaveClass('w-full')
     expect(screen.getByRole('button', { name: 'Close announcements' })).toBeInTheDocument()
   })
 

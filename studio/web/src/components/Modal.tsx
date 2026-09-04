@@ -165,7 +165,8 @@ export default function Modal({
     'aria-describedby': description ? descriptionId : undefined,
     tabIndex: -1,
     className: [
-      'flex w-full min-h-0 flex-col overflow-hidden rounded-lg border border-dim bg-elevated shadow-xl',
+      'flex min-h-0 flex-col overflow-hidden rounded-lg border border-dim bg-elevated shadow-xl',
+      size === 'wide' ? '' : 'w-full',
       SIZE_CLASS[size],
       panelClassName,
     ].filter(Boolean).join(' '),

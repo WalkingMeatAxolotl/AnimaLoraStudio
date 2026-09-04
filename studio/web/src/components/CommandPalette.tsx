@@ -69,6 +69,14 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
     position: 'fixed', top: 56, right: 20, width: 520,
   })
 
+  const restoreQueryFocus = useCallback(() => {
+    requestAnimationFrame(() => {
+      const panel = panelRef.current
+      const input = inputRef.current
+      if (panel?.isConnected && input && document.activeElement !== input) input.focus()
+    })
+  }, [])
+
   useLayoutEffect(() => {
     if (!open) return
     if (anchorEl) {
@@ -124,10 +132,11 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
 
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || active === panel || !panel.contains(active))) {
         event.preventDefault()
         last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && (active === last || active === panel || !panel.contains(active))) {
         event.preventDefault()
         first.focus()
       }
@@ -366,6 +375,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
             role="combobox"
             aria-label={t('commandPalette.inputLabel')}
             aria-autocomplete="list"
+            aria-haspopup="listbox"
             aria-expanded="true"
             aria-controls="command-palette-listbox"
             aria-activedescendant={flatItems[activeIdx]
@@ -376,6 +386,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
             value={query}
             onChange={(e) => { setQuery(e.target.value); setActiveIdx(0) }}
             onKeyDown={handleKeyDown}
+            onBlur={restoreQueryFocus}
           />
           {captionsLoading && (
             <span role="status" aria-live="polite" className="text-2xs text-fg-tertiary animate-pulse motion-reduce:animate-none">

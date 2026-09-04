@@ -239,16 +239,15 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
       ref={rowRef}
       role="group"
       aria-label={t('sidebar.versionControlsLabel', { label: activeVersion?.label ?? '—' })}
-      tabIndex={0}
-      className="group relative flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none"
+      className="group relative flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors motion-reduce:transition-none"
     >
       {idIcon}
       {label}
 
       <div className="flex items-center gap-0.5 shrink-0">
-        {/* 新建 / 导出 / 删除：hover（或键盘 focus）才浮现。用 hidden→flex（而非
-            opacity）让它们平时不占位，版本名 flex-1 得以伸展；hover 时才挤占空间。 */}
-        <span className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+        {/* 新建 / 导出 / 删除：平时保留稳定宽度但视觉隐藏；键盘 Tab 聚焦首个
+            action 时由 group-focus-within 显现，避免用无动作的 focusable group 当跳板。 */}
+        <span className="flex pointer-events-none items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 motion-reduce:transition-none">
           <VerAction icon={I.plus} title={t('sidebar.newVersion')} onClick={() => onCreateVersion()} />
           <VerAction icon={I.download} title={t('sidebar.exportTitle')} onClick={onExportTrain} disabled={exporting} />
           {multiVersion && (
@@ -731,34 +730,20 @@ export default function Sidebar() {
           collapsed={collapsed}
         />
         <ThemeToggle collapsed={collapsed} />
-        {collapsed ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            iconOnly
-            onClick={toggle}
-            aria-controls="primary-navigation"
-            aria-expanded={false}
-            aria-label={t('sidebar.expand')}
-            title={t('sidebar.expand')}
-            className="mt-related w-full"
-          >
-            {I.chevR}
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={toggle}
-            aria-controls="primary-navigation"
-            aria-expanded={true}
-            aria-label={t('sidebar.collapse')}
-            title={t('sidebar.collapse')}
-            className="mt-related w-full justify-start"
-          >
-            {I.chevL}<span>{t('sidebar.collapseLabel')}</span>
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly={collapsed}
+          onClick={toggle}
+          aria-controls="primary-navigation"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          className={`mt-related w-full ${collapsed ? '' : 'justify-start'}`}
+        >
+          {collapsed ? I.chevR : I.chevL}
+          {!collapsed && <span>{t('sidebar.collapseLabel')}</span>}
+        </Button>
       </div>
     </aside>
   )

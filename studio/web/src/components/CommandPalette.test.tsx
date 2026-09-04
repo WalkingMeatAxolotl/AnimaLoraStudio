@@ -51,6 +51,7 @@ describe('CommandPalette', () => {
     const input = screen.getByRole('combobox', { name: '搜索命令' })
     const listbox = screen.getByRole('listbox', { name: '命令搜索结果' })
     expect(input).toHaveAttribute('aria-controls', listbox.id)
+    expect(input).toHaveAttribute('aria-haspopup', 'listbox')
     expect(input).toHaveAttribute('aria-expanded', 'true')
     await waitFor(() => expect(input).toHaveFocus())
 
@@ -73,6 +74,20 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(input, { key: 'End' })
     expect(screen.getByRole('option', { name: /设置/ })).toHaveAttribute('aria-selected', 'true')
     expect(input).toHaveFocus()
+  })
+
+  it('recaptures unexpected panel focus so command keys stay on the query', async () => {
+    renderPalette()
+    const input = screen.getByRole('combobox', { name: '搜索命令' })
+    const dialog = screen.getByRole('dialog', { name: '命令面板' })
+    await waitFor(() => expect(input).toHaveFocus())
+
+    dialog.focus()
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(input).toHaveFocus()
+
+    dialog.focus()
+    await waitFor(() => expect(input).toHaveFocus())
   })
 
   it('navigates the selected command with ArrowDown and Enter', async () => {

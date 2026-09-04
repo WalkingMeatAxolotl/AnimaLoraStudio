@@ -127,11 +127,15 @@ describe('Sidebar (PP0)', () => {
     const toggle = screen.getByRole('button', { name: '折叠' })
     expect(toggle).toHaveAttribute('aria-controls', 'primary-navigation')
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    toggle.focus()
     fireEvent.click(toggle)
 
     expect(sidebar).toHaveAttribute('data-collapsed', 'true')
     expect(window.sessionStorage.getItem('studio.sidebar.expanded')).toBe('0')
-    expect(screen.getByRole('button', { name: '展开' })).toHaveAttribute('aria-expanded', 'false')
+    const expand = screen.getByRole('button', { name: '展开' })
+    expect(expand).toBe(toggle)
+    expect(expand).toHaveAttribute('aria-expanded', 'false')
+    expect(expand).toHaveFocus()
   })
 
   it('restores the collapsed state from the current session', () => {
@@ -206,8 +210,12 @@ describe('Sidebar version row (live / in project)', () => {
 
   it('single version: new + export present, switch + delete hidden', () => {
     renderLive('/projects/3', makeCtx([MOCK_VERSION]))
-    expect(screen.getByRole('group', { name: 'v1 的版本操作' })).toBeInTheDocument()
-    expect(screen.getByTitle('新版本')).toHaveClass('btn', 'btn-ghost', 'btn-xs', 'btn-icon')
+    const group = screen.getByRole('group', { name: 'v1 的版本操作' })
+    expect(group).not.toHaveAttribute('tabindex')
+    const newVersion = screen.getByTitle('新版本')
+    expect(newVersion).toHaveClass('btn', 'btn-ghost', 'btn-xs', 'btn-icon')
+    newVersion.focus()
+    expect(newVersion).toHaveFocus()
     expect(screen.getByTitle('打包导出当前版本训练集')).toHaveClass('btn', 'btn-ghost', 'btn-xs', 'btn-icon')
     // 切换 / 删除只在多版本时出现
     expect(screen.queryByTitle('切换版本')).toBeNull()
