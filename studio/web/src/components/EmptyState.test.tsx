@@ -24,6 +24,12 @@ describe('EmptyState', () => {
     expect(screen.queryByText('Nothing here')).not.toBeInTheDocument()
   })
 
+  it('can be embedded in an existing surface without a nested card', () => {
+    render(<EmptyState embedded data-testid="embedded" description="No images" />)
+    expect(screen.getByTestId('embedded')).toHaveClass('empty-state')
+    expect(screen.getByTestId('embedded')).not.toHaveClass('card')
+  })
+
   it('accepts an action and standard HTML attributes', () => {
     render(
       <EmptyState

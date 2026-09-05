@@ -8,6 +8,8 @@ export interface EmptyStateProps extends Omit<HTMLAttributes<HTMLElement>, 'chil
   description: ReactNode
   action?: ReactNode
   size?: EmptyStateSize
+  /** Use inside an existing panel without adding a nested card surface. */
+  embedded?: boolean
 }
 
 export default function EmptyState({
@@ -15,6 +17,7 @@ export default function EmptyState({
   description,
   action,
   size = 'md',
+  embedded = false,
   className = '',
   ...rest
 }: EmptyStateProps) {
@@ -24,11 +27,12 @@ export default function EmptyState({
     className,
   ].filter(Boolean).join(' ')
 
+  const Container = embedded ? 'div' : Card
   return (
-    <Card {...rest} className={classes}>
+    <Container {...rest} className={classes}>
       {title && <p className="empty-state-title">{title}</p>}
       <p className="empty-state-description">{description}</p>
       {action && <div className="empty-state-action">{action}</div>}
-    </Card>
+    </Container>
   )
 }
