@@ -216,6 +216,12 @@ computed target description via `aria-describedby`; never place two labelable
 controls in one label. Header scope-wide and selected-image actions use
 ActionGroup, with the selected-image primary action last. Model-missing guidance
 uses a compact, non-live Alert; download and task payloads remain page-owned.
+The image-resolution filter uses a named SegmentedControl (mutually exclusive
+filter values, not content tabs). Keep an active bin visible even when a refresh
+reduces its count to zero; do not silently change the selected filter. Folder
+filtering and selection clearing stay page-owned. ImageGrid keeps its existing
+bounded slot and internal list inset; the statistical sidebar owns its own scroll
+when its cards exceed the available height.
 
 Control sizes:
 

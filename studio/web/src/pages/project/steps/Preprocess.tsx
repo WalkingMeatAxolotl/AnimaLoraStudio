@@ -18,6 +18,7 @@ import { Input, Select } from '../../../components/FormControl'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
+import { SegmentedControl, type SelectionItem } from '../../../components/SelectionGroup'
 import StepShell from '../../../components/StepShell'
 import BarHistogram from '../../../components/BarHistogram'
 import { PX_BINS, pxBinFor, computePixelHist, type PxBinId } from '../../../lib/pixelBins'
@@ -499,7 +500,7 @@ export default function PreprocessPage() {
             visibleRows[previewIdx].folder, 1600,
           ) + `&_=${visibleRows[previewIdx].mtime}`}
           caption={`${visibleRows[previewIdx].name} · ${
-            visibleRows[previewIdx].status === 'processed' ? '✓ 已处理' : '⊘ 未处理'
+            visibleRows[previewIdx].status === 'processed' ? t('preprocess.filterProcessed') : t('preprocess.filterPending')
           }`}
           index={previewIdx}
           total={visibleRows.length}
@@ -724,68 +725,50 @@ function ImagesPanel({
   // axis users want to filter by is resolution (which images need upscaling
   // and which are already large enough). Pixel bins double as a visual link
   // to the sidebar histogram so users see the same buckets on both sides.
-  const chip = (key: FilterMode, label: string, count: number) => (
-    <button
-      onClick={() => setFilter(key)}
-      className={
-        'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
-        (filter === key
-          ? 'bg-accent text-white'
-          : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
-      }
-    >
-      {label} {count}
-    </button>
-  )
-  // Only show bin chips that have at least one image — keeps the chip row
-  // tight on small datasets (a 10-image set isn't going to occupy all 6 bins).
-  const nonEmptyBins = PX_BINS.filter((b) => (binCounts.get(b.id) ?? 0) > 0)
+  // Preserve the selected bin at zero after a refresh so the radiogroup still
+  // exposes the active filter; users can explicitly return to All.
+  const visibleBins = PX_BINS.filter((b) => (binCounts.get(b.id) ?? 0) > 0 || b.id === filter)
+  const filters: SelectionItem<FilterMode>[] = [
+    { value: 'all', label: `${t('preprocess.filterAll')} (${summary.image_count})` },
+    ...visibleBins.map((bin) => ({ value: bin.id, label: `${bin.label} (${binCounts.get(bin.id) ?? 0})` })),
+  ]
 
   return (
-    <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
-      <header className="flex items-center gap-2 shrink-0 px-2.5 py-1.5 border-b border-subtle text-sm flex-wrap">
-        <h3 className="font-semibold">{t('preprocess.imagesTitle')}</h3>
+    <Card as="section" radius="compact" aria-labelledby="upscale-images-title"
+      className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+      <header className="flex items-center gap-related shrink-0 px-3 py-2 border-b border-subtle text-sm flex-wrap">
+        <h2 id="upscale-images-title" className="type-panel-title">{t('preprocess.imagesTitle')}</h2>
         <span className="text-fg-tertiary">{t('preprocess.totalCount', { n: summary.image_count })}</span>
-        {selected.size > 0 && (
-          <span className="text-accent">{t('preprocess.selectedCount', { n: selected.size })}</span>
-        )}
-        <span className="mx-1 text-dim">·</span>
-        <div className="flex items-center gap-1 flex-wrap">
-          {chip('all', t('preprocess.filterAll'), summary.image_count)}
-          {nonEmptyBins.map((b) =>
-            chip(b.id, b.label, binCounts.get(b.id) ?? 0),
-          )}
-        </div>
+        <SegmentedControl
+          items={filters}
+          value={filter}
+          onChange={setFilter}
+          ariaLabel={t('preprocess.resolutionFilter')}
+          idPrefix="upscale-resolution"
+          size="sm"
+          className="flex-wrap max-w-full"
+        />
         {folders.length > 0 && (
-          <>
-            <span className="mx-1 text-dim">·</span>
-            <label className="flex items-center gap-1 text-xs text-fg-tertiary">
-              {t('preprocess.folderFilter')}
-              <select
-                value={folderFilter}
-                onChange={(e) => setFolderFilter(e.target.value)}
-                className="input text-xs"
-                style={{ width: 'auto', padding: '1px 6px' }}
-              >
-                <option value="all">{t('preprocess.folderAll')}</option>
-                {folders.map((f) => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-            </label>
-          </>
+          <label className="flex min-w-0 max-w-full items-center gap-related text-xs text-fg-tertiary">
+            <span className="shrink-0">{t('preprocess.folderFilter')}</span>
+            <Select controlSize="sm" className="w-auto min-w-0 max-w-full"
+              value={folderFilter}
+              onChange={(e) => setFolderFilter(e.target.value)}
+            >
+              <option value="all">{t('preprocess.folderAll')}</option>
+              {folders.map((f) => <option key={f} value={f}>{f}</option>)}
+            </Select>
+          </label>
         )}
-        <span className="flex-1" />
-        <button
-          onClick={onSelectAll}
-          disabled={items.length === 0}
-          className="btn btn-ghost btn-sm"
-        >{t('common.selectAll')}</button>
-        <button
-          onClick={onClear}
-          disabled={selected.size === 0}
-          className="btn btn-ghost btn-sm"
-        >{t('common.deselect')}</button>
+        <ActionGroup aria-label={t('preprocess.selectionActions')} className="ml-auto"
+          status={selected.size > 0 && (
+            <span className="text-accent">{t('preprocess.selectedCount', { n: selected.size })}</span>
+          )}
+          secondary={<>
+            <Button variant="ghost" size="sm" onClick={onSelectAll} disabled={items.length === 0}>{t('common.selectAll')}</Button>
+            <Button variant="ghost" size="sm" onClick={onClear} disabled={selected.size === 0}>{t('common.deselect')}</Button>
+          </>}
+        />
       </header>
       <ImageGrid
         className="flex-1 min-h-0"
@@ -796,10 +779,10 @@ function ImagesPanel({
         onActivate={onPreview}
         onPreview={onPreview}
         clickMode="activate"
-        ariaLabel="preprocess-grid"
+        ariaLabel={t('preprocess.imagesTitle')}
         emptyHint={t('preprocess.emptyForBin')}
       />
-    </section>
+    </Card>
   )
 }
 
@@ -848,26 +831,21 @@ function PreprocessSidebar({
         : `${(b / 1024).toFixed(0)} KB`
 
   return (
-    <div className="flex flex-col gap-3 min-w-0">
+    <div role="region" aria-label={t('preprocess.statisticsLabel')} tabIndex={0}
+      className="flex flex-col gap-field min-w-0 min-h-0 overflow-y-auto">
       {/* 像素分布 — 用户最直接关心的"图够不够大"信息，置顶；按总像素面积
           分桶映射到常见 LoRA 训练分辨率，跟 grid 上的 chip 一一对应。 */}
       {pixelHist.length > 0 && (
-        <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-          <h3 className="caption flex items-center gap-1.5">
-            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent" />
-            {t('preprocess.sidebarPxDist')}
-          </h3>
-          <div className="mt-1.5">
+        <Card radius="compact" padding="sm" className="shrink-0">
+          <h2 className="type-panel-title">{t('preprocess.sidebarPxDist')}</h2>
+          <div className="mt-related">
             <BarHistogram bins={pixelHist.map((b) => ({ key: b.id, label: b.label, n: b.n }))} />
           </div>
-        </div>
+        </Card>
       )}
 
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <h3 className="caption flex items-center gap-1.5">
-          <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-ok" />
-          {t('preprocess.sidebarDisk')}
-        </h3>
+      <Card radius="compact" padding="sm" className="shrink-0">
+        <h2 className="type-panel-title">{t('preprocess.sidebarDisk')}</h2>
         <StatRow
           label={t('preprocess.diskTotal')}
           value={processedImages.length > 0 ? fmtBytes(processedBytes) : '—'}
@@ -876,26 +854,23 @@ function PreprocessSidebar({
         {processedImages.length > 0 && (
           <StatRow label={t('preprocess.diskAvg')} value={fmtBytes(avgBytes)} />
         )}
-        <p className="text-[11px] text-fg-tertiary mt-1.5 leading-snug">
+        <p className="text-xs text-fg-tertiary mt-related leading-snug">
           {targetEdge === null ? t('preprocess.diskNoteOff') : t('preprocess.diskNoteSmart')}
         </p>
-      </div>
+      </Card>
 
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <h3 className="caption flex items-center gap-1.5">
-          <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent opacity-60" />
-          {t('preprocess.sidebarDevice')}
-        </h3>
+      <Card radius="compact" padding="sm" className="shrink-0">
+        <h2 className="type-panel-title">{t('preprocess.sidebarDevice')}</h2>
         <StatRow
           label={selectedModel}
           value={upscaler?.exists ? t('preprocess.modelReady') : t('preprocess.modelNotDownloaded')}
           accent={upscaler?.exists ? 'ok' : 'warn'}
         />
         <StatRow label={t('preprocess.vramEst')} value={`~${estVramMB} MB`} />
-        <p className="text-[11px] text-fg-tertiary mt-1.5 leading-snug">
+        <p className="text-xs text-fg-tertiary mt-related leading-snug">
           {t('preprocess.vramNote')}
         </p>
-      </div>
+      </Card>
     </div>
   )
 }
@@ -915,9 +890,9 @@ function StatRow({
     accent === 'err' ? 'text-err' :
     'text-fg-primary'
   return (
-    <div className="flex justify-between items-baseline mt-1.5 text-xs">
-      <span className="text-fg-tertiary">{label}</span>
-      <span className={`font-mono font-medium ${cls}`}>{value}</span>
+    <div className="flex min-w-0 justify-between items-baseline gap-related mt-related text-xs">
+      <span className="min-w-0 break-words text-fg-tertiary">{label}</span>
+      <span className={`shrink-0 font-mono font-medium ${cls}`}>{value}</span>
     </div>
   )
 }

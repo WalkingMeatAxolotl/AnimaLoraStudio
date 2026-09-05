@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type Job, type ModelsCatalog, type TrainImage, type UpscalerVariant } from '../../../api/client'
 import PreprocessPage from './Preprocess'
 
-const mocks = vi.hoisted(() => ({ toast: vi.fn(), reload: vi.fn() }))
+const mocks = vi.hoisted(() => ({ toast: vi.fn(), reload: vi.fn(), onEvent: undefined as undefined | ((event: unknown) => void) }))
 vi.mock('../../../components/Toast', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../components/Toast')>()
   return {
@@ -14,12 +14,16 @@ vi.mock('../../../components/Toast', async (importOriginal) => {
     useOptionalToast: () => ({ toast: mocks.toast }),
   }
 })
-vi.mock('../../../lib/useEventStream', () => ({ useEventStream: vi.fn() }))
+vi.mock('../../../lib/useEventStream', () => ({ useEventStream: (callback: (event: unknown) => void) => { mocks.onEvent = callback } }))
 // Only the parameter/action contract is under test here. ImageGrid's own tests
 // cover selection and virtualization; no synthetic geometry is asserted here.
 vi.mock('../../../components/ImageGrid', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../components/ImageGrid')>()
-  return { ...actual, default: ({ items }: { items: { name: string }[] }) => <div role="grid">{items.map(item => <span key={item.name}>{item.name}</span>)}</div> }
+  return { ...actual, default: ({ items, className, contentClassName, ariaLabel }: { items: { name: string }[]; className?: string; contentClassName?: string; ariaLabel?: string }) => (
+    <div role="grid" aria-label={ariaLabel} className={className} data-content-class={contentClassName}>
+      {items.map(item => <span key={item.name}>{item.name}</span>)}
+    </div>
+  ) }
 })
 
 const variant = (label: string, exists = true, kind: 'preset' | 'custom' = 'preset'): UpscalerVariant => ({
@@ -161,6 +165,53 @@ describe('Preprocess upscale controls', () => {
     expect(screen.getByRole('button', { name: '下载中...' })).toBeDisabled()
     await act(async () => rejectDownload(new Error('offline')))
     expect(mocks.toast).toHaveBeenCalledWith('Error: offline', 'error')
+  })
+
+  it('filters by keyboard, clears selection and keeps the grid in its bounded slot', async () => {
+    vi.mocked(api.listPreprocessFilesTrain).mockResolvedValue({ images: [images[0], { ...images[1], w: 1024, h: 1024 }], summary: { image_count: 2 } })
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+    await user.click(screen.getByRole('button', { name: '全选' }))
+    expect(screen.getByRole('button', { name: '放大选中 2' })).toBeEnabled()
+    const filters = screen.getByRole('radiogroup', { name: '图片分辨率筛选' })
+    const all = within(filters).getByRole('radio', { name: '全部 (2)' })
+    all.focus()
+    await user.keyboard('{ArrowRight}')
+    const small = within(filters).getByRole('radio', { name: '512² – 768² (1)' })
+    expect(small).toHaveFocus()
+    expect(small).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('button', { name: '放大选中 0' })).toBeDisabled()
+    const grid = screen.getByRole('grid', { name: '图片' })
+    expect(grid.parentElement).toBe(screen.getByRole('region', { name: '图片' }))
+    expect(grid).toHaveClass('flex-1', 'min-h-0')
+    expect(grid).toHaveAttribute('data-content-class', 'p-2')
+    expect(grid.parentElement).toHaveClass('overflow-hidden', 'min-h-0')
+    expect(grid).toHaveTextContent(images[0].name)
+    expect(grid).not.toHaveTextContent(images[1].name)
+    await user.keyboard('{End}')
+    expect(within(filters).getByRole('radio', { name: '1024² – 1536² (1)' })).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(all).toHaveFocus()
+    expect(grid).toHaveTextContent(images[1].name)
+    const stats = screen.getByRole('region', { name: '放大统计' })
+    expect(stats).toHaveClass('min-h-0', 'overflow-y-auto')
+    expect(stats).toHaveAttribute('tabindex', '0')
+    expect(within(stats).getAllByRole('heading', { level: 2 })).toHaveLength(3)
+  })
+
+  it('retains the selected resolution at zero when refreshed images leave that bin', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+    await user.click(screen.getByRole('radio', { name: '512² – 768² (2)' }))
+    vi.mocked(api.listPreprocessFilesTrain).mockResolvedValue({ images: [], summary: { image_count: 0 } })
+    act(() => mocks.onEvent?.({ type: 'project_state_changed', project_id: 1 }))
+    const selected = await screen.findByRole('radio', { name: '512² – 768² (0)' })
+    expect(selected).toHaveAttribute('aria-checked', 'true')
+    expect(selected).toHaveAttribute('tabindex', '0')
+    await user.click(screen.getByRole('radio', { name: '全部 (0)' }))
+    expect(screen.queryByRole('radio', { name: '512² – 768² (0)' })).not.toBeInTheDocument()
   })
 
   it('does not offer downloading a missing custom model', async () => {
