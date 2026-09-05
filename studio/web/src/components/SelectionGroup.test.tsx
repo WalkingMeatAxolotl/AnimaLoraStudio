@@ -12,12 +12,13 @@ const tabItems = [
   { value: 'output', label: '输出', controls: 'panel-output' },
 ] as const
 
-function TabsHarness({ appearance }: { appearance?: 'underline' | 'segmented' } = {}) {
+function TabsHarness({ appearance, layout }: { appearance?: 'underline' | 'segmented'; layout?: 'equal' | 'content' } = {}) {
   const [value, setValue] = useState<View>('overview')
   return (
     <>
       <Tabs
         appearance={appearance}
+        layout={layout}
         items={tabItems}
         value={value}
         onChange={setValue}
@@ -36,7 +37,7 @@ function TabsHarness({ appearance }: { appearance?: 'underline' | 'segmented' } 
   )
 }
 
-function ModeHarness() {
+function ModeHarness({ layout }: { layout?: 'equal' | 'content' } = {}) {
   const [value, setValue] = useState<'single' | 'xy'>('single')
   return (
     <SegmentedControl
@@ -49,6 +50,7 @@ function ModeHarness() {
       ariaLabel="生成模式"
       idPrefix="generate-mode"
       size="sm"
+      layout={layout}
     />
   )
 }
@@ -82,7 +84,7 @@ describe('Tabs', () => {
     const group = screen.getByRole('tablist', { name: '任务详情' })
     const overview = screen.getByRole('tab', { name: '详情' })
     expect(group).toHaveClass('ui-selection-segmented')
-    expect(group).not.toHaveClass('ui-selection-underline')
+    expect(group).not.toHaveClass('ui-selection-underline', 'ui-selection-content')
     expect(overview).toHaveAttribute('aria-controls', 'panel-overview')
     expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'panel-overview')
   })
@@ -130,6 +132,22 @@ describe('SegmentedControl', () => {
     expect(xy).toHaveFocus()
     expect(xy).toHaveAttribute('aria-checked', 'true')
   })
+})
+
+describe('Content-sized selections', () => {
+  it('opts both segmented APIs into intrinsic sizing without changing their semantics', async () => {
+    const user = userEvent.setup()
+    render(<><TabsHarness appearance="segmented" layout="content" /><ModeHarness layout="content" /></>)
+    expect(screen.getByRole('tablist')).toHaveClass('ui-selection-content')
+    expect(screen.getByRole('radiogroup')).toHaveClass('ui-selection-content')
+    screen.getByRole('tab', { name: '详情' }).focus()
+    await user.keyboard('{End}')
+    expect(screen.getByRole('tab', { name: '输出' })).toHaveFocus()
+    screen.getByRole('radio', { name: '单图' }).focus()
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByRole('radio', { name: 'XY 矩阵' })).toHaveFocus()
+  })
+
 })
 
 describe('selectionItemId', () => {

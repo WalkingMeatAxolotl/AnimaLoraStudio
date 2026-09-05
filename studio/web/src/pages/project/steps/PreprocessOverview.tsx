@@ -254,6 +254,7 @@ export default function PreprocessOverviewPage() {
               ariaLabel={t('preprocessOverview.tabsLabel')}
               idPrefix={tabPrefix}
               appearance="segmented"
+              layout="content"
             />
             <ActionGroup
               className="ml-auto"

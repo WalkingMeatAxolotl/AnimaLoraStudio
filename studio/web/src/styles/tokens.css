@@ -618,6 +618,23 @@ select option:checked {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Content-sized toolbar selections must disclose labels, not divide the
+ * intrinsic width equally and truncate the longer item. Wrap whole items first;
+ * exceptionally long labels may wrap inside an item to stay in the viewport. */
+.ui-selection-segmented.ui-selection-content {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.ui-selection-segmented.ui-selection-content .ui-selection-item {
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: normal;
+}
+.ui-selection-segmented.ui-selection-content .ui-selection-label {
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
 .ui-selection-segmented .ui-selection-item:not(:disabled):not([data-state="active"]):hover {
   background: var(--bg-overlay);
   color: var(--fg-secondary);

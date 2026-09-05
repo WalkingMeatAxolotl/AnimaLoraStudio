@@ -210,6 +210,19 @@ native form controls. They preserve browser semantics while sharing focus, disab
 invalid, sizing, and theme behavior. The legacy `.input` and `.input-mono` classes
 remain compatibility paths during incremental migration.
 
+The upscale operation panel adopts these controls at `sm` workbench size. Its
+preset and conditional custom-edge input have separate labels and share the
+computed target description via `aria-describedby`; never place two labelable
+controls in one label. Header scope-wide and selected-image actions use
+ActionGroup, with the selected-image primary action last. Model-missing guidance
+uses a compact, non-live Alert; download and task payloads remain page-owned.
+The image-resolution filter uses a named SegmentedControl (mutually exclusive
+filter values, not content tabs). Keep an active bin visible even when a refresh
+reduces its count to zero; do not silently change the selected filter. Folder
+filtering and selection clearing stay page-owned. ImageGrid keeps its existing
+bounded slot and internal list inset; the statistical sidebar owns its own scroll
+when its cards exceed the available height.
+
 Control sizes:
 
 - `md` is the default for dialogs and ordinary forms and aligns with `Button md`.
@@ -388,6 +401,11 @@ Tabs support two appearances without changing meaning:
   widths it scrolls horizontally instead of wrapping labels into ambiguous rows.
 - `segmented` is for compact, bounded navigation inside a workbench panel. Use the same
   segmented appearance for mutually exclusive modes, but through `SegmentedControl`.
+- Segmented tracks default to `layout="equal"` for existing fixed-width consumers.
+  Toolbar filters and overview labels with differing lengths use `layout="content"`:
+  intrinsic item widths, wrapping onto new rows when needed, and no label ellipsis.
+  An exceptionally long label may wrap within its item. Preprocess resolution filters
+  and Overview dataset tabs opt in; do not compensate with fixed widths or smaller text.
 
 Selection follows focus for this application: Arrow keys move to the next enabled item
 and activate it, wrapping at both ends; Home and End move to the first and last enabled

@@ -64,6 +64,7 @@ describe('PreprocessOverview adoption', () => {
     await user.click(screen.getByRole('button', { name: '全选' }))
     expect(screen.getByRole('button', { name: '撤销选中 (1)' })).toBeEnabled()
     const allTab = screen.getByRole('tab', { name: '处理后数据集 (2)' })
+    expect(screen.getByRole('tablist', { name: '数据集视图' })).toHaveClass('ui-selection-content')
     const removedTab = screen.getByRole('tab', { name: '已删除 (1)' })
     allTab.focus()
     await user.keyboard('{ArrowRight}')

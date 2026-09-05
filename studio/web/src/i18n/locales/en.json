@@ -2060,6 +2060,11 @@
     "formatTitle": "Format distribution"
   },
   "preprocess": {
+    "statisticsLabel": "Upscale statistics",
+    "resolutionFilter": "Image resolution filter",
+    "selectionActions": "Image selection actions",
+    "upscaleActions": "Upscale actions",
+    "customEdgeLabel": "Custom target edge (pixels)",
     "toolsLabel": "Preprocess tools",
     "customModelGoSettings": "Custom model not found — go to Settings → Preprocess",
     "downloadingModel": "Downloading {{model}}",
