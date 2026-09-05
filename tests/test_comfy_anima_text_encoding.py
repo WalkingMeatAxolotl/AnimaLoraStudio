@@ -467,6 +467,40 @@ def test_sample_image_comfy_parity_batches_cfg_like_comfyui(monkeypatch) -> None
     assert cross_max == [2.0, 1.0]
 
 
+def test_sample_image_cfg_handles_positive_and_negative_lengths_above_floor(monkeypatch) -> None:
+    model = RecordingBatchedDenoiseModel()
+
+    def one_step_sampler(denoise_fn, x, sigmas, **_kwargs):
+        denoise_fn(x, sigmas[0])
+        return x
+
+    monkeypatch.setattr(inference_samplers, "build_inference_sampler", lambda _name: one_step_sampler)
+
+    image = sample_image(
+        model,
+        FakeVAE(),
+        FakeQwenModel(),
+        RecordingQwenTokenizer(),
+        FakeTokenizer(),
+        "a" * 526,
+        height=16,
+        width=16,
+        steps=1,
+        cfg_scale=4.0,
+        negative_prompt="",
+        sampler_name="er_sde",
+        scheduler="simple",
+        device="cpu",
+        dtype=torch.float32,
+        seed=123,
+    )
+
+    assert image.size == (2, 2)
+    assert len(model.forward_calls) == 2
+    assert [call["cross"].shape[1] for call in model.forward_calls] == [512, 527]
+    assert [call["cross"].amax().item() for call in model.forward_calls] == [2.0, 1.0]
+
+
 def test_sample_image_retries_with_sdpa_when_xformers_outputs_nan(monkeypatch) -> None:
     from modeling.anima import cosmos_predict2_modeling as cosmos
 
