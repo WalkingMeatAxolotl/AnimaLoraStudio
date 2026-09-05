@@ -746,7 +746,7 @@ function ImagesPanel({
           ariaLabel={t('preprocess.resolutionFilter')}
           idPrefix="upscale-resolution"
           size="sm"
-          className="flex-wrap max-w-full"
+          layout="content"
         />
         {folders.length > 0 && (
           <label className="flex min-w-0 max-w-full items-center gap-related text-xs text-fg-tertiary">

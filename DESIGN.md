@@ -401,6 +401,11 @@ Tabs support two appearances without changing meaning:
   widths it scrolls horizontally instead of wrapping labels into ambiguous rows.
 - `segmented` is for compact, bounded navigation inside a workbench panel. Use the same
   segmented appearance for mutually exclusive modes, but through `SegmentedControl`.
+- Segmented tracks default to `layout="equal"` for existing fixed-width consumers.
+  Toolbar filters and overview labels with differing lengths use `layout="content"`:
+  intrinsic item widths, wrapping onto new rows when needed, and no label ellipsis.
+  An exceptionally long label may wrap within its item. Preprocess resolution filters
+  and Overview dataset tabs opt in; do not compensate with fixed widths or smaller text.
 
 Selection follows focus for this application: Arrow keys move to the next enabled item
 and activate it, wrapping at both ends; Home and End move to the first and last enabled

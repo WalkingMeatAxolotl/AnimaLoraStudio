@@ -22,6 +22,8 @@ type SharedSelectionProps<T extends string, I extends SelectionItem<T> = Selecti
   ariaLabel: string
   idPrefix: string
   size?: SelectionSize
+  /** Segmented controls only: fit labels and wrap rather than equal-width truncation. */
+  layout?: 'equal' | 'content'
   className?: string
 }
 
@@ -47,6 +49,7 @@ function SelectionGroup<T extends string>({
   ariaLabel,
   idPrefix,
   size = 'md',
+  layout = 'equal',
   className = '',
   semantics,
   appearance,
@@ -105,6 +108,7 @@ function SelectionGroup<T extends string>({
         'ui-selection-group',
         `ui-selection-${appearance}`,
         `ui-selection-${size}`,
+        appearance === 'segmented' && layout === 'content' && 'ui-selection-content',
         className,
       ].filter(Boolean).join(' ')}
     >

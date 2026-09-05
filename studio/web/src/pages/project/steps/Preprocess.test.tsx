@@ -175,6 +175,7 @@ describe('Preprocess upscale controls', () => {
     await user.click(screen.getByRole('button', { name: '全选' }))
     expect(screen.getByRole('button', { name: '放大选中 2' })).toBeEnabled()
     const filters = screen.getByRole('radiogroup', { name: '图片分辨率筛选' })
+    expect(filters).toHaveClass('ui-selection-content')
     const all = within(filters).getByRole('radio', { name: '全部 (2)' })
     all.focus()
     await user.keyboard('{ArrowRight}')
