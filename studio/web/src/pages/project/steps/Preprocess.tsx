@@ -10,6 +10,11 @@ import {
 } from '../../../api/client'
 import { parseFolderMeta } from '../../../lib/folderMeta'
 import { compareImagePath } from '../../../lib/imageSort'
+import ActionGroup from '../../../components/ActionGroup'
+import Alert from '../../../components/Alert'
+import Button from '../../../components/Button'
+import Card from '../../../components/Card'
+import { Input, Select } from '../../../components/FormControl'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
@@ -381,33 +386,26 @@ export default function PreprocessPage() {
       title={t('steps.preprocess.title')}
       subtitle={t('steps.preprocess.subtitle')}
       actions={
-        <>
-          {/* 放大全部 = ghost；放大选中 = primary + icon（选中项才启用），放最右 */}
-          <button
-            type="button"
-            onClick={() =>
-              void (folderScopedNames
-                ? startPreprocess('selected', folderScopedNames)
-                : startPreprocess('all'))
-            }
-            disabled={upscaleBusy || !modelReady || upscaleTotal === 0}
-            className="btn btn-ghost btn-sm"
-          >
-            {t('preprocess.upscaleAll', { n: upscaleTotal })}
-          </button>
-          <button
-            type="button"
-            onClick={() => void startPreprocess('selected', selectedTargets.names)}
-            disabled={upscaleBusy || !modelReady || selectedTargets.count === 0}
-            className="btn btn-primary btn-sm"
-            title={selectedTargets.count === 0 ? t('preprocess.upscaleSelectedHint') : ''}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            <span>{t('preprocess.upscaleSelected', { n: selectedTargets.count })}</span>
-          </button>
-        </>
+        <ActionGroup
+          aria-label={t('preprocess.upscaleActions')}
+          secondary={
+            <Button variant="ghost" size="sm"
+              onClick={() =>
+                void (folderScopedNames
+                  ? startPreprocess('selected', folderScopedNames)
+                  : startPreprocess('all'))
+              }
+              disabled={upscaleBusy || !modelReady || upscaleTotal === 0}
+            >{t('preprocess.upscaleAll', { n: upscaleTotal })}</Button>
+          }
+          primary={
+            <Button variant="primary" size="sm"
+              onClick={() => void startPreprocess('selected', selectedTargets.names)}
+              disabled={upscaleBusy || !modelReady || selectedTargets.count === 0}
+              title={selectedTargets.count === 0 ? t('preprocess.upscaleSelectedHint') : undefined}
+            >{t('preprocess.upscaleSelected', { n: selectedTargets.count })}</Button>
+          }
+        />
       }
       belowHeader={<PreprocessToolsBar current="upscale" projectId={project.id} versionId={vid} />}
       logSources={[
@@ -590,75 +588,64 @@ function OperationPanel({
       : t('preprocess.targetHintEdge', { edge: targetEdge, mpx: (targetEdge * targetEdge / 1e6).toFixed(2) })
 
   return (
-    <section className="flex flex-col gap-1.5 rounded-md border border-subtle bg-surface px-3 py-2.5 shrink-0">
-      <h3 className="caption flex items-center gap-1.5">
-        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent" />
-        {t('preprocess.panelTitle')}
-      </h3>
+    <Card as="section" radius="compact" padding="sm" aria-labelledby="upscale-settings-title"
+      className="flex flex-col gap-related shrink-0 min-w-0">
+      <h2 id="upscale-settings-title" className="type-panel-title">{t('preprocess.panelTitle')}</h2>
 
       {!modelReady && (
-        <div className="flex items-center gap-2 text-sm px-2 py-1.5 rounded-sm bg-warn-soft border border-warn">
-          <span className="text-warn font-medium">{t('preprocess.needDownload')}</span>
-          <span className="text-fg-secondary text-xs flex-1 truncate">
-            {upscaler?.kind === 'custom'
-              ? t('preprocess.customModelLocal')
-              : `${upscaler?.hf_repo ?? upscaler?.ms_repo ?? '—'} · ~${upscaler?.size_mb ?? 64} MB`}
-          </span>
-          <button
-            onClick={onDownloadModel}
-            disabled={downloadingModel || upscaler?.kind === 'custom'}
-            className="btn btn-primary btn-sm"
-          >
-            {downloadingModel ? t('preprocess.modelDownloading') : t('preprocess.downloadModel', { model: selectedModel })}
-          </button>
-        </div>
+        <Alert tone="warning" size="sm" title={t('preprocess.needDownload')}
+          action={
+            <Button variant="primary" size="sm"
+              onClick={onDownloadModel}
+              disabled={downloadingModel || upscaler?.kind === 'custom'}
+            >{downloadingModel ? t('preprocess.modelDownloading') : t('preprocess.downloadModel', { model: selectedModel })}</Button>
+          }
+        >
+          {upscaler?.kind === 'custom'
+            ? t('preprocess.customModelLocal')
+            : `${upscaler?.hf_repo ?? upscaler?.ms_repo ?? '—'} · ~${upscaler?.size_mb ?? 64} MB`}
+        </Alert>
       )}
 
-      {/* 目标分辨率行 */}
-      <div className="flex items-center gap-2 text-sm flex-wrap">
-        <label className="flex items-center gap-1.5">
-          <span className="text-fg-tertiary">{t('preprocess.targetRes')}</span>
-          <select
-            value={selectValue}
-            onChange={(e) => handlePresetChange(e.target.value)}
-            disabled={busy}
-            className="input text-sm"
-            style={{ width: 'auto', padding: '2px 6px' }}
-          >
-            {TARGET_PRESETS.map((p) => (
-              <option
-                key={p.edge === null ? 'off' : p.edge === 0 ? 'custom' : p.edge}
-                value={p.edge === null ? 'off' : p.edge === 0 ? 'custom' : String(p.edge)}
-              >{p.label}</option>
-            ))}
-          </select>
-          {targetEdge === 0 && (
-            <input
-              type="number"
-              min={256}
-              max={4096}
-              step={64}
+      <div className="flex items-center gap-related text-sm flex-wrap">
+        <label htmlFor="upscale-target" className="text-fg-tertiary">{t('preprocess.targetRes')}</label>
+        <Select id="upscale-target" controlSize="sm" className="w-auto max-w-full"
+          value={selectValue}
+          onChange={(e) => handlePresetChange(e.target.value)}
+          disabled={busy}
+          aria-describedby="upscale-target-hint"
+        >
+          {TARGET_PRESETS.map((p) => (
+            <option
+              key={p.edge === null ? 'off' : p.edge === 0 ? 'custom' : p.edge}
+              value={p.edge === null ? 'off' : p.edge === 0 ? 'custom' : String(p.edge)}
+            >{p.label}</option>
+          ))}
+        </Select>
+        {targetEdge === 0 && (
+          <>
+            <label htmlFor="upscale-custom-edge" className="sr-only">{t('preprocess.customEdgeLabel')}</label>
+            <Input id="upscale-custom-edge" controlSize="sm" mono
+              type="number" min={256} max={4096} step={64}
               value={customEdge}
               onChange={(e) => setCustomEdge(e.target.value)}
               disabled={busy}
-              className="input input-mono text-sm"
-              style={{ width: 80, padding: '2px 6px' }}
+              className="w-20"
+              aria-describedby="upscale-target-hint"
               placeholder={t('preprocess.edgePlaceholder')}
             />
-          )}
-          <span className="text-fg-tertiary text-xs">{targetHint}</span>
-        </label>
+          </>
+        )}
+        <span id="upscale-target-hint" className="text-fg-tertiary text-xs">{targetHint}</span>
       </div>
 
-      <div className="flex items-center gap-2 text-sm flex-wrap">
-        <label className="flex items-center gap-1.5">
-          <span className="text-fg-tertiary">{t('preprocess.modelLabel')}</span>
-          <select
+      <div className="flex items-center gap-related text-sm flex-wrap">
+        <label className="flex min-w-0 max-w-full items-center gap-related">
+          <span className="text-fg-tertiary shrink-0">{t('preprocess.modelLabel')}</span>
+          <Select controlSize="sm" mono className="w-auto min-w-0 max-w-full"
             value={selectedModel}
             onChange={(e) => onSelectedModelChange(e.target.value)}
             disabled={busy}
-            className="input text-sm mono"
-            style={{ width: 'auto', padding: '2px 6px' }}
           >
             {allUpscalers.map((v) => (
               <option key={v.label} value={v.label}>
@@ -670,46 +657,30 @@ function OperationPanel({
             {allUpscalers.length === 0 && (
               <option value={selectedModel}>{selectedModel}</option>
             )}
-          </select>
+          </Select>
         </label>
-
-        <span className="text-dim">·</span>
-
-        <label className="flex items-center gap-1.5">
+        <label className="flex items-center gap-related">
           <span className="text-fg-tertiary">tile</span>
-          <select
+          <Select controlSize="sm" mono className="w-auto"
             value={tileSize}
             onChange={(e) => setTileSize(Number(e.target.value))}
             disabled={busy}
-            className="input text-sm"
-            style={{ width: 'auto', padding: '2px 6px' }}
           >
-            {TILE_OPTIONS.map((n) => (
-              <option key={n} value={n}>{n}px</option>
-            ))}
-          </select>
+            {TILE_OPTIONS.map((n) => <option key={n} value={n}>{n}px</option>)}
+          </Select>
         </label>
-
-        <span className="text-dim">·</span>
-
-        <label className="flex items-center gap-1.5">
+        <label className="flex items-center gap-related">
           <span className="text-fg-tertiary">{t('preprocess.deviceLabel')}</span>
-          <select
+          <Select controlSize="sm" className="w-auto"
             value={device}
             onChange={(e) => setDevice(e.target.value as Device)}
             disabled={busy}
-            className="input text-sm"
-            style={{ width: 'auto', padding: '2px 6px' }}
           >
-            {DEVICE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+            {DEVICE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </Select>
         </label>
-
       </div>
-
-    </section>
+    </Card>
   )
 }
 

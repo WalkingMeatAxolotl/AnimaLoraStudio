@@ -2060,6 +2060,8 @@
     "formatTitle": "Format distribution"
   },
   "preprocess": {
+    "upscaleActions": "Upscale actions",
+    "customEdgeLabel": "Custom target edge (pixels)",
     "toolsLabel": "Preprocess tools",
     "customModelGoSettings": "Custom model not found — go to Settings → Preprocess",
     "downloadingModel": "Downloading {{model}}",

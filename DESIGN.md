@@ -210,6 +210,13 @@ native form controls. They preserve browser semantics while sharing focus, disab
 invalid, sizing, and theme behavior. The legacy `.input` and `.input-mono` classes
 remain compatibility paths during incremental migration.
 
+The upscale operation panel adopts these controls at `sm` workbench size. Its
+preset and conditional custom-edge input have separate labels and share the
+computed target description via `aria-describedby`; never place two labelable
+controls in one label. Header scope-wide and selected-image actions use
+ActionGroup, with the selected-image primary action last. Model-missing guidance
+uses a compact, non-live Alert; download and task payloads remain page-owned.
+
 Control sizes:
 
 - `md` is the default for dialogs and ordinary forms and aligns with `Button md`.

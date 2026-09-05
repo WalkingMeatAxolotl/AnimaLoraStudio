@@ -2060,6 +2060,8 @@
     "formatTitle": "格式分布"
   },
   "preprocess": {
+    "upscaleActions": "放大操作",
+    "customEdgeLabel": "自定义目标边长（像素）",
     "toolsLabel": "预处理工具导航",
     "customModelGoSettings": "自定义模型请前往设置 → 预处理重新下载",
     "downloadingModel": "开始下载 {{model}}",
