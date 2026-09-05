@@ -2060,6 +2060,7 @@
     "formatTitle": "Format distribution"
   },
   "preprocess": {
+    "toolsLabel": "Preprocess tools",
     "customModelGoSettings": "Custom model not found — go to Settings → Preprocess",
     "downloadingModel": "Downloading {{model}}",
     "needModelFirst": "Download upscaler first: {{model}}",
@@ -2136,6 +2137,9 @@
     "nextNote": "Preprocess is optional — skipped images use originals, processed images use the preprocess copy. ADR 0004: user sees one image set."
   },
   "preprocessOverview": {
+    "tabsLabel": "Dataset views",
+    "actionsLabel": "Dataset selection and undo",
+    "loadError": "Could not load the dataset. Retry to refresh the view.",
     "subtitle": "Upscale / crop / inpaint — Overview (preview + undo)",
     "title": "Processed images",
     "tabAll": "Processed dataset",
@@ -2148,7 +2152,7 @@
     "empty": "Nothing processed yet. Go to «Upscale» or «Crop» to start.",
     "emptyAll": "No images in this project yet. Download or upload some first.",
     "emptyRemoved": "No images marked removed by the duplicate review tool.",
-    "restoreSelected": "↶ Undo selected ({{n}})",
+    "restoreSelected": "Undo selected ({{n}})",
     "restoreSelectedTitle": "Undo flag: processed → revert to download/; duplicate-removed → unhide",
     "resetAll": "Undo all",
     "resetAllTitle": "Delete every preprocess product and revert to download/ originals",

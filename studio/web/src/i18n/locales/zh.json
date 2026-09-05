@@ -2060,6 +2060,7 @@
     "formatTitle": "格式分布"
   },
   "preprocess": {
+    "toolsLabel": "预处理工具导航",
     "customModelGoSettings": "自定义模型请前往设置 → 预处理重新下载",
     "downloadingModel": "开始下载 {{model}}",
     "needModelFirst": "请先下载放大器：{{model}}",
@@ -2136,6 +2137,9 @@
     "nextNote": "预处理是可选阶段——跳过的图筛选页会用原图，已处理的图自动用预处理副本。ADR 0004：用户只看到一份图。"
   },
   "preprocessOverview": {
+    "tabsLabel": "数据集视图",
+    "actionsLabel": "数据集选择与撤销",
+    "loadError": "无法加载数据集，请重试刷新视图。",
     "subtitle": "放大 / 裁剪 / 涂抹 — 总览（预览 + 撤销）",
     "title": "已处理图片",
     "tabAll": "处理后数据集",
@@ -2148,7 +2152,7 @@
     "empty": "还没有任何处理过的图片。回到「放大」或「裁剪」开始处理。",
     "emptyAll": "项目里还没有图片。先去「数据集下载」下载或上传图片。",
     "emptyRemoved": "没有被去重审核标记移除的图片。",
-    "restoreSelected": "↶ 撤销选中 ({{n}})",
+    "restoreSelected": "撤销选中 ({{n}})",
     "restoreSelectedTitle": "撤销标记：处理产物→回 download 原图；去重移除→恢复显示",
     "resetAll": "撤销全部",
     "resetAllTitle": "把所有放大 / 裁剪产物全部删除，回到 download 原图",
