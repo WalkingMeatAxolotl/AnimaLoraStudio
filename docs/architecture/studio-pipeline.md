@@ -253,6 +253,7 @@ Pydantic 模型在 `studio/infrastructure/secrets.py`（`studio/secrets.py` 是�
 | `generate_progress` | `job_id`, `step`, `total_steps` | 推理 daemon 出图进度 |
 | `preprocess_progress` | `job_id`, `project_id`, `idx`, `total`, `name`, `status`, `action?`, `succeeded`, `failed`, `skipped` | preprocess_worker 放大每张图完成 → 前端实时刷 files / 进度 / 盘占 |
 | `crop_progress` | `job_id`, `project_id`, `idx`, `total`, `name`, `status`, `n_out?`, `outputs?`, `succeeded`, `failed`, `skipped` | preprocess_worker 裁剪每张图完成；worker 端节流 ≥1Hz（done 事件聚合，skip/fail/首末强发）|
+| `head_mask_progress` | `job_id`, `project_id`, `version_id`, `idx`, `total`, `name`, `status`, `detections?`, `succeeded`, `failed`, `skipped` | preprocess_worker 自动头部检测逐图进度；只生成提案，不写原图或 mask |
 | `system_stats_updated` | `cpu`, `gpu`, `mem`, `vram` | `_StatsThread` 2.5s 周期推 Topbar 系统资源 pill（v0.6） |
 
 前端 `useEventStream.ts` 共享一条 `EventSource`，多个组件订阅不会重复连。

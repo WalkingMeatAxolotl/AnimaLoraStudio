@@ -10,11 +10,15 @@ from typing import Any, Optional
 
 from ... import secrets
 from .. import eval_registry
-from .downloader import get_status_snapshot
+from .downloader import get_status_snapshot, head_detector_status
 from .families import FAMILY_ASSETS
 from .paths import (
     CLTAGGER_VERSIONS,
     DEFAULT_UPSCALER,
+    HEAD_DETECTOR_REPO,
+    HEAD_DETECTOR_REVISION,
+    HEAD_DETECTOR_SHA256,
+    HEAD_DETECTOR_SIZE,
     TAEFLUX_FILES,
     TAEFLUX_REPO,
     UPSCALER_EXTS,
@@ -24,6 +28,7 @@ from .paths import (
     cltagger_required_files,
     cltagger_target_root,
     eval_model_target_dir,
+    head_detector_target,
     models_root,
     selected_upscaler,
     taeflux_dir,
@@ -72,6 +77,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
     `downloads` 字段返回当前活跃下载 status。
     """
     r = root or models_root()
+    head_status = head_detector_status(r)
 
     # 模型族区块经 FAMILY_ASSETS registry 遍历（多模型 PR-4）；单族时输出与
     # 旧实现逐字节一致，前端零改动
@@ -538,6 +544,17 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "target_dir": str(upscaler_dir(r)),
             "variants": upscaler_variants,
         },
+        "head_detector": {
+            "id": "head_detector",
+            "name": "Anime Head Detector",
+            "description": "Automatic cartoon head masking (ONNX, downloaded on demand)",
+            "repo": HEAD_DETECTOR_REPO,
+            "revision": HEAD_DETECTOR_REVISION,
+            "target_path": str(head_detector_target(r)),
+            "expected_size": HEAD_DETECTOR_SIZE,
+            "expected_sha256": HEAD_DETECTOR_SHA256,
+            **head_status,
+        },
         # 统一来源候选行（前端泛化候选卡消费；键 = domain）。
         "model_sources": model_source_rows,
         # 按类型的下载源选择：双源类型给 dropdown，固定 HF 的给单选指示。
@@ -551,7 +568,8 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "eval": {"current": src_cfg.get("eval", "huggingface"),
                      "available": ["huggingface", "modelscope"]},
             "upscaler": {"current": src_cfg.get("upscaler", "huggingface"),
-                         "available": ["huggingface", "modelscope"]},
+                          "available": ["huggingface", "modelscope"]},
+            "head_detector": {"current": "huggingface", "available": ["huggingface"]},
             "cltagger": {"current": "huggingface", "available": ["huggingface"]},
             "taeflux": {"current": "huggingface", "available": ["huggingface"]},
         },

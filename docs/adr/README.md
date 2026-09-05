@@ -22,6 +22,7 @@
 | 0014 | [测试出图延迟加载 VAE，并分块合并 FP8 LoRA](0014-lazy-vae-and-chunked-fp8-lora-merge.md) | Accepted | 2026-07-20 |
 | 0015 | [用实测峰值协调测试出图的 TE / DiT 驻留](0015-calibrated-te-dit-vram-orchestration.md) | Accepted | 2026-07-20 |
 | 0016 | [分阶段升级 LyCORIS v4 并隔离实验性 kernel backend](0016-adopt-lycoris-v4-with-safe-kernel-rollout.md) | Proposed | 2026-09-04 |
+| 0017 | [用提案式 ONNX 检测生成可撤销的头部空间遮罩](0017-proposal-based-auto-head-mask.md) | Accepted | 2026-09-06 |
 
 ## 状态值
 

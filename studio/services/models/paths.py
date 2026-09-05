@@ -33,6 +33,16 @@ TAEFLUX_FILES = [
 CLTAGGER_REPO = "cella110n/cl_tagger"
 CLTAGGER_V2_REPO = "cella110n/cl_tagger_v2"
 
+# 自动头部遮罩检测器。权重不随 Studio 分发，由用户在下载中心按需获取。
+# revision / size / digest 同时固定，避免上游同路径换权重导致检测结果漂移。
+HEAD_DETECTOR_REPO = "deepghs/anime_head_detection"
+HEAD_DETECTOR_REVISION = "06604feee81983792a57c21081e539c0ae229833"
+HEAD_DETECTOR_REPO_PATH = "head_detect_v2.0_s/model.onnx"
+HEAD_DETECTOR_SIZE = 44_585_386
+HEAD_DETECTOR_SHA256 = (
+    "6679f9b71192298bbf174d82e9e5581c3237b0c3dc67deace7cdbf686b070a00"
+)
+
 # CLTagger 预设。v1 在 cella110n/cl_tagger 的版本子目录下；v2 是独立 gated
 # repo，但文件仍在版本子目录下。新版本出现时往这里加一行，UI 自动作为 radio 暴露。
 #
@@ -279,6 +289,17 @@ def upscaler_dir(root: Optional[Path] = None) -> Path:
     """放大器权重根目录 `{models_root}/upscalers/`。"""
     r = root or models_root()
     return r / "upscalers"
+
+
+def head_detector_dir(root: Optional[Path] = None) -> Path:
+    """自动头部遮罩 ONNX 模型目录。"""
+    r = root or models_root()
+    return r / "preprocess" / "head_detector"
+
+
+def head_detector_target(root: Optional[Path] = None) -> Path:
+    """固定版本的自动头部检测器落点。"""
+    return head_detector_dir(root) / "model.onnx"
 
 
 def upscaler_target(label: str, root: Optional[Path] = None) -> Path:

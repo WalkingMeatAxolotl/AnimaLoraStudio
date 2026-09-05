@@ -1171,6 +1171,10 @@
     "notDownloaded": "Not downloaded",
     "downloadAction": "⤓ Download",
     "upscalersPreprocess": "Upscalers (preprocess)",
+    "headDetectorTitle": "Head detector (automatic masks)",
+    "headDetectorHelp": "Creates cartoon-head proposals on the preprocess inpaint page. The on-demand weight is pinned and SHA-256 verified; it is not bundled with Studio.",
+    "headDetectorRevision": "Pinned revision {{revision}}",
+    "headDetectorCorrupt": "The local file failed size or SHA-256 verification. Downloading again replaces the damaged file first.",
     "availableUpscalers": "Available upscalers",
     "upscalersHelpPath": "Preprocess uses upscaling for small images. Files are stored in <code>{{path}}</code>.",
     "upscalersHelpDefault": "The selected radio item is the default model used by the preprocess page. custom comes from the form below or previous custom downloads.",
@@ -2236,12 +2240,14 @@
     "filter": {
       "all": "All",
       "pending": "Untouched",
-      "edited": "Painted"
+      "edited": "Painted",
+      "undetected": "No head detected"
     },
     "filmstripEmpty": {
       "all": "Workspace is empty.",
       "pending": "Every image already has strokes.",
-      "edited": "No image has been painted yet."
+      "edited": "No image has been painted yet.",
+      "undetected": "Every detected image has at least one head."
     },
     "loading": "Loading workspace...",
     "emptyWorkspace": "Workspace is empty,",
@@ -2259,7 +2265,40 @@
     "toastNotReady": "Image is still loading",
     "toastSaved": "Saved {{name}}",
     "toastSavedAll": "Saved {{n}} images",
-    "toastSavedAllPartial": "Done: {{ok}} saved, {{failed}} failed"
+    "toastSavedAllPartial": "Done: {{ok}} saved, {{failed}} failed",
+    "headMask": {
+      "title": "Automatic head mask",
+      "boundary": "Creates spatial masks only. It never changes source images or removes character names, hair, or eye tags from captions.",
+      "modelReady": "Model ready",
+      "modelMissing": "Model missing",
+      "modelRequired": "Download and verify the head detector first.",
+      "downloadModel": "Download head detector (about 42.5 MB)",
+      "downloadStarted": "Head detector download started",
+      "downloading": "Downloading model…",
+      "parameters": "Detection parameters",
+      "confidence": "Confidence",
+      "iou_threshold": "NMS IoU",
+      "padding_ratio": "Padding",
+      "feather_ratio": "Feather",
+      "detectAll": "Detect all",
+      "detectCurrent": "Detect current",
+      "detectStarted": "Head detection job #{{id}} started",
+      "detectFailed": "Head detection failed. Check the task log.",
+      "detectCanceled": "Head detection canceled; the incomplete proposal was not saved.",
+      "saveFirst": "{{n}} image(s) have unsaved strokes. Save them before batch detection.",
+      "progress": "Detecting {{done}} / {{total}} · {{heads}} head(s) found",
+      "summary": "{{images}} image(s) · {{heads}} head(s) · {{selected}} selected",
+      "showUndetected": "No detection ({{n}})",
+      "stale": "{{n}} image(s) changed after detection. Run detection again.",
+      "selectCurrent": "Select current",
+      "clearCurrent": "Clear current",
+      "noneCurrent": "The current image has no detection proposal.",
+      "region": "Head {{n}} · {{score}}%",
+      "applySelected": "Apply selected ({{n}})",
+      "undoApply": "Undo this auto mask",
+      "applied": "Merged automatic masks into {{n}} image(s)",
+      "undone": "Restored masks for {{n}} image(s)"
+    }
   },
   "steps": {
     "download": {
@@ -2581,7 +2620,9 @@
     "navitDistDownscaled": "{{n}} imgs exceeded the token budget and were downscaled.",
     "navitDistMore": "… {{kinds}} more sizes, {{n}} imgs total",
     "navitBucketHint": "NaViT packing: buckets only quantize sizes; batching packs across buckets by token budget — batch_size is not involved.",
-    "maskedLossHint": "{{n}} training image(s) have masks (Inpaint · Mask) but masked_loss is off — this run will not use them. Enable masked_loss in the loss group to apply.",
+    "maskedLossHint": "{{n}} training image(s) have masks (Inpaint · Mask) but masked_loss is off — this run will not use them.",
+    "enableMaskedLoss": "Enable now",
+    "maskedLossEnableBlocked": "Turn off Leap or NaViT Packing first; both are incompatible with spatial masks.",
     "confirmReset": "Reset config to preset {{name}}? All customizations on the current version will be lost.",
     "resetOkText": "Reset",
     "resetSuccess": "Reset to preset {{name}} config",

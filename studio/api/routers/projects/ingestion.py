@@ -45,6 +45,9 @@ from ....domain.errors import (
 from ...schemas.ingestion import (
     DownloadRequest,
     EstimateRequest,
+    HeadMaskApplyRequest,
+    HeadMaskDetectRequest,
+    HeadMaskUndoRequest,
     PreprocessCropRequest,
     PreprocessRestoreRequest,
     PreprocessStartRequest,
@@ -59,6 +62,7 @@ from ....services.preprocess import core as preprocess_svc
 from ....services import model_downloader
 from ....services.booru import downloader
 from ....services.preprocess import manifest as preprocess_manifest
+from ....services.preprocess import head_mask as head_mask_svc
 from ....services.dataset import uploads as uploads_svc
 
 router = APIRouter()
@@ -576,6 +580,101 @@ def delete_mask_train_endpoint(pid: int, vid: int, name: str) -> dict[str, Any]:
     res = preprocess_svc.mask_delete_train(p, v["label"], name=name)
     _publish_project_state(p)
     return res
+
+
+def _head_mask_job_or_404(pid: int, vid: int, job_id: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        job = project_jobs.get_job(conn, job_id)
+    params = (job or {}).get("params_decoded") or {}
+    if (
+        not job
+        or job.get("project_id") != pid
+        or job.get("version_id") != vid
+        or job.get("kind") != preprocess_svc.PREPROCESS_KIND
+        or params.get("stage") != preprocess_svc.STAGE_HEAD_MASK
+    ):
+        raise NotFoundError(
+            "Head-mask detection job not found",
+            code="preprocess.head_mask_job_not_found",
+            details={"job_id": job_id},
+        )
+    return job
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/preprocess/head-mask/detect")
+def start_head_mask_detection(
+    pid: int, vid: int, body: HeadMaskDetectRequest,
+) -> dict[str, Any]:
+    """Queue proposal-only cartoon head detection; source images stay untouched."""
+    _resolve_pv_or_404(pid, vid)
+    status = model_downloader.head_detector_status()
+    if not status.get("valid"):
+        raise ConflictError(
+            "Anime head detector is not downloaded or failed integrity validation",
+            code="preprocess.head_mask_model_missing",
+            details={"model_id": "head_detector", **status},
+        )
+    with db.connection_for() as conn:
+        job = preprocess_svc.start_head_mask_job_train(
+            conn,
+            project_id=pid,
+            version_id=vid,
+            scope=body.scope,
+            names=body.filenames,
+            confidence=body.confidence,
+            iou_threshold=body.iou_threshold,
+            padding_ratio=body.padding_ratio,
+            feather_ratio=body.feather_ratio,
+        )
+    _publish_job_state(job)
+    return job
+
+
+@router.get(
+    "/api/projects/{pid}/versions/{vid}/preprocess/head-mask/proposals/{job_id}"
+)
+def get_head_mask_proposals(
+    pid: int, vid: int, job_id: int,
+) -> dict[str, Any]:
+    _head_mask_job_or_404(pid, vid, job_id)
+    p, v = _resolve_pv_or_404(pid, vid)
+    result = head_mask_svc.load_result(job_id)
+    train_dir = preprocess_svc.version_train_dir(p, v["label"])
+    return {
+        **head_mask_svc.result_with_staleness(result, train_dir),
+        "undo_available": head_mask_svc.undo_available(job_id),
+    }
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/preprocess/head-mask/apply")
+async def apply_head_mask_proposals(
+    pid: int, vid: int, body: HeadMaskApplyRequest,
+) -> dict[str, Any]:
+    _head_mask_job_or_404(pid, vid, body.job_id)
+    p, v = _resolve_pv_or_404(pid, vid)
+    train_dir = preprocess_svc.version_train_dir(p, v["label"])
+    result = await run_in_threadpool(
+        head_mask_svc.apply_proposals,
+        body.job_id,
+        train_dir,
+        body.selections,
+    )
+    _publish_project_state(p)
+    return result
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/preprocess/head-mask/undo")
+async def undo_head_mask_apply(
+    pid: int, vid: int, body: HeadMaskUndoRequest,
+) -> dict[str, Any]:
+    _head_mask_job_or_404(pid, vid, body.job_id)
+    p, v = _resolve_pv_or_404(pid, vid)
+    train_dir = preprocess_svc.version_train_dir(p, v["label"])
+    result = await run_in_threadpool(
+        head_mask_svc.undo_apply, body.job_id, train_dir,
+    )
+    _publish_project_state(p)
+    return result
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/preprocess/files/reset")

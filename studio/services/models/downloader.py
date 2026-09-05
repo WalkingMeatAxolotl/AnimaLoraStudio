@@ -9,6 +9,7 @@ download_flat[_ms] 实际下载，调 paths.py / families 拿 target Path 和模
 from __future__ import annotations
 
 import logging
+import hashlib
 import threading
 import time
 from dataclasses import dataclass, field
@@ -47,6 +48,11 @@ from .families.krea2 import (
 from .paths import (
     CLTAGGER_VERSIONS,
     DEFAULT_UPSCALER,
+    HEAD_DETECTOR_REPO,
+    HEAD_DETECTOR_REPO_PATH,
+    HEAD_DETECTOR_REVISION,
+    HEAD_DETECTOR_SHA256,
+    HEAD_DETECTOR_SIZE,
     TAEFLUX_FILES,
     TAEFLUX_REPO,
     UPSCALER_EXTS,
@@ -57,6 +63,7 @@ from .paths import (
     cltagger_required_files,
     cltagger_target_root,
     eval_model_target_dir,
+    head_detector_target,
     models_root,
     qwen_image_vae_target,
     selected_upscaler,
@@ -106,6 +113,77 @@ def download_taeflux(
         if not _sources.download_flat(TAEFLUX_REPO, f, target, on_log=on_log):
             ok = False
     return ok
+
+
+def head_detector_status(root: Optional[Path] = None) -> dict[str, Any]:
+    """返回固定 head detector 的完整性状态（size + SHA-256）。"""
+    target = head_detector_target(root)
+    try:
+        stat = target.stat()
+    except OSError:
+        return {"exists": False, "valid": False, "size": 0, "mtime": 0.0}
+    if stat.st_size != HEAD_DETECTOR_SIZE:
+        return {
+            "exists": True, "valid": False,
+            "size": stat.st_size, "mtime": stat.st_mtime,
+        }
+    digest = hashlib.sha256()
+    try:
+        with target.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return {
+            "exists": True, "valid": False,
+            "size": stat.st_size, "mtime": stat.st_mtime,
+        }
+    return {
+        "exists": True,
+        "valid": digest.hexdigest() == HEAD_DETECTOR_SHA256,
+        "size": stat.st_size,
+        "mtime": stat.st_mtime,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def download_head_detector(
+    root: Optional[Path] = None,
+    *,
+    on_log: TaskLogLike = _DEFAULT_LOG,
+) -> bool:
+    """下载并严格校验自动头部遮罩模型。损坏文件不会被当成已安装。"""
+    target = head_detector_target(root)
+    before = head_detector_status(root)
+    if before["valid"]:
+        on_log.info("Head detector is already installed and verified: %s", target)
+        return True
+    if target.exists():
+        try:
+            target.unlink()
+        except OSError as exc:
+            on_log.error("Cannot replace the invalid head detector at %s: %s", target, exc)
+            return False
+    ok = _sources.download_flat(
+        HEAD_DETECTOR_REPO,
+        HEAD_DETECTOR_REPO_PATH,
+        target,
+        revision=HEAD_DETECTOR_REVISION,
+        on_log=on_log,
+    )
+    status = head_detector_status(root)
+    if not ok or not status["valid"]:
+        on_log.error(
+            "Head detector integrity check failed: expected size=%d sha256=%s; got size=%s sha256=%s",
+            HEAD_DETECTOR_SIZE, HEAD_DETECTOR_SHA256,
+            status.get("size"), status.get("sha256", "unavailable"),
+        )
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    on_log.info("Head detector downloaded and verified: %s", target)
+    return True
 
 
 def download_anima_main(
@@ -813,6 +891,8 @@ def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
             else f"upscaler:custom:{variant}"
         )
         target = upscaler_target(variant, root)
+    elif model_id == "head_detector":
+        target = head_detector_target(root)
     elif model_id == "cltagger_custom":
         # fork repo 专属根目录整删（与官方 repo 目录隔离，安全）
         if not variant:
@@ -965,6 +1045,12 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = f"upscaler:{label}"
         start_download_async(
             key, lambda log: download_upscaler(label, root, on_log=log)
+        )
+        return key
+    if model_id == "head_detector":
+        key = "head_detector"
+        start_download_async(
+            key, lambda log: download_head_detector(root, on_log=log)
         )
         return key
     if model_id == "cltagger_custom":

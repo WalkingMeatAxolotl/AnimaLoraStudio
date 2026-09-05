@@ -37,6 +37,7 @@ import { HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/mode
 import LoraSourcesSection from './settings/LoraSourcesSection'
 import {
   DisplaySection,
+  HeadDetectorSection,
   IdleTimeoutSection,
   ModelsSection,
   SaveTestImagesSection,
@@ -805,14 +806,15 @@ export default function SettingsPage() {
       </div>
       </>)}
 
-      {tab === 'preprocess' && (
+      {tab === 'preprocess' && (<>
         <UpscalerSection
           catalog={catalog}
           setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}
         />
-      )}
+        <HeadDetectorSection catalog={catalog} />
+      </>)}
 
       {tab === 'testing' && (<>
         {/* Test generation uses the server Comfy-style runtime. Attention backend

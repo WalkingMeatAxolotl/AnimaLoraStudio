@@ -150,6 +150,38 @@ def test_resolve_endpoint_env_with_whitespace_treated_empty(
     assert model_downloader._resolve_endpoint() == "https://hf-mirror.com"
 
 
+def test_head_detector_download_uses_pinned_revision_and_rejects_corruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.services.models import downloader as dl
+
+    payload = b"verified-model"
+    monkeypatch.setattr(dl, "HEAD_DETECTOR_SIZE", len(payload))
+    monkeypatch.setattr(
+        dl, "HEAD_DETECTOR_SHA256",
+        __import__("hashlib").sha256(payload).hexdigest(),
+    )
+    captured: dict[str, object] = {}
+
+    def download(repo_id, subpath, target, **kwargs):
+        captured.update(repo_id=repo_id, subpath=subpath, revision=kwargs.get("revision"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return True
+
+    monkeypatch.setattr(dl._sources, "download_flat", download)
+    assert dl.download_head_detector(tmp_path, on_log=dl._DEFAULT_LOG)
+    assert captured["revision"] == dl.HEAD_DETECTOR_REVISION
+
+    (dl.head_detector_target(tmp_path)).write_bytes(b"corrupt")
+    monkeypatch.setattr(
+        dl._sources, "download_flat",
+        lambda _repo, _subpath, target, **_kwargs: (target.write_bytes(b"wrong") or True),
+    )
+    assert not dl.download_head_detector(tmp_path, on_log=dl._DEFAULT_LOG)
+    assert not dl.head_detector_target(tmp_path).exists()
+
+
 def test_on_log_does_not_hold_lock_during_print(
     reset_downloads,
 ) -> None:

@@ -43,6 +43,7 @@ PREPROCESS_KIND = "preprocess"
 # 历史 job（params 缺 stage 时按放大处理）。
 STAGE_UPSCALE = "upscale"
 STAGE_CROP = "crop"
+STAGE_HEAD_MASK = "head_mask"
 DEFAULT_MODEL = "4x-AnimeSharp"
 DEFAULT_TILE_SIZE = 256
 DEFAULT_TILE_PAD = 16
@@ -50,6 +51,10 @@ DEFAULT_DEVICE = "auto"
 # LoRA 训练桶的目标面积。1024² = 1048576 px 是 SDXL/Flux/Anima 常用桶；用户
 # 可以在 UI 选 768²/1024²/1536²/2048² 或自定义边长。
 DEFAULT_TARGET_AREA = 1024 * 1024
+DEFAULT_HEAD_MASK_CONFIDENCE = 0.413
+DEFAULT_HEAD_MASK_IOU = 0.7
+DEFAULT_HEAD_MASK_PADDING = 0.10
+DEFAULT_HEAD_MASK_FEATHER = 0.03
 
 PRODUCT_SUFFIX = ".png"
 # 裁剪框最小归一化边长，画布上小于这个的不算有效（避免误触出零像素图）
@@ -438,6 +443,56 @@ def start_crop_job_train(
         sanitized[name] = out_rects
 
     params = {"stage": STAGE_CROP, "crops": sanitized}
+    return project_jobs.create_job(
+        conn,
+        project_id=project_id,
+        version_id=version_id,
+        kind=PREPROCESS_KIND,
+        params=params,
+    )
+
+
+def start_head_mask_job_train(
+    conn, *,
+    project_id: int,
+    version_id: int,
+    scope: str = "all",
+    names: Optional[list[str]] = None,
+    confidence: float,
+    iou_threshold: float,
+    padding_ratio: float,
+    feather_ratio: float,
+) -> dict[str, Any]:
+    """Create a proposal-only anime head detection job in the preprocess queue."""
+    if not projects.get_project(conn, project_id):
+        raise NotFoundError(
+            "Project not found",
+            code="project.not_found", details={"id": project_id},
+        )
+    if scope not in ("all", "selected"):
+        raise ValidationError(
+            "Invalid head-mask scope",
+            code="preprocess.head_mask_scope_invalid",
+            details={"scope": scope}, http_status=400,
+        )
+    if scope == "selected" and not names:
+        raise ValidationError(
+            "No images selected",
+            code="preprocess.selection_empty", http_status=400,
+        )
+    if names:
+        for name in names:
+            _validate_rel_name(name)
+    params: dict[str, Any] = {
+        "stage": STAGE_HEAD_MASK,
+        "scope": scope,
+        "confidence": float(confidence),
+        "iou_threshold": float(iou_threshold),
+        "padding_ratio": float(padding_ratio),
+        "feather_ratio": float(feather_ratio),
+    }
+    if names:
+        params["names"] = list(dict.fromkeys(names))
     return project_jobs.create_job(
         conn,
         project_id=project_id,

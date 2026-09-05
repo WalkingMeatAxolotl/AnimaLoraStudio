@@ -39,6 +39,7 @@ from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import models as model_downloader
 from studio.services.preprocess import manifest as preprocess_manifest
 from studio.services.preprocess import masks as train_masks
+from studio.services.preprocess import head_mask
 from studio.services.inference import upscaler
 
 from utils.log_throttle import ProgressThrottle, RepeatThrottle
@@ -124,6 +125,10 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
             return 1
         if stage == preprocess.STAGE_CROP:
             return _run_crop_train(project, version, params, log, emit_event)
+        if stage == preprocess.STAGE_HEAD_MASK:
+            return _run_head_mask_train(
+                job_id, project, version, params, log, emit_event,
+            )
         if stage == preprocess.STAGE_UPSCALE:
             return _run_upscale_train(
                 project, version, params, log, emit_event,
@@ -135,6 +140,115 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
         # 提供，不再另发一条 log 行（C6）。
         logger.exception("Preprocess worker crashed: job=%s", job_id)
         return 1
+
+
+def _run_head_mask_train(
+    job_id: int,
+    project: dict[str, Any],
+    version: dict[str, Any],
+    params: dict[str, Any],
+    log: TaskLogLike,
+    emit_event: Callable[..., None],
+) -> int:
+    """Detect every cartoon head and persist reviewable proposals only."""
+    scope = str(params.get("scope") or "all")
+    names = params.get("names") or None
+    confidence = float(params.get("confidence", head_mask.DEFAULT_CONFIDENCE))
+    iou_threshold = float(
+        params.get("iou_threshold", head_mask.DEFAULT_IOU_THRESHOLD)
+    )
+    padding_ratio = float(
+        params.get("padding_ratio", head_mask.DEFAULT_PADDING_RATIO)
+    )
+    feather_ratio = float(
+        params.get("feather_ratio", head_mask.DEFAULT_FEATHER_RATIO)
+    )
+    try:
+        sources = preprocess.resolve_targets_train(
+            project, version["label"], mode=scope, names=names,
+        )
+    except DomainError as exc:
+        log.error("Resolving head-mask images failed: %s", exc)
+        return 1
+    try:
+        status = model_downloader.head_detector_status()
+        if not status.get("valid"):
+            log.error(
+                "Anime head detector is missing or damaged; download it under "
+                "Settings -> Preprocess before retrying"
+            )
+            return 1
+        detector = head_mask.HeadDetector(model_downloader.head_detector_target())
+    except Exception as exc:  # noqa: BLE001
+        log.error("Loading the anime head detector failed: %s", exc)
+        return 1
+
+    train_dir = preprocess.version_train_dir(project, version["label"])
+    proposals: list[dict[str, Any]] = []
+    succeeded = failed = skipped = 0
+    total = len(sources)
+    log.info(
+        "Head detection started: images=%d confidence=%.3f iou=%.3f "
+        "padding=%.3f feather=%.3f provider=%s",
+        total, confidence, iou_threshold, padding_ratio, feather_ratio,
+        detector.provider,
+    )
+    for idx, name in enumerate(sources, start=1):
+        if _stop_requested:
+            log.warning(
+                "Head detection canceled after %d/%d images; no proposal was saved",
+                idx - 1, total,
+            )
+            return 130
+        path = train_dir / name
+        if not path.is_file():
+            skipped += 1
+            emit_event(
+                "head_mask_progress", idx=idx, total=total, name=name,
+                status="skip", succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+            continue
+        try:
+            size, detections = detector.detect(
+                path, confidence=confidence, iou_threshold=iou_threshold,
+            )
+            proposal = head_mask.make_image_proposal(
+                name, path, size, detections,
+                padding_ratio=padding_ratio,
+                feather_ratio=feather_ratio,
+            )
+            proposals.append(proposal)
+            succeeded += 1
+            emit_event(
+                "head_mask_progress", idx=idx, total=total, name=name,
+                status="done", detections=len(detections),
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            log.warning("Head detection failed for %s: %s", name, exc)
+            emit_event(
+                "head_mask_progress", idx=idx, total=total, name=name,
+                status="fail", error=str(exc)[:200],
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+
+    result = head_mask.new_result(
+        job_id,
+        confidence=confidence,
+        iou_threshold=iou_threshold,
+        padding_ratio=padding_ratio,
+        feather_ratio=feather_ratio,
+        provider=detector.provider,
+        images=proposals,
+    )
+    head_mask.write_result(job_id, result)
+    heads = sum(len(image["regions"]) for image in proposals)
+    log.info(
+        "Head detection proposal ready: images=%d heads=%d failed=%d skipped=%d",
+        succeeded, heads, failed, skipped,
+    )
+    return 0
 
 
 def _run_upscale_train(
