@@ -878,6 +878,10 @@ export default function TrainPage() {
                   activeVersion={activeVersion}
                   reg={reg}
                   config={config}
+                  onEnableMaskedLoss={() => {
+                    if (!config) return
+                    setConfigSync({ ...config, masked_loss: true })
+                  }}
                 />
               </div>
             ) : config ? (
@@ -937,11 +941,13 @@ function DatasetStatsPanel({
   activeVersion,
   reg,
   config,
+  onEnableMaskedLoss,
 }: {
   projectId: number
   activeVersion: Version | null
   reg: RegStatus | null
   config: ConfigData | null
+  onEnableMaskedLoss: () => void
 }) {
   const { t } = useTranslation()
   const trainFolders = activeVersion?.stats?.train_folders ?? []
@@ -1104,18 +1110,22 @@ function DatasetStatsPanel({
         projectId={projectId}
         vid={activeVersion?.id ?? 0}
         maskedLoss={config?.masked_loss === true}
+        blocked={config?.leap_enabled === true || config?.navit_packing === true}
+        onEnable={onEnableMaskedLoss}
       />
     </div>
   )
 }
 
-/** 训练集有 mask 但 masked_loss 关闭时的提示（决策 D7：只提示不代开）。 */
+/** 训练集有 mask 但 masked_loss 关闭时的提示；允许在互斥规则许可时一键启用。 */
 function MaskedLossHint({
-  projectId, vid, maskedLoss,
+  projectId, vid, maskedLoss, blocked, onEnable,
 }: {
   projectId: number
   vid: number
   maskedLoss: boolean
+  blocked: boolean
+  onEnable: () => void
 }) {
   const { t } = useTranslation()
   const [maskCount, setMaskCount] = useState(0)
@@ -1135,8 +1145,15 @@ function MaskedLossHint({
 
   if (maskCount === 0 || maskedLoss) return null
   return (
-    <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-xs text-fg-secondary leading-relaxed">
-      {t('train.maskedLossHint', { n: maskCount })}
+    <div className="rounded-md border border-warn bg-warn-soft px-3 py-2.5 text-xs text-fg-secondary leading-relaxed flex items-center gap-3">
+      <span className="flex-1">
+        {t('train.maskedLossHint', { n: maskCount })}
+        {blocked && ` ${t('train.maskedLossEnableBlocked')}`}
+      </span>
+      <button type="button" className="btn btn-primary btn-sm shrink-0"
+        disabled={blocked} onClick={onEnable}>
+        {t('train.enableMaskedLoss')}
+      </button>
     </div>
   )
 }

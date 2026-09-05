@@ -24,6 +24,13 @@ export interface InpaintStroke {
 
 export type InpaintMode = 'paint' | 'mask'
 
+export interface HeadMaskOverlayRegion {
+  id: string
+  score: number
+  selected: boolean
+  mask_region: { x1: number; y1: number; x2: number; y2: number }
+}
+
 export interface InpaintCanvasHandle {
   /** 当前图 + 全部涂抹笔画合成导出 PNG。图片未加载完成时返回 null。 */
   exportBlob: () => Promise<Blob | null>
@@ -282,11 +289,14 @@ const InpaintCanvas = forwardRef<
     onStrokeEnd: (s: InpaintStroke) => void
     onMaskStrokeEnd: (s: InpaintStroke) => void
     onPickColor: (hex: string) => void
+    /** Proposal-only overlay. It is never included in image or mask exports. */
+    proposalRegions?: HeadMaskOverlayRegion[]
   }
 >(function InpaintCanvas(
   {
     imageUrl, imageW, imageH, mode, strokes, maskStrokes, maskBaseUrl,
     brush, erase, onStrokeEnd, onMaskStrokeEnd, onPickColor,
+    proposalRegions = [],
   },
   ref,
 ) {
@@ -321,6 +331,8 @@ const InpaintCanvas = forwardRef<
   modeRef.current = mode
   const eraseRef = useRef(erase)
   eraseRef.current = erase
+  const proposalRegionsRef = useRef(proposalRegions)
+  proposalRegionsRef.current = proposalRegions
 
   const ensureLayer = useCallback((
     holder: React.MutableRefObject<HTMLCanvasElement | null>,
@@ -355,7 +367,26 @@ const InpaintCanvas = forwardRef<
       ctx.drawImage(layer, 0, 0)
       ctx.restore()
     }
-  }, [])
+    for (const proposal of proposalRegionsRef.current) {
+      const r = proposal.mask_region
+      const width = Math.max(0, r.x2 - r.x1)
+      const height = Math.max(0, r.y2 - r.y1)
+      if (!width || !height) continue
+      ctx.save()
+      ctx.fillStyle = proposal.selected
+        ? 'rgba(255, 168, 0, 0.16)'
+        : 'rgba(128, 128, 128, 0.10)'
+      ctx.strokeStyle = proposal.selected ? '#ffad21' : '#8b929c'
+      ctx.lineWidth = Math.max(2, Math.min(imageW, imageH) / 350)
+      if (!proposal.selected) ctx.setLineDash([10, 7])
+      ctx.fillRect(r.x1, r.y1, width, height)
+      ctx.strokeRect(r.x1, r.y1, width, height)
+      ctx.font = `${Math.max(12, Math.min(imageW, imageH) / 32)}px sans-serif`
+      ctx.fillStyle = proposal.selected ? '#ffad21' : '#d0d3d8'
+      ctx.fillText(`${Math.round(proposal.score * 100)}%`, r.x1 + 3, Math.max(15, r.y1 - 4))
+      ctx.restore()
+    }
+  }, [imageW, imageH])
 
   // 图片加载（imageUrl 变化 = 换图或保存后 mtime 刷新）
   useEffect(() => {
@@ -415,6 +446,10 @@ const InpaintCanvas = forwardRef<
     }
     redraw()
   }, [strokes, ensureLayer, redraw])
+
+  useEffect(() => {
+    redraw()
+  }, [proposalRegions, redraw])
 
   useImperativeHandle(ref, () => ({
     exportBlob: async () => {

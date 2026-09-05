@@ -441,6 +441,57 @@ export function UpscalerSection({
   )
 }
 
+export function HeadDetectorSection({
+  catalog,
+}: {
+  catalog: ModelsCatalog | null
+}) {
+  const { t } = useTranslation()
+  const { startDownload, deleteAsset, downloadBusy } = useSettingsData()
+  const model = catalog?.head_detector
+  const download = catalog?.downloads.head_detector
+  return (
+    <SettingsSection id="head-detector" title={t('settings.headDetectorTitle')}>
+      {!model ? (
+        <p className="text-fg-tertiary text-xs">{t('common.loading')}</p>
+      ) : (
+        <ModelGroupCard
+          title={model.name}
+          helpTooltip={<p>{t('settings.headDetectorHelp')}</p>}
+        >
+          <div className="flex items-center gap-2 text-xs">
+            <div className="flex flex-col flex-1 min-w-0">
+              <code className="font-mono text-fg-primary truncate">{model.repo}</code>
+              <span className="text-fg-tertiary truncate">
+                {t('settings.headDetectorRevision', { revision: model.revision.slice(0, 12) })}
+              </span>
+              <span className="text-fg-tertiary truncate" title={model.target_path}>
+                {model.target_path}
+              </span>
+            </div>
+            <ModelStatusBadge
+              exists={model.valid}
+              size={model.size}
+              status={download?.status}
+            />
+            <DownloadButton
+              exists={model.valid}
+              status={download?.status}
+              busy={downloadBusy.has('head_detector')}
+              onClick={() => void startDownload('head_detector')}
+              onDelete={() => void deleteAsset('head_detector', undefined, model.name)}
+            />
+          </div>
+          {model.exists && !model.valid && (
+            <p className="text-xs text-err m-0">{t('settings.headDetectorCorrupt')}</p>
+          )}
+          {download?.message && <p className="text-xs text-err m-0">{download.message}</p>}
+        </ModelGroupCard>
+      )}
+    </SettingsSection>
+  )
+}
+
 // ── Tag 翻译词典：上传 / 恢复默认 / 全局 chip toggle ──────────────────────
 
 export function TagDictionarySection() {

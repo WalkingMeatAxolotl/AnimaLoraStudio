@@ -1171,6 +1171,10 @@
     "notDownloaded": "未下载",
     "downloadAction": "⤓ 下载",
     "upscalersPreprocess": "放大器（预处理）",
+    "headDetectorTitle": "头部检测器（自动遮罩）",
+    "headDetectorHelp": "用于预处理涂抹页的卡通人物头部提案。权重固定版本并校验 SHA-256，按需下载，不随 Studio 程序包分发。",
+    "headDetectorRevision": "固定 revision {{revision}}",
+    "headDetectorCorrupt": "本地文件未通过大小或 SHA-256 校验；重新下载会先替换损坏文件。",
     "availableUpscalers": "可用放大器",
     "upscalersHelpPath": "预处理阶段对小图做超分。文件落在 <code>{{path}}</code>。",
     "upscalersHelpDefault": "单选选中的就是预处理页默认用的模型。custom 是从下面表单或之前自定义下载来的。",
@@ -2236,12 +2240,14 @@
     "filter": {
       "all": "全部",
       "pending": "未涂抹",
-      "edited": "已涂抹"
+      "edited": "已涂抹",
+      "undetected": "未检测到头部"
     },
     "filmstripEmpty": {
       "all": "工作集是空的。",
       "pending": "所有图都已有笔画。",
-      "edited": "还没有涂抹过任何图。"
+      "edited": "还没有涂抹过任何图。",
+      "undetected": "每张已检测图片都识别到了头部。"
     },
     "loading": "加载工作集...",
     "emptyWorkspace": "工作集为空，",
@@ -2259,7 +2265,40 @@
     "toastNotReady": "图片还没加载完成",
     "toastSaved": "已保存 {{name}}",
     "toastSavedAll": "已保存 {{n}} 张",
-    "toastSavedAllPartial": "保存完成：成功 {{ok}} 张，失败 {{failed}} 张"
+    "toastSavedAllPartial": "保存完成：成功 {{ok}} 张，失败 {{failed}} 张",
+    "headMask": {
+      "title": "自动头部遮罩",
+      "boundary": "只生成空间遮罩，不修改原图，也不会自动删除 caption 中的角色名、发色或眼睛标签。",
+      "modelReady": "模型就绪",
+      "modelMissing": "模型未下载",
+      "modelRequired": "请先下载并校验头部检测模型。",
+      "downloadModel": "下载头部检测模型（约 42.5 MB）",
+      "downloadStarted": "头部检测模型已开始下载",
+      "downloading": "模型下载中…",
+      "parameters": "检测参数",
+      "confidence": "置信度",
+      "iou_threshold": "NMS IoU",
+      "padding_ratio": "扩展比例",
+      "feather_ratio": "羽化比例",
+      "detectAll": "检测全部",
+      "detectCurrent": "检测当前",
+      "detectStarted": "头部检测任务 #{{id}} 已开始",
+      "detectFailed": "头部检测失败，请查看任务日志。",
+      "detectCanceled": "头部检测已取消，未保存不完整提案。",
+      "saveFirst": "还有 {{n}} 张图片存在未保存笔画，请先保存再运行批量检测。",
+      "progress": "正在检测 {{done}} / {{total}} · 已发现 {{heads}} 个头部",
+      "summary": "{{images}} 张图 · {{heads}} 个头部 · 已选 {{selected}} 个",
+      "showUndetected": "未检测到（{{n}}）",
+      "stale": "{{n}} 张图片在检测后发生变化，请重新检测。",
+      "selectCurrent": "当前图全选",
+      "clearCurrent": "当前图全不选",
+      "noneCurrent": "当前图片没有检测提案。",
+      "region": "头部 {{n}} · {{score}}%",
+      "applySelected": "应用所选（{{n}}）",
+      "undoApply": "撤销本次自动遮罩",
+      "applied": "已把自动遮罩合并到 {{n}} 张图片",
+      "undone": "已恢复 {{n}} 张图片应用前的遮罩"
+    }
   },
   "steps": {
     "download": {
@@ -2581,7 +2620,9 @@
     "navitDistDownscaled": "{{n}} 张超 token 预算，已等比降采样。",
     "navitDistMore": "… 其余 {{kinds}} 种尺寸共 {{n}} 张",
     "navitBucketHint": "NaViT 打包：桶只决定尺寸量化；分批按 token 预算跨桶拼包，与 batch_size 无关。",
-    "maskedLossHint": "训练集有 {{n}} 张图带 mask（涂抹页 · 遮罩），但 masked_loss 未开启 —— 本次训练不会使用这些 mask。需要生效请在 loss 配置组开启 masked_loss。",
+    "maskedLossHint": "训练集有 {{n}} 张图带 mask（涂抹页 · 遮罩），但 masked_loss 未开启 —— 本次训练不会使用这些 mask。",
+    "enableMaskedLoss": "一键启用",
+    "maskedLossEnableBlocked": "请先关闭 Leap 或 NaViT Packing，二者与空间 mask 互斥。",
     "confirmReset": "重置为预设 {{name}} 的配置？当前 version 的所有自定义内容会丢失。",
     "resetOkText": "重置",
     "resetSuccess": "已重置为预设 {{name}} 的配置",

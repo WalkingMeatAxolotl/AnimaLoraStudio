@@ -83,6 +83,7 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   ],
   preprocess: [
     { id: 'upscalers', labelKey: 'settings.upscalers' },
+    { id: 'head-detector', labelKey: 'settings.headDetectorTitle' },
   ],
   tagging: [
     { id: 'llm-tagger', labelKey: 'settings.llmTagger' },

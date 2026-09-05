@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...services.preprocess import core as preprocess_svc
 
@@ -60,3 +60,21 @@ class PreprocessCropRequest(BaseModel):
     stem_c1.png / ... 并删除原 stem.png。
     """
     crops: dict[str, list[CropRect]]
+
+
+class HeadMaskDetectRequest(BaseModel):
+    scope: str = "all"  # all | selected
+    filenames: Optional[list[str]] = None
+    confidence: float = Field(preprocess_svc.DEFAULT_HEAD_MASK_CONFIDENCE, ge=0.01, le=0.99)
+    iou_threshold: float = Field(preprocess_svc.DEFAULT_HEAD_MASK_IOU, ge=0.01, le=0.99)
+    padding_ratio: float = Field(preprocess_svc.DEFAULT_HEAD_MASK_PADDING, ge=0.0, le=1.0)
+    feather_ratio: float = Field(preprocess_svc.DEFAULT_HEAD_MASK_FEATHER, ge=0.0, le=0.5)
+
+
+class HeadMaskApplyRequest(BaseModel):
+    job_id: int = Field(gt=0)
+    selections: dict[str, list[str]]
+
+
+class HeadMaskUndoRequest(BaseModel):
+    job_id: int = Field(gt=0)

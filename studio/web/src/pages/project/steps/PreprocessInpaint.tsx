@@ -8,10 +8,14 @@ import {
   type Version,
 } from '../../../api/client'
 import Filmstrip from '../../../components/preprocess/Filmstrip'
+import AutoHeadMaskPanel, {
+  type AutoHeadMaskState,
+} from '../../../components/preprocess/AutoHeadMaskPanel'
 import InpaintCanvas, {
   renderInpaintedBlob,
   renderMaskBlob,
   type InpaintCanvasHandle,
+  type HeadMaskOverlayRegion,
   type InpaintMode,
   type InpaintStroke,
 } from '../../../components/preprocess/InpaintCanvas'
@@ -27,7 +31,7 @@ interface Ctx {
   reload: () => Promise<void>
 }
 
-type Filter = 'all' | 'pending' | 'edited'
+type Filter = 'all' | 'pending' | 'edited' | 'undetected'
 
 /** 统一编辑历史条目：涂抹与 mask 笔画共用一条时间线。 */
 interface HistoryEntry {
@@ -89,6 +93,7 @@ export default function PreprocessInpaintPage() {
   const [redoByImage, setRedoByImage] = useState<Record<string, HistoryEntry[]>>({})
   const [filter, setFilter] = useState<Filter>('all')
   const [busy, setBusy] = useState(false)
+  const [headMaskState, setHeadMaskState] = useState<AutoHeadMaskState | null>(null)
 
   const [brush, setBrush] = useLocalStorageState<BrushState>(
     'studio:inpaint:brush', DEFAULT_BRUSH,
@@ -138,15 +143,51 @@ export default function PreprocessInpaintPage() {
 
   const counts = useMemo(() => {
     const edited = images.filter((im) => (historyByImage[im.name] ?? []).length > 0).length
-    return { all: images.length, pending: images.length - edited, edited }
-  }, [images, historyByImage])
+    const detected = new Set(
+      headMaskState?.images.filter((im) => im.regions.length > 0).map((im) => im.name) ?? [],
+    )
+    const proposalNames = new Set(headMaskState?.images.map((im) => im.name) ?? [])
+    const undetected = images.filter((im) => proposalNames.has(im.name) && !detected.has(im.name)).length
+    return { all: images.length, pending: images.length - edited, edited, undetected }
+  }, [images, historyByImage, headMaskState])
 
   const filteredImages = useMemo(() => images.filter((im) => {
     const n = (historyByImage[im.name] ?? []).length
     if (filter === 'pending') return n === 0
     if (filter === 'edited') return n > 0
+    if (filter === 'undetected') {
+      const proposal = headMaskState?.images.find((item) => item.name === im.name)
+      return proposal?.regions.length === 0
+    }
     return true
-  }), [images, filter, historyByImage])
+  }), [images, filter, historyByImage, headMaskState])
+
+  const activeProposalRegions = useMemo<HeadMaskOverlayRegion[]>(() => {
+    if (!activeName || !headMaskState) return []
+    const image = headMaskState.images.find((item) => item.name === activeName)
+    if (!image) return []
+    const selected = new Set(headMaskState.selections[activeName] ?? [])
+    return image.regions.map((region) => ({
+      id: region.id,
+      score: region.score,
+      selected: selected.has(region.id),
+      mask_region: region.mask_region,
+    }))
+  }, [activeName, headMaskState])
+
+  const onHeadMaskStateChange = useCallback((state: AutoHeadMaskState | null) => {
+    setHeadMaskState(state)
+  }, [])
+
+  const showUndetected = useCallback((names: string[]) => {
+    setFilter('undetected')
+    if (names.length > 0) setActiveName(names[0])
+  }, [])
+
+  const refreshAfterAutoMask = useCallback(async () => {
+    await refreshWorkspace()
+    await reload()
+  }, [refreshWorkspace, reload])
 
   const rawUrl = useCallback((im: CropWorkspaceItem) => {
     const { folder, filename } = splitRel(im.name)
@@ -397,7 +438,7 @@ export default function PreprocessInpaintPage() {
         <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
           <header className="flex items-center gap-2 shrink-0 px-2.5 py-1.5 border-b border-subtle text-sm flex-wrap">
             <div className="flex items-center gap-1">
-              {(['all', 'pending', 'edited'] as const).map((k) => (
+              {(['all', 'pending', 'edited', ...(headMaskState ? ['undetected' as const] : [])] as const).map((k) => (
                 <button
                   key={k}
                   onClick={() => setFilter(k)}
@@ -496,6 +537,7 @@ export default function PreprocessInpaintPage() {
                     onStrokeEnd={onStrokeEnd}
                     onMaskStrokeEnd={onMaskStrokeEnd}
                     onPickColor={onPickColor}
+                    proposalRegions={activeProposalRegions}
                   />
                 </div>
 
@@ -507,7 +549,17 @@ export default function PreprocessInpaintPage() {
                   brush={brush}
                   setBrush={setBrush}
                   recentColors={recentColors}
-                />
+                >
+                  <AutoHeadMaskPanel
+                    projectId={project.id}
+                    versionId={vid}
+                    activeName={activeName}
+                    unsavedCount={editedNames.length}
+                    onStateChange={onHeadMaskStateChange}
+                    onShowUndetected={showUndetected}
+                    onWorkspaceChanged={refreshAfterAutoMask}
+                  />
+                </ToolPanel>
               </div>
             )}
           </div>
@@ -561,6 +613,7 @@ function ToolPanel({
   brush,
   setBrush,
   recentColors,
+  children,
 }: {
   mode: InpaintMode
   setMode: (m: InpaintMode) => void
@@ -569,6 +622,7 @@ function ToolPanel({
   brush: BrushState
   setBrush: (v: BrushState | ((prev: BrushState) => BrushState)) => void
   recentColors: string[]
+  children?: React.ReactNode
 }) {
   const { t } = useTranslation()
   const [recentOpen, setRecentOpen] = useState(false)
@@ -691,6 +745,7 @@ function ToolPanel({
             style={{ width: 56, padding: '2px 6px' }}
           />
         </label>
+        {children}
       </div>
     </div>
   )

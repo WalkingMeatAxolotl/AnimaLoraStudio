@@ -378,6 +378,7 @@ def download_flat(
     repo_subpath: str,
     target: Path,
     *,
+    revision: Optional[str] = None,
     on_log: TaskLogLike = _DEFAULT_LOG,
 ) -> bool:
     """从 HF 下载 repo_subpath，扁平落到 target；返回 True = 已就绪。
@@ -403,6 +404,8 @@ def download_flat(
             local_dir=str(target.parent),
             local_dir_use_symlinks=False,
         )
+        if revision:
+            kwargs["revision"] = revision
         if endpoint:
             kwargs["endpoint"] = endpoint
         if token:

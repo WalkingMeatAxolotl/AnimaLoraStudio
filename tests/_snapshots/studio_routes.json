@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 214,
+  "count": 218,
   "routes": [
     {
       "path": "/",
@@ -1055,6 +1055,38 @@
         "POST"
       ],
       "name": "restore_preprocess_files_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/head-mask/apply",
+      "methods": [
+        "POST"
+      ],
+      "name": "apply_head_mask_proposals",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/head-mask/detect",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_head_mask_detection",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/head-mask/proposals/{job_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_head_mask_proposals",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/head-mask/undo",
+      "methods": [
+        "POST"
+      ],
+      "name": "undo_head_mask_apply",
       "type": "APIRoute"
     },
     {

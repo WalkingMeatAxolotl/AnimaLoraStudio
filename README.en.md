@@ -8,7 +8,7 @@
 
 ## Features
 
-- **One-stop pipeline**: Booru scraping / curation / preprocessing (dedup · upscale · crop · retouch) / tagging / regularization set / training / image-gen testing — all in one browser panel, guided by a stepper.
+- **One-stop pipeline**: Booru scraping / curation / preprocessing (dedup · upscale · crop · retouch · [automatic head masks](docs/user-guide/auto-head-mask.en.md)) / tagging / regularization set / training / image-gen testing — all in one browser panel, guided by a stepper.
 - **Two model families**: Anima and Krea 2 share the same workflow; switch families right in the training config (weight paths and family defaults are recomputed with an itemized confirmation), options are filtered per family, and one project can hold versions of both families.
 - **Three taggers**: WD14, CLTagger (local ONNX), LLM (OpenAI-compatible, long captions); a trigger word entered once is auto-injected into every caption.
 - **Booru scraping**: native Gelbooru / Danbooru (Cloudflare-compatible UA, rate limiting, account auth).

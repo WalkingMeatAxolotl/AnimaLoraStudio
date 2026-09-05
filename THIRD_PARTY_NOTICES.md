@@ -17,6 +17,16 @@
 
 ## 模型与权重
 
+### deepghs / anime_head_detection (MIT，按需下载)
+
+- **来源**：[`deepghs/anime_head_detection`](https://huggingface.co/deepghs/anime_head_detection)
+- **用途**：预处理页“自动头部遮罩”使用 `head_detect_v2.0_s/model.onnx`；固定 revision
+  `06604feee81983792a57c21081e539c0ae229833`，程序下载后校验文件大小与 SHA-256。
+- **分发方式**：权重不包含在本仓库、安装包或 release 中，由用户在模型下载中心按需下载。
+- **许可说明**：模型仓库目前标注 MIT；上游在 2026 年仍有商业再分发许可澄清
+  [讨论](https://github.com/deepghs/imgutils/issues/179)。分发者应在实际分发时重新核对模型卡和许可；
+  本项目的按需下载策略不代表对任何商业用途作许可保证。
+
 ### circlestone-labs / Anima
 
 - **来源**：[`circlestone-labs/Anima`](https://huggingface.co/circlestone-labs/Anima)
