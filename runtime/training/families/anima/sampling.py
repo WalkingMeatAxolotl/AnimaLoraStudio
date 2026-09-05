@@ -404,16 +404,37 @@ def sample_image(
                         cross_cond,  # noqa: F821
                         padding_mask=pad_mask.expand(x_model.shape[0], -1, -1, -1).contiguous(),  # noqa: F821
                     )
-                x_batch = torch.cat([x_model, x_model], dim=0)
-                cross_batch = torch.cat([cross_uncond, cross_cond], dim=0)  # noqa: F821
-                pad_batch = pad_mask.expand(x_batch.shape[0], -1, -1, -1).contiguous()  # noqa: F821
-                sigma_batch = sigma_1d.expand(x_batch.shape[0])
-                v_uncond, v_cond = model(
-                    x_batch,
-                    sigma_batch,
-                    cross_batch,
-                    padding_mask=pad_batch,
-                ).chunk(2)
+                if cross_uncond.shape[1:] == cross_cond.shape[1:]:  # noqa: F821
+                    x_batch = torch.cat([x_model, x_model], dim=0)
+                    cross_batch = torch.cat([cross_uncond, cross_cond], dim=0)  # noqa: F821
+                    pad_batch = pad_mask.expand(x_batch.shape[0], -1, -1, -1).contiguous()  # noqa: F821
+                    sigma_batch = sigma_1d.expand(x_batch.shape[0])
+                    v_uncond, v_cond = model(
+                        x_batch,
+                        sigma_batch,
+                        cross_batch,
+                        padding_mask=pad_batch,
+                    ).chunk(2)
+                else:
+                    # ComfyUI only batches CONDCrossAttn values when their
+                    # sequence shapes are concat-compatible.  A long positive
+                    # prompt and a short negative prompt therefore run as two
+                    # forwards instead of truncating either conditioning.
+                    model_args = (
+                        x_model,
+                        sigma_1d.expand(x_model.shape[0]),
+                    )
+                    model_kwargs = {
+                        "padding_mask": pad_mask.expand(  # noqa: F821
+                            x_model.shape[0], -1, -1, -1,
+                        ).contiguous(),
+                    }
+                    v_uncond = model(
+                        *model_args, cross_uncond, **model_kwargs,  # noqa: F821
+                    )
+                    v_cond = model(
+                        *model_args, cross_cond, **model_kwargs,  # noqa: F821
+                    )
                 return v_uncond + cfg_scale * (v_cond - v_uncond)
 
         v = _run_model_forward()
