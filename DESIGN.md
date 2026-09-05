@@ -188,6 +188,8 @@ Use `EmptyState` when a list or page region has no content to present:
 
 - `md` is the primary zero state for an otherwise empty page or tab.
 - `sm` is a compact no-match state inside an existing section.
+- Use `embedded` inside an existing panel to retain the empty-state hierarchy without
+  adding a nested Card surface; standalone states keep their default Card.
 - Titles state what is absent; descriptions explain the next useful step.
 - Actions are optional and must use the appropriate Button or link primitive.
 - Loading, errors, and warnings are not empty states and require their own semantics.
@@ -589,6 +591,20 @@ and content-driven evidence; `md`/`lg`/`xl` utility classes are not an independe
 breakpoint policy.
 
 ## 18. Split-workspace and pane-geometry contract
+
+Preprocess Overview follows the same virtual-grid boundary as Curation: the
+`ImageGrid` wrapper directly fills a `flex-1 min-h-0` panel slot; content inset is
+passed through `contentClassName` to the Virtuoso list. Do not add an outer
+`overflow-y-auto` wrapper or compensate with negative margins. The panel header
+and batch actions remain outside the grid scrollport. Loading, load failure and
+empty content are distinct; a failed refresh retains already loaded images.
+
+Preprocess tool navigation remains native route Links (including the current
+route), with a named nav and `aria-current="page"`. It reuses the underline
+selection recipe and its local horizontal overflow/focus treatment, not tablist
+semantics. Only the Overview's local dataset views use Tabs and a stable shared
+panel with `aria-labelledby` pointing to the selected tab.
+
 
 A split workspace preserves simultaneous context for a task; it is not an ordinary
 responsive grid and there is no universal split-shell component. `PaneResizer` is

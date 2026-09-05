@@ -7,8 +7,6 @@ interface ToolDef {
   id: PreprocessTool
   /** i18n key suffix under `preprocess.tools.*`. */
   i18nKey: string
-  /** Disabled in this milestone; tab is dim placeholder. */
-  disabled?: boolean
 }
 
 /** Overview comes first — it's the gallery + multi-select + undo entry that
@@ -27,52 +25,28 @@ interface Props {
   versionId: number
 }
 
-// tab class 与正则集页 RegTab 一致：下划线式（border-b-2 -mb-px），active 橙字。
-const TAB_BASE =
-  'inline-flex items-center gap-1.5 py-2 px-[18px] text-sm border-b-2 -mb-px bg-transparent transition-colors '
-
-/** 预处理工具切换条：贴 header 下方的全宽下划线 tab（对齐正则集页 belowHeader nav）。
- *
- *  工具（总览 / 去重 / 放大 / 裁剪 / 涂抹）是平级 **tool**、不是流水阶段——没有完成
- *  态、任意时刻任意顺序都能用。每个 tab 是路由 `<Link>`（`?tool=`），不是本地 state；
- *  inpaint 是占位禁用。URL 约定（ADR 0010）：
- *  `/projects/:pid/v/:vid/preprocess?tool=...`——query string 让 sidebar 的
- *  `/preprocess` matcher 保持简单，同时切换工具时父路由不卸载。
- *
- *  设计为直接塞进 StepShell 的 `belowHeader`（自带 `border-b px-page` 全宽条）。 */
+/** Route navigation, not local content tabs. The underline recipe is shared
+ * with Tabs, but every tool remains a Link with native browser navigation.
+ * Overview omits the query parameter; other tools use ?tool=... (ADR 0010).
+ * The local horizontal scrollport keeps every tool reachable on compact desktop.
+ */
 export default function PreprocessToolsBar({ current, projectId, versionId }: Props) {
   const { t } = useTranslation()
   const base = `/projects/${projectId}/v/${versionId}/preprocess`
   return (
-    <nav className="flex items-center gap-0 border-b border-subtle px-page shrink-0">
+    <nav aria-label={t('preprocess.toolsLabel')} className="ui-selection-group ui-selection-underline ui-selection-md px-page shrink-0">
       {TOOLS.map((tool) => {
         const label = t(`preprocess.tools.${tool.i18nKey}`)
         const isActive = tool.id === current
-        if (tool.disabled) {
-          return (
-            <span
-              key={tool.id}
-              className={TAB_BASE + 'font-normal text-fg-disabled border-transparent cursor-not-allowed'}
-              title={t(`preprocess.tools.${tool.i18nKey}Title`, { defaultValue: '' })}
-            >{label}</span>
-          )
-        }
-        if (isActive) {
-          return (
-            <span
-              key={tool.id}
-              className={TAB_BASE + 'font-semibold text-accent border-accent'}
-              aria-current="page"
-            >{label}</span>
-          )
-        }
-        // overview is the default tool (no ?tool= query); everyone else needs a tool param
+        // Overview is the default tool; preserve native Link behavior even when active.
         const href = tool.id === 'overview' ? base : `${base}?tool=${tool.id}`
         return (
           <Link
             key={tool.id}
             to={href}
-            className={TAB_BASE + 'font-normal text-fg-tertiary border-transparent hover:text-fg-primary hover:border-default cursor-pointer'}
+            aria-current={isActive ? 'page' : undefined}
+            data-state={isActive ? 'active' : 'inactive'}
+            className="ui-selection-item"
           >{label}</Link>
         )
       })}

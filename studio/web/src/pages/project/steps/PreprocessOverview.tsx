@@ -8,10 +8,16 @@ import {
   type ProjectDetail,
   type Version,
 } from '../../../api/client'
+import ActionGroup from '../../../components/ActionGroup'
+import Alert from '../../../components/Alert'
+import Button from '../../../components/Button'
+import Card from '../../../components/Card'
+import EmptyState from '../../../components/EmptyState'
 import { useDialog } from '../../../components/Dialog'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
+import { Tabs, selectionItemId, type TabItem } from '../../../components/SelectionGroup'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -48,6 +54,7 @@ export default function PreprocessOverviewPage() {
   const [workspace, setWorkspace] = useState<CropWorkspaceItem[]>([])
   const [removed, setRemoved] = useState<DuplicateRemovedItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [selAnchor, setSelAnchor] = useState<string | null>(null)
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
@@ -61,8 +68,9 @@ export default function PreprocessOverviewPage() {
       ])
       setWorkspace(ws.images)
       setRemoved(rm.images)
+      setLoadError(false)
     } catch {
-      /* ignore */
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -211,9 +219,11 @@ export default function PreprocessOverviewPage() {
     [tab, visibleNames, processedNames],
   )
 
-  const tabDefs: { id: Tab; label: string; count: number }[] = [
-    { id: 'all', label: t('preprocessOverview.tabAll'), count: workspace.length },
-    { id: 'removed', label: t('preprocessOverview.tabRemoved'), count: removed.length },
+  const panelId = 'preprocess-overview-panel'
+  const tabPrefix = 'preprocess-overview-tab'
+  const tabDefs: TabItem<Tab>[] = [
+    { value: 'all', label: `${t('preprocessOverview.tabAll')} (${workspace.length})`, controls: panelId },
+    { value: 'removed', label: `${t('preprocessOverview.tabRemoved')} (${removed.length})`, controls: panelId },
   ]
 
   const emptyHint =
@@ -223,7 +233,7 @@ export default function PreprocessOverviewPage() {
   // ADR 0010: hooks 之后再做 vid guard
   if (!activeVersion) {
     return (
-      <div className="p-6 text-fg-secondary">
+      <div className="p-page text-fg-secondary">
         {t('projectStepper.selectVersion')}
       </div>
     )
@@ -235,66 +245,71 @@ export default function PreprocessOverviewPage() {
       subtitle={t('preprocessOverview.subtitle')}
       belowHeader={<PreprocessToolsBar current="overview" projectId={project.id} versionId={vid} />}
     >
-      <div className="flex flex-col h-full gap-3 min-h-0">
-        <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
-          <header className="flex items-center gap-2 shrink-0 px-3 py-2 border-b border-subtle text-sm flex-wrap">
-            <div className="flex items-center gap-1">
-              {tabDefs.map((td) => (
-                <button
-                  key={td.id}
-                  onClick={() => setTab(td.id)}
-                  className={`px-2.5 py-1 rounded-md text-sm font-medium ${
-                    tab === td.id
-                      ? 'bg-overlay text-fg-primary'
-                      : 'text-fg-secondary hover:bg-overlay/50'
-                  }`}
-                >
-                  {td.label}
-                  <span className="ml-1 text-fg-tertiary text-xs">{td.count}</span>
-                </button>
-              ))}
-            </div>
-            {sel.size > 0 && (
-              <span className="text-accent text-xs">
-                {t('preprocessOverview.selectedCount', { n: sel.size })}
-              </span>
-            )}
-            <span className="flex-1" />
-            <button
-              onClick={() => setSel(new Set(selectableNames))}
-              disabled={selectableNames.length === 0}
-              className="btn btn-ghost btn-sm"
-            >{t('common.selectAll')}</button>
-            <button
-              onClick={() => { setSel(new Set()); setSelAnchor(null) }}
-              disabled={sel.size === 0}
-              className="btn btn-ghost btn-sm"
-            >{t('common.deselect')}</button>
-            <button
-              onClick={() => void restoreNames(Array.from(sel))}
-              disabled={sel.size === 0}
-              className="btn btn-sm bg-err-soft text-err"
-              title={t('preprocessOverview.restoreSelectedTitle')}
-            >{t('preprocessOverview.restoreSelected', { n: sel.size })}</button>
-            {tab === 'all' && (
-              <button
-                onClick={() => void resetAll()}
-                disabled={processed.length === 0}
-                className="btn btn-sm btn-secondary"
-                title={t('preprocessOverview.resetAllTitle')}
-              >↶ {t('preprocessOverview.resetAll')}</button>
-            )}
+      <Card as="section" radius="compact" className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+          <header className="flex items-center gap-related shrink-0 px-3 py-2 border-b border-subtle flex-wrap">
+            <Tabs
+              items={tabDefs}
+              value={tab}
+              onChange={setTab}
+              ariaLabel={t('preprocessOverview.tabsLabel')}
+              idPrefix={tabPrefix}
+              appearance="segmented"
+            />
+            <ActionGroup
+              className="ml-auto"
+              aria-label={t('preprocessOverview.actionsLabel')}
+              status={sel.size > 0 && (
+                <span className="text-accent text-xs">
+                  {t('preprocessOverview.selectedCount', { n: sel.size })}
+                </span>
+              )}
+              secondary={<>
+                <Button variant="ghost" size="sm"
+                  onClick={() => setSel(new Set(selectableNames))}
+                  disabled={selectableNames.length === 0}
+                >{t('common.selectAll')}</Button>
+                <Button variant="ghost" size="sm"
+                  onClick={() => { setSel(new Set()); setSelAnchor(null) }}
+                  disabled={sel.size === 0}
+                >{t('common.deselect')}</Button>
+                <Button variant="danger" size="sm"
+                  onClick={() => void restoreNames(Array.from(sel))}
+                  disabled={sel.size === 0}
+                  title={t('preprocessOverview.restoreSelectedTitle')}
+                >{t('preprocessOverview.restoreSelected', { n: sel.size })}</Button>
+                {tab === 'all' && (
+                  <Button variant="danger" size="sm"
+                    onClick={() => void resetAll()}
+                    disabled={processed.length === 0}
+                    title={t('preprocessOverview.resetAllTitle')}
+                  >{t('preprocessOverview.resetAll')}</Button>
+                )}
+              </>}
+            />
           </header>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-3">
-            {loading && (
-              <p className="text-fg-tertiary text-sm">{t('common.loading')}</p>
-            )}
-            {!loading && items.length === 0 && (
-              <p className="text-fg-tertiary text-sm">{emptyHint}</p>
-            )}
-            {items.length > 0 && (
+          <div
+            id={panelId}
+            role="tabpanel"
+            aria-labelledby={selectionItemId(tabPrefix, tab)}
+            aria-busy={loading}
+            className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
+          >
+            {loading ? (
+              <div role="status" className="p-3 text-fg-tertiary text-sm">{t('common.loading')}</div>
+            ) : <>
+              {loadError && (
+                <Alert tone="danger" role="alert" className="m-3 shrink-0"
+                  action={<Button variant="secondary" size="sm" onClick={() => void refresh()}>{t('common.retry')}</Button>}
+                >{t('preprocessOverview.loadError')}</Alert>
+              )}
+              {!loadError && items.length === 0 && (
+                <EmptyState embedded size="sm" description={emptyHint} className="flex-1 min-h-0 overflow-y-auto" />
+              )}
+              {items.length > 0 && (
               <ImageGrid
+                className="flex-1 min-h-0"
+                contentClassName="p-2"
                 items={items}
                 selected={sel}
                 onSelect={(name, e) => {
@@ -314,13 +329,13 @@ export default function PreprocessOverviewPage() {
                   if (i >= 0) setPreviewIdx(i)
                 }}
                 clickMode="activate"
-                ariaLabel={`preprocess-overview-grid-${tab}`}
+                ariaLabel={t(tab === 'all' ? 'preprocessOverview.tabAll' : 'preprocessOverview.tabRemoved')}
                 emptyHint={emptyHint}
               />
-            )}
+              )}
+            </>}
           </div>
-        </section>
-      </div>
+      </Card>
 
       {previewItem && (
         <ImagePreviewModal
