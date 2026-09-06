@@ -175,7 +175,13 @@ def run(job_id: int) -> int:
             _log_tag_done(progress, done=0, total=total_images, skipped=skipped, errors=0)
             return 0
 
-        tagger = get_tagger(tagger_name, overrides=overrides)
+        effective_overrides = dict(overrides or {})
+        if tagger_name == "llm" and params.get("llm_preset_snapshot"):
+            effective_overrides["__preset_snapshot"] = params["llm_preset_snapshot"]
+        tagger = get_tagger(
+            tagger_name,
+            overrides=effective_overrides or None,
+        )
         tagger.prepare()
         if overrides:
             progress.info(msg(

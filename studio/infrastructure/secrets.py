@@ -1005,7 +1005,11 @@ def _load_unlocked() -> Secrets:
 
 
 def load() -> Secrets:
-    """Read secrets, recovering a corrupt primary or failing without overwrite."""
+    """Read the active config authority, strictly and without silent defaults."""
+    from .storage_layout import is_split_complete
+    if is_split_complete():
+        from . import config_store
+        return config_store.load()
     with _SECRETS_LOCK:
         return _load_unlocked()
 
@@ -1027,6 +1031,11 @@ def _save_unlocked(s: Secrets) -> None:
 
 
 def save(s: Secrets) -> None:
+    from .storage_layout import is_split_complete
+    if is_split_complete():
+        from . import config_store
+        config_store.save(s)
+        return
     with _SECRETS_LOCK:
         _save_unlocked(s)
 
@@ -1040,7 +1049,11 @@ def get(path: str) -> Any:
 
 
 def update(partial: dict[str, Any]) -> Secrets:
-    """Deep-merge a partial payload under one read-modify-write lock."""
+    """Deep-merge a partial payload through the active config authority."""
+    from .storage_layout import is_split_complete
+    if is_split_complete():
+        from . import config_store
+        return config_store.update(partial)
     with _SECRETS_LOCK:
         return _update_unlocked(partial)
 

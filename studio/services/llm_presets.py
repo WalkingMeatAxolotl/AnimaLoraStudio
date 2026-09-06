@@ -4,7 +4,9 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..infrastructure import credentials
+from ..infrastructure import llm_model_cache
 from ..infrastructure import llm_preset_store as preset_store
+from ..infrastructure import settings_store
 
 
 class CredentialReferenceError(RuntimeError):
@@ -24,8 +26,17 @@ def _assert_credential_exists(credential_ref: str) -> None:
         )
 
 
-def present(stored: preset_store.StoredLLMPreset) -> dict[str, Any]:
+def present(
+    stored: preset_store.StoredLLMPreset, *, default_id: Optional[str] = None
+) -> dict[str, Any]:
+    if default_id is None:
+        default_id = settings_store.get_default_llm_preset_id()
     data = stored.public_dict()
+    data["model_ids"] = llm_model_cache.load(
+        stored.config.id,
+        base_url=stored.config.base_url,
+        credential_ref=stored.credential_ref,
+    )
     status = "unconfigured"
     if stored.credential_ref:
         try:
@@ -38,19 +49,25 @@ def present(stored: preset_store.StoredLLMPreset) -> dict[str, Any]:
             status = "degraded"
     data["credential_status"] = status
     data["credential_configured"] = status == "configured"
+    data["is_default"] = bool(default_id and stored.config.id == default_id)
     return data
 
 
 def list_presets() -> dict[str, Any]:
     items, invalid = preset_store.list_all()
+    default_id = settings_store.get_default_llm_preset_id()
     return {
-        "items": [present(item) for item in items],
+        "items": [present(item, default_id=default_id) for item in items],
         "invalid_items": [item.public_dict() for item in invalid],
+        "default_preset_id": default_id,
     }
 
 
 def get_preset(preset_id: str) -> dict[str, Any]:
-    return present(preset_store.get(preset_id))
+    return present(
+        preset_store.get(preset_id),
+        default_id=settings_store.get_default_llm_preset_id(),
+    )
 
 
 def create_preset(
@@ -76,22 +93,81 @@ def update_preset(
     )
 
 
+def set_default_preset(preset_id: str) -> str:
+    stored = preset_store.get(preset_id)
+    settings_store.set_default_llm_preset_id(stored.config.id)
+    return stored.config.id
+
+
+def delete_preset(preset_id: str, *, expected_etag: str) -> None:
+    if settings_store.get_default_llm_preset_id() == preset_id:
+        raise preset_store.LLMPresetConflictError(
+            "Select another default before deleting this preset"
+        )
+    preset_store.delete(preset_id, expected_etag=expected_etag)
+    llm_model_cache.discard(preset_id)
+
+
 def credential_references(credential_id: str) -> list[str]:
+    from ..infrastructure import config_store
+
     cid = credential_id.strip().lower()
     items, _ = preset_store.list_all()
-    return sorted(item.config.id for item in items if item.credential_ref == cid)
+    preset_refs = [item.config.id for item in items if item.credential_ref == cid]
+    return sorted(set(preset_refs + config_store.credential_references(cid)))
 
 
 def delete_credential(
     credential_id: str,
     *,
     expected_etag: Optional[str],
-    force: bool = False,
 ) -> None:
     references = credential_references(credential_id)
-    if references and not force:
+    if references:
         raise CredentialReferenceError(credential_id, references)
     credentials.delete(credential_id, expected_etag=expected_etag)
+
+
+def snapshot(preset_id: Optional[str] = None) -> dict[str, Any]:
+    """Freeze a non-secret recipe for a queued tagging task."""
+    target_id = preset_id or settings_store.get_default_llm_preset_id()
+    stored = preset_store.get(target_id)
+    config = stored.config.model_dump(exclude={"api_key", "model_ids"})
+    return {
+        "kind": "anima-llm-preset-snapshot",
+        "schema_version": 1,
+        "preset_id": stored.config.id,
+        "preset_etag": stored.etag,
+        "credential_ref": stored.credential_ref,
+        "config": config,
+    }
+
+
+def legacy_config():
+    """Compose the runtime legacy shape without making it a persistence source."""
+    from ..infrastructure import secrets as legacy_secrets
+
+    listing = list_presets()
+    presets: list[legacy_secrets.LLMPresetConfig] = []
+    for item in listing["items"]:
+        payload = {
+            key: value
+            for key, value in item.items()
+            if key in legacy_secrets.LLMPresetConfig.model_fields
+        }
+        credential_ref = str(item.get("credential_ref") or "")
+        if credential_ref:
+            try:
+                payload["api_key"] = credentials.resolve(credential_ref)
+            except credentials.CredentialNotFoundError:
+                payload["api_key"] = ""
+        else:
+            payload["api_key"] = ""
+        presets.append(legacy_secrets.LLMPresetConfig.model_validate(payload))
+    return legacy_secrets.LLMTaggerConfig(
+        current_preset=listing["default_preset_id"],
+        presets=presets,
+    )
 
 
 def resolved_connection(

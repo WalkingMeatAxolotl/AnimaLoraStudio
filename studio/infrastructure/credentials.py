@@ -183,6 +183,30 @@ def resolve(credential_id: str) -> str:
         return record.secret
 
 
+def put(
+    credential_id: str,
+    *,
+    label: str,
+    secret: str,
+    kind: Literal["api_key", "token"] = "api_key",
+) -> dict[str, Any]:
+    """Create or replace a well-known credential without exposing its value."""
+    with _CREDENTIALS_LOCK:
+        document = _load_unlocked()
+        cid = credential_id.strip().lower()
+        record = CredentialRecord(
+            id=cid,
+            kind=kind,
+            label=label,
+            secret=secret,
+        )
+        if document.items.get(cid) == record:
+            return _metadata(record)
+        document.items[cid] = record
+        _save_unlocked(document)
+        return _metadata(record)
+
+
 def create(
     *,
     label: str,

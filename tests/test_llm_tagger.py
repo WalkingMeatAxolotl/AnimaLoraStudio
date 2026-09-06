@@ -37,6 +37,44 @@ def isolated_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def test_task_snapshot_freezes_recipe_and_resolves_only_referenced_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.infrastructure import credentials
+
+    monkeypatch.setattr(credentials, "resolve", lambda credential_id: f"key:{credential_id}")
+    snapshot = {
+        "kind": "anima-llm-preset-snapshot",
+        "schema_version": 1,
+        "preset_id": "usr_frozen",
+        "preset_etag": "sha256:old",
+        "credential_ref": "cred_frozen",
+        "config": {
+            "id": "usr_frozen",
+            "label": "Frozen",
+            "base_url": "https://old.example/v1",
+            "model": "old-model",
+            "temperature": 0.2,
+            "messages": [
+                {"type": "text", "role": "system", "content": "old prompt"},
+                {"type": "image", "role": "user", "content": ""},
+            ],
+        },
+    }
+
+    cfg = llm_tagger.LLMTagger(
+        overrides={"__preset_snapshot": snapshot, "temperature": 0.4},
+        session=MagicMock(),
+    )._cfg()
+
+    assert cfg.id == "usr_frozen"
+    assert cfg.base_url == "https://old.example/v1"
+    assert cfg.model == "old-model"
+    assert cfg.messages[0].content == "old prompt"
+    assert cfg.temperature == pytest.approx(0.4)
+    assert cfg.api_key == "key:cred_frozen"
+
+
 def _png(path: Path) -> Path:
     Image.new("RGB", (8, 8), (10, 20, 30)).save(path)
     return path

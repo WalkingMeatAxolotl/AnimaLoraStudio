@@ -11,13 +11,22 @@ from studio.api.exception_handlers import register_exception_handlers
 from studio.api.routers import credentials as credentials_router
 from studio.api.routers import llm_presets as presets_router
 from studio.infrastructure import credentials
+from studio.infrastructure import llm_model_cache
 from studio.infrastructure import llm_preset_store as store
+from studio.infrastructure import secrets as legacy_secrets
+from studio.infrastructure import settings_store
+from studio.services import llm_presets as preset_service
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(store, "LLM_PRESETS_DIR", tmp_path / "llm_presets")
     monkeypatch.setattr(credentials, "CREDENTIALS_FILE", tmp_path / "credentials.json")
+    monkeypatch.setattr(
+        llm_model_cache, "LLM_MODEL_CACHE_DIR", tmp_path / "cache" / "llm_models"
+    )
+    monkeypatch.setattr(settings_store, "SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.setattr(legacy_secrets, "SECRETS_FILE", tmp_path / "secrets.json")
     app = FastAPI()
     register_exception_handlers(app)
     app.include_router(credentials_router.router)
@@ -60,6 +69,11 @@ def _create_preset(client: TestClient, credential_id: str = "") -> dict:
 def test_crud_uses_etag_and_never_returns_secret(client: TestClient) -> None:
     credential = _create_credential(client)
     created = _create_preset(client, credential["id"])
+    task_snapshot = preset_service.snapshot(created["id"])
+    assert task_snapshot["preset_etag"] == created["etag"]
+    assert task_snapshot["credential_ref"] == credential["id"]
+    assert "api_key" not in json.dumps(task_snapshot)
+    assert "secret-value" not in json.dumps(task_snapshot)
 
     fetched = client.get(f"/api/llm-tagger/presets/{created['id']}")
     assert fetched.status_code == 200
@@ -138,13 +152,16 @@ def test_credential_delete_checks_preset_references(client: TestClient) -> None:
     assert blocked.status_code == 409
     assert blocked.json()["error"]["details"]["referenced_by"] == [created["id"]]
 
-    forced = client.delete(
-        f"/api/credentials/{credential['id']}?force=true",
+    deleted_preset = client.delete(
+        f"/api/llm-tagger/presets/{created['id']}",
+        headers={"If-Match": created["etag"]},
+    )
+    assert deleted_preset.status_code == 200
+    deleted = client.delete(
+        f"/api/credentials/{credential['id']}",
         headers={"If-Match": credential["etag"]},
     )
-    assert forced.status_code == 200
-    fetched = client.get(f"/api/llm-tagger/presets/{created['id']}")
-    assert fetched.json()["credential_configured"] is False
+    assert deleted.status_code == 200
 
 
 def test_credential_stale_write_returns_current_etag(client: TestClient) -> None:
@@ -208,6 +225,36 @@ def test_portable_export_and_import_remove_local_binding(client: TestClient) -> 
     assert imported.json()["id"] != created["id"]
     assert imported.json()["credential_ref"] == ""
     assert imported.json()["credential_configured"] is False
+
+
+def test_model_refresh_writes_only_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio.services.tagging import llm as llm_tagger
+
+    credential = _create_credential(client)
+    created = _create_preset(client, credential["id"])
+    monkeypatch.setattr(
+        llm_tagger,
+        "fetch_openai_compatible_models",
+        lambda base_url, api_key, *, timeout: ["vision-a", "vision-b"],
+    )
+
+    refreshed = client.post(
+        f"/api/llm-tagger/presets/{created['id']}/models/refresh",
+        json={},
+    )
+    after = client.get(f"/api/llm-tagger/presets/{created['id']}")
+
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["items"] == ["vision-a", "vision-b"]
+    assert after.json()["etag"] == created["etag"]
+    cached = llm_model_cache.load(
+        created["id"],
+        base_url="https://example.test/v1",
+        credential_ref=credential["id"],
+    )
+    assert cached == ["vision-a", "vision-b"]
 
 
 def test_builtin_override_reset_requires_current_etag(client: TestClient) -> None:

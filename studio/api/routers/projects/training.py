@@ -145,6 +145,19 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         if ov:
             params[f"{body.tagger}_overrides"] = ov
 
+    # LLM tasks pin the non-secret recipe at enqueue time. The worker resolves
+    # only the referenced credential at execution, so prompt/model edits cannot
+    # change an already queued job and no API key enters the job ledger.
+    if body.tagger == "llm":
+        from ....infrastructure.storage_layout import is_split_complete
+        if is_split_complete():
+            from ....services import llm_presets
+
+            selected_id = None
+            if overrides_field is not None:
+                selected_id = overrides_field.current_preset
+            params["llm_preset_snapshot"] = llm_presets.snapshot(selected_id)
+
     with db.connection_for() as conn:
         if trigger_word is not None and trigger_word != (v.get("trigger_word") or ""):
             updated = versions.update_version(conn, vid, trigger_word=trigger_word)

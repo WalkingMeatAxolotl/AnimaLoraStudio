@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 214,
+  "count": 235,
   "routes": [
     {
       "path": "/",
@@ -55,6 +55,46 @@
         "PUT"
       ],
       "name": "_configs_redirect",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/credentials",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_credentials",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/credentials",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_credential",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/credentials/{credential_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_credential",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/credentials/{credential_id}",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "patch_credential",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/credentials/{credential_id}/secret",
+      "methods": [
+        "PUT"
+      ],
+      "name": "replace_credential_secret",
       "type": "APIRoute"
     },
     {
@@ -279,6 +319,118 @@
         "POST"
       ],
       "name": "refresh_llm_tagger_models",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_llm_presets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/default",
+      "methods": [
+        "PUT"
+      ],
+      "name": "set_default_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/import",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "patch_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/connection/test",
+      "methods": [
+        "POST"
+      ],
+      "name": "test_llm_preset_connection",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/duplicate",
+      "methods": [
+        "POST"
+      ],
+      "name": "duplicate_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/export",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/history",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_llm_preset_history",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/history/restore",
+      "methods": [
+        "POST"
+      ],
+      "name": "restore_llm_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/models/refresh",
+      "methods": [
+        "POST"
+      ],
+      "name": "refresh_llm_preset_models",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/presets/{preset_id}/reset",
+      "methods": [
+        "POST"
+      ],
+      "name": "reset_llm_preset",
       "type": "APIRoute"
     },
     {
@@ -1447,6 +1599,22 @@
         "GET"
       ],
       "name": "export_wandb_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/settings",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_settings",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/settings",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "patch_settings",
       "type": "APIRoute"
     },
     {

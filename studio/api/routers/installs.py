@@ -296,9 +296,47 @@ def _select_preset(
 def refresh_llm_tagger_models(body: LLMModelsRefreshRequest) -> dict[str, Any]:
     """读取 OpenAI-compatible /models，并保存到指定 preset 的 model_ids。
 
-    `preset_id` 不传时用 current_preset。成功后才落 secrets，避免请求失败时写脏。
+    `preset_id` 不传时用 current_preset。新布局中只更新可重建 cache；
+    旧布局成功后才落 secrets，避免请求失败时写脏。
     """
     from ...services.tagging import llm as llm_tagger_svc
+    from ...infrastructure.storage_layout import is_split_complete
+
+    if is_split_complete():
+        from ...infrastructure import config_store, llm_model_cache
+        from ...services import llm_presets as preset_service
+
+        preset_id = body.preset_id or preset_service.list_presets()["default_preset_id"]
+        stored, api_key = preset_service.resolved_connection(preset_id)
+        target = stored.config
+        if not target.base_url.strip():
+            raise ValidationError(
+                "API base URL is required",
+                code="llm_tagger.base_url_required", http_status=400,
+            )
+        try:
+            model_ids = llm_tagger_svc.fetch_openai_compatible_models(
+                target.base_url,
+                api_key,
+                timeout=body.timeout or target.timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise DomainError(
+                f"Could not reach the model service: {exc}",
+                code="llm_tagger.connect_failed",
+                details={"reason": str(exc)}, http_status=502,
+            ) from exc
+        llm_model_cache.save(
+            stored.config.id,
+            model_ids,
+            base_url=target.base_url,
+            credential_ref=stored.credential_ref,
+        )
+        return {
+            "items": model_ids,
+            "preset_id": target.id,
+            "secrets": config_store.public_snapshot(),
+        }
 
     tagger_cfg = secrets.load().llm_tagger
     target = _select_preset(tagger_cfg, body.preset_id)

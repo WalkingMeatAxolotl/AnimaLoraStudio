@@ -131,6 +131,10 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     # PR-5：从 server.py 顶层搬来的 import-time 副作用 —— 现在跟随 app 启动
     # 才落盘，便于测试 / 工具 import 而不写文件系统。
     ensure_dirs()
+    # ADR 0017: split LLM preset documents and credentials before any request,
+    # worker, or startup task can observe a half-migrated storage layout.
+    from ..infrastructure.storage_layout import ensure_storage_layout
+    ensure_storage_layout()
     db.init_db()
 
     # 测试出图 tempdir 遗留清扫（防 supervisor crash 泄漏 anima_gen_* 目录）

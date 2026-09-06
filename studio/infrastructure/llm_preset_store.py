@@ -101,6 +101,11 @@ def _preset_id(value: str) -> str:
     return result
 
 
+def validate_preset_id(value: str) -> str:
+    """Return the canonical cross-platform ID or raise without changing identity."""
+    return _preset_id(value)
+
+
 def _path(preset_id: str) -> Path:
     return LLM_PRESETS_DIR / f"{_preset_id(preset_id)}.json"
 

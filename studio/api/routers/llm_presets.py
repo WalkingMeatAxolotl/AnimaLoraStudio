@@ -8,8 +8,11 @@ from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 
 from ...domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
+from ...infrastructure import config_store
 from ...infrastructure import credentials
+from ...infrastructure import llm_model_cache
 from ...infrastructure import llm_preset_store as preset_store
+from ...infrastructure import settings_store
 from ...services import llm_presets as preset_service
 from ...services.tagging import llm as llm_tagger_service
 
@@ -23,6 +26,10 @@ class CreatePresetRequest(BaseModel):
 
 class DuplicatePresetRequest(BaseModel):
     label: Optional[str] = None
+
+
+class SetDefaultPresetRequest(BaseModel):
+    id: str
 
 
 class RestorePresetRequest(BaseModel):
@@ -78,11 +85,19 @@ def _raise_store_error(exc: Exception) -> None:
         raise DomainError(
             str(exc), code="credential.store_corrupt", http_status=503
         ) from exc
+    if isinstance(exc, settings_store.SettingsStoreCorruptError):
+        raise DomainError(
+            str(exc), code="settings.store_corrupt", http_status=503
+        ) from exc
     raise exc
 
 
 def _public(stored: preset_store.StoredLLMPreset) -> dict[str, Any]:
     return preset_service.present(stored)
+
+
+def _project_legacy() -> None:
+    config_store.project_current_best_effort()
 
 
 @router.get("/api/llm-tagger/presets")
@@ -103,9 +118,21 @@ def create_llm_preset(body: CreatePresetRequest, response: Response) -> dict[str
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
     _set_etag(response, stored.etag)
     response.headers["Location"] = f"/api/llm-tagger/presets/{stored.config.id}"
     return _public(stored)
+
+
+@router.put("/api/llm-tagger/presets/default")
+def set_default_llm_preset(body: SetDefaultPresetRequest) -> dict[str, str]:
+    try:
+        preset_id = preset_service.set_default_preset(body.id)
+    except Exception as exc:
+        _raise_store_error(exc)
+        raise AssertionError("unreachable")
+    _project_legacy()
+    return {"default_preset_id": preset_id}
 
 
 @router.get("/api/llm-tagger/presets/{preset_id}")
@@ -134,6 +161,7 @@ def patch_llm_preset(
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
     _set_etag(response, stored.etag)
     return _public(stored)
 
@@ -145,10 +173,11 @@ def delete_llm_preset(
 ) -> dict[str, str]:
     expected = _etag_header(if_match)
     try:
-        preset_store.delete(preset_id, expected_etag=expected)
+        preset_service.delete_preset(preset_id, expected_etag=expected)
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
     return {"deleted": preset_id}
 
 
@@ -161,6 +190,7 @@ def duplicate_llm_preset(
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
     _set_etag(response, stored.etag)
     response.headers["Location"] = f"/api/llm-tagger/presets/{stored.config.id}"
     return _public(stored)
@@ -178,6 +208,7 @@ def reset_llm_preset(
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
     _set_etag(response, stored.etag)
     return _public(stored)
 
@@ -187,10 +218,12 @@ async def import_llm_preset(file: UploadFile = File(...)) -> dict[str, Any]:
     raw = await file.read()
     fallback = (file.filename or "Imported").rsplit(".", 1)[0]
     try:
-        return _public(preset_store.import_portable(raw, fallback_label=fallback))
+        stored = preset_store.import_portable(raw, fallback_label=fallback)
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
+    return _public(stored)
 
 
 @router.get("/api/llm-tagger/presets/{preset_id}/export")
@@ -233,6 +266,7 @@ def restore_llm_preset(
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
+    _project_legacy()
     _set_etag(response, stored.etag)
     return _public(stored)
 
@@ -266,7 +300,14 @@ def refresh_llm_preset_models(
             details={"reason": str(exc)},
             http_status=502,
         ) from exc
-    # Deliberately no preset mutation: discovered models are cache/output data.
+    # Discovered model IDs are disposable cache data, never preset content.
+    llm_model_cache.save(
+        stored.config.id,
+        items,
+        base_url=config.base_url,
+        credential_ref=stored.credential_ref,
+    )
+    _project_legacy()
     return {"items": items, "preset_id": preset_id, "preset_etag": stored.etag}
 
 

@@ -426,29 +426,70 @@ class LLMTagger:
         #   - 任意 LLMPresetConfig 字段（base_url / model / endpoint / temperature / ...）
         # `api_key` 出于安全考虑不允许从 overrides 传（避免泄漏到 task 日志）；要改用
         # Settings 持久化或显式 secrets.update()。
+        raw_overrides = dict(overrides or {})
+        snapshot = raw_overrides.pop("__preset_snapshot", None)
+        self._preset_snapshot = snapshot if isinstance(snapshot, dict) else None
         self._overrides = {
             k: v
-            for k, v in (overrides or {}).items()
+            for k, v in raw_overrides.items()
             if v is not None and k != "api_key"
         }
         self._external_session = session is not None
         self._session = session or requests.Session()
 
     def _cfg(self) -> "secrets.LLMPresetConfig":
-        """返回最终生效的 active preset（已 apply overrides）。"""
-        tagger_cfg = secrets.load().llm_tagger
-        # 1) 决定 active preset
-        preset_id = str(self._overrides.get("current_preset") or tagger_cfg.current_preset)
-        active = next((p for p in tagger_cfg.presets if p.id == preset_id), None)
-        if active is None:
-            active = tagger_cfg.active
-        # 2) apply 字段 overrides
-        preset_dict = active.model_dump()
-        for k, v in self._overrides.items():
-            if k == "current_preset":
+        """Return the effective preset, resolving credentials only at execution."""
+        if self._preset_snapshot is not None:
+            from ...infrastructure import credentials as credential_store
+
+            snapshot = self._preset_snapshot
+            if snapshot.get("kind") != "anima-llm-preset-snapshot":
+                raise RuntimeError("Invalid LLM preset snapshot")
+            raw_config = snapshot.get("config")
+            if not isinstance(raw_config, dict):
+                raise RuntimeError("LLM preset snapshot has no config")
+            preset_dict = dict(raw_config)
+            credential_ref = str(snapshot.get("credential_ref") or "")
+            # Missing credentials fail fast; never fall back to another key.
+            preset_dict["api_key"] = (
+                credential_store.resolve(credential_ref)
+                if credential_ref
+                else ""
+            )
+        else:
+            # ADR 0017 canonical path. The legacy branch remains for direct library
+            # callers/tests that intentionally run without the HTTP startup migration.
+            from ...infrastructure.storage_layout import is_split_complete
+            if is_split_complete():
+                from ...infrastructure import credentials as credential_store
+                from ...infrastructure import llm_preset_store, settings_store
+
+                preset_id = str(
+                    self._overrides.get("current_preset")
+                    or settings_store.get_default_llm_preset_id()
+                )
+                stored = llm_preset_store.get(preset_id)
+                preset_dict = stored.config.model_dump()
+                preset_dict["api_key"] = (
+                    credential_store.resolve(stored.credential_ref)
+                    if stored.credential_ref
+                    else ""
+                )
+            else:
+                tagger_cfg = secrets.load().llm_tagger
+                preset_id = str(
+                    self._overrides.get("current_preset") or tagger_cfg.current_preset
+                )
+                active = next((p for p in tagger_cfg.presets if p.id == preset_id), None)
+                if active is None:
+                    active = tagger_cfg.active
+                preset_dict = active.model_dump()
+
+        for key, value in self._overrides.items():
+            if key == "current_preset":
                 continue
-            if k in preset_dict:
-                preset_dict[k] = v
+            if key in preset_dict:
+                preset_dict[key] = value
         return secrets.LLMPresetConfig(**preset_dict)
 
     def is_available(self) -> tuple[bool, str]:

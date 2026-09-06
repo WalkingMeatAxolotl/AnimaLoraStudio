@@ -13,7 +13,7 @@
 
 子进程不落 studio.log（D2）——所以诊断包是把两条线按时间窗拼在一起的地方。
 
-脱敏：不含 secrets.json；run.log / studio.log 文本过一遍 REDACT_PATTERNS
+脱敏：不含 credentials.json / secrets.json；run.log / studio.log 文本过一遍 REDACT_PATTERNS
 （api_key / token / Authorization / hf_ 与 sk- 形态的 key）。不是加密级保证，
 只是防止常见 key 顺手泄漏；README 里写明让用户发出前自己再过目。
 """
@@ -174,7 +174,7 @@ def _readme(task_id: int | None, window: tuple[float, float] | None, members: li
         "contents:",
         *[f"  {m}" for m in members],
         "",
-        "脱敏 / redaction: 不含 secrets.json；run.log 与 studio.log 已过 api_key / token /",
+        "脱敏 / redaction: 不含 credentials.json / secrets.json；run.log 与 studio.log 已过 api_key / token /",
         "Authorization / hf_* / sk-* 模式脱敏。发出前请自行过目一遍，路径中可能含用户名。",
     ]
     return "\n".join(lines) + "\n"

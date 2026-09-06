@@ -22,6 +22,7 @@ from .routers import (
     announcements,
     browse,
     client_errors,
+    credentials,
     data_exports,
     diagnostics,
     events_sse,
@@ -31,11 +32,13 @@ from .routers import (
     installs,
     logs,
     lora_catalog,
+    llm_presets,
     models,
     models_storage,
     presets,
     root,
     samples,
+    settings,
     secrets as secrets_router,
     studio_data,
     system,
@@ -84,6 +87,9 @@ app.include_router(data_exports.router)
 app.include_router(tagger.router)
 # PR-6 commit 2: admin router（secrets / models / upscalers）。jobs router 已删（R-5 台账合并，数据作业走 /api/queue）
 app.include_router(secrets_router.router)
+app.include_router(settings.router)
+app.include_router(credentials.router)
+app.include_router(llm_presets.router)
 app.include_router(models.router)
 app.include_router(upscalers.router)
 app.include_router(tag_dictionary.router)

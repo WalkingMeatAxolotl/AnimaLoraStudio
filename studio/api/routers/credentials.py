@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
 
 from ...domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
+from ...infrastructure import config_store
 from ...infrastructure import credentials
 from ...services import llm_presets as preset_service
 
@@ -116,11 +117,13 @@ def replace_credential_secret(
     if_match: Optional[str] = Header(default=None, alias="If-Match"),
 ) -> dict[str, Any]:
     try:
-        return credentials.replace_secret(
+        result = credentials.replace_secret(
             credential_id,
             body.secret,
             expected_etag=_etag_header(if_match),
         )
+        config_store.project_current_best_effort()
+        return result
     except Exception as exc:
         _raise_store_error(exc)
         raise AssertionError("unreachable")
@@ -129,14 +132,12 @@ def replace_credential_secret(
 @router.delete("/api/credentials/{credential_id}")
 def delete_credential(
     credential_id: str,
-    force: bool = Query(default=False),
     if_match: Optional[str] = Header(default=None, alias="If-Match"),
 ) -> dict[str, str]:
     try:
         preset_service.delete_credential(
             credential_id,
             expected_etag=_etag_header(if_match),
-            force=force,
         )
     except Exception as exc:
         _raise_store_error(exc)
