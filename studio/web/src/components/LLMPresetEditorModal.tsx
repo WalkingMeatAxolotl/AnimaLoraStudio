@@ -6,10 +6,10 @@
 //
 // 布局参考打标页字段范式：label 上 / 控件全宽在下 / 两列 grid，分节平铺不折叠。
 import type { TFunction } from 'i18next'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Trans, useTranslation } from 'react-i18next'
-import { api, type LLMPreset, type SecretsPatch } from '../api/client'
+import { api, type LLMPreset } from '../api/client'
 import { MASK } from '../pages/tools/settings/constants'
 import { useSettingsData } from '../lib/SettingsData'
 import { useDialog } from './Dialog'
@@ -38,32 +38,73 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
   const { t } = useTranslation()
   const { toast } = useToast()
   const { confirm } = useDialog()
-  const { secrets, setSecrets, commitSecrets } = useSettingsData()
+  const { secrets, reloadSecrets, runSave } = useSettingsData()
   // 另存为副本后切到新预设继续编辑
   const [editingId, setEditingId] = useState(presetId)
   const [modelsBusy, setModelsBusy] = useState(false)
   const [testBusy, setTestBusy] = useState(false)
+  const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve())
+  const etagRef = useRef('')
 
   const presets = secrets?.llm_tagger.presets ?? []
   const preset = presets.find((p) => p.id === editingId) ?? null
+  const presetRef = useRef<LLMPreset | null>(preset)
+  useEffect(() => {
+    presetRef.current = preset
+    etagRef.current = preset?.etag ?? ''
+  }, [preset])
 
   if (!secrets || !preset) return null
 
+  const enqueueMutation = (operation: () => Promise<void>) => {
+    mutationQueueRef.current = mutationQueueRef.current
+      .then(() => runSave(operation))
+      .catch((error) => toast(String(error), 'error'))
+  }
+
   const patchPreset = (patch: Partial<LLMPreset>) => {
-    const next = presets.map((p) => (p.id === editingId ? { ...p, ...patch } : p))
-    commitSecrets({ llm_tagger: { presets: next } } as SecretsPatch)
+    enqueueMutation(async () => {
+      const current = presetRef.current
+      if (!current?.etag) throw new Error('Preset ETag is missing; reload settings')
+      const updated = await api.patchLLMPreset(current.id, patch, etagRef.current || current.etag)
+      etagRef.current = updated.etag ?? ''
+      await reloadSecrets()
+    })
+  }
+
+  const patchApiKey = (value: string) => {
+    if (value === MASK) return
+    enqueueMutation(async () => {
+      const current = presetRef.current
+      if (!current?.etag) throw new Error('Preset ETag is missing; reload settings')
+      if (current.credential_ref) {
+        const metadata = (await api.listCredentials()).find((item) => item.id === current.credential_ref)
+        if (!metadata) throw new Error(`Credential not found: ${current.credential_ref}`)
+        await api.replaceCredentialSecret(metadata.id, value, metadata.etag)
+      } else if (value) {
+        const credential = await api.createCredential({
+          label: `LLM · ${current.label}`,
+          secret: value,
+        })
+        const updated = await api.patchLLMPreset(
+          current.id,
+          { credential_ref: credential.id },
+          etagRef.current || current.etag,
+        )
+        etagRef.current = updated.etag ?? ''
+      }
+      await reloadSecrets()
+    })
   }
 
   const refreshModels = async () => {
     setModelsBusy(true)
     try {
-      const result = await api.refreshLLMModels({
-        preset_id: preset.id,
-        base_url: preset.base_url,
-        api_key: preset.api_key,
-        timeout: preset.timeout,
-      })
-      setSecrets(result.secrets)
+      await mutationQueueRef.current
+      const current = presetRef.current
+      if (!current) return
+      const result = await api.refreshLLMModels(current.id, current.timeout)
+      await reloadSecrets()
       toast(t('settings.modelsLoaded', { n: result.items.length }), 'success')
     } catch (e) {
       toast(t('settings.modelsLoadFailed', { error: String(e) }), 'error')
@@ -75,16 +116,10 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
   const testConnection = async () => {
     setTestBusy(true)
     try {
-      const result = await api.testLLMConnection({
-        preset_id: preset.id,
-        base_url: preset.base_url,
-        api_key: preset.api_key,
-        model: preset.model,
-        endpoint: preset.endpoint,
-        timeout: preset.timeout,
-        max_tokens: Math.max(512, preset.max_tokens),
-        temperature: preset.temperature,
-      })
+      await mutationQueueRef.current
+      const current = presetRef.current
+      if (!current) return
+      const result = await api.testLLMConnection(current.id, current.timeout)
       // 延迟 / HTTP 状态 / 错误预览拼进 toast，让用户不打开日志也能拿到详情。
       const parts: string[] = [result.ok ? t('settings.llmTestOk') : t('settings.llmTestNotOk')]
       if (result.elapsed_ms > 0) parts.push(`${result.elapsed_ms} ms`)
@@ -101,37 +136,18 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
     }
   }
 
-  // 另存为副本：免弹窗（Dialog 弹层叠 modal 之上体验差）——直接用「原名 - Copy」
-  // 命名并切到副本继续编辑，名称字段随时可改。
   const saveAsCopy = () => {
     const label = `${llmPresetLabel(preset, t)} - Copy`
-    const slug = label.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset'
-    const used = new Set(presets.map((p) => p.id))
-    let idx = 1
-    let id = slug
-    while (used.has(id)) {
-      idx += 1
-      id = `${slug}_${idx}`
-    }
-    const next: LLMPreset = {
-      ...preset,
-      // deep-copy 可变字段避免共享引用
-      messages: preset.messages.map((m) => ({ ...m })),
-      model_ids: [...preset.model_ids],
-      // api_key 不复制：这里拿到的是 MASK 掩码，后端 deep-merge 对新 id 会把
-      // MASK leaf 直接丢弃 → 静默落成空 key。明确置空让用户重填。
-      api_key: '',
-      id,
-      label,
-      builtin: false,
-    }
-    commitSecrets({ llm_tagger: { presets: [...presets, next] } } as SecretsPatch)
-    setEditingId(id)
-    toast(t('llmPreset.savedAsCopy', { label }), 'success')
+    enqueueMutation(async () => {
+      const current = presetRef.current
+      if (!current) return
+      const copied = await api.duplicateLLMPreset(current.id, label)
+      await reloadSecrets()
+      setEditingId(copied.id)
+      toast(t('llmPreset.savedAsCopy', { label }), 'success')
+    })
   }
 
-  // 导出 json 下载直链（后端已抹掉 api_key/base_url/model_ids）；编辑走 instant-apply
-  // 已落盘，服务端状态即所见状态。
   const exportPreset = () => {
     const a = document.createElement('a')
     a.href = api.llmPresetExportUrl(editingId)
@@ -142,30 +158,34 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
   }
 
   const deletePreset = async () => {
-    if (preset.builtin || presets.length <= 1) return
+    if (preset.builtin || presets.length <= 1 || !preset.etag) return
     const label = preset.label
     if (!(await confirm(t('settings.confirmDeletePreset', { label }), { tone: 'danger' }))) return
-    const next = presets.filter((p) => p.id !== editingId)
-    // 删的是全局默认时把默认转给列表第一个；一次 commit 避免两个 patch 竞态。
-    commitSecrets({
-      llm_tagger: {
-        presets: next,
-        ...(secrets.llm_tagger.current_preset === editingId
-          ? { current_preset: next[0]?.id ?? 'style_json' }
-          : {}),
-      },
-    } as SecretsPatch)
-    toast(t('llmPreset.deleted', { label }), 'success')
-    onClose()
+    enqueueMutation(async () => {
+      const current = presetRef.current
+      if (!current?.etag) return
+      if (secrets.llm_tagger.current_preset === current.id) {
+        const replacement = presets.find((item) => item.id !== current.id)
+        if (!replacement) return
+        await api.setDefaultLLMPreset(replacement.id)
+      }
+      await api.deleteLLMPreset(current.id, etagRef.current || current.etag)
+      await reloadSecrets()
+      toast(t('llmPreset.deleted', { label }), 'success')
+      onClose()
+    })
   }
 
   const resetToBuiltin = async () => {
-    if (!preset.builtin) return
+    if (!preset.builtin || !preset.etag) return
     if (!(await confirm(t('settings.confirmResetPreset', { label: llmPresetLabel(preset, t) }), { tone: 'danger' }))) return
-    // 从列表移除，后端 validator 在 PUT 后会用程序默认值补回同 id 的内置预设。
-    // 乐观更新窗口内本 preset 短暂不存在，直接关掉 modal 避免闪烁。
-    commitSecrets({ llm_tagger: { presets: presets.filter((p) => p.id !== editingId) } } as SecretsPatch)
-    onClose()
+    enqueueMutation(async () => {
+      const current = presetRef.current
+      if (!current?.etag) return
+      await api.resetLLMPreset(current.id, etagRef.current || current.etag)
+      await reloadSecrets()
+      onClose()
+    })
   }
 
   const assistNeedsTags =
@@ -241,7 +261,7 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
               <MField label="API Key">
                 <ApiKeyInput
                   value={preset.api_key}
-                  onCommit={(v) => patchPreset({ api_key: v })}
+                  onCommit={patchApiKey}
                 />
               </MField>
               <MField label={t('llmPreset.fieldEndpoint')}>

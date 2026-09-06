@@ -51,6 +51,7 @@ interface SettingsData {
   secrets: Secrets | null
   secretsError: string | null
   setSecrets: (s: Secrets) => void
+  reloadSecrets: () => Promise<Secrets | null>
   /** instant-apply 统一写入入口：乐观更新 + 串行 PUT 单字段 patch。 */
   commitSecrets: (patch: SecretsPatch) => void
   /** 包装一次性即时 PUT（下载源 / 主模型 / upscaler 等独立保存），驱动 saveStatus 指示。 */
@@ -82,11 +83,19 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
   const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const pendingRef = useRef(0)
 
-  useEffect(() => {
-    api.getSecrets()
-      .then((s) => { setSecrets(s); setSecretsError(null) })
-      .catch((e) => setSecretsError(String(e)))
+  const reloadSecrets = useCallback(async (): Promise<Secrets | null> => {
+    try {
+      const loaded = await api.getSecrets()
+      setSecrets(loaded)
+      setSecretsError(null)
+      return loaded
+    } catch (e) {
+      setSecretsError(String(e))
+      return null
+    }
   }, [])
+
+  useEffect(() => { void reloadSecrets() }, [reloadSecrets])
 
   const reloadCatalog = useCallback(async (): Promise<ModelsCatalog | null> => {
     try {
@@ -192,13 +201,13 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
         pendingRef.current -= 1
         setSaveStatus({ state: 'error', error: String(e) })
         toast(String(e), 'error')
-        api.getSecrets().then((s) => setSecrets(s)).catch(() => {})
+        void reloadSecrets()
       })
-  }, [toast])
+  }, [reloadSecrets, toast])
 
   return (
     <Ctx.Provider value={{
-      secrets, secretsError, setSecrets, commitSecrets, runSave, saveStatus,
+      secrets, secretsError, setSecrets, reloadSecrets, commitSecrets, runSave, saveStatus,
       catalog, catalogError, reloadCatalog,
       downloadBusy, startDownload, deleteAsset, setDownloadSource,
     }}>

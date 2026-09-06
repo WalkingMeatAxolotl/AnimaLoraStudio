@@ -364,6 +364,15 @@ export interface LLMPreset {
   builtin: boolean
   base_url: string
   api_key: string
+  /** Stable reference into the write-only credential store (ADR 0017). */
+  credential_ref?: string
+  credential_status?: 'unconfigured' | 'empty' | 'missing' | 'degraded' | 'configured'
+  credential_configured?: boolean
+  /** File-content ETag required by PATCH/DELETE/reset. */
+  etag?: string
+  origin?: 'builtin' | 'builtin_override' | 'custom'
+  is_default?: boolean
+  updated_at?: number | null
   model: string
   model_ids: string[]
   endpoint: 'chat_completions' | 'responses'
@@ -381,6 +390,15 @@ export interface LLMPreset {
   concurrency: number
   requests_per_second: number
   max_requests_per_minute: number
+}
+
+export interface LLMCredentialMetadata {
+  id: string
+  kind: 'api_key' | 'token'
+  label: string
+  configured: boolean
+  etag: string
+  referenced_by?: string[]
 }
 
 export interface LLMTaggerConfig {
@@ -2290,23 +2308,63 @@ export const api = {
     return (await resp.json()) as { id: string; label: string; secrets: Secrets }
   },
 
-  /** LLM preset json 下载直链（**不含 API 信息**：api_key/base_url/model_ids 置空）。
-   *  <a href={...} download> 触发即可，不发 fetch。 */
+  /** Portable LLM preset JSON download; credentials and local endpoint are excluded. */
   llmPresetExportUrl: (id: string) =>
-    `/api/secrets/llm/presets/${encodeURIComponent(id)}/export`,
-  /** 上传 json/yaml 导入 LLM preset；返回新 preset 标识 + 最新 masked secrets。 */
-  importLLMPreset: async (
-    file: File,
-  ): Promise<{ id: string; label: string; secrets: Secrets }> => {
+    `/api/llm-tagger/presets/${encodeURIComponent(id)}/export`,
+  importLLMPreset: async (file: File): Promise<LLMPreset> => {
     const fd = new FormData()
     fd.append('file', file, file.name)
-    const resp = await fetch('/api/secrets/llm/presets/import', { method: 'POST', body: fd })
+    const resp = await fetch('/api/llm-tagger/presets/import', { method: 'POST', body: fd })
     if (!resp.ok) {
       const body = await resp.json().catch(() => null)
       throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
-    return (await resp.json()) as { id: string; label: string; secrets: Secrets }
+    const preset = (await resp.json()) as LLMPreset
+    return { ...preset, api_key: preset.credential_configured ? '***' : '' }
   },
+  createLLMPreset: (preset: LLMPreset) => {
+    const payload = { ...preset } as Record<string, unknown>
+    for (const key of [
+      'id', 'builtin', 'api_key', 'credential_ref', 'credential_status',
+      'credential_configured', 'etag', 'origin', 'is_default', 'updated_at', 'model_ids',
+    ]) delete payload[key]
+    return req<LLMPreset>('/api/llm-tagger/presets', {
+      method: 'POST',
+      body: JSON.stringify({ preset: payload, credential_ref: '' }),
+    })
+  },
+  patchLLMPreset: (id: string, patch: Partial<LLMPreset>, etag: string) =>
+    req<LLMPreset>(`/api/llm-tagger/presets/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'If-Match': etag },
+      body: JSON.stringify(patch),
+    }),
+  duplicateLLMPreset: (id: string, label: string) =>
+    req<LLMPreset>(`/api/llm-tagger/presets/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST', body: JSON.stringify({ label }),
+    }),
+  deleteLLMPreset: (id: string, etag: string) =>
+    req<{ deleted: string }>(`/api/llm-tagger/presets/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'If-Match': etag },
+    }),
+  resetLLMPreset: (id: string, etag: string) =>
+    req<LLMPreset>(`/api/llm-tagger/presets/${encodeURIComponent(id)}/reset`, {
+      method: 'POST', headers: { 'If-Match': etag },
+    }),
+  setDefaultLLMPreset: (id: string) =>
+    req<{ default_preset_id: string }>('/api/llm-tagger/presets/default', {
+      method: 'PUT', body: JSON.stringify({ id }),
+    }),
+  listCredentials: () =>
+    req<{ items: LLMCredentialMetadata[] }>('/api/credentials').then((r) => r.items),
+  createCredential: (body: { label: string; secret: string }) =>
+    req<LLMCredentialMetadata>('/api/credentials', {
+      method: 'POST', body: JSON.stringify({ ...body, kind: 'api_key' }),
+    }),
+  replaceCredentialSecret: (id: string, secret: string, etag: string) =>
+    req<LLMCredentialMetadata>(`/api/credentials/${encodeURIComponent(id)}/secret`, {
+      method: 'PUT', headers: { 'If-Match': etag }, body: JSON.stringify({ secret }),
+    }),
 
   // 兼容别名：PP0 之前叫 listConfigs / getConfig / ...。保留一段时间。
   listConfigs: () =>
@@ -2325,8 +2383,8 @@ export const api = {
       body: JSON.stringify({ new_name: newName }),
     }),
 
-  // Secrets ------------------------------------------------------------
-  getSecrets: () => req<Secrets>('/api/secrets'),
+  // Settings (legacy method names retained for call-site compatibility) ----
+  getSecrets: () => req<Secrets>('/api/settings'),
 
   // Tag dictionary -----------------------------------------------------
   /** 当前词典 meta + 是否已加载。Settings UI 启动时 ping，决定显示"未初始化"还是详情。 */
@@ -2404,28 +2462,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ label }),
     }),
-  refreshLLMModels: (body: {
-    preset_id?: string
-    base_url?: string
-    api_key?: string
-    timeout?: number
-  }) =>
-    req<{ items: string[]; preset_id: string; secrets: Secrets }>('/api/llm-tagger/models/refresh', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  testLLMConnection: (
-    body:
-      & { preset_id?: string }
-      & Partial<Pick<LLMPreset, 'base_url' | 'api_key' | 'model' | 'endpoint' | 'timeout' | 'max_tokens' | 'temperature'>>,
-  ) =>
-    req<LLMConnectionTestResult>('/api/llm-tagger/test', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
+  refreshLLMModels: (presetId: string, timeout?: number) =>
+    req<{ items: string[]; preset_id: string; preset_etag: string }>(
+      `/api/llm-tagger/presets/${encodeURIComponent(presetId)}/models/refresh`,
+      { method: 'POST', body: JSON.stringify({ timeout }) },
+    ),
+  testLLMConnection: (presetId: string, timeout?: number) =>
+    req<LLMConnectionTestResult>(
+      `/api/llm-tagger/presets/${encodeURIComponent(presetId)}/connection/test`,
+      { method: 'POST', body: JSON.stringify({ timeout }) },
+    ),
   updateSecrets: (patch: SecretsPatch) =>
-    req<Secrets>('/api/secrets', {
-      method: 'PUT',
+    req<Secrets>('/api/settings', {
+      method: 'PATCH',
       body: JSON.stringify(patch),
     }),
 

@@ -3,7 +3,6 @@ import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
   type ModelSourceRow,
-  type LLMPreset,
   type Secrets,
   type SecretsPatch,
   type WandBPreset,
@@ -61,7 +60,9 @@ export default function SettingsPage() {
     secrets: server,
     secretsError,
     setSecrets: setServer,
+    reloadSecrets,
     commitSecrets,
+    runSave,
     saveStatus,
     catalog,
     catalogError,
@@ -155,18 +156,26 @@ export default function SettingsPage() {
   }
 
   // —— LLM 预设管理（列表 + 编辑 modal；字段编辑集中在 LLMPresetEditorModal）——
-  const addLlmPreset = () => {
-    const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
-    let idx = 1
-    let id = `preset_${idx}`
-    while (used.has(id)) {
-      idx += 1
-      id = `preset_${idx}`
+  const addLlmPreset = async () => {
+    const index = draft.llm_tagger.presets.length + 1
+    const label = t('settings.newPresetLabel', { n: index })
+    const fallback = _makeFallbackPreset('temporary', label, 'text')
+    try {
+      const created = await runSave(() => api.createLLMPreset(fallback))
+      await reloadSecrets()
+      setEditingLlmPresetId(created.id)
+    } catch (e) {
+      toast(String(e), 'error')
     }
-    const next: LLMPreset = _makeFallbackPreset(id, t('settings.newPresetLabel', { n: idx }), 'text')
-    next.builtin = false
-    update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
-    setEditingLlmPresetId(id)
+  }
+
+  const setDefaultLlmPreset = async (id: string) => {
+    try {
+      await runSave(() => api.setDefaultLLMPreset(id))
+      await reloadSecrets()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
   }
 
   // 删除/恢复内置/另存为/导出都住在 LLMPresetEditorModal footer 里，
@@ -177,10 +186,10 @@ export default function SettingsPage() {
   // 导入成功直接打开编辑 modal 让用户补全连接信息。
   const importLlmPreset = async (file: File) => {
     try {
-      const r = await api.importLLMPreset(file)
-      setServer(r.secrets)
-      toast(t('settings.llmPresetImported', { label: r.label }), 'success')
-      setEditingLlmPresetId(r.id)
+      const preset = await runSave(() => api.importLLMPreset(file))
+      await reloadSecrets()
+      toast(t('settings.llmPresetImported', { label: preset.label }), 'success')
+      setEditingLlmPresetId(preset.id)
     } catch (e) {
       toast(`${t('settings.llmPresetImportInvalid')}: ${e}`, 'error')
     }
@@ -492,13 +501,13 @@ export default function SettingsPage() {
             <button type="button" onClick={() => llmImportRef.current?.click()} className="btn btn-secondary btn-sm">
               {t('settings.llmPresetImport')}
             </button>
-            <button type="button" onClick={addLlmPreset} className="btn btn-secondary btn-sm">
+            <button type="button" onClick={() => void addLlmPreset()} className="btn btn-secondary btn-sm">
               {t('settings.llmPresetNew')}
             </button>
             <input
               ref={llmImportRef}
               type="file"
-              accept=".json,.yaml,.yml"
+              accept=".json"
               style={{ display: 'none' }}
               onChange={(e) => {
                 const f = e.target.files?.[0]
@@ -519,7 +528,7 @@ export default function SettingsPage() {
                   isDefault ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
                 }`}>
                   <input type="radio" name="llm_preset_default" checked={isDefault}
-                    onChange={() => update('llm_tagger', 'current_preset', p.id)}
+                    onChange={() => void setDefaultLlmPreset(p.id)}
                     className="shrink-0"
                     style={{ accentColor: 'var(--accent)' }}
                     title={t('settings.llmPresetSetDefault')}

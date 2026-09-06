@@ -57,6 +57,10 @@ const initialServerState = {
         id: 'style_json',
         label: '画风 LoRA JSON',
         builtin: true,
+        etag: 'sha256:style',
+        origin: 'builtin',
+        credential_ref: '',
+        credential_configured: false,
         base_url: '',
         api_key: '',
         model: '',
@@ -87,6 +91,10 @@ const initialServerState = {
         id: 'joycaption',
         label: 'JoyCaption（vLLM 本地）',
         builtin: true,
+        etag: 'sha256:joy',
+        origin: 'builtin',
+        credential_ref: '',
+        credential_configured: false,
         base_url: 'http://localhost:8000/v1',
         api_key: '',
         model: 'fancyfeast/llama-joycaption-beta-one-hf-llava',
@@ -358,7 +366,17 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-    if (init?.method === 'PUT') {
+    if (init?.method === 'POST' && String(url).includes('/models/refresh')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        items: ['model-a'], preset_id: 'joycaption', preset_etag: 'sha256:joy',
+      }), { status: 200 }))
+    }
+    if (init?.method === 'PUT' && String(url).includes('/api/llm-tagger/presets/default')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ default_preset_id: JSON.parse(String(init.body)).id }), { status: 200 })
+      )
+    }
+    if (init?.method === 'PATCH') {
       const body = JSON.parse(String(init.body)) as Record<
         string,
         Record<string, unknown>
@@ -505,7 +523,7 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(([url, init]) => {
-        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        if (init?.method !== 'PATCH' || !String(url).includes('/api/settings')) return false
         try {
           return JSON.stringify(JSON.parse(String(init.body)).generate?.lora_catalog_dirs) === '[]'
         } catch { return false }
@@ -514,7 +532,7 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('hydrates from /api/secrets and shows masked sensitive fields as placeholder', async () => {
+  it('hydrates from /api/settings and shows masked sensitive fields as placeholder', async () => {
     const user = userEvent.setup()
     renderPage()
     // gelbooru 凭证已挪到「密钥」tab
@@ -528,7 +546,7 @@ describe('SettingsPage (PP0)', () => {
     expect((placeholder as HTMLInputElement).value).toBe('')
   })
 
-  it('PUT /api/secrets only sends the changed leaves', async () => {
+  it('PATCH /api/settings only sends the changed leaves', async () => {
     const user = userEvent.setup()
     renderPage()
     await user.click(await screen.findByRole('button', { name: '密钥' }))
@@ -540,7 +558,7 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(
-        ([, init]) => init?.method === 'PUT'
+        ([, init]) => init?.method === 'PATCH'
       )
       expect(putCall).toBeDefined()
       const body = JSON.parse(String(putCall![1].body))
@@ -579,7 +597,7 @@ describe('SettingsPage (PP0)', () => {
     await user.selectOptions(select, '0')
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(([u, i]) => {
-        if (i?.method !== 'PUT' || !String(u).includes('/api/secrets')) return false
+        if (i?.method !== 'PATCH' || !String(u).includes('/api/settings')) return false
         try {
           return JSON.parse(String(i.body)).system?.gpu_index === 0
         } catch {
@@ -638,7 +656,7 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(([url, init]) => {
-        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        if (init?.method !== 'PATCH' || !String(url).includes('/api/settings')) return false
         try {
           return JSON.parse(String(init.body)).generate?.lora_merge_precision === 'bf16'
         } catch {
@@ -681,7 +699,7 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(([url, init]) => {
-        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        if (init?.method !== 'PATCH' || !String(url).includes('/api/settings')) return false
         try { return 'download_sources' in JSON.parse(String(init.body)) } catch { return false }
       })
       expect(putCall).toBeDefined()
@@ -734,7 +752,7 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(
-        ([url, init]) => String(url).includes('/api/secrets') && init?.method === 'PUT'
+        ([url, init]) => String(url).includes('/api/settings') && init?.method === 'PATCH'
       )
       expect(putCall).toBeDefined()
       const body = JSON.parse(String(putCall![1].body))
@@ -764,7 +782,27 @@ describe('SettingsPage (PP0)', () => {
     expect(within(modal).getByText('每分钟最大请求数（0 = 不限）')).toBeInTheDocument()
   })
 
-  it('selecting another LLM preset as global default PUTs current_preset', async () => {
+  it('refreshes models through the read-only per-preset endpoint', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    const joyRow = screen.getByText('JoyCaption（vLLM 本地）').closest('li')!
+    await user.click(within(joyRow).getByRole('button', { name: /编辑/ }))
+    const modal = await screen.findByTestId('llm-preset-editor-modal')
+    await user.click(within(modal).getByRole('button', { name: /从服务器拉取/ }))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) =>
+        init?.method === 'POST'
+        && String(url).includes('/api/llm-tagger/presets/joycaption/models/refresh'))
+      expect(call).toBeDefined()
+      expect(fetchMock.mock.calls.some(([url]) =>
+        String(url).endsWith('/api/llm-tagger/models/refresh'))).toBe(false)
+    })
+  })
+
+  it('selecting another LLM preset as global default uses the preset resource API', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -774,8 +812,8 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(([url, init]) => {
-        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
-        try { return JSON.parse(String(init.body)).llm_tagger?.current_preset === 'joycaption' } catch { return false }
+        if (init?.method !== 'PUT' || !String(url).includes('/api/llm-tagger/presets/default')) return false
+        try { return JSON.parse(String(init.body)).id === 'joycaption' } catch { return false }
       })
       expect(putCall).toBeDefined()
     })
@@ -794,7 +832,7 @@ describe('SettingsPage (PP0)', () => {
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(
-        ([, init]) => init?.method === 'PUT'
+        ([, init]) => init?.method === 'PATCH'
       )
       expect(putCall).toBeDefined()
       const body = JSON.parse(String(putCall![1].body))
