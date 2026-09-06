@@ -210,8 +210,28 @@ def _validate_final(
         raise StorageMigrationError("Migrated default preset differs")
 
 
+def _authorities_share_storage_root() -> bool:
+    """Return whether every split authority belongs to this layout marker.
+
+    Besides catching invalid runtime wiring, this prevents a marker from one
+    Studio Data root from activating stores in another root.  That matters
+    when a backup is mounted independently and keeps tests that isolate the
+    legacy source from accidentally reading the developer's live stores.
+    """
+    root = STORAGE_LAYOUT_FILE.parent.resolve()
+    authority_roots = (
+        legacy_secrets.SECRETS_FILE.parent.resolve(),
+        credentials.CREDENTIALS_FILE.parent.resolve(),
+        settings_store.SETTINGS_FILE.parent.resolve(),
+        preset_store.LLM_PRESETS_DIR.parent.resolve(),
+    )
+    return all(candidate == root for candidate in authority_roots)
+
+
 def is_split_complete() -> bool:
     with _LAYOUT_LOCK:
+        if not _authorities_share_storage_root():
+            return False
         record = _load_layout().migrations.get(_MIGRATION_KEY)
         return record is not None and record.state == "complete"
 

@@ -37,6 +37,19 @@ def _legacy() -> secrets.Secrets:
     return value
 
 
+def test_split_completion_is_scoped_to_one_storage_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate(monkeypatch, tmp_path)
+    storage_layout.ensure_storage_layout()
+    assert storage_layout.is_split_complete() is True
+
+    other_root = tmp_path / "restored-legacy-root"
+    monkeypatch.setattr(secrets, "SECRETS_FILE", other_root / "secrets.json")
+
+    assert storage_layout.is_split_complete() is False
+
+
 def test_split_migration_preserves_values_and_removes_secrets_from_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

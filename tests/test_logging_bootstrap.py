@@ -40,7 +40,13 @@ def test_webui_lifespan_calls_setup_logging(tmp_path: Path,
     monkeypatch.setenv("ANIMA_LOG_DIR", str(tmp_path))
     from fastapi.testclient import TestClient
     from studio import server
+    from studio.infrastructure import credentials
+    from studio.infrastructure import llm_model_cache
+    from studio.infrastructure import llm_preset_store
     from studio.infrastructure import paths
+    from studio.infrastructure import secrets
+    from studio.infrastructure import settings_store
+    from studio.infrastructure import storage_layout
 
     # 隔离 STUDIO_DATA：lifespan 会拿单实例锁 + disk_cache.init（其
     # startup_clean 会 rmtree root 下所有 session-*）。不隔离的话：
@@ -48,7 +54,22 @@ def test_webui_lifespan_calls_setup_logging(tmp_path: Path,
     # (b) 更糟 —— 老版本没锁时曾把活 server 的出图 cache 目录整个删掉。
     # lifespan 内部是函数级 `from ..infrastructure.paths import STUDIO_DATA`，
     # setattr 模块属性即可生效。
-    monkeypatch.setattr(paths, "STUDIO_DATA", tmp_path / "studio_data")
+    studio_data = tmp_path / "studio_data"
+    monkeypatch.setattr(paths, "STUDIO_DATA", studio_data)
+    monkeypatch.setattr(secrets, "SECRETS_FILE", studio_data / "secrets.json")
+    monkeypatch.setattr(credentials, "CREDENTIALS_FILE", studio_data / "credentials.json")
+    monkeypatch.setattr(settings_store, "SETTINGS_FILE", studio_data / "settings.json")
+    monkeypatch.setattr(llm_preset_store, "LLM_PRESETS_DIR", studio_data / "llm_presets")
+    monkeypatch.setattr(
+        llm_model_cache,
+        "LLM_MODEL_CACHE_DIR",
+        studio_data / "cache" / "llm_models",
+    )
+    monkeypatch.setattr(
+        storage_layout,
+        "STORAGE_LAYOUT_FILE",
+        studio_data / "storage-layout.json",
+    )
 
     # 触发 lifespan
     with TestClient(server.app) as client:

@@ -1059,7 +1059,10 @@ def update(partial: dict[str, Any]) -> Secrets:
 
 
 def _update_unlocked(partial: dict[str, Any]) -> Secrets:
-    current_dict = _load_unlocked().model_dump()
+    # Keep the public load/save seam used by callers and tests while the outer
+    # RLock makes the read-modify-write sequence atomic.  Both functions
+    # re-enter the same lock in legacy mode; RLock makes that safe.
+    current_dict = load().model_dump()
     # 剥离 models 的 read-compat computed 键（selected_anima / custom_anima_paths）：
     # 它们不是存储字段，留在 merge base 里会以「入站 legacy 键」的身份经
     # _migrate_legacy_model_fields 覆盖 partial 新写入的 selected/custom。
@@ -1076,7 +1079,7 @@ def _update_unlocked(partial: dict[str, Any]) -> Secrets:
         wd14_base.pop("model_ids", None)
     merged = _deep_merge(current_dict, partial)
     new = Secrets.model_validate(merged)
-    _save_unlocked(new)
+    save(new)
     return new
 
 
