@@ -79,7 +79,7 @@ python tools/download_models.py --modelscope      # 走魔搭社区
 打开 <http://127.0.0.1:8765/>，项目页「+ 新建项目」，侧栏 Stepper 引导走 8 步（标 ✱ 的可跳过）：
 
 1. **下载** — Booru 抓图（先在 Settings 填 Gelbooru / Danbooru 凭据）或本地 jpg / png / zip 上传。
-2. **筛选** — download / train 双面板，多选复制要训的图到 train/，子文件夹管理。
+2. **筛选** — 左侧未分配素材、右侧当前训练分组；多选后直接加入目标分组，并可管理训练子文件夹。需要留出评估图片时，在顶部「加入目标」中切换到次级的验证集模式。
 3. **预处理** ✱ — 总览（多选 + 一键撤销）+ 去重审核 + 放大（ESRGAN / Real-ESRGAN 多预设）+ 裁剪（手动框选 + 按宽高比预填）+ 涂抹（可选择覆盖原图或绘制训练遮罩）。不需要可直接跳过。
 4. **打标** — WD14 / CLTagger / LLM（OpenAI 兼容，含 JoyCaption preset）三选一 + 阈值，GPU EP 自动 fallback；顶部填 trigger_word 自动注入每张 caption。
 5. **标签编辑** — 缓存模式 + 还原点，批量加 / 删 / 替换，单图修。

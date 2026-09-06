@@ -79,7 +79,7 @@ python tools/download_models.py --modelscope      # Use ModelScope
 Open <http://127.0.0.1:8765/>, click "+ New project" on the projects page, and the sidebar stepper guides you through 8 steps (those marked ✱ are skippable):
 
 1. **Download** — Booru scraping (fill in Gelbooru / Danbooru credentials in Settings first) or local jpg / png / zip upload.
-2. **Curate** — download / train dual panels, multi-select to copy images into train/, subfolder management.
+2. **Curate** — unused images on the left and the current training folder on the right; select images to add them to that folder and manage training subfolders. When you need held-out evaluation images, switch the top **Destination** control to the secondary Validation mode.
 3. **Preprocess** ✱ — overview (multi-select + one-click undo) + duplicate review + upscale (ESRGAN / Real-ESRGAN presets) + crop (manual boxes + aspect-ratio prefill) + inpaint (either paint over the source image or draw a training mask). Skip if not needed.
 4. **Tag** — WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset) + thresholds, automatic GPU EP fallback; a trigger word at the top is auto-injected into every caption.
 5. **Tag editor** — cached mode + restore points, bulk add / delete / replace, per-image edits.
