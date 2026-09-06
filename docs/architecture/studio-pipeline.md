@@ -23,9 +23,14 @@
 
 ```
 studio_data/
-├── secrets.json                          ★ 全局服务配置（gelbooru token 等）
-│                                         studio_data/ 已被 .gitignore，自然安全
-├── presets/                              ★ 全局预设池
+├── settings.json                         ★ 非敏感全局设置（ADR 0017）
+├── credentials.json                      ★ 本机明文凭证；API 只写不读 secret
+├── storage-layout.json                   文件存储迁移状态与源 hash
+├── llm_presets/                          ★ LLM preset：一实体一 JSON 文件
+├── cache/llm_models/                     可删除、可重建的模型发现缓存
+├── backups/                              原子文件历史与迁移前 legacy 备份
+├── secrets.json                          旧版兼容投影；新代码不得作为权威源
+├── presets/                              ★ 全局训练预设池
 │   ├── train_baseline.yaml
 │   └── proj_42_baseline.yaml             从某 version 推回的预设
 ├── projects/{id}-{slug}/
@@ -143,49 +148,29 @@ CREATE INDEX idx_tasks_queue ON tasks(status, priority DESC, created_at ASC);
 
 ---
 
-## 4. 全局服务配置 `studio_data/secrets.json`
+## 4. 全局设置、凭证与 LLM preset（ADR 0017）
 
-```jsonc
-{
-  "gelbooru": {
-    "user_id": "",
-    "api_key": "",
-    "save_tags": false,                   // 是否同时保存 booru 自带标签
-    "convert_to_png": true,
-    "remove_alpha_channel": false
-  },
-  "huggingface": {
-    "token": "",                           // WD14 公开模型不强制；私有/限速时填
-    "endpoint": ""                         // 空 = HF 官方；可粘贴自建反代 URL。0.8.2 起 hf-mirror 暂时隐藏，见 docs/todo/hf-mirror-recheck.md
-  },
-  "joycaption": {
-    "base_url": "http://localhost:8000/v1",
-    "model": "fancyfeast/llama-joycaption-beta-one-hf-llava",
-    "prompt_template": "Descriptive Caption"
-  },
-  "wd14": {
-    "model_id": "SmilingWolf/wd-vit-tagger-v3",   // 当前选中值；候选列表统一在 model_sources
-    "threshold_general": 0.35,
-    "threshold_character": 0.85,
-    "blacklist_tags": []
-  },
-  "models": {
-    "selected": { "anima": "latest", "krea2": "raw_fp8" },   // 按族选中的主模型 variant / 自定义绝对路径
-    "selected_te": { "krea2": "fp8" },                       // Krea 2 文本编码器精度（bf16 / fp8）
-    "vram_policy": "auto"                                    // 出图显存策略：auto / save_vram / performance
-  },
-  "model_sources": {
-    // 模型来源统一（0.20）：每个 domain = 候选列表（内置 preset + 用户候选），
-    // kind=download|local；覆盖 wd14 / cltagger / eval 指标 / 放大器 / 两族主模型八个 domain。
-    // 当前选中值仍写各自旧字段（wd14.model_id / models.selected 等），运行时消费方零改动。
-    "wd14": [ { "kind": "download", "value": "SmilingWolf/wd-vit-tagger-v3", "builtin": true } ]
-  }
-}
-```
+自 ADR 0017 起，`studio_data/secrets.json` 不再是新版本的配置权威源。配置按生命周期和安全边界拆分：
 
-Pydantic 模型在 `studio/infrastructure/secrets.py`（`studio/secrets.py` 是兼容 shim）；GET / PUT `/api/secrets` 操作；敏感字段（`token` / `api_key`）GET 时显示 `"***"`，PUT 时客户端发 `"***"` 表示「保持不变」。老字段（`wd14.model_ids` / `models.custom` / `selected_anima` 等）由 validator 迁移进新结构并保留写盘（回滚版本可读），入站旧键继续生效。
+| 数据 | 权威存储 | API |
+|---|---|---|
+| 非敏感全局设置 | `studio_data/settings.json` | `GET/PATCH /api/settings` |
+| API key / token | `studio_data/credentials.json` | `/api/credentials`；secret 仅 write-only |
+| builtin LLM 模板 | `studio/llm_presets/*.json` | 只读；由代码发布 |
+| 用户 preset / builtin override | `studio_data/llm_presets/{id}.json` | `/api/llm-tagger/presets` CRUD |
+| 服务端模型候选 | `studio_data/cache/llm_models/` | 刷新接口，只改缓存 |
 
-前端 `/tools/settings` 表单分 7 个 tab（数据集 / 打标 / 训练 / 监控 / 测试 / 页面 / 系统），密码字段用 `<input type="password">`。系统 tab 含 webui 自更新版本卡片（详见 [ADR 0002](../adr/0002-webui-self-update.md)）和服务重启。
+`settings.json` 不保存 secret；LLM preset 只保存稳定的 `credential_ref`。凭证文件在本机为明文，这是“不使用 OS keyring、也不做同机伪加密”的明确威胁模型：本机文件读取权限仍等价于读取凭证。所有文件存储统一使用进程内 read-modify-write 锁、同目录临时文件、`fsync`、`os.replace`、有效版本备份和损坏恢复；存在但无法恢复的文件必须拒绝覆盖。
+
+前端 `/tools/settings` 继续使用聚合后的 `Secrets` TypeScript 视图展示设置，但普通变更提交到 `/api/settings`，LLM preset 和 credential 只能走独立资源 API。聚合响应永远把敏感字段显示为 `"***"`。`/api/secrets` 仅为兼容旧客户端保留；新代码不得通过它修改 LLM preset 列表。
+
+首次启动会严格读取旧 `secrets.json`，按 `storage-layout.json` 的 prepared/complete 状态进行可续跑迁移；迁移前原文件进入 `backups/legacy/`。只有 complete marker 落盘后新布局才成为权威源。此后 `secrets.json` 至多是供旧版本回滚的 best-effort 派生投影。
+
+排队的 LLM 打标任务在 job params 中冻结不含 secret 的 preset 快照（含 preset ID、ETag、完整 recipe 与 `credential_ref`）；worker 执行时只解析该凭证。preset 后续编辑/删除不改变已排队任务，凭证缺失则 fail-fast，禁止回退到其他 key。
+
+Pydantic 兼容模型仍在 `studio/infrastructure/secrets.py`（`studio/secrets.py` 是 shim），但持久化边界分别位于 `settings_store.py`、`credentials.py`、`llm_preset_store.py` 和 `config_store.py`。
+
+前端 `/tools/settings` 表单分 9 个 tab（密钥 / 数据集 / 预处理 / 打标 / 训练 / 监控 / 测试 / 页面 / 系统）。系统 tab 含 webui 自更新版本卡片（详见 [ADR 0002](../adr/0002-webui-self-update.md)）和服务重启。
 
 ---
 

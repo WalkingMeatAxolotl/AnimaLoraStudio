@@ -133,7 +133,7 @@ models  →  utils  →  runtime  →  studio  →  tools
 | `docs/announcements/<date>-v<ver>.md`（`tag: release`） | `CHANGELOG.md`、公告栏、GitHub Release Body | `python tools/bump_version.py bump --version X.Y.Z`（格式见 `docs/announcements/README.md`，ADR 0013） |
 | `studio/domain/training.py:TrainingConfig`（`studio/schema.py` 是 shim） | `argparse_bridge` 生成 argparse、前端 `SchemaForm` 渲染、`validate_schema_consistency()` 校验 | 改字段时跟 4 个 plugin registry（adapters / optimizers / schedulers / losses）的 Literal 枚举**一起改**，启动期会拒；`model_family` Literal 另与 runtime `families` registry + studio `FAMILY_ASSETS` / 能力矩阵三方对齐（`tests/test_model_family_gating.py` 锁死） |
 | `studio/domain/common.py`（能力矩阵 / 族默认 / `FAMILY_SAMPLING`） | runtime SPECS 直接引用（单源）、`cap_gate()` 展开 show_when、选项按族过滤 | 改族能力 / 族默认 / 采样白名单只动这一处 |
-| `studio/infrastructure/secrets.py` schema（`studio/secrets.py` 是 shim） | `/api/secrets` + Settings 7 tab 表单 | Pydantic 模型 + 前端表单同时改 |
+| `studio/infrastructure/secrets.py` Pydantic 兼容 schema（`studio/secrets.py` 是 shim） | ADR 0017 后由 `settings.json`、`credentials.json`、`llm_presets/*.json` 组合出的运行时视图 | 普通设置走 `/api/settings`；LLM preset / credential 必须走各自资源 API，禁止把 `llm_tagger.presets` 写回聚合配置 |
 
 ### 3.4 训练栈插件边界（ADR 0003）
 
