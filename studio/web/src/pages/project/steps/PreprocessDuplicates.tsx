@@ -11,8 +11,11 @@ import {
 import DuplicateReviewPanel, {
   DEFAULT_DUPLICATE_OPTIONS,
 } from '../../../components/DuplicateReviewPanel'
+import ActionGroup from '../../../components/ActionGroup'
+import Button from '../../../components/Button'
 import { useDialog } from '../../../components/Dialog'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
+import { SegmentedControl } from '../../../components/SelectionGroup'
 import StepShell from '../../../components/StepShell'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import { useToast } from '../../../components/Toast'
@@ -40,6 +43,7 @@ export default function PreprocessDuplicatesPage() {
   const [result, setResult] = useState<DuplicateScanResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const [logs, setLogs] = useState<DuplicateLog[]>([])
   const [scanLogVisible, setScanLogVisible] = useState(false)
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
@@ -80,6 +84,7 @@ export default function PreprocessDuplicatesPage() {
   const scan = async () => {
     if (busy) return
     setBusy(true)
+    setScanning(true)
     setResult(null)
     setSelected(new Set())
     setScanLogVisible(true)
@@ -104,6 +109,7 @@ export default function PreprocessDuplicatesPage() {
       toast(String(e), 'error')
       setLogs((prev) => [...prev, { ts: Date.now(), status: 'error', text: String(e) }])
     } finally {
+      setScanning(false)
       setBusy(false)
     }
   }
@@ -155,25 +161,30 @@ export default function PreprocessDuplicatesPage() {
       title={t('steps.preprocess.title')}
       subtitle={t('duplicates.subtitle')}
       actions={
-        <>
-          {/* 扫描重复 = ghost；确认去除 = primary（主操作），放最右 */}
-          <button
-            type="button"
-            onClick={() => void scan()}
-            disabled={busy}
-            className="btn btn-ghost btn-sm"
-          >
-            {busy ? t('duplicates.scanning') : t('duplicates.scanBtn')}
-          </button>
-          <button
-            type="button"
-            onClick={() => void apply()}
-            disabled={busy || selected.size === 0}
-            className="btn btn-primary btn-sm"
-          >
-            {t('duplicates.applyBtn', { n: selected.size })}
-          </button>
-        </>
+        <ActionGroup
+          aria-label={t('duplicates.actionsLabel')}
+          secondary={(
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={scanning}
+              disabled={busy}
+              onClick={() => void scan()}
+            >
+              {scanning ? t('duplicates.scanning') : t('duplicates.scanBtn')}
+            </Button>
+          )}
+          primary={(
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void apply()}
+              disabled={busy || selected.size === 0}
+            >
+              {t('duplicates.applyBtn', { n: selected.size })}
+            </Button>
+          )}
+        />
       }
       belowHeader={<PreprocessToolsBar current="dedupe" projectId={project.id} versionId={vid} />}
       logSources={[
@@ -182,7 +193,7 @@ export default function PreprocessDuplicatesPage() {
           label: t('logDrawer.dupScan'),
           // 扫描是同步 HTTP + SSE 进度，前端合成状态：跑着 = running，
           // 否则按最后一条日志判 failed/done。不可取消。
-          status: busy
+          status: scanning
             ? ('running' as const)
             : logs[logs.length - 1]?.status === 'error'
               ? ('failed' as const)
@@ -190,7 +201,7 @@ export default function PreprocessDuplicatesPage() {
           // 错误行加裸 `ERROR:` 前缀：LogView 按行契约的兼容规则识别级别着色
           lines: logs.map((l) => (l.status === 'error' ? `ERROR: ${l.text}` : l.text)),
           startedAt: logs[0] ? logs[0].ts / 1000 : null,
-          finishedAt: busy ? null : logs[logs.length - 1] ? logs[logs.length - 1].ts / 1000 : null,
+          finishedAt: scanning ? null : logs[logs.length - 1] ? logs[logs.length - 1].ts / 1000 : null,
         },
       ]}
     >
@@ -278,46 +289,44 @@ function DuplicateOperationPanel({
       </h3>
 
       <div className="flex items-center gap-2 text-sm flex-wrap">
-        <label className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5">
           <span className="text-fg-tertiary">{t('duplicates.scope')}</span>
-          <select
-            className="input text-sm"
-            style={{ width: 'auto', padding: '2px 6px' }}
+          <SegmentedControl
+            items={([
+              ['strict', 'scopeStrict'],
+              ['both', 'scopeBoth'],
+            ] as const).map(([value, key]) => ({
+              value,
+              label: t(`duplicates.${key}`),
+              disabled: busy,
+            }))}
             value={options.match_scope}
-            onChange={(e) => patch('match_scope', e.target.value as DuplicateScanOptions['match_scope'])}
-            disabled={busy}
-          >
-            <option value="strict">{t('duplicates.scopeStrict')}</option>
-            <option value="both">{t('duplicates.scopeBoth')}</option>
-          </select>
-        </label>
+            onChange={(value) => patch('match_scope', value as DuplicateScanOptions['match_scope'])}
+            ariaLabel={t('duplicates.scope')}
+            idPrefix="duplicate-scope"
+            size="sm"
+            layout="content"
+          />
+        </div>
         <span className="text-dim">·</span>
         <div
           className={'flex items-center gap-1.5' + (sensitivityLocked ? ' opacity-50' : '')}
           title={sensitivityLocked ? t('duplicates.sensitivityLockedHint') : undefined}
         >
           <span className="text-fg-tertiary">{t('duplicates.sensitivity')}</span>
-          <div className="inline-flex rounded-sm border border-subtle overflow-hidden">
-            {SENSITIVITY_OPTIONS.map(({ id, key }) => {
-              const active = options.sensitivity === id
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  disabled={busy || sensitivityLocked}
-                  onClick={() => patch('sensitivity', id)}
-                  className={
-                    'px-2 py-0.5 text-xs transition-colors disabled:cursor-not-allowed ' +
-                    (active
-                      ? 'bg-accent text-accent-fg font-medium'
-                      : 'bg-transparent text-fg-secondary hover:bg-overlay/40')
-                  }
-                >
-                  {t(`duplicates.${key}`)}
-                </button>
-              )
-            })}
-          </div>
+          <SegmentedControl
+            items={SENSITIVITY_OPTIONS.map(({ id, key }) => ({
+              value: id,
+              label: t(`duplicates.${key}`),
+              disabled: busy || sensitivityLocked,
+            }))}
+            value={options.sensitivity}
+            onChange={(value) => patch('sensitivity', value)}
+            ariaLabel={t('duplicates.sensitivity')}
+            idPrefix="duplicate-sensitivity"
+            size="sm"
+            layout="content"
+          />
         </div>
       </div>
     </section>

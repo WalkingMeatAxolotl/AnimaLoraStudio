@@ -20,6 +20,9 @@ export default function Filmstrip<T extends FilmstripItemBase>({
   activeName,
   onSelect,
   thumbUrl,
+  ariaLabel,
+  header,
+  itemLabel,
   emptyHint,
   renderOverlay,
 }: {
@@ -27,51 +30,67 @@ export default function Filmstrip<T extends FilmstripItemBase>({
   activeName: string | null
   onSelect: (name: string) => void
   thumbUrl: (im: T) => string
+  ariaLabel: string
+  header?: ReactNode
+  itemLabel?: (im: T) => string
   emptyHint?: string
   renderOverlay?: (im: T) => ReactNode
 }) {
-  if (items.length === 0) {
-    return (
-      <div className="flex items-center justify-center bg-sunken/40 border border-subtle rounded p-3 h-full text-center text-fg-tertiary text-[11px] leading-snug">
-        {emptyHint ?? ''}
-      </div>
-    )
-  }
   return (
-    <div className="grid grid-cols-3 gap-1 overflow-y-auto pr-1 bg-sunken/40 border border-subtle rounded p-1.5 h-full content-start">
-      {items.map((im) => {
-        const isActive = im.name === activeName
-        return (
-          <div key={im.name} className="fs-thumb-sq-cell">
-            <button
-              onClick={() => onSelect(im.name)}
-              className={'fs-thumb-sq ' + (isActive ? 'is-active' : '')}
-              title={im.name}
-            >
-              {/* <img> instead of background-image: browsers honour Cache-Control
-                  + ETag for <img src> reliably; CSS background-image hits the
-                  in-memory decoded-image cache and can keep showing stale bytes
-                  after an in-place crop output. object-fit: cover preserves the
-                  original squared-thumbnail look. */}
-              <img
-                src={thumbUrl(im)}
-                alt=""
-                draggable={false}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  objectPosition: 'center',
-                  pointerEvents: 'none',
-                }}
-              />
-              {renderOverlay?.(im)}
-            </button>
-          </div>
-        )
-      })}
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className="flex flex-col bg-sunken/40 border border-subtle rounded h-full min-h-0 overflow-hidden"
+    >
+      {header && (
+        <div className="shrink-0 border-b border-subtle p-1.5">
+          {header}
+        </div>
+      )}
+      {items.length === 0 ? (
+        <div className="flex flex-1 min-h-0 items-center justify-center p-3 text-center text-fg-tertiary text-[11px] leading-snug">
+          {emptyHint ?? ''}
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-1 overflow-y-auto p-1.5 pr-1 content-start min-h-0">
+          {items.map((im) => {
+            const isActive = im.name === activeName
+            return (
+              <div key={im.name} className="fs-thumb-sq-cell">
+                <button
+                  type="button"
+                  onClick={() => onSelect(im.name)}
+                  className={'fs-thumb-sq ' + (isActive ? 'is-active' : '')}
+                  title={im.name}
+                  aria-label={itemLabel?.(im) ?? im.name}
+                  aria-pressed={isActive}
+                >
+                  {/* An image element instead of background-image lets browsers honour
+                      Cache-Control + ETag reliably; CSS background-image hits the
+                      in-memory decoded-image cache and can keep showing stale bytes
+                      after an in-place crop output. object-fit: cover preserves the
+                      original squared-thumbnail look. */}
+                  <img
+                    src={thumbUrl(im)}
+                    alt=""
+                    draggable={false}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      objectPosition: 'center',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  {renderOverlay?.(im)}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

@@ -7,6 +7,7 @@ import {
   type DuplicateScanOptions,
   type DuplicateScanResult,
 } from '../api/client'
+import Button from './Button'
 
 export const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
   match_scope: 'both',
@@ -73,25 +74,30 @@ export default function DuplicateReviewPanel({
             : t('duplicates.empty')}
         </span>
         <span className="flex-1" />
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => onSelect(new Set(suggested))}
           disabled={busy || suggested.length === 0}
-          className="btn btn-secondary btn-sm"
         >
           {t('duplicates.selectSuggested')}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => onSelect(new Set())}
           disabled={busy || selected.size === 0}
-          className="btn btn-secondary btn-sm"
         >
           {t('common.deselect')}
-        </button>
+        </Button>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-2">
+      <div
+        role="region"
+        aria-label={t('duplicates.reviewScrollLabel')}
+        tabIndex={0}
+        className="flex-1 min-h-0 overflow-y-auto p-2"
+      >
         {!result ? (
           <div className="min-h-[180px] h-full flex flex-col items-center justify-center text-center px-6 py-10">
             <div className="text-sm font-medium text-fg-secondary">{t('duplicates.emptyTitle')}</div>
@@ -141,7 +147,10 @@ function DuplicateGroupCard({
 }) {
   const { t } = useTranslation()
   return (
-    <article className="rounded-md border border-subtle bg-sunken p-2">
+    <article
+      aria-label={t('duplicates.groupLabel', { id: group.group_id, n: group.items.length })}
+      className="rounded-md border border-subtle bg-sunken p-2"
+    >
       <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
         <span className="badge badge-neutral">#{group.group_id}</span>
         <span className="badge badge-neutral">{t('duplicates.groupCandidates', { n: group.items.length })}</span>
@@ -198,7 +207,13 @@ function DuplicateItemCell({
         (selected ? 'border-warn ring-2 ring-warn-soft' : 'border-ok ring-1 ring-ok-soft')
       }
     >
-      <button type="button" onClick={onPreview} className="block w-full aspect-square bg-sunken" title={item.name}>
+      <button
+        type="button"
+        onClick={onPreview}
+        className="block w-full aspect-square bg-sunken"
+        title={item.name}
+        aria-label={t('duplicates.previewCandidate', { name: item.name })}
+      >
         {(() => {
           const { folder, filename } = splitRel(item.name)
           return (
@@ -223,7 +238,8 @@ function DuplicateItemCell({
                 ? 'bg-warn text-white border-warn'
                 : 'bg-ok-soft text-ok border-ok'
             } disabled:opacity-60 disabled:cursor-not-allowed`}
-            aria-label={`${selected ? t('duplicates.restoreCandidate') : t('duplicates.removeCandidate')} ${item.name}`}
+            aria-label={`${selected ? t('duplicates.selectedRemove') : t('duplicates.keep')} ${item.name}`}
+            aria-pressed={selected}
           >
             {selected ? t('duplicates.selectedRemove') : t('duplicates.keep')}
           </button>
