@@ -104,9 +104,9 @@ StepShell
 ├─ belowHeader: PreprocessToolsBar（inpaint active）
 └─ 内容区 —— 单 section 卡片占满全宽（无统计 RightRail，涂抹无统计语义）
    └─ section
-      ├─ header 行: [全部/未改/已改] pills · 文件名 · W×H    [清除本图笔画 ghost]
+      ├─ header 行: 文件名 · W×H    [撤销 / 重做 / 放弃当前修改]
       └─ 内层三栏 grid '220px minmax(0,1fr) 260px'（同裁剪页参数）
-         ├─ Filmstrip（自裁剪页抽出共享；「已改」dot 角标）
+         ├─ Filmstrip（header 内含全部 / 未修改 / 待保存筛选；下面是共享缩略图与状态角标）
          ├─ InpaintCanvas：原图分辨率离屏 canvas + CSS 缩放；滚轮 zoom /
          │    空格拖拽 pan；笔刷圆形光标；底部细条 readout（zoom%·坐标）
          └─ ToolPanel：模式切换占位（涂抹|Mask，PR-B 启用）· 颜色 swatch

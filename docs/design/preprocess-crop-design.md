@@ -102,9 +102,9 @@ ADR 0004 的 `{kind, model, scale, action, target_area, src_size, dst_size, elap
 
 **画布交互**：8 handle（4 角 + 4 边） + 三分网格 + 暗色 dim 框外 + live 像素尺寸 / AR readout。
 
-**右侧 rect list**：缩略 + 可编辑 label + 输出像素 + 复制 / 删除（选中时 header 出 icon）。
+**右侧 rect list**：列表主信息只显示序号、长宽比与输出像素；`label` 仅在选中框后作为安静的可选备注编辑，并明确不影响 `_cN` 输出命名；复制 / 删除 / 清空本图都归属该检查器。
 
-**filter chips**：全部 / 待裁剪 / 已裁剪（按本 session 内 `cropsByImage` 状态过滤）。
+**filter chips**：全部 / 待裁剪 / 已裁剪（按本 session 内 `cropsByImage` 状态过滤），放在 Filmstrip 自己的 header 中，不与当前图画布操作混放。
 
 **主操作**：`裁剪当前图` / `▶ 裁剪全部(N)`。
 
@@ -209,7 +209,7 @@ StepShell (title / subtitle)
    └─ 右 RightRail (裁剪进度 / 预估产物 / AR 分布 / 盘占用)
 ```
 
-WorkArea 内部三列：filmstrip 竖排（3 col 正方 cover thumbs）/ canvas 容器测量自适应 / rect list 选中时 header 出 ⎘ ✕ icon。
+WorkArea 内部三列：filmstrip 竖排（header 内含状态筛选，下面是 3 col 正方 cover thumbs）/ canvas 容器测量自适应 / rect list（静态序号、比例与尺寸；选中后才显示可选备注，并提供 ⎘ / ✕）。
 
 ### 总览 tab（overview）
 
