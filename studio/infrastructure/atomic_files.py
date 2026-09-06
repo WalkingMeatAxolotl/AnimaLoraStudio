@@ -175,6 +175,65 @@ def atomic_write_text(
     )
 
 
+def archive_file(
+    path: Path,
+    archive_dir: Path,
+    *,
+    validate_existing: Optional[BytesValidator] = None,
+    mode: Optional[int] = None,
+    suffix: str = "bak",
+) -> Path:
+    """Atomically move an existing valid file into an archive directory."""
+    path = Path(path)
+    data = path.read_bytes()
+    if validate_existing is not None:
+        try:
+            validate_existing(data)
+        except Exception as exc:
+            raise InvalidExistingFileError(
+                f"Refusing to archive invalid existing file: {path}"
+            ) from exc
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    clean_suffix = suffix.strip(".") or "bak"
+    if clean_suffix == "bak":
+        archive_name = _backup_name(path)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        archive_name = f"{path.name}.{stamp}.{uuid.uuid4().hex}.{clean_suffix}"
+    archive_path = archive_dir / archive_name
+    if mode is not None:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+    os.replace(path, archive_path)
+    _fsync_directory(path.parent)
+    _fsync_directory(archive_dir)
+    return archive_path
+
+
+def replace_invalid_bytes(
+    path: Path,
+    data: bytes,
+    archive_dir: Path,
+    *,
+    mode: Optional[int] = None,
+) -> Path:
+    """Preserve invalid primary bytes, then atomically install replacement bytes."""
+    path = Path(path)
+    if not path.exists():
+        atomic_write_bytes(path, data, mode=mode)
+        return path
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    corrupt_path = archive_dir / (
+        f"{path.name}.{stamp}.{uuid.uuid4().hex}.corrupt"
+    )
+    atomic_write_bytes(corrupt_path, path.read_bytes(), mode=mode)
+    atomic_write_bytes(path, data, mode=mode)
+    return corrupt_path
+
+
 def recover_latest_valid_backup(
     path: Path,
     backup_dir: Path,
@@ -205,14 +264,9 @@ def recover_latest_valid_backup(
     if selected_path is None or selected_data is None:
         return None
 
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    corrupt_path = backup_dir / f"{path.name}.{stamp}.{uuid.uuid4().hex}.corrupt"
-    corrupt_bytes = path.read_bytes()
-    atomic_write_bytes(corrupt_path, corrupt_bytes, mode=mode)
-    # Deliberately bypass existing-file validation here: its failure is the
-    # reason recovery was requested, and the exact corrupt bytes are preserved.
-    atomic_write_bytes(path, selected_data, mode=mode)
+    corrupt_path = replace_invalid_bytes(
+        path, selected_data, backup_dir, mode=mode
+    )
     return RecoveryResult(
         data=selected_data,
         backup_path=selected_path,
