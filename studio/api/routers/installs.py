@@ -279,11 +279,17 @@ def xformers_install() -> dict[str, Any]:
 def _select_preset(
     tagger_cfg: "secrets.LLMTaggerConfig", preset_id: Optional[str]
 ) -> "secrets.LLMPresetConfig":
-    pid = preset_id or tagger_cfg.current_preset
+    if preset_id is None:
+        return tagger_cfg.active
     for preset in tagger_cfg.presets:
-        if preset.id == pid:
+        if preset.id == preset_id:
             return preset
-    return tagger_cfg.active
+    raise ValidationError(
+        f"LLM preset not found: {preset_id}",
+        code="llm_tagger.preset_not_found",
+        details={"preset_id": preset_id},
+        http_status=404,
+    )
 
 
 @router.post("/api/llm-tagger/models/refresh")
@@ -328,7 +334,7 @@ def refresh_llm_tagger_models(body: LLMModelsRefreshRequest) -> dict[str, Any]:
     }
     if body.api_key not in (None, secrets.MASK):
         preset_patch["api_key"] = api_key
-    new = secrets.update({"llm_tagger": {"presets": [preset_patch]}})
+    new = secrets.update_llm_preset(target.id, preset_patch)
     return {
         "items": model_ids,
         "preset_id": target.id,

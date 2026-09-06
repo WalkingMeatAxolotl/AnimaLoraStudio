@@ -7,15 +7,25 @@
 from __future__ import annotations
 
 import json
-from pathlib import PurePosixPath, PureWindowsPath
+import logging
+import threading
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
+from .atomic_files import (
+    InvalidExistingFileError,
+    atomic_write_text,
+    recover_latest_valid_backup,
+)
 from .paths import STUDIO_DATA
 
 SECRETS_FILE = STUDIO_DATA / "secrets.json"
 MASK = "***"
+_LOGGER = logging.getLogger(__name__)
+_SECRETS_LOCK = threading.RLock()
+_SECRETS_BACKUP_COUNT = 3
 # 点路径 + `*` 通配支持：`llm_tagger.presets.*.api_key` 会遍历 list 内每个 dict。
 SENSITIVE_FIELDS: tuple[str, ...] = (
     "gelbooru.api_key",
@@ -941,22 +951,84 @@ class Secrets(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def load() -> Secrets:
-    """读 secrets.json；缺失或损坏时返回默认实例（不抛错）。"""
+class SecretsCorruptError(RuntimeError):
+    """An existing secrets file is invalid and has no recoverable backup."""
+
+
+def _secrets_backup_dir() -> Path:
+    # Derive this dynamically so tests can safely monkeypatch SECRETS_FILE.
+    return SECRETS_FILE.parent / "backups" / "secrets"
+
+
+def _decode_secrets(raw: bytes) -> Secrets:
+    parsed = json.loads(raw.decode("utf-8"))
+    migrated = _migrate_legacy_schema(parsed) if isinstance(parsed, dict) else parsed
+    return Secrets.model_validate(migrated)
+
+
+def _validate_secrets_bytes(raw: bytes) -> None:
+    _decode_secrets(raw)
+
+
+def _load_unlocked() -> Secrets:
     if not SECRETS_FILE.exists():
         return Secrets()
+    # A transient filesystem failure is not evidence of corrupt content. Never
+    # replace a potentially valid latest file with an older backup for an I/O
+    # error (notably short-lived Windows antivirus/indexer locks).
+    raw = SECRETS_FILE.read_bytes()
     try:
-        raw = json.loads(SECRETS_FILE.read_text(encoding="utf-8"))
-        raw = _migrate_legacy_schema(raw) if isinstance(raw, dict) else raw
-        return Secrets.model_validate(raw)
-    except Exception:
-        # 文件损坏不应阻断 Studio 启动；用默认值覆盖
-        return Secrets()
+        return _decode_secrets(raw)
+    except Exception as original_exc:
+        try:
+            recovered = recover_latest_valid_backup(
+                SECRETS_FILE,
+                _secrets_backup_dir(),
+                validate=_validate_secrets_bytes,
+                mode=0o600,
+            )
+        except Exception as recovery_exc:
+            raise SecretsCorruptError(
+                f"Could not read or recover {SECRETS_FILE}"
+            ) from recovery_exc
+        if recovered is None:
+            raise SecretsCorruptError(
+                f"Existing secrets file is invalid and no valid backup exists: "
+                f"{SECRETS_FILE}"
+            ) from original_exc
+        _LOGGER.error(
+            "Recovered invalid secrets file from backup %s; corrupt bytes kept at %s",
+            recovered.backup_path,
+            recovered.corrupt_path,
+        )
+        return _decode_secrets(recovered.data)
+
+
+def load() -> Secrets:
+    """Read secrets, recovering a corrupt primary or failing without overwrite."""
+    with _SECRETS_LOCK:
+        return _load_unlocked()
+
+
+def _save_unlocked(s: Secrets) -> None:
+    try:
+        atomic_write_text(
+            SECRETS_FILE,
+            s.model_dump_json(indent=2),
+            backup_dir=_secrets_backup_dir(),
+            keep_backups=_SECRETS_BACKUP_COUNT,
+            validate_existing=_validate_secrets_bytes,
+            mode=0o600,
+        )
+    except InvalidExistingFileError as exc:
+        raise SecretsCorruptError(
+            f"Refusing to overwrite invalid secrets file: {SECRETS_FILE}"
+        ) from exc
 
 
 def save(s: Secrets) -> None:
-    SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SECRETS_FILE.write_text(s.model_dump_json(indent=2), encoding="utf-8")
+    with _SECRETS_LOCK:
+        _save_unlocked(s)
 
 
 def get(path: str) -> Any:
@@ -968,14 +1040,13 @@ def get(path: str) -> Any:
 
 
 def update(partial: dict[str, Any]) -> Secrets:
-    """deep-merge `partial` 进当前持久化值；返回新 Secrets 并落盘。
+    """Deep-merge a partial payload under one read-modify-write lock."""
+    with _SECRETS_LOCK:
+        return _update_unlocked(partial)
 
-    - `partial` 里 leaf 值为 MASK ("***") 时，表示「保持原值不变」。
-    - llm_tagger.presets 是 list[dict]，按 preset.id 匹配做按 id deep-merge，
-      让前端 PUT 整个 list 时单个 preset 的 api_key=MASK 也能保持原值。
-    - 未提及的字段沿用旧值。
-    """
-    current_dict = load().model_dump()
+
+def _update_unlocked(partial: dict[str, Any]) -> Secrets:
+    current_dict = _load_unlocked().model_dump()
     # 剥离 models 的 read-compat computed 键（selected_anima / custom_anima_paths）：
     # 它们不是存储字段，留在 merge base 里会以「入站 legacy 键」的身份经
     # _migrate_legacy_model_fields 覆盖 partial 新写入的 selected/custom。
@@ -992,8 +1063,31 @@ def update(partial: dict[str, Any]) -> Secrets:
         wd14_base.pop("model_ids", None)
     merged = _deep_merge(current_dict, partial)
     new = Secrets.model_validate(merged)
-    save(new)
+    _save_unlocked(new)
     return new
+
+
+def update_llm_preset(preset_id: str, partial: dict[str, Any]) -> Secrets:
+    """Update exactly one LLM preset without replacing sibling list items."""
+    with _SECRETS_LOCK:
+        current = _load_unlocked()
+        presets = list(current.llm_tagger.presets)
+        for index, preset in enumerate(presets):
+            if preset.id != preset_id:
+                continue
+            patch = dict(partial)
+            supplied_id = patch.pop("id", preset_id)
+            if supplied_id != preset_id:
+                raise ValueError("LLM preset id is immutable")
+            merged = _deep_merge(preset.model_dump(), patch)
+            merged["id"] = preset_id
+            presets[index] = LLMPresetConfig.model_validate(merged)
+            full_list = [item.model_dump() for item in presets]
+            # Reuse the canonical update path so computed compatibility fields
+            # are removed before re-validation (model_sources is especially
+            # sensitive to stale wd14/models compatibility projections).
+            return _update_unlocked({"llm_tagger": {"presets": full_list}})
+        raise KeyError(f"LLM preset not found: {preset_id}")
 
 
 def to_masked_dict(s: Secrets) -> dict[str, Any]:
@@ -1063,19 +1157,20 @@ def import_wandb_preset(
         ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
     ).strip("_") or "imported"
 
-    s = load()
-    used = {p.id for p in s.wandb.presets}
-    pid, idx = slug, 1
-    while pid in used:
-        idx += 1
-        pid = f"{slug}_{idx}"
+    with _SECRETS_LOCK:
+        s = _load_unlocked()
+        used = {p.id for p in s.wandb.presets}
+        pid, idx = slug, 1
+        while pid in used:
+            idx += 1
+            pid = f"{slug}_{idx}"
 
-    preset = WandBPresetConfig(**{**payload, "id": pid, "label": label})
-    s.wandb.presets.append(preset)
-    s.wandb.current_preset = preset.id
-    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（去重/回退保底）
-    save(new)
-    return new, preset
+        preset = WandBPresetConfig(**{**payload, "id": pid, "label": label})
+        s.wandb.presets.append(preset)
+        s.wandb.current_preset = preset.id
+        new = Secrets.model_validate(s.model_dump())  # 重跑 validator（去重/回退保底）
+        _save_unlocked(new)
+        return new, preset
 
 
 # ---------------------------------------------------------------------------
@@ -1121,20 +1216,21 @@ def import_llm_preset(
         ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
     ).strip("_") or "imported"
 
-    s = load()
-    used = {p.id for p in s.llm_tagger.presets}
-    pid, idx = slug, 1
-    while pid in used:
-        idx += 1
-        pid = f"{slug}_{idx}"
+    with _SECRETS_LOCK:
+        s = _load_unlocked()
+        used = {p.id for p in s.llm_tagger.presets}
+        pid, idx = slug, 1
+        while pid in used:
+            idx += 1
+            pid = f"{slug}_{idx}"
 
-    preset = LLMPresetConfig(**{**payload, "id": pid, "label": label})
-    s.llm_tagger.presets.append(preset)
-    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（内置排序/去重）
-    save(new)
-    # validator 会按内置顺序重排列表，按 id 取回权威 preset
-    imported = next(p for p in new.llm_tagger.presets if p.id == pid)
-    return new, imported
+        preset = LLMPresetConfig(**{**payload, "id": pid, "label": label})
+        s.llm_tagger.presets.append(preset)
+        new = Secrets.model_validate(s.model_dump())  # 重跑 validator（内置排序/去重）
+        _save_unlocked(new)
+        # validator 会按内置顺序重排列表，按 id 取回权威 preset
+        imported = next(p for p in new.llm_tagger.presets if p.id == pid)
+        return new, imported
 
 
 # ---------------------------------------------------------------------------
@@ -1362,10 +1458,11 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """把 patch 合并到 base：嵌套 dict 递归合并；leaf 值为 MASK 则丢弃。
+    """Merge dict fields; ID-bearing lists are authoritative replacements.
 
-    list[dict] 含 id 字段时（如 llm_tagger.presets）按 id deep-merge：保留 base
-    里 patch 没动到的 preset；patch 中存在的 preset 与 base 同 id 项 deep-merge。
+    The full-list replacement is retained for existing delete/reset callers.
+    Single-entity mutations must use a dedicated helper such as
+    :func:`update_llm_preset` rather than passing a one-item list.
     """
     out = dict(base)
     for key, val in patch.items():

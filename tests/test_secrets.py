@@ -41,11 +41,51 @@ def test_defaults_when_file_missing(secrets_file: Path) -> None:
     assert s.wandb.current_preset == s.wandb.presets[0].id
 
 
-def test_load_corrupt_json_returns_defaults(secrets_file: Path) -> None:
+def test_load_corrupt_json_without_backup_fails_closed(secrets_file: Path) -> None:
+    original = "{not valid json"
+    secrets_file.write_text(original, encoding="utf-8")
+
+    with pytest.raises(secrets.SecretsCorruptError, match="no valid backup"):
+        secrets.load()
+
+    assert secrets_file.read_text(encoding="utf-8") == original
+
+
+def test_load_io_error_does_not_restore_older_backup(
+    secrets_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secrets.update({"gelbooru": {"user_id": "older"}})
+    secrets.update({"gelbooru": {"user_id": "latest"}})
+    original_read_bytes = Path.read_bytes
+
+    def _fail_primary(path: Path) -> bytes:
+        if path == secrets_file:
+            raise PermissionError("temporarily locked")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", _fail_primary)
+
+    with pytest.raises(PermissionError, match="temporarily locked"):
+        secrets.load()
+
+    assert "latest" in secrets_file.read_text(encoding="utf-8")
+
+
+def test_load_corrupt_json_recovers_latest_valid_backup(
+    secrets_file: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    secrets.update({"gelbooru": {"user_id": "recover-me"}})
+    secrets.update({"gelbooru": {"user_id": "newer"}})
     secrets_file.write_text("{not valid json", encoding="utf-8")
-    # 不应抛错；返回默认实例
-    s = secrets.load()
-    assert s.gelbooru.user_id == ""
+
+    recovered = secrets.load()
+
+    assert recovered.gelbooru.user_id == "recover-me"
+    assert "Recovered invalid secrets file" in caplog.text
+    backup_dir = secrets_file.parent / "backups" / "secrets"
+    corrupt = list(backup_dir.glob("secrets.json.*.corrupt"))
+    assert len(corrupt) == 1
+    assert corrupt[0].read_text(encoding="utf-8") == "{not valid json"
 
 
 def test_wd14_defaults_include_candidate_list(secrets_file: Path) -> None:
@@ -156,6 +196,36 @@ def test_llm_preset_keeps_model_in_model_ids(secrets_file: Path) -> None:
     joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
     assert joy.model == "vision-a"
     assert joy.model_ids == ["vision-a"]
+
+
+def test_llm_preset_update_preserves_model_source_details(
+    secrets_file: Path,
+) -> None:
+    secrets.update(
+        {
+            "model_sources": {
+                "cltagger": [
+                    {
+                        "kind": "download",
+                        "repo": "custom/cltagger",
+                        "extra": {
+                            "model_path": "weights/model.onnx",
+                            "tag_mapping_path": "weights/tags.json",
+                        },
+                    }
+                ]
+            }
+        }
+    )
+
+    secrets.update_llm_preset("style_json", {"model": "vision-model"})
+
+    candidate = secrets.load().model_sources["cltagger"][0]
+    assert candidate.repo == "custom/cltagger"
+    assert candidate.extra == {
+        "model_path": "weights/model.onnx",
+        "tag_mapping_path": "weights/tags.json",
+    }
 
 
 def test_llm_preset_assist_tagger_normalization() -> None:

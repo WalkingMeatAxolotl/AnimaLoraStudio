@@ -295,6 +295,48 @@ def test_refresh_llm_models_saves_masked_config(
     assert style_loaded.api_key == "secret"
 
 
+def test_refresh_llm_models_preserves_all_custom_presets(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [
+                    {"id": "custom_one", "label": "Custom one", "model": "old-one"},
+                    {"id": "custom_two", "label": "Custom two", "model": "old-two"},
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(
+        llm_tagger,
+        "fetch_openai_compatible_models",
+        lambda *args, **kwargs: ["vision-a", "vision-b"],
+    )
+
+    response = client.post(
+        "/api/llm-tagger/models/refresh",
+        json={"preset_id": "style_json", "base_url": "http://x/v1"},
+    )
+
+    assert response.status_code == 200, response.text
+    by_id = {preset.id: preset for preset in secrets.load().llm_tagger.presets}
+    assert by_id["custom_one"].model == "old-one"
+    assert by_id["custom_two"].model == "old-two"
+
+
+def test_refresh_llm_models_rejects_unknown_explicit_preset(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/llm-tagger/models/refresh",
+        json={"preset_id": "missing", "base_url": "http://x/v1"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "llm_tagger.preset_not_found"
+
+
 def test_llm_connection_test_uses_masked_saved_key(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
