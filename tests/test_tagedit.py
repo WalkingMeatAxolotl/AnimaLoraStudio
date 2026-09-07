@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from studio.services.dataset import tagedit
+from studio.services.tagging.caption_format import caption_json_to_text
 
 
 @pytest.fixture
@@ -88,6 +89,39 @@ def test_read_documented_json_caption(train_dir: Path) -> None:
         "watercolor",
         "blue background",
     ]
+
+
+def test_write_documented_json_makes_editor_tags_authoritative(train_dir: Path) -> None:
+    f = _img(train_dir / "5_a", "1.png")
+    p = f.with_suffix(".json")
+    p.write_text(
+        json.dumps(
+            {
+                "fixed": {"quality": "best", "series": "", "artist": ""},
+                "character": {"name": "", "variant": "", "full": ""},
+                "from_path": {},
+                "ai_output": {
+                    "count": "1girl",
+                    "appearance": ["old appearance"],
+                    "tags": ["old tag"],
+                    "environment": [],
+                    "nl": "old prose",
+                },
+                "meta": {"trigger": "ohwx"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    tagedit.write_tags(f, ["ohwx", "new tag"])
+
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["tags"] == ["ohwx", "new tag"]
+    assert written["ai_output"]["tags"] == ["old tag"]
+    assert written["meta"] == {"trigger": "ohwx"}
+    assert tagedit.read_tags(f) == ["ohwx", "new tag"]
+    assert caption_json_to_text(written) == "ohwx, new tag. old prose"
 
 
 def test_read_missing_returns_empty(train_dir: Path) -> None:

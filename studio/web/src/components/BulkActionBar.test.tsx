@@ -61,7 +61,7 @@ describe('BulkActionBar (with confirm modal)', () => {
     const user = userEvent.setup()
     const { onApply } = renderBar()
 
-    await user.click(screen.getByRole('button', { name: '尾部' }))
+    await user.click(screen.getByRole('radio', { name: '尾部' }))
     await user.type(screen.getByLabelText('要添加的 tag'), 'warm')
     await user.click(screen.getByRole('button', { name: '添加' }))
     await confirmInModal(user)

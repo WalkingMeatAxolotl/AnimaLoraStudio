@@ -159,6 +159,18 @@ describe('ImageGrid (PP3)', () => {
     expect(onActivate).not.toHaveBeenCalled()
   })
 
+  it('renders a warning badge for locally modified images', () => {
+    render(
+      <ImageGrid
+        items={[{ name: 'dirty.png', thumbUrl: '/dirty', badge: '未保存', badgeTone: 'warning' }]}
+        selected={new Set()}
+        onSelect={() => {}}
+      />
+    )
+
+    expect(screen.getByText('未保存')).toHaveClass('badge-warn')
+  })
+
   it('shows empty hint', () => {
     render(
       <ImageGrid items={[]} selected={new Set()} onSelect={() => {}} emptyHint="空空" />

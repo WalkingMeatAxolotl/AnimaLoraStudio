@@ -47,7 +47,7 @@ describe('SaveBar', () => {
     expect(group).not.toBeNull()
     expect(within(group as HTMLElement).getAllByRole('button').map((button) => button.textContent))
       .toEqual(['Restore points', 'Save (3)'])
-    expect(screen.getByRole('button', { name: 'Save (3)' })).toHaveClass('btn-primary')
+    expect(screen.getByRole('button', { name: 'Save (3)' })).toHaveClass('btn-danger')
     expect(screen.getByRole('button', { name: 'Restore points' })).toHaveClass('btn-ghost')
     expect(group?.textContent).not.toMatch(/[💾🕒]/u)
   })
