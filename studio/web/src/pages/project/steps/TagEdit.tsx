@@ -7,11 +7,17 @@ import {
   type ProjectDetail,
   type Version,
 } from '../../../api/client'
+import Alert from '../../../components/Alert'
+import Badge from '../../../components/Badge'
 import BulkActionBar from '../../../components/BulkActionBar'
+import Button from '../../../components/Button'
+import Card from '../../../components/Card'
 import { useDialog } from '../../../components/Dialog'
+import EmptyState from '../../../components/EmptyState'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import PaneResizer, { normalizePanePair } from '../../../components/PaneResizer'
 import SaveBar from '../../../components/SaveBar'
+import { SegmentedControl } from '../../../components/SelectionGroup'
 import StepShell from '../../../components/StepShell'
 import TagEditor from '../../../components/TagEditor'
 import TagStatsPanel from '../../../components/TagStatsPanel'
@@ -56,9 +62,17 @@ export default function TagEditPage() {
   const versionId = activeVersion?.id ?? null
 
   const [cache, setCache] = useState<Map<string, string[]>>(new Map())
+  const dirtyRef = useRef(false)
+  const editRevisionRef = useRef(0)
+  const reloadRequestRef = useRef(0)
+  const saveInFlightRef = useRef(false)
   const [initial, setInitial] = useState<Map<string, string[]>>(new Map())
   const [meta, setMeta] = useState<Map<string, CaptionMeta>>(new Map())
   const [keys, setKeys] = useState<string[]>([])
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [externalUpdatePending, setExternalUpdatePending] = useState(false)
 
   const [activeKey, setActiveKey] = useState<string>('')
   const [sel, setSel] = useState<Set<string>>(new Set())
@@ -90,10 +104,23 @@ export default function TagEditPage() {
   const gridMax = 100 - boundedSidePct - TAG_EDIT_PREVIEW_MIN
   const sideMax = 100 - boundedGridPct - TAG_EDIT_PREVIEW_MIN
 
-  const reloadCache = useCallback(async () => {
-    if (versionId == null) return
+  const reloadCache = useCallback(async (
+    mode: 'initial' | 'refresh' | 'replace' = 'refresh',
+  ) => {
+    if (versionId == null) return false
+    const requestId = ++reloadRequestRef.current
+    const editRevision = editRevisionRef.current
+    if (mode === 'initial') setIsLoading(true)
     try {
       const r = await api.listCaptionsFull(project.id, versionId)
+      if (requestId !== reloadRequestRef.current) return false
+      if (
+        mode === 'refresh' &&
+        (dirtyRef.current || editRevisionRef.current !== editRevision)
+      ) {
+        setExternalUpdatePending(true)
+        return false
+      }
       const c = new Map<string, string[]>()
       const m = new Map<string, CaptionMeta>()
       const ks: string[] = []
@@ -106,27 +133,40 @@ export default function TagEditPage() {
         m.set(k, { folder: it.folder, name: it.name, format: it.format })
         ks.push(k)
       }
-      setCache(c); setInitial(new Map(c)); setMeta(m); setKeys(ks)
-    } catch (e) { toast(String(e), 'error') }
-  }, [project.id, versionId, toast])
-
-  useEffect(() => { void reloadCache() }, [reloadCache])
-
-  useEventStream((evt) => {
-    if (
-      evt.type === 'version_state_changed' &&
-      versionId != null &&
-      evt.version_id === versionId
-    ) {
-      void reloadCache(); void reload()
-    } else if (
-      evt.type === 'job_state_changed' &&
-      evt.project_id === project.id &&
-      (evt.status === 'done' || evt.status === 'failed')
-    ) {
-      void reloadCache(); void reload()
+      setCache(c)
+      setInitial(new Map(c))
+      setMeta(m)
+      setKeys(ks)
+      setHasLoaded(true)
+      setLoadError(null)
+      setExternalUpdatePending(false)
+      return true
+    } catch (e) {
+      if (requestId !== reloadRequestRef.current) return false
+      setLoadError(String(e))
+      return false
+    } finally {
+      if (mode === 'initial' && requestId === reloadRequestRef.current) {
+        setIsLoading(false)
+      }
     }
-  })
+  }, [project.id, versionId])
+
+  useEffect(() => {
+    setCache(new Map())
+    setInitial(new Map())
+    setMeta(new Map())
+    setKeys([])
+    setHasLoaded(false)
+    setIsLoading(true)
+    setLoadError(null)
+    setExternalUpdatePending(false)
+    setActiveKey('')
+    setSel(new Set())
+    setAnchor(null)
+    setFolderFilter('')
+    void reloadCache('initial')
+  }, [reloadCache])
 
   const dirtyKeys = useMemo(() => {
     const out: string[] = []
@@ -138,6 +178,27 @@ export default function TagEditPage() {
     return out
   }, [cache, initial, keys])
   const dirty = dirtyKeys.length > 0
+  const dirtyKeySet = useMemo(() => new Set(dirtyKeys), [dirtyKeys])
+  dirtyRef.current = dirty
+
+  useEventStream((evt) => {
+    const relevantVersion = versionId != null && evt.version_id === versionId
+    const versionChanged = evt.type === 'version_state_changed' && relevantVersion
+    const tagJobFinished =
+      evt.type === 'job_state_changed' &&
+      relevantVersion &&
+      evt.project_id === project.id &&
+      evt.kind === 'tag' &&
+      (evt.status === 'done' || evt.status === 'failed')
+    if (!versionChanged && !tagJobFinished) return
+
+    void reload()
+    if (dirty) {
+      setExternalUpdatePending(true)
+      return
+    }
+    void reloadCache('refresh')
+  })
 
   useEffect(() => {
     if (!dirty) return
@@ -200,6 +261,19 @@ export default function TagEditPage() {
     return c
   }, [meta])
 
+  useEffect(() => {
+    const valid = new Set(keys)
+    setSel((prev) => {
+      const next = new Set(Array.from(prev).filter((key) => valid.has(key)))
+      return next.size === prev.size ? prev : next
+    })
+    setActiveKey((prev) => (prev && !valid.has(prev) ? '' : prev))
+    if (folderFilter && !folderNames.includes(folderFilter)) {
+      setFolderFilter('')
+      setAnchor(null)
+    }
+  }, [folderFilter, folderNames, keys])
+
   const filteredKeys = useMemo(() => {
     if (!folderFilter) return keys
     return keys.filter((k) => meta.get(k)?.folder === folderFilter)
@@ -217,16 +291,18 @@ export default function TagEditPage() {
               ? api.versionThumbUrl(project.id, activeVersion.id, 'train', m.name, m.folder)
               : '',
           meta: tags.slice(0, 5).join(', '),
+          badge: dirtyKeySet.has(k) ? t('tagEdit.unsavedBadge') : undefined,
+          badgeTone: dirtyKeySet.has(k) ? 'warning' as const : undefined,
         }
       }),
-    [filteredKeys, meta, cache, project.id, activeVersion]
+    [filteredKeys, meta, cache, dirtyKeySet, project.id, activeVersion, t]
   )
 
   const selectedKeys = useMemo(
     () => filteredKeys.filter((k) => sel.has(k)),
     [filteredKeys, sel]
   )
-  const navKeys = selectedKeys.length > 0 ? selectedKeys : filteredKeys
+  const navKeys = activeKey && selectedKeys.includes(activeKey) ? selectedKeys : filteredKeys
   const activeIndex = activeKey ? navKeys.indexOf(activeKey) : -1
 
   const tagSuggestions = useMemo(() => {
@@ -238,17 +314,25 @@ export default function TagEditPage() {
   const handlePickTag = useCallback(
     (tag: string) => {
       const matched = new Set<string>()
-      for (const k of keys) {
+      for (const k of filteredKeys) {
         if ((cache.get(k) ?? []).includes(tag)) matched.add(k)
       }
       setSel(matched); setAnchor(null)
       toast(t('tagEdit.selectedContaining', { tag, n: matched.size }), 'success')
     },
-    [keys, cache, toast, t]
+    [filteredKeys, cache, toast, t]
   )
 
   if (!activeVersion) {
-    return <p className="text-fg-tertiary p-6">{t('tagEdit.noVersion')}</p>
+    return <EmptyState title={t('tagEdit.title')} description={t('tagEdit.noVersion')} />
+  }
+
+  const handleFolderChange = (folder: string) => {
+    if (folder === folderFilter) return
+    setFolderFilter(folder)
+    setSel(new Set())
+    setAnchor(null)
+    setActiveKey('')
   }
 
   const handleClick = (key: string, e: React.MouseEvent) => {
@@ -265,12 +349,17 @@ export default function TagEditPage() {
 
   const updateActiveTags = (tags: string[]) => {
     if (!activeKey) return
+    editRevisionRef.current += 1
+    dirtyRef.current = true
     setCache((prev) => {
       const next = new Map(prev); next.set(activeKey, [...tags]); return next
     })
   }
 
   const applyBulkUpdates = (updates: Map<string, string[]>) => {
+    if (updates.size === 0) return
+    editRevisionRef.current += 1
+    dirtyRef.current = true
     setCache((prev) => {
       const next = new Map(prev)
       for (const [k, v] of updates) next.set(k, v)
@@ -330,22 +419,86 @@ export default function TagEditPage() {
     toast(t('tagEdit.replacedInN', { from: oldTag, to: newTag, n: updates.size }), 'success')
   }
 
-  const onSave = async () => {
-    if (!dirty || versionId == null) return
+  const onSave = async (confirmExternal = true) => {
+    if (!dirty || versionId == null || saveInFlightRef.current) return
+    if (externalUpdatePending && confirmExternal) {
+      const proceed = await confirm(
+        t('tagEdit.externalSaveMessage', { n: dirtyKeys.length }),
+        { tone: 'warn', title: t('tagEdit.externalUpdateTitle') },
+      )
+      if (!proceed) return
+    }
+
+    const editRevisionAtSave = editRevisionRef.current
     const items: CommitItem[] = dirtyKeys.map((k) => {
       const m = meta.get(k)!
-      return { folder: m.folder, name: m.name, tags: cache.get(k) ?? [] }
+      return { folder: m.folder, name: m.name, tags: [...(cache.get(k) ?? [])] }
     })
+    const submitted = new Map(items.map((item) => [
+      keyOf(item.folder, item.name),
+      [...item.tags],
+    ]))
+    saveInFlightRef.current = true
     try {
       const r = await api.commitCaptions(project.id, versionId, items)
-      setInitial(new Map(cache))
-      toast(t('tagEdit.savedToast', { written: r.written, id: r.snapshot.id }), 'success')
-      void reload()
-    } catch (e) { toast(String(e), 'error') }
+      const skipped = new Set(r.skipped)
+      const writtenKeys = dirtyKeys.filter((k) => !skipped.has(k))
+      setInitial((prev) => {
+        const next = new Map(prev)
+        for (const k of writtenKeys) next.set(k, [...(submitted.get(k) ?? [])])
+        return next
+      })
+
+      if (r.skipped.length > 0) {
+        toast(t('tagEdit.saveSkippedToast', {
+          written: r.written,
+          skipped: r.skipped.length,
+        }), 'error')
+      } else {
+        toast(t('tagEdit.savedToast', { written: r.written, id: r.snapshot.id }), 'success')
+      }
+
+      const editedDuringSave = editRevisionRef.current !== editRevisionAtSave
+      if (externalUpdatePending && r.skipped.length === 0 && !editedDuringSave) {
+        // The submitted snapshot is now the clean baseline. A normal refresh still
+        // refuses to apply if the user edits while the follow-up request is in flight.
+        dirtyRef.current = false
+        await reloadCache('refresh')
+      }
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      saveInFlightRef.current = false
+    }
+  }
+
+  const discardAndRefresh = async () => {
+    if (dirty) {
+      const discard = await confirm(
+        t('tagEdit.externalDiscardMessage', { n: dirtyKeys.length }),
+        {
+          tone: 'danger',
+          title: t('tagEdit.externalUpdateTitle'),
+          okText: t('tagEdit.discardAndRefresh'),
+          cancelText: t('tagEdit.unsavedConfirmStay'),
+        },
+      )
+      if (!discard) return
+    }
+    const refreshed = await reloadCache('replace')
+    if (!refreshed) return
+    setExternalUpdatePending(false)
+    setActiveKey('')
+    setSel(new Set())
+    setAnchor(null)
+    await reload()
   }
 
   const onAfterRestore = async () => {
-    await reloadCache()
+    const refreshed = await reloadCache('replace')
+    if (!refreshed) return
+    setExternalUpdatePending(false)
     setActiveKey('')
     setSel(new Set())
     setAnchor(null)
@@ -362,6 +515,7 @@ export default function TagEditPage() {
   const activeFolder = activeMeta?.folder ?? ''
   const activeName = activeMeta?.name ?? ''
   const activeTags = activeKey ? cache.get(activeKey) ?? [] : []
+  const activeDirty = activeKey ? dirtyKeySet.has(activeKey) : false
 
   const isEditing = Boolean(activeKey)
 
@@ -372,15 +526,15 @@ export default function TagEditPage() {
       actions={
         <>
           {activeVersion.trigger_word && (
-            <span className="badge badge-neutral" title={t('tagEdit.triggerWordHint')}>
+            <Badge tone="neutral" title={t('tagEdit.triggerWordHint')}>
               {t('tagEdit.triggerWord')}:{' '}
               <code className="font-mono">{activeVersion.trigger_word}</code>
-            </span>
+            </Badge>
           )}
           {stats && (
-            <span className={allTagged ? 'badge badge-ok' : 'badge badge-neutral'}>
+            <Badge tone={allTagged ? 'success' : 'neutral'}>
               {t('tagEdit.taggedBadge', { tagged: taggedTotal, total: trainTotal })}
-            </span>
+            </Badge>
           )}
           <SaveBar
             pid={project.id}
@@ -392,7 +546,75 @@ export default function TagEditPage() {
         </>
       }
     >
+      {externalUpdatePending && (
+        <Alert
+          tone="warning"
+          size="sm"
+          title={t('tagEdit.externalUpdateTitle')}
+          className="mb-related shrink-0"
+          action={(
+            <div className="flex flex-wrap items-center gap-related">
+              <Button variant="primary" size="sm" onClick={() => void onSave(false)}>
+                {t('tagEdit.saveAndRefresh')}
+              </Button>
+              <Button variant="danger" size="sm" onClick={() => void discardAndRefresh()}>
+                {t('tagEdit.discardAndRefresh')}
+              </Button>
+            </div>
+          )}
+        >
+          {t('tagEdit.externalUpdateMessage', { n: dirtyKeys.length })}
+        </Alert>
+      )}
+
+      {hasLoaded && loadError && (
+        <Alert
+          tone="danger"
+          size="sm"
+          role="alert"
+          title={t('tagEdit.refreshErrorTitle')}
+          className="mb-related shrink-0"
+          action={(
+            <Button variant="secondary" size="sm" onClick={() => void reloadCache('refresh')}>
+              {t('common.retry')}
+            </Button>
+          )}
+        >
+          {loadError}
+        </Alert>
+      )}
+
+      {isLoading && !hasLoaded ? (
+        <Card
+          role="status"
+          aria-busy="true"
+          padding="lg"
+          className="flex flex-1 min-h-0 items-center justify-center text-sm text-fg-secondary"
+        >
+          {t('tagEdit.loading')}
+        </Card>
+      ) : !hasLoaded && loadError ? (
+        <Alert
+          tone="danger"
+          role="alert"
+          title={t('tagEdit.loadErrorTitle')}
+          action={(
+            <Button variant="secondary" size="sm" onClick={() => void reloadCache('initial')}>
+              {t('common.retry')}
+            </Button>
+          )}
+        >
+          {loadError}
+        </Alert>
+      ) : hasLoaded && keys.length === 0 ? (
+        <EmptyState
+          title={t('tagEdit.emptyTitle')}
+          description={t('tagEdit.noImagesHint')}
+          className="flex-1"
+        />
+      ) : (
       <div
+        data-tag-edit-workspace
         ref={rowRef}
         role="region"
         aria-label={t('tagEdit.workspaceLabel')}
@@ -400,35 +622,35 @@ export default function TagEditPage() {
         className="flex flex-1 min-h-0 gap-2.5 overflow-x-auto overflow-y-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
       >
 
-        <section
+        <Card
+          as="section"
           id={TAG_EDIT_GRID_PANE_ID}
-          className="rounded-md border border-subtle bg-surface flex flex-col min-w-[240px] overflow-hidden"
+          radius="compact"
+          className="flex flex-col min-w-[240px] min-h-0 overflow-hidden"
           style={{ flex: isEditing ? `0 0 ${boundedGridPct}%` : 1 }}
         >
-          {folderNames.length > 1 && (
-            <div className="px-2 pt-2 pb-1.5 flex items-center gap-1 flex-wrap shrink-0 border-b border-subtle">
-              {['', ...folderNames].map((f) => {
-                const isActive = f === folderFilter
-                const label = f || t('common.all')
-                const count = f ? folderCounts.get(f) ?? 0 : keys.length
-                return (
-                  <button
-                    key={f || '__all__'}
-                    type="button"
-                    onClick={() => setFolderFilter(f)}
-                    className={
-                      'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
-                      (isActive
-                        ? 'bg-accent text-white'
-                        : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
-                    }
-                  >
-                    {label} {count}
-                  </button>
-                )
-              })}
+          <div className="px-field py-related flex flex-col gap-related shrink-0 border-b border-subtle">
+            <div className="flex items-center gap-related min-w-0">
+              <h2 className="type-panel-title m-0 flex-1">{t('tagEdit.imageListTitle')}</h2>
+              <span className="text-xs text-fg-tertiary tnum">
+                {t('tagEdit.visibleCount', { n: filteredKeys.length })}
+              </span>
             </div>
-          )}
+            {folderNames.length > 1 && (
+              <SegmentedControl
+                items={['', ...folderNames].map((folder) => ({
+                  value: folder,
+                  label: `${folder || t('common.all')} ${folder ? folderCounts.get(folder) ?? 0 : keys.length}`,
+                }))}
+                value={folderFilter}
+                onChange={handleFolderChange}
+                ariaLabel={t('tagEdit.folderFilterLabel')}
+                idPrefix="tag-edit-folder"
+                size="sm"
+                layout="content"
+              />
+            )}
+          </div>
           <ImageGrid
             className="flex-1 min-h-0"
             contentClassName="p-2"
@@ -437,15 +659,15 @@ export default function TagEditPage() {
             activeName={activeKey || undefined}
             onSelect={handleClick}
             onActivate={setActiveKey}
-            clickMode="activate"
-            ariaLabel="tag-edit-grid"
+            clickMode={sel.size > 0 ? 'select' : 'activate'}
+            ariaLabel={t('tagEdit.gridLabel')}
             emptyHint={
               folderFilter
                 ? t('tagEdit.noImagesInFolder', { folder: folderFilter })
                 : t('tagEdit.noImagesHint')
             }
           />
-        </section>
+        </Card>
 
         {isEditing && (
           <PaneResizer
@@ -460,7 +682,7 @@ export default function TagEditPage() {
         )}
 
         {isEditing && (
-          <section className="flex-1 min-w-[240px] rounded-md border border-subtle bg-surface flex flex-col overflow-hidden">
+          <Card as="section" radius="compact" className="flex-1 min-w-[240px] min-h-0 flex flex-col overflow-hidden">
             <div className="px-3 py-2 border-b border-subtle shrink-0 flex items-center gap-2">
               <span className="text-xs text-fg-tertiary">{t('tagEdit.singleEdit')}</span>
               <code className="flex-1 min-w-0 text-xs font-mono text-fg-secondary truncate">
@@ -477,7 +699,7 @@ export default function TagEditPage() {
                 alt={activeName}
               />
             </div>
-          </section>
+          </Card>
         )}
 
         <PaneResizer
@@ -500,22 +722,85 @@ export default function TagEditPage() {
             // editing 时：bulk + 标签分布 都和"调单图标签"无关，整个侧栏让位给
             // TagEditor。退出 editing 后自动回来，sel / folderFilter 等 state
             // 保留（隐藏的是 UI 不是状态）。
-            <section className="flex-1 rounded-md border border-subtle bg-surface p-2.5 flex flex-col gap-2 min-h-0 overflow-hidden">
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button onClick={() => navActive(-1)} disabled={navKeys.length === 0} aria-label={t('tagEdit.prevImage')} className="btn btn-secondary btn-sm">◀</button>
-                <span className="text-xs text-fg-tertiary font-mono flex-1 text-center">
-                  {activeIndex >= 0 ? `${activeIndex + 1} / ${navKeys.length}` : `– / ${navKeys.length}`}
-                </span>
-                <button onClick={() => navActive(1)} disabled={navKeys.length === 0} aria-label={t('tagEdit.nextImage')} className="btn btn-secondary btn-sm">▶</button>
-                <button onClick={() => setActiveKey('')} className="btn btn-ghost btn-sm ml-1" aria-label={t('tagEdit.closeEdit')}>✕</button>
+            <Card
+              as="section"
+              radius="compact"
+              className="flex-1 flex flex-col min-h-0 overflow-hidden"
+              aria-labelledby="tag-edit-editor-title"
+            >
+              <header className="px-2.5 py-2 border-b border-subtle flex items-center gap-2 shrink-0 min-w-0">
+                <div className="flex items-baseline gap-2 min-w-0">
+                  <h2 id="tag-edit-editor-title" className="type-panel-title m-0 whitespace-nowrap">
+                    {t('tagEdit.title')}
+                  </h2>
+                  <span className="text-xs text-fg-tertiary tnum whitespace-nowrap">
+                    {t('tagEditor.tagCount', { n: activeTags.length })}
+                  </span>
+                  {activeDirty && (
+                    <Badge tone="warning" size="sm">
+                      {t('tagEdit.unsavedBadge')}
+                    </Badge>
+                  )}
+                </div>
+                <div className="ml-auto flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    iconOnly
+                    onClick={() => navActive(-1)}
+                    disabled={navKeys.length === 0}
+                    aria-label={t('tagEdit.prevImage')}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="m15 18-6-6 6-6" />
+                    </svg>
+                  </Button>
+                  <span
+                    className="min-w-[2.75rem] text-xs text-fg-tertiary font-mono text-center tnum"
+                    title={t(selectedKeys.includes(activeKey) ? 'tagEdit.navSelectedScope' : 'tagEdit.navFolderScope')}
+                  >
+                    {`${activeIndex + 1}/${navKeys.length}`}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    iconOnly
+                    onClick={() => navActive(1)}
+                    disabled={navKeys.length === 0}
+                    aria-label={t('tagEdit.nextImage')}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="m9 18 6-6-6-6" />
+                    </svg>
+                  </Button>
+                  <span className="mx-0.5 h-4 w-px bg-subtle" aria-hidden="true" />
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    iconOnly
+                    onClick={() => setActiveKey('')}
+                    aria-label={t('tagEdit.closeEdit')}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                      <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                  </Button>
+                </div>
+              </header>
+              <div className="p-2.5 flex-1 min-h-0 flex flex-col">
+                <TagEditor
+                  resetKey={activeKey}
+                  tags={activeTags}
+                  onChange={updateActiveTags}
+                  showTagCount={false}
+                />
               </div>
-              <TagEditor tags={activeTags} onChange={updateActiveTags} />
-            </section>
+            </Card>
           ) : (
             // BulkActionBar + TagStatsPanel 合到同一个外框 section（"标签编辑
             // 工作区"），视觉上是一个面板：上半是 batch 输入区，下半是标签分布
             // 兼快捷单 tag 操作区。两者共享"操作 = 给当前选中图做"的语义。
-            <section className="flex-1 min-h-0 rounded-md border border-subtle bg-surface flex flex-col overflow-hidden">
+            <Card as="section" radius="compact" className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <BulkActionBar
                 cache={cache}
                 selectedKeys={selectedKeys}
@@ -532,10 +817,11 @@ export default function TagEditPage() {
                 onRemoveTag={removeTagFromSelected}
                 onReplaceTag={replaceTagInSelected}
               />
-            </section>
+            </Card>
           )}
         </div>
       </div>
+      )}
     </StepShell>
   )
 }

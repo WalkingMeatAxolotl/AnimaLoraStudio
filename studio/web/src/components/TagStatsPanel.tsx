@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import Button from './Button'
+import { Input } from './FormControl'
 import { TranslatedTag } from './tagDisplay/TranslatedTag'
 import { TagSuggestList } from './tagSuggest/TagSuggestList'
 import { useTagSuggest } from './tagSuggest/useTagSuggest'
@@ -109,12 +111,13 @@ export default function TagStatsPanel({
         )}
         <span className="flex-1" />
         {usingSelection && (
-          <input
+          <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t('common.filter')}
-            className="input"
-            style={{ fontSize: 'var(--t-xs)', padding: '1px 8px', width: 120 }}
+            aria-label={t('tagStats.filterLabel')}
+            controlSize="sm"
+            className="w-[120px]"
           />
         )}
       </div>
@@ -168,6 +171,7 @@ export default function TagStatsPanel({
                     className="flex items-center gap-1 px-2 py-0.5 rounded-sm bg-overlay"
                   >
                     <EditTagInput
+                      tag={tag}
                       editInputRef={editInputRef}
                       value={editValue}
                       setValue={setEditValue}
@@ -177,18 +181,24 @@ export default function TagStatsPanel({
                     {/* onMouseDown 而不是 onClick：input 的 onBlur 会先触发，
                      * onClick 来时 commitEdit 已经被 cancelEdit 覆盖。
                      * mousedown 在 blur 之前触发，能拿到正确的 editValue。 */}
-                    <button
+                    <Button
+                      variant="primary"
+                      size="xs"
+                      iconOnly
                       onMouseDown={(e) => { e.preventDefault(); commitEdit() }}
-                      className="btn btn-primary btn-sm"
-                      style={{ padding: '1px 6px' }}
                       aria-label={t('common.confirm')}
-                    >✓</button>
-                    <button
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" /></svg>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      iconOnly
                       onMouseDown={(e) => { e.preventDefault(); cancelEdit() }}
-                      className="btn btn-ghost btn-sm"
-                      style={{ padding: '1px 6px' }}
                       aria-label={t('common.cancel')}
-                    >✕</button>
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+                    </Button>
                   </div>
                 )
               }
@@ -216,7 +226,7 @@ export default function TagStatsPanel({
                     <button
                       onClick={() => startEdit(tag)}
                       title={t('tagStats.replaceTitle', { tag })}
-                      className="opacity-0 group-hover:opacity-100 relative z-[1] shrink-0 text-fg-tertiary hover:text-accent px-1 cursor-pointer bg-transparent border-none"
+                      className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 relative z-[1] shrink-0 text-fg-tertiary hover:text-accent px-1 cursor-pointer bg-transparent border-none"
                       aria-label={t('tagStats.replaceTitle', { tag })}
                     >✎</button>
                   )}
@@ -224,7 +234,7 @@ export default function TagStatsPanel({
                     <button
                       onClick={() => onRemoveTag(tag)}
                       title={t('tagStats.removeTitle', { tag })}
-                      className="opacity-0 group-hover:opacity-100 relative z-[1] shrink-0 text-fg-tertiary hover:text-danger px-1 cursor-pointer bg-transparent border-none"
+                      className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 relative z-[1] shrink-0 text-fg-tertiary hover:text-danger px-1 cursor-pointer bg-transparent border-none"
                       aria-label={t('tagStats.removeTitle', { tag })}
                     >×</button>
                   )}
@@ -240,13 +250,15 @@ export default function TagStatsPanel({
 
 /** Inline tag rename input + 翻译 autocomplete。抽出来是为了能放 useTagSuggest hook —
  *  父组件 .map 内部不能调 hook。 */
-function EditTagInput({ editInputRef, value, setValue, onCommit, onCancel }: {
+function EditTagInput({ tag, editInputRef, value, setValue, onCommit, onCancel }: {
+  tag: string
   editInputRef: RefObject<HTMLInputElement>
   value: string
   setValue: (v: string) => void
   onCommit: () => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation()
   const suggest = useTagSuggest({
     value,
     inputRef: editInputRef,
@@ -255,7 +267,7 @@ function EditTagInput({ editInputRef, value, setValue, onCommit, onCancel }: {
   })
   return (
     <div className="relative flex-1 min-w-0">
-      <input
+      <Input
         ref={editInputRef}
         value={value}
         onChange={(e) => { setValue(e.target.value); suggest.notifyChange() }}
@@ -267,8 +279,10 @@ function EditTagInput({ editInputRef, value, setValue, onCommit, onCancel }: {
         onClick={() => suggest.notifyClick()}
         onFocus={() => suggest.notifyFocus()}
         onBlur={() => { suggest.notifyBlur(); onCancel() }}
-        className="input input-mono w-full"
-        style={{ fontSize: 'var(--t-xs)', padding: '1px 6px' }}
+        aria-label={t('tagStats.replaceInputLabel', { tag })}
+        controlSize="sm"
+        mono
+        className="w-full"
       />
       <TagSuggestList
         open={suggest.open}

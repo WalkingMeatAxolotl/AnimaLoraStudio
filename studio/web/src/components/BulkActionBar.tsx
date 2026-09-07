@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import Button from './Button'
+import { Input } from './FormControl'
+import { SegmentedControl } from './SelectionGroup'
 import { useDialog } from './Dialog'
 import { useToast } from './Toast'
 import { TranslatedTag } from './tagDisplay/TranslatedTag'
@@ -154,17 +157,19 @@ export default function BulkActionBar({
           {t('bulkAction.selectedTotal', { n: selectedKeys.length, total: totalCount })}
         </span>
         <span className="flex-1" />
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onSelectAll}
           disabled={totalCount === 0}
-          className="btn btn-ghost btn-sm"
           title={t('bulkAction.selectAllImagesHint')}
-        >{t('bulkAction.selectAllImages')}</button>
-        <button
+        >{t('bulkAction.selectAllImages')}</Button>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onClearSelection}
           disabled={noneSelected}
-          className="btn btn-ghost btn-sm"
-        >{t('common.deselect')}</button>
+        >{t('common.deselect')}</Button>
       </div>
 
       {/* V2 行式：四操作各一行，按钮列右对齐。 */}
@@ -208,6 +213,7 @@ export default function BulkActionBar({
             value={oldTag}
             onChange={setOldTag}
             placeholder={t('bulkAction.replaceOldPlaceholder')}
+            ariaLabel={t('bulkAction.replaceOldAria')}
             suggestions={tagSuggestions}
           />
           <span className="text-fg-tertiary shrink-0">→</span>
@@ -215,6 +221,7 @@ export default function BulkActionBar({
             value={newTag}
             onChange={setNewTag}
             placeholder={t('bulkAction.replaceNewPlaceholder')}
+            ariaLabel={t('bulkAction.replaceNewAria')}
             suggestions={tagSuggestions}
           />
           <RowButton
@@ -262,15 +269,17 @@ function BulkRow({
   return (
     <div
       className={
-        'flex items-center gap-2 px-2.5 py-2 ' +
+        'flex flex-wrap items-center gap-related px-field py-related ' +
         (last ? '' : 'border-b border-subtle')
       }
     >
-      <div className={'inline-flex items-center gap-1.5 shrink-0 w-16 ' + toneClass}>
+      <div className={'inline-flex items-center gap-related shrink-0 w-16 ' + toneClass}>
         <RowIcon>{icon}</RowIcon>
         <span className="text-xs font-medium">{label}</span>
       </div>
-      {children}
+      <div className="flex flex-1 min-w-48 items-center gap-related flex-wrap">
+        {children}
+      </div>
     </div>
   )
 }
@@ -296,8 +305,7 @@ function RowIcon({ children }: { children: ReactNode }) {
 /** 在「删除」「去重」行里占位，宽度对齐到「添加」行的首部/尾部 toggle 列，
  * 保证四行的右按钮在同一条竖线上。 */
 function ToggleSpacer() {
-  // 64px ≈ 首部/尾部 segmented 的渲染宽度（含 padding + border）。
-  return <span aria-hidden="true" className="shrink-0" style={{ width: 64 }} />
+  return <span aria-hidden="true" className="flex-1" />
 }
 
 function RowButton({
@@ -313,32 +321,24 @@ function RowButton({
   title?: string
   children: ReactNode
 }) {
-  // 设计稿 V2：只有「添加」是 filled primary，其它三个（删除 / 替换 / 去重）都是
-  // outline。删除走 err 着色（text + 边），保持和 替换 / 去重 同等视觉份量 —
-  // 不再 filled，避免抢走 caption 列表的注意力。
-  const baseCls = 'btn btn-sm shrink-0 justify-center'
-  const cls =
-    tone === 'primary'
-      ? `btn-primary ${baseCls}`
-      : `btn-secondary ${baseCls}`
-  const dangerStyle =
-    tone === 'danger'
-      ? {
-          color: 'var(--err)',
-          borderColor:
-            'color-mix(in oklch, var(--err) 35%, var(--border-default))',
-        }
-      : {}
+  const dangerStyle = tone === 'danger'
+    ? {
+        color: 'var(--err)',
+        borderColor: 'color-mix(in oklch, var(--err) 35%, var(--border-default))',
+      }
+    : undefined
   return (
-    <button
+    <Button
+      variant={tone === 'primary' ? 'primary' : 'secondary'}
+      size="sm"
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={cls}
-      style={{ minWidth: 64, ...dangerStyle }}
+      style={dangerStyle}
+      className="shrink-0 justify-center min-w-16"
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -374,40 +374,19 @@ function PositionToggle({
   onChange: (p: Position) => void
   t: (k: string) => string
 }) {
-  // 设计稿 V2：container 是 bg-sunken 的小坑，激活态是「弹出的小台」—
-  // bg-canvas + 仅 accent 文字 + 一道 accent 着色的 inset 边，整体很克制，
-  // 不抢「添加」主按钮的颜色。
-  const activeStyle = {
-    background: 'var(--bg-canvas)',
-    color: 'var(--accent)',
-    boxShadow:
-      'inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, var(--border-default))',
-  }
-  const segClass =
-    'px-1.5 py-0.5 text-[11px] font-mono cursor-pointer border-0 bg-transparent'
   return (
-    <div
-      className="inline-flex rounded-sm shrink-0 p-[2px] gap-[2px]"
-      style={{
-        background: 'var(--bg-sunken)',
-        border: '1px solid var(--border-subtle)',
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => onChange('front')}
-        className={segClass + ' rounded-[3px]'}
-        style={position === 'front' ? activeStyle : { color: 'var(--fg-secondary)' }}
-        aria-pressed={position === 'front'}
-      >{t('bulkAction.posFront')}</button>
-      <button
-        type="button"
-        onClick={() => onChange('back')}
-        className={segClass + ' rounded-[3px]'}
-        style={position === 'back' ? activeStyle : { color: 'var(--fg-secondary)' }}
-        aria-pressed={position === 'back'}
-      >{t('bulkAction.posBack')}</button>
-    </div>
+    <SegmentedControl
+      items={[
+        { value: 'front', label: t('bulkAction.posFront') },
+        { value: 'back', label: t('bulkAction.posBack') },
+      ]}
+      value={position}
+      onChange={onChange}
+      ariaLabel={t('bulkAction.positionLabel')}
+      idPrefix="bulk-add-position"
+      size="sm"
+      layout="content"
+    />
   )
 }
 
@@ -449,15 +428,16 @@ function TagsField({ value, onChange, placeholder, suggestions, ariaLabel }: Tag
   }
 
   return (
-    <div className="relative flex-1 min-w-0" ref={ref}>
-      <input
+    <div className="relative flex-1 min-w-24" ref={ref}>
+      <Input
         value={value}
         onChange={(e) => { onChange(e.target.value); setOpen(true) }}
         onFocus={() => setOpen(true)}
         placeholder={placeholder}
         aria-label={ariaLabel}
-        className="input input-mono w-full"
-        style={{ fontSize: 'var(--t-xs)' }}
+        controlSize="sm"
+        mono
+        className="w-full"
       />
       {open && matches.length > 0 && (
         <ul

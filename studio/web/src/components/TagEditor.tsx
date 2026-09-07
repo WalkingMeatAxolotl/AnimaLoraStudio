@@ -16,6 +16,9 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { useTranslation } from 'react-i18next'
 
+import Button from './Button'
+import { Input, Textarea } from './FormControl'
+import { SegmentedControl } from './SelectionGroup'
 import { TranslatedTag } from './tagDisplay/TranslatedTag'
 import { TagSuggestList } from './tagSuggest/TagSuggestList'
 import { useTagSuggest } from './tagSuggest/useTagSuggest'
@@ -27,21 +30,37 @@ interface Props {
   onSave?: () => void | Promise<void>
   saving?: boolean
   dirty?: boolean
+  showTagCount?: boolean
+  /** Identity of the edited source. Changing it resets only per-source buffers, not mode. */
+  resetKey?: string
 }
 
 type Mode = 'chip' | 'text'
 
-const parseLine = (raw: string): string[] =>
-  raw.split(/[,，\n]/).map((t) => t.trim()).filter(Boolean)
+const parseLine = (raw: string): string[] => {
+  const next: string[] = []
+  const seen = new Set<string>()
+  for (const value of raw.split(/[,，\n]/).map((tag) => tag.trim()).filter(Boolean)) {
+    if (seen.has(value)) continue
+    seen.add(value)
+    next.push(value)
+  }
+  return next
+}
+
+const tagsEqual = (a: string[], b: string[]): boolean =>
+  a.length === b.length && a.every((tag, index) => tag === b[index])
 
 export default function TagEditor({
-  tags, natural, onChange, onSave, saving, dirty,
+  tags, natural, onChange, onSave, saving, dirty, showTagCount = true, resetKey,
 }: Props) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState('')
   const tagsJoined = useMemo(() => tags.join(', '), [tags])
   const [mode, setMode] = useState<Mode>(natural ? 'text' : 'chip')
   const [textBuf, setTextBuf] = useState(() => tagsJoined)
+  const textTagsRef = useRef([...tags])
+  const previousResetKeyRef = useRef(resetKey)
   const draftInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -53,14 +72,27 @@ export default function TagEditor({
   // Reset draft when image switches
   useEffect(() => { setDraft('') }, [tags])
 
-  // Sync textBuf when tags change WHILE in text mode (image switch)
-  const prevTagsJoinedRef = useRef(tagsJoined)
+  // Source identity is separate from its value: two images may legitimately share
+  // identical tags. Switching images resets per-image buffers without resetting mode.
   useEffect(() => {
-    if (mode === 'text' && tagsJoined !== prevTagsJoinedRef.current) {
-      setTextBuf(tagsJoined)
+    if (previousResetKeyRef.current === resetKey) return
+    previousResetKeyRef.current = resetKey
+    setDraft('')
+    setTextBuf(tagsJoined)
+    textTagsRef.current = [...tags]
+  }, [resetKey, tags, tagsJoined])
+
+  // Keep free-form punctuation and spacing intact while the parent echoes edits back.
+  // A genuinely external tag change (for example, another active image) resets the buffer.
+  useEffect(() => {
+    if (mode !== 'text') {
+      textTagsRef.current = [...tags]
+      return
     }
-    prevTagsJoinedRef.current = tagsJoined
-  }, [tagsJoined, mode])
+    if (tagsEqual(tags, textTagsRef.current)) return
+    setTextBuf(tagsJoined)
+    textTagsRef.current = [...tags]
+  }, [mode, tags, tagsJoined])
 
   const addTag = (raw: string) => {
     const t = raw.trim().replace(/^[,，]+|[,，]+$/g, '')
@@ -79,6 +111,13 @@ export default function TagEditor({
     onPick: ({ suggestion }) => { addTag(suggestion.tag) },
   })
 
+  const updateText = (raw: string) => {
+    setTextBuf(raw)
+    const next = parseLine(raw)
+    textTagsRef.current = next
+    if (!tagsEqual(next, tags)) onChange(next)
+  }
+
   // text 模式 textarea：根据 cursor 算 token range，替换为 `tag, ` 并保持光标。
   const textSuggest = useTagSuggest({
     value: textBuf,
@@ -88,7 +127,7 @@ export default function TagEditor({
       const after = textBuf.slice(range.end)
       const cleanAfter = after.replace(/^[,，]\s*/, '')
       const next = `${before}${suggestion.tag}, ${cleanAfter}`
-      setTextBuf(next)
+      updateText(next)
       const newCursor = before.length + suggestion.tag.length + 2
       requestAnimationFrame(() => {
         const el = textareaRef.current
@@ -110,45 +149,40 @@ export default function TagEditor({
     onChange(arrayMove(tags, oldIndex, newIndex))
   }
 
-  const commitText = () => {
-    const next: string[] = []
-    const seen = new Set<string>()
-    for (const t of parseLine(textBuf)) {
-      if (seen.has(t)) continue
-      seen.add(t); next.push(t)
-    }
-    if (JSON.stringify(next) !== JSON.stringify(tags)) onChange(next)
-  }
-
   const switchToText = () => {
     if (mode === 'text') return
-    setTextBuf(tagsJoined) // sync immediately, no double-render via effect
+    setTextBuf(tagsJoined)
+    textTagsRef.current = [...tags]
     setMode('text')
   }
 
   const switchToChip = () => {
     if (mode === 'chip') return
-    commitText()
     setMode('chip')
   }
 
   if (natural) {
     return (
       <div className="flex flex-col gap-2 flex-1 min-h-0">
-        <textarea
+        <Textarea
           value={tags[0] ?? ''}
           onChange={(e) => onChange([e.target.value])}
           placeholder={t('tagEditor.naturalPlaceholder')}
-          className="input input-mono text-sm flex-1 resize-none"
+          aria-label={t('tagEditor.naturalInputLabel')}
+          mono
+          className="text-sm flex-1 resize-none"
         />
         {onSave && (
-          <button
+          <Button
+            variant={dirty ? 'primary' : 'secondary'}
+            size="sm"
             disabled={saving || !dirty}
+            loading={saving}
             onClick={onSave}
-            className={`self-start ${dirty ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}`}
+            className="self-start"
           >
             {saving ? t('common.saving') : dirty ? t('common.save') : t('saveBar.saved')}
-          </button>
+          </Button>
         )}
       </div>
     )
@@ -157,11 +191,23 @@ export default function TagEditor({
   return (
     <div className="flex flex-col gap-1.5 flex-1 min-h-0">
       {/* mode switch */}
-      <div className="flex items-center gap-1.5 text-xs shrink-0">
-        <ModeBtn active={mode === 'chip'} onClick={switchToChip}>{t('tagEditor.modeChip')}</ModeBtn>
-        <ModeBtn active={mode === 'text'} onClick={switchToText}>{t('tagEditor.modeText')}</ModeBtn>
+      <div className="flex items-center gap-related text-xs shrink-0">
+        <SegmentedControl
+          items={[
+            { value: 'chip', label: t('tagEditor.modeChip') },
+            { value: 'text', label: t('tagEditor.modeText') },
+          ]}
+          value={mode}
+          onChange={(next) => next === 'chip' ? switchToChip() : switchToText()}
+          ariaLabel={t('tagEditor.modeLabel')}
+          idPrefix="tag-editor-mode"
+          size="sm"
+          layout="content"
+        />
         <span className="flex-1" />
-        <span className="text-fg-tertiary">{t('tagEditor.tagCount', { n: tags.length })}</span>
+        {showTagCount && (
+          <span className="text-fg-tertiary tnum">{t('tagEditor.tagCount', { n: tags.length })}</span>
+        )}
       </div>
 
       {/* content area — both modes use flex:1 so no height jitter */}
@@ -185,7 +231,7 @@ export default function TagEditor({
           </DndContext>
           <div className="flex items-center gap-1.5 shrink-0">
             <div className="relative flex-1">
-              <input
+              <Input
                 ref={draftInputRef}
                 value={draft}
                 onChange={(e) => { setDraft(e.target.value); draftSuggest.notifyChange() }}
@@ -199,7 +245,10 @@ export default function TagEditor({
                 onFocus={() => draftSuggest.notifyFocus()}
                 onBlur={() => draftSuggest.notifyBlur()}
                 placeholder={t('tagEditor.addPlaceholder')}
-                className="input input-mono text-xs w-full"
+                aria-label={t('tagEditor.addInputLabel')}
+                controlSize="sm"
+                mono
+                className="w-full"
               />
               <TagSuggestList
                 open={draftSuggest.open}
@@ -213,30 +262,35 @@ export default function TagEditor({
               />
             </div>
             {onSave && (
-              <button
+              <Button
+                variant={dirty ? 'primary' : 'secondary'}
+                size="sm"
                 disabled={saving || !dirty}
+                loading={saving}
                 onClick={onSave}
-                className={dirty ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
               >
                 {saving ? t('common.saving') : dirty ? t('common.save') : t('saveBar.saved')}
-              </button>
+              </Button>
             )}
           </div>
         </>
       ) : (
         <>
           <div className="relative flex-1 min-h-0 flex flex-col">
-            <textarea
+            <Textarea
               ref={textareaRef}
               value={textBuf}
-              onChange={(e) => { setTextBuf(e.target.value); textSuggest.notifyChange() }}
+              onChange={(e) => { updateText(e.target.value); textSuggest.notifyChange() }}
               onKeyDown={(e) => { textSuggest.handleKeyDown(e) }}
               onKeyUp={() => textSuggest.notifySelect()}
               onClick={() => textSuggest.notifyClick()}
               onFocus={() => textSuggest.notifyFocus()}
-              onBlur={() => { textSuggest.notifyBlur(); commitText() }}
+              onBlur={() => { textSuggest.notifyBlur() }}
               placeholder={t('tagEditor.textPlaceholder')}
-              className="input input-mono text-xs flex-1 resize-none"
+              aria-label={t('tagEditor.textInputLabel')}
+              controlSize="sm"
+              mono
+              className="flex-1 resize-none"
             />
             <TagSuggestList
               open={textSuggest.open}
@@ -249,39 +303,22 @@ export default function TagEditor({
               positionDeps={[textBuf]}
             />
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button onClick={commitText} className="btn btn-ghost btn-sm">{t('tagEditor.sync')}</button>
-            {onSave && (
-              <button
+          {onSave && (
+            <div className="flex items-center justify-end shrink-0">
+              <Button
+                variant={dirty ? 'primary' : 'secondary'}
+                size="sm"
                 disabled={saving || !dirty}
-                onClick={async () => { commitText(); await onSave() }}
-                className={dirty ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                loading={saving}
+                onClick={onSave}
               >
                 {saving ? t('common.saving') : dirty ? t('common.save') : t('saveBar.saved')}
-              </button>
-            )}
-          </div>
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>
-  )
-}
-
-function ModeBtn({ active, onClick, children }: {
-  active: boolean; onClick: () => void; children: React.ReactNode
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={[
-        'px-2 py-0.5 rounded-sm text-xs border transition-colors cursor-pointer',
-        active
-          ? 'bg-accent border-accent text-accent-fg'
-          : 'bg-overlay border-subtle text-fg-secondary hover:bg-surface',
-      ].join(' ')}
-    >
-      {children}
-    </button>
   )
 }
 

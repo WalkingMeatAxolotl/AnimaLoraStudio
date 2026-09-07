@@ -95,7 +95,7 @@ export default function SaveBar({
         )}
         primary={(
           <Button
-            variant={dirtyCount > 0 ? 'primary' : 'secondary'}
+            variant={dirtyCount > 0 ? 'danger' : 'secondary'}
             size="sm"
             onClick={save}
             disabled={dirtyCount === 0}

@@ -9,6 +9,8 @@ export interface ImageGridItem {
   meta?: string
   /** 常显小角标，cell 右下角（可选）。例如 "已处理"，用于在合并视图里区分状态。 */
   badge?: string
+  /** 小角标语义。warning 用于未保存的本地修改；默认沿用 accent。 */
+  badgeTone?: 'accent' | 'warning'
 }
 
 interface Props {
@@ -272,7 +274,7 @@ const Cell = memo(function Cell({
           'absolute top-1 left-1 w-5 h-5 rounded-sm flex items-center justify-center text-[12px] font-bold transition-opacity ' +
           (selected
             ? 'bg-accent text-accent-fg opacity-100'
-            : 'bg-black/50 border border-subtle text-transparent opacity-0 group-hover:opacity-100')
+            : 'bg-black/50 border border-subtle text-transparent opacity-0 group-hover:opacity-100 focus-visible:opacity-100')
         }
       >
         ✓
@@ -286,13 +288,20 @@ const Cell = memo(function Cell({
             onPreview(item.name)
           }}
           aria-label={`${t('common.preview')} ${item.name}`}
-          className="absolute top-1 right-1 w-5 h-5 rounded-sm bg-black/60 text-white text-[11px] opacity-0 group-hover:opacity-100 hover:bg-black/80"
+          className="absolute top-1 right-1 w-5 h-5 rounded-sm bg-black/60 text-white text-[11px] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-black/80"
         >
           ⤢
         </button>
       )}
       {item.badge && (
-        <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-sm bg-accent text-accent-fg text-[10px] font-medium pointer-events-none">
+        <div
+          className={
+            'absolute bottom-1 right-1 pointer-events-none ' +
+            (item.badgeTone === 'warning'
+              ? 'badge badge-warn badge-sm'
+              : 'px-1.5 py-0.5 rounded-sm bg-accent text-accent-fg text-[10px] font-medium')
+          }
+        >
           {item.badge}
         </div>
       )}
