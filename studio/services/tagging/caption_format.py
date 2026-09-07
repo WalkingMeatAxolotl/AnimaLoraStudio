@@ -75,10 +75,14 @@ def normalize_caption_json(raw: dict[str, Any] | None) -> dict[str, Any]:
             },
         }
 
-    # TagEdit writes an explicit flat list while retaining the structured LLM
-    # payload for provenance. Once present, that user-edited list is authoritative;
-    # otherwise a subsequent read would silently resurrect the stale ai_output.
-    if isinstance(tags_obj, list):
+    # TagEdit writes an explicit flat list into a documented full payload while
+    # retaining structured LLM fields for provenance. Only that combination marks
+    # the list as an authoritative editor result. A raw LLM simplified payload can
+    # also contain a flat ``tags`` list alongside ``count`` / ``appearance`` /
+    # ``environment`` and must continue through the simplified-shape normalizer.
+    if isinstance(tags_obj, list) and any(
+        key in data for key in ("ai_output", "fixed", "from_path")
+    ):
         ai = data.get("ai_output") if isinstance(data.get("ai_output"), dict) else {}
         return {
             "meta": data.get("meta") if isinstance(data.get("meta"), dict) else {},
