@@ -670,6 +670,15 @@ Pane geometry follows these rules:
   preview minimum even when stored values are stale or corrupt. If the three authored
   panes no longer fit, its named workspace establishes one keyboard-focusable
   horizontal boundary rather than shrinking tools below useful widths or clipping them.
+  In Tag Edit, the active folder is also the authoritative selection/statistics scope:
+  changing it clears selection and the old single-image context. External caption
+  updates may refresh a clean cache, but must preserve dirty edits behind explicit
+  save-and-refresh or discard-and-refresh actions. Commit responses are authoritative;
+  skipped files remain dirty instead of being reported as saved. Text-mode edits enter
+  the local cache immediately—there is no separate sync action—and only the page-level
+  Save control persists them. While any caption is dirty, that control uses the danger
+  emphasis; each affected thumbnail and the active tag-editor header carry an explicit
+  unsaved marker so dataset and image scope remain distinguishable.
 - Train preview, Tagging status, Generate canvas and attached drawers, preprocessing
   editors, and evaluation matrices retain their specialist topology. Do not add
   resize handles or migrate them to `PaneResizer` without task-specific evidence.
