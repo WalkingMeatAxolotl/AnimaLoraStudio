@@ -617,6 +617,25 @@ passed through `contentClassName` to the Virtuoso list. Do not add an outer
 and batch actions remain outside the grid scrollport. Loading, load failure and
 empty content are distinct; a failed refresh retains already loaded images.
 
+Download is the representative acquisition workspace. Booru search and file
+import are always-open sibling cards on desktop and stack only at compact widths;
+do not add a mode-tab row or a disclosure above the source grid. Booru preserves
+the deliberate `estimate → confirm count → start` sequence. Before the first
+estimate, the plan row shows one quiet “not queried” status and withholds the
+count field instead of repeating unknown placeholders or explanatory empty-state
+copy. After an estimate, show the match total once, the editable batch count once,
+and a plain start action; do not repeat the same count in shortcuts or button copy.
+Only when the backend applies exclusions may a compact inline indicator expose the
+effective query through its tooltip/accessibility text. File import distinguishes
+browser transfer from a server-accessible path, but both sources share
+`select → review selection → import`; the selection summary stays on one truncated
+line with full names/paths in its tooltip, and selecting a server path never imports
+immediately. Passive image count and total size belong in the
+source-image header. Do not restore a permanent statistics rail or
+format-distribution chart at the expense of the ImageGrid. The source grid remains
+the only image scroll owner, permanent deletion keeps confirmation, and a failed
+refresh retains loaded images with an in-place retry.
+
 Preprocess tool navigation remains native route Links (including the current
 route), with a named nav and `aria-current="page"`. It reuses the underline
 selection recipe and its local horizontal overflow/focus treatment, not tablist
