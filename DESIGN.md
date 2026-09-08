@@ -33,6 +33,31 @@ surface has identical density.
 A page may compose primitives with layout utilities. It must not recreate an
 existing primitive with arbitrary colors, padding, font sizes, or hover states.
 
+### Cross-surface UX decision protocol
+
+Every product-surface UX proposal must resolve consistency before local
+optimization, even when the request initially names only one page:
+
+1. Read this document first and follow an existing semantic contract when one
+   applies. Do not relocate a stable action, change feedback, or invent a new
+   interaction because it looks locally cleaner.
+2. If no contract applies, inspect representative current surfaces with the same
+   user intent, object scope, risk, and task lifecycle. Repetition is evidence,
+   not authority: distinguish an established pattern from migration debt and
+   intentional specialist behavior.
+3. When the same unresolved semantic decision recurs across surfaces, define the
+   app-wide mental model here before implementing the page. State whether the
+   current change completes the migration or is the first bounded adoption slice;
+   do not let a one-page exception silently become a standard.
+4. A surface may diverge only when its task semantics, object ownership, risk,
+   lifecycle, or required professional geometry materially differ. Record that
+   evidence and the anti-goals in its task brief.
+
+A decision-ready UI/UX proposal must therefore answer three questions: what this
+document already defines, how equivalent current surfaces behave, and whether the
+chosen rule should apply across the app. If those answers are unknown, continue
+the audit instead of entering implementation.
+
 ## 3. Foundations
 
 ### Color
@@ -321,6 +346,13 @@ flows; it renders through the same shell. Use a Drawer for persistent secondary 
 that should remain available alongside page context, and do not put ordinary page
 content in a modal merely to make it prominent.
 
+Confirmation follows consequence, not control type. Require it when execution will
+permanently delete persisted content, replace an existing persisted collection, discard
+recoverable local edits, or abandon in-progress work that cannot resume. Confirm at the
+execution boundary rather than when the user merely selects a dangerous mode, and name
+the affected object and consequence. Do not confirm routine, reversible, or easily
+undoable actions; warning copy beside the control is sufficient there.
+
 Every modal has one required title, an optional concise description, optional header
 utilities, one scrollable body, and an optional footer. Use `sm` for a short prompt, `md`
 for ordinary forms, `lg` for structured comparisons or dense option sets, and `wide`
@@ -452,6 +484,16 @@ Async UI describes real work; it must not fabricate a waiting phase for local st
 content. Use `Button` loading for one pending action, `ConfigSkeleton` for a genuine
 initial remote schema/config fetch, and `ProgressBar` for an operation with duration.
 A spinner or progress bar is not a substitute for the page's ordinary empty state.
+
+A submitted task snapshot and an editable future draft are different interaction
+scopes. Controls that still represent the active snapshot become read-only or disabled
+for that operation scope. A surface may instead keep settings editable only when it
+labels and visually separates them as the next-run draft; the active task remains
+separately identifiable, and actions that would concurrently mutate the same destination
+stay disabled. Independent panels may remain available. After reload, never present
+fresh defaults as though they were the running task's submitted parameters. Existing
+surfaces migrate to this contract by workflow slice; new work must not add an unlabeled
+editable form beside a live task.
 
 `ProgressBar` is the typed visual and accessibility primitive. Every instance has a
 localized accessible label. Pass `value` and `max` only when the application has a
@@ -635,6 +677,40 @@ source-image header. Do not restore a permanent statistics rail or
 format-distribution chart at the expense of the ImageGrid. The source grid remains
 the only image scroll owner, permanent deletion keeps confirmation, and a failed
 refresh retains loaded images with an in-place retry.
+
+Tagging and Regularization share one async-planner layout contract. At wide desktop,
+the editable setup column and the status rail use a consistent `3fr / 2fr` ratio;
+at compact desktop they stack under one workspace scroll owner. Idle state names the
+editable summary as this run's plan. While a job is live, the submitted parameters
+are an immutable Current task and the still-editable form/summary are explicitly
+Next-run settings; conflicting Start, clear, delete, and dedup actions remain disabled.
+The PageHeader owns only stable task actions and does not duplicate the plan summary.
+
+Tagging keeps the four run decisions (tagger, scope, existing-caption policy, trigger
+word) together and exposes only the active tagger's parameters. Existing captions
+default to `skip`; choosing overwrite must warn in the run-plan summary and require
+confirmation when the selected scope is known or may contain captions. Data status
+owns train/validation coverage and facts recoverable from the last job ledger; never
+present today's global model or preset as the previous run's exact configuration.
+Exact zero-work runs remain valid worker no-ops. Because the API has no per-folder
+tagged count, folder + skip displays “scan after start” rather than a false exact
+estimate. Start exposes labelled busy state, and Advanced is a named disclosure with
+`aria-expanded` / `aria-controls`.
+
+Regularization is a two-stage generation workspace. `Generate` and `Images` use the
+shared underline Tabs immediately below the PageHeader; this stable full-width divider
+separates page-level stages from controls inside either stage. AI prior remains the
+default source and Booru remains the faster alternative. Their local source picker uses
+content-sized pill radios with no full-column background track, preserving the existing
+source hierarchy and keeping the explanatory copy below the choice. The Images-stage
+folder filter likewise uses independent compact filter chips; the chips may wrap, but no
+shared background stretches through the remaining toolbar space. The generate stage
+separates the run plan from persisted reg-set facts.
+Full rebuild requires a confirmation that names the images, captions, metadata, and
+deletion history being removed. Initial load failure, stale refresh failure,
+unavailable train-tag statistics, and a truly empty reg set remain distinct states
+with local retry paths. The Images stage owns folder filtering and batch actions above
+a single `ImageGrid` scroll owner.
 
 Preprocess tool navigation remains native route Links (including the current
 route), with a named nav and `aria-current="page"`. It reuses the underline
