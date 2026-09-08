@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
@@ -13,8 +13,15 @@ import {
   type Version,
   type WD14Config,
 } from '../../../api/client'
+import Alert from '../../../components/Alert'
+import Badge from '../../../components/Badge'
+import Button from '../../../components/Button'
+import Card from '../../../components/Card'
+import { Checkbox, Input, Select, controlClassName } from '../../../components/FormControl'
 import { InfoButton } from '../../../components/InfoButton'
 import LLMPresetEditorModal, { llmPresetLabel } from '../../../components/LLMPresetEditorModal'
+import Modal from '../../../components/Modal'
+import ProgressBar from '../../../components/ProgressBar'
 import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
@@ -99,7 +106,7 @@ export default function TaggingPage() {
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
   // 落盘格式跟着产物走（LLM json preset → .json，其余 → .txt），不再由请求指定。
-  const [onExisting, setOnExisting] = useState<'overwrite' | 'skip' | 'append'>('overwrite')
+  const [onExisting, setOnExisting] = useState<'overwrite' | 'skip' | 'append'>('skip')
   // 触发词：初值从 activeVersion 取（持久化在 version 表）；启动打标时一并提交，
   // 后端会同步落库 + 传给 worker prepend 到每张 caption。
   const [triggerWord, setTriggerWord] = useState<string>('')
@@ -107,6 +114,8 @@ export default function TaggingPage() {
   // folders 给 dropdown 列 train 子文件夹选项（从 curation 拿）。
   const [scope, setScope] = useState<string>('all')
   const [folders, setFolders] = useState<string[]>([])
+  const [folderLoadError, setFolderLoadError] = useState<string | null>(null)
+  const [overwriteConfirmOpen, setOverwriteConfirmOpen] = useState(false)
 
   // defaults 直接从 SettingsData 的 live secrets 派生：设置抽屉 instant-apply
   // 的改动关上抽屉立即回流本页（不再持有 mount 时的一次性 getSecrets 快照）。
@@ -208,11 +217,15 @@ export default function TaggingPage() {
   // 切版本时 scope 复位 'all'（旧版本的文件夹名在新版本可能不存在）。
   useEffect(() => {
     setScope('all')
+    setFolderLoadError(null)
     if (vid == null) { setFolders([]); return }
     void api
       .getCuration(project.id, vid)
       .then((v) => setFolders(v.folders))
-      .catch(() => setFolders([]))
+      .catch((error) => {
+        setFolders([])
+        setFolderLoadError(String(error))
+      })
   }, [project.id, vid])
 
   useEventStream((evt) => {
@@ -247,48 +260,58 @@ export default function TaggingPage() {
   const taggedImages = stats?.tagged_image_count ?? 0
   const valTotal = stats?.validation_image_count ?? 0
   const valTagged = stats?.validation_tagged_count ?? 0
-  // 此轮需要打标（训练集 / 验证集面板各算各的）：overwrite/append 全量、skip 只
-  // 未打标。数据限制——选训练集文件夹时只有文件夹总数拿不到其已打标数（skip 退回
-  // 文件夹总数）。随 scope / onExisting 实时变。
-  const trainScopeTotal =
-    scope === 'all' ? totalImages
-      : scope === 'validation' ? 0
-        : (stats?.train_folders.find((f) => f.name === scope)?.image_count ?? null)
-  const trainThisRoundNeed =
-    trainScopeTotal == null ? null
+  // 本次运行影响：all / validation 可精确计算；单训练文件夹缺少已打标数，
+  // skip 时必须显示“启动后扫描”而不是把文件夹总数伪装成精确工作量。
+  const selectedFolderTotal = scope === 'all' || scope === 'validation'
+    ? null
+    : (stats?.train_folders.find((folder) => folder.name === scope)?.image_count ?? 0)
+  const runEstimate = scope === 'all'
+    ? (onExisting === 'skip'
+        ? Math.max(0, totalImages - taggedImages) + Math.max(0, valTotal - valTagged)
+        : totalImages + valTotal)
+    : scope === 'validation'
+      ? (onExisting === 'skip' ? Math.max(0, valTotal - valTagged) : valTotal)
       : onExisting === 'skip'
-        ? (scope === 'all' ? Math.max(0, totalImages - taggedImages) : trainScopeTotal)
-        : trainScopeTotal
-  // 验证集只在 scope=all / validation 时参与本轮打标。
-  const valInScope = scope === 'all' || scope === 'validation'
-  const valThisRoundNeed = !valInScope
-    ? 0
-    : onExisting === 'skip' ? Math.max(0, valTotal - valTagged) : valTotal
-  // 面板「打标方式/模型/预设/触发词」显示的是上一次实际打标用的配置（历史事实，
-  // 与正则集 meta 意义一致），从最近一次 tag job 的 params 复原；模型 / 预设未
-  // override 时退回当前默认（与 worker「override ?? default」解析一致，默认未变时
-  // 精确）。触发词持久化在 version（打标时写入），非当前表单临时值。
+        ? null
+        : selectedFolderTotal
+  const scopeLabel = scope === 'all'
+    ? t('tag.scopeAll')
+    : scope === 'validation'
+      ? t('tag.scopeValidation')
+      : scope
+  const existingPolicyLabel = onExisting === 'skip'
+    ? t('tag.onExistingSkip')
+    : onExisting === 'append'
+      ? t('tag.onExistingAppend')
+      : t('tag.onExistingOverwrite')
+  // 单文件夹没有已打标计数：若训练集全局已有 caption，则覆盖风险未知但存在，
+  // 仍要求确认；若全局为 0，则可证明无需确认。
+  const overwriteExistingCount = scope === 'all'
+    ? taggedImages + valTagged
+    : scope === 'validation'
+      ? valTagged
+      : taggedImages === 0 ? 0 : null
+  const overwriteNeedsConfirm = onExisting === 'overwrite' && overwriteExistingCount !== 0
+
+  // 历史卡只显示 job ledger 能证明的事实，不把今天的全局默认冒充成上次配置。
   const lastParams = jobParams(job)
   const lastTagger = typeof lastParams.tagger === 'string' ? lastParams.tagger : null
-  const lastMethodLabel =
-    lastTagger === 'wd14' ? 'WD14'
-      : lastTagger === 'cltagger' ? 'CLTagger'
-        : lastTagger === 'llm' ? 'LLM'
-          : null
+  const lastMethodLabel = lastTagger ? taggerLabel(lastTagger, t) : null
   const lastModelLabel =
     lastTagger === 'wd14'
-      ? ((lastParams.wd14_overrides as { model_id?: string } | undefined)?.model_id || wd14Defaults?.model_id || null)
+      ? ((lastParams.wd14_overrides as { model_id?: string } | undefined)?.model_id ?? null)
       : lastTagger === 'cltagger'
-        ? ((lastParams.cltagger_overrides as { model_id?: string } | undefined)?.model_id || cltaggerDefaults?.model_id || null)
+        ? ((lastParams.cltagger_overrides as { model_id?: string } | undefined)?.model_id ?? null)
         : null
-  const lastPresetId =
-    lastTagger === 'llm'
-      ? ((lastParams.llm_overrides as { current_preset?: string } | undefined)?.current_preset || llmDefaults?.current_preset || null)
-      : null
-  const lastPresetLabel = lastPresetId
-    ? (llmDefaults?.presets.find((p) => p.id === lastPresetId)?.label ?? lastPresetId)
+  const lastPresetId = lastTagger === 'llm'
+    ? ((lastParams.llm_overrides as { current_preset?: string } | undefined)?.current_preset ?? null)
     : null
-  const lastTrigger = (activeVersion.trigger_word ?? '').trim()
+  const lastPresetLabel = lastPresetId
+    ? (llmDefaults?.presets.find((preset) => preset.id === lastPresetId)?.label ?? lastPresetId)
+    : null
+  const lastTrigger = typeof lastParams.trigger_word === 'string'
+    ? lastParams.trigger_word.trim()
+    : ''
 
   const buildWd14Overrides = (): Record<string, unknown> | undefined => {
     if (!wd14Form || !wd14Defaults) return undefined
@@ -338,9 +361,9 @@ export default function TaggingPage() {
     return { current_preset: llmPresetId }
   }
 
-  const startTagging = async () => {
+  const enqueueTagging = async () => {
     if (!taggerStatus?.ok) {
-      toast(t('tag.taggerUnavailable', { tagger, msg: taggerStatus?.msg ?? '' }), 'error')
+      toast(t('tag.taggerUnavailable', { tagger: taggerLabel(tagger, t), msg: taggerStatus?.msg ?? '' }), 'error')
       return
     }
     try {
@@ -358,6 +381,7 @@ export default function TaggingPage() {
       })
       setJob(j)
       setLogs([])
+      setOverwriteConfirmOpen(false)
       const note = overrides ? t('tag.taggingEnqueuedOverrides', { n: Object.keys(overrides).length }) : ''
       toast(t('tag.taggingEnqueued', { id: j.id }) + note, 'success')
       // 触发词改了 → 让父级 reload version 状态，下次重渲染拿新的 trigger_word
@@ -368,6 +392,18 @@ export default function TaggingPage() {
       toast(String(e), 'error')
     }
   }
+
+  const requestStartTagging = () => {
+    if (overwriteNeedsConfirm) {
+      setOverwriteConfirmOpen(true)
+      return
+    }
+    void enqueueTagging()
+  }
+
+  const unavailableMessage = taggerStatus && !taggerStatus.ok ? taggerStatus.msg : ''
+  const needsOnnxRecovery = /onnx\s*runtime|onnxruntime/i.test(unavailableMessage)
+  const needsModelRecovery = /需下载模型|download.*model|model.*(?:missing|not found)/i.test(unavailableMessage)
 
   return (
     <StepShell
@@ -390,128 +426,160 @@ export default function TaggingPage() {
         },
       ]}
       actions={
-        /* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */
-        <button
-          onClick={startTagging}
-          disabled={isLive || !taggerStatus?.ok}
-          className="btn btn-primary btn-sm"
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={requestStartTagging}
+          disabled={!taggerStatus?.ok || isLive}
+          loading={isLive || taggerStatus === null}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M8 5v14l11-7z" />
           </svg>
           <span>
             {isLive ? t('tag.taggingBtn') : taggerStatus === null ? t('tag.checkingBtn') : t('tag.startBtn')}
           </span>
-        </button>
+        </Button>
       }
     >
-    <div className="flex flex-col h-full gap-3 min-h-0">
-
-      <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
-
-        {/* 左栏：参数区整体滚动；任务日志走 StepShell 的统一抽屉（issue #251） */}
-        <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
-          <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 shrink-0 text-sm">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div
+        data-tagging-workspace
+        className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)] xl:overflow-hidden"
+      >
+        {/* 紧凑桌面由 workspace 统一滚动；宽桌面两栏各自滚动。 */}
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 xl:overflow-y-auto">
+          {isLive && job && (
+            <Alert
+              tone="info"
+              size="sm"
+              title={t('tag.currentTaskTitle', {
+                tagger: lastMethodLabel ?? taggerLabel(tagger, t),
+                id: job.id,
+              })}
+            >
+              {t('tag.nextRunDraftHint')}
+            </Alert>
+          )}
+          <Card
+            as="section"
+            padding="md"
+            className="shrink-0 text-sm"
+            aria-labelledby="tag-run-settings-title"
+          >
+            <h2 id="tag-run-settings-title" className="type-panel-title mb-related">
+              {t(isLive ? 'tag.nextRunSettingsTitle' : 'tag.runSettingsTitle')}
+            </h2>
+            <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
               <TagField
+                htmlFor="tagging-tagger"
                 label={t('tag.fieldTagger')}
                 helpTooltip={taggerDesc}
                 help={
-                  <span className="inline-flex items-center gap-2 flex-wrap">
-                    <span
-                      className={
-                        taggerStatus
-                          ? taggerStatus.ok ? 'badge badge-ok' : 'badge badge-err'
-                          : 'badge badge-neutral'
-                      }
+                  <span className="inline-flex min-w-0 items-center gap-2 flex-wrap">
+                    <Badge
+                      tone={taggerStatus ? (taggerStatus.ok ? 'success' : 'danger') : 'neutral'}
+                      size="sm"
                       title={taggerStatus?.msg ?? t('tag.checkingBtn')}
                     >
                       {taggerStatus
-                        ? taggerStatus.ok
-                          ? `${t('tag.statusReady')} ${taggerStatus.msg}`
-                          : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
+                        ? taggerStatus.ok ? t('tag.statusReady') : t('tag.statusUnavail')
                         : t('tag.statusChecking')}
-                    </span>
-                    {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
-                      <button
-                        type="button"
+                    </Badge>
+                    {taggerStatus?.msg && (
+                      <span className="min-w-0 truncate" title={taggerStatus.msg}>{taggerStatus.msg}</span>
+                    )}
+                    {taggerStatus && !taggerStatus.ok && needsOnnxRecovery && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
-                        className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
                       >
                         {t('tag.goInstallOnnx')}
-                      </button>
+                      </Button>
                     )}
-                    {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
-                      <button
-                        type="button"
+                    {taggerStatus && !taggerStatus.ok && needsModelRecovery && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
-                        className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
                       >
                         {t('tag.goDownload')}
-                      </button>
+                      </Button>
                     )}
                   </span>
                 }
               >
-                <select
+                <Select
+                  id="tagging-tagger"
                   value={tagger}
-                  onChange={(e) => setTagger(e.target.value as TaggerName)}
-                  className="input" style={fieldInputStyle}
+                  onChange={(event) => setTagger(event.target.value as TaggerName)}
+                  controlSize="sm"
+                  surface="canvas"
                 >
-                  <option value="wd14">WD14（本地 ONNX）</option>
-                  <option value="cltagger">CLTagger（本地 ONNX）</option>
-                  <option value="llm">LLM（OpenAI compatible，含 JoyCaption preset）</option>
-                </select>
+                  <option value="wd14">{t('tag.taggerWd14')}</option>
+                  <option value="cltagger">{t('tag.taggerCltagger')}</option>
+                  <option value="llm">{t('tag.taggerLlm')}</option>
+                </Select>
               </TagField>
 
-              <TagField label={t('tag.scope')} helpTooltip={t('tag.scopeHint')}>
-                <select
+              <TagField htmlFor="tagging-scope" label={t('tag.scope')} helpTooltip={t('tag.scopeHint')}>
+                <Select
+                  id="tagging-scope"
                   value={scope}
-                  onChange={(e) => setScope(e.target.value)}
-                  disabled={isLive}
-                  className="input" style={fieldInputStyle}
+                  onChange={(event) => setScope(event.target.value)}
+                  controlSize="sm"
+                  surface="canvas"
                 >
                   <option value="all">{t('tag.scopeAll')}</option>
-                  {folders.map((f) => (
-                    <option key={f} value={f}>{f}</option>
+                  {folders.map((folder) => (
+                    <option key={folder} value={folder}>{folder}</option>
                   ))}
                   <option value="validation">{t('tag.scopeValidation')}</option>
-                </select>
+                </Select>
               </TagField>
 
-              <TagField label={t('tag.onExisting')} helpTooltip={t('tag.onExistingHint')}>
-                <select
+              <TagField htmlFor="tagging-existing" label={t('tag.onExisting')} helpTooltip={t('tag.onExistingHint')}>
+                <Select
+                  id="tagging-existing"
                   value={onExisting}
-                  onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
-                  disabled={isLive}
-                  className="input" style={fieldInputStyle}
+                  onChange={(event) => setOnExisting(event.target.value as 'overwrite' | 'skip' | 'append')}
+                  controlSize="sm"
+                  surface="canvas"
                 >
-                  <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
                   <option value="skip">{t('tag.onExistingSkip')}</option>
+                  <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
                   <option value="append">{t('tag.onExistingAppend')}</option>
-                </select>
+                </Select>
               </TagField>
 
-              <TagField label={t('tag.triggerWord')} helpTooltip={t('tag.triggerWordHint')}>
-                <input
+              <TagField htmlFor="tagging-trigger" label={t('tag.triggerWord')} helpTooltip={t('tag.triggerWordHint')}>
+                <Input
+                  id="tagging-trigger"
                   type="text"
                   value={triggerWord}
-                  onChange={(e) => setTriggerWord(e.target.value)}
+                  onChange={(event) => setTriggerWord(event.target.value)}
                   placeholder={t('tag.triggerWordPlaceholder')}
-                  disabled={isLive}
-                  className="input input-mono"
-                  style={fieldCtlStyle(triggerWord.trim() !== (activeVersion.trigger_word ?? ''))}
+                  controlSize="sm"
+                  surface="canvas"
+                  mono
+                  className={triggerWord.trim() !== (activeVersion.trigger_word ?? '') ? 'border-warn' : ''}
                 />
               </TagField>
             </div>
-          </section>
+            {folderLoadError && (
+              <Alert tone="warning" size="sm" className="mt-related" title={t('tag.scopeLoadFailed')}>
+                {folderLoadError}
+              </Alert>
+            )}
+          </Card>
 
           {tagger === 'wd14' && (
             <Wd14Panel
               form={wd14Form}
               defaults={wd14Defaults}
               onChange={setWd14Form}
-              disabled={isLive}
+              disabled={false}
               downloadCenter={
                 wd14Form && (
                   <div className="flex flex-col gap-3">
@@ -540,7 +608,7 @@ export default function TaggingPage() {
               form={cltaggerForm}
               defaults={cltaggerDefaults}
               onChange={setCltaggerForm}
-              disabled={isLive}
+              disabled={false}
               downloadCenter={
                 cltaggerForm && (
                   <div className="flex flex-col gap-3">
@@ -580,25 +648,28 @@ export default function TaggingPage() {
                 setLlmPresetId(id)
               }}
               onEdit={() => setLlmEditorOpen(true)}
-              disabled={isLive}
+              disabled={false}
             />
           )}
 
         </div>
 
-        {/* 右栏：训练集 / 验证集打标状态（进度 + 上一轮打标配置 + 此轮需要打标） */}
         <TagStatusPanel
+          currentTagger={taggerLabel(tagger, t)}
+          scopeLabel={scopeLabel}
+          existingPolicyLabel={existingPolicyLabel}
+          runEstimate={runEstimate}
+          currentTriggerWord={triggerWord.trim()}
+          overwriteWarning={overwriteNeedsConfirm}
           totalImages={totalImages}
           taggedImages={taggedImages}
           methodLabel={lastMethodLabel}
           modelLabel={lastModelLabel}
           presetLabel={lastPresetLabel}
-          triggerWord={lastTrigger}
+          lastTriggerWord={lastTrigger}
           latestTaggedAt={job?.finished_at ?? null}
-          thisRoundNeed={trainThisRoundNeed}
           validationTotal={valTotal}
           validationTagged={valTagged}
-          validationThisRoundNeed={valThisRoundNeed}
           isLive={isLive}
         />
       </div>
@@ -609,6 +680,32 @@ export default function TaggingPage() {
         presetId={llmPresetId}
         onClose={() => setLlmEditorOpen(false)}
       />
+    )}
+
+    {overwriteConfirmOpen && (
+      <Modal
+        role="alertdialog"
+        size="sm"
+        title={t('tag.overwriteConfirmTitle')}
+        description={t('tag.overwriteConfirmDescription')}
+        onClose={() => setOverwriteConfirmOpen(false)}
+        footer={
+          <div className="flex justify-end gap-related">
+            <Button variant="secondary" onClick={() => setOverwriteConfirmOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button variant="danger" onClick={() => void enqueueTagging()}>
+              {t('tag.overwriteConfirmAction')}
+            </Button>
+          </div>
+        }
+      >
+        <Alert tone="warning" title={t('tag.overwriteWarningTitle')}>
+          {overwriteExistingCount == null
+            ? t('tag.overwriteWarningUnknown', { scope: scopeLabel })
+            : t('tag.overwriteWarningKnown', { scope: scopeLabel, n: overwriteExistingCount })}
+        </Alert>
+      </Modal>
     )}
     </StepShell>
   )
@@ -631,9 +728,9 @@ function Wd14Panel({
   const { t } = useTranslation()
   if (!form || !defaults) {
     return (
-      <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
+      <Card as="section" padding="sm" className="shrink-0 text-xs text-fg-tertiary">
         {t('tag.wd14Loading')}
-      </section>
+      </Card>
     )
   }
 
@@ -647,25 +744,29 @@ function Wd14Panel({
 
   return (
     <>
-      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
+      <Card as="section" padding="md" className="flex shrink-0 flex-col gap-2 text-sm">
         <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <TagFieldNumber label={t('settings.fieldThresholdGeneral')} value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
           <TagFieldNumber label={t('settings.fieldThresholdCharacter')} value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         </div>
-      </section>
+      </Card>
 
       <AdvancedSection>
         <div className="flex flex-col gap-3">
           {downloadCenter}
           <TagField label={t('settings.fieldBlacklistTags')}>
             <TagListInput
+              ariaLabel={t('settings.fieldBlacklistTags')}
               value={form.blacklist_tags}
               placeholder={t('tag.blacklistPlaceholder1')}
               disabled={disabled}
               onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
-              className="input input-mono"
-              style={fieldCtlStyle(JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags))}
+              className={controlClassName({
+                size: 'sm', surface: 'canvas', mono: true,
+                className: JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)
+                  ? 'border-warn' : '',
+              })}
             />
           </TagField>
         </div>
@@ -682,15 +783,15 @@ function PanelHeader({ dirty, onRestore, disabled, subtitle }: {
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <PanelDot />
-      <span className="caption">{t('tag.taggerParams')}</span>
+      <h2 className="type-panel-title">{t('tag.taggerParams')}</h2>
       {subtitle && <span className="text-xs text-fg-tertiary">{subtitle}</span>}
       <span className="flex-1" />
       {dirty && (
         <>
-          <span className="badge badge-warn">{t('tag.modified')}</span>
-          <button onClick={onRestore} disabled={disabled} className="btn btn-ghost btn-sm" title={t('tag.restore')}>
+          <Badge tone="warning" size="sm">{t('tag.modified')}</Badge>
+          <Button variant="ghost" size="xs" onClick={onRestore} disabled={disabled} title={t('tag.restore')}>
             {t('tag.restore')}
-          </button>
+          </Button>
         </>
       )}
     </div>
@@ -701,18 +802,24 @@ function PanelHeader({ dirty, onRestore, disabled, subtitle }: {
 function AdvancedSection({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const contentId = useId()
   return (
-    <section className="rounded-md border border-subtle bg-surface shrink-0 text-sm">
-      <button
-        type="button"
+    <Card as="section" padding="none" className="shrink-0 text-sm">
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-3.5 py-2.5 text-sm font-semibold text-fg-primary bg-transparent border-none cursor-pointer"
+        aria-expanded={open}
+        aria-controls={contentId}
+        className="w-full justify-between rounded-none px-3.5 py-2.5"
       >
         <span>{t('tag.advanced')}</span>
-        <span className="text-fg-tertiary text-xs">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && <div className="px-3.5 pb-2.5">{children}</div>}
-    </section>
+        <span className="text-xs text-fg-tertiary" aria-hidden="true">{open ? '▾' : '▸'}</span>
+      </Button>
+      <div id={contentId} hidden={!open} className="px-3.5 pb-2.5">
+        {open ? children : null}
+      </div>
+    </Card>
   )
 }
 
@@ -729,9 +836,9 @@ function CLTaggerPanel({
   const { t } = useTranslation()
   if (!form || !defaults) {
     return (
-      <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
+      <Card as="section" padding="sm" className="shrink-0 text-xs text-fg-tertiary">
         {t('tag.cltaggerLoading')}
-      </section>
+      </Card>
     )
   }
 
@@ -753,13 +860,13 @@ function CLTaggerPanel({
 
   return (
     <>
-      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
+      <Card as="section" padding="md" className="flex shrink-0 flex-col gap-2 text-sm">
         <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <TagFieldNumber label={t('settings.fieldThresholdGeneral')} value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
           <TagFieldNumber label={t('settings.fieldThresholdCharacter')} value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         </div>
-      </section>
+      </Card>
 
       <AdvancedSection>
         <div className="flex flex-col gap-3">
@@ -776,12 +883,16 @@ function CLTaggerPanel({
           </TagField>
           <TagField label={t('settings.fieldBlacklistTags')}>
             <TagListInput
+              ariaLabel={t('settings.fieldBlacklistTags')}
               value={form.blacklist_tags}
               placeholder={t('tag.blacklistPlaceholder2')}
               disabled={disabled}
               onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
-              className="input input-mono"
-              style={fieldCtlStyle(JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags))}
+              className={controlClassName({
+                size: 'sm', surface: 'canvas', mono: true,
+                className: JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)
+                  ? 'border-warn' : '',
+              })}
             />
           </TagField>
         </div>
@@ -804,18 +915,18 @@ function LLMTaggerPanel({
   const { t } = useTranslation()
   if (!defaults || !presetId) {
     return (
-      <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
+      <Card as="section" padding="sm" className="shrink-0 text-xs text-fg-tertiary">
         {t('tag.llmLoading')}
-      </section>
+      </Card>
     )
   }
 
   const active = defaults.presets.find((p) => p.id === presetId) ?? defaults.presets[0]
   if (!active) {
     return (
-      <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-err shrink-0">
+      <Card as="section" padding="sm" className="shrink-0 text-xs text-err">
         {t('tag.llmNoPreset')}
-      </section>
+      </Card>
     )
   }
 
@@ -826,7 +937,7 @@ function LLMTaggerPanel({
     !active.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
 
   return (
-    <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
+    <Card as="section" padding="md" className="flex shrink-0 flex-col gap-2 text-sm">
       {/* header 与 WD14/CLTagger 面板同款 PanelHeader；还原 = 切回全局默认预设 */}
       <PanelHeader
         dirty={overridden}
@@ -838,13 +949,9 @@ function LLMTaggerPanel({
         <TagFieldSelect
           label={t('tag.fieldPreset')}
           labelExtra={
-            <button
-              type="button"
-              onClick={onEdit}
-              className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
-            >
+            <Button variant="ghost" size="xs" onClick={onEdit}>
               {t('tag.llmEditPreset')}
-            </button>
+            </Button>
           }
           value={active.id}
           disabled={disabled}
@@ -876,50 +983,32 @@ function LLMTaggerPanel({
           ))}
         </TagFieldSelect>
       </div>
-    </section>
+    </Card>
   )
 }
 
 // ---------------------------------------------------------------------------
-// 面板字段块：对齐训练配置页 components/Field.tsx 的视觉（label 上 / 控件全宽
-// 在下 / 说明文字在控件下方），叠加打标页特有的 modified 语义（本次任务覆盖值
-// ≠ 预填值 → 橙色边框 + title 提示原值）。
+// 面板字段块：统一使用共享 FormControl，并让可见 label 与控件建立程序化关联。
 // ---------------------------------------------------------------------------
 
-// 与 components/Field.tsx 的 inputStyle 同款（更紧凑；背景用 canvas）。
-const fieldInputStyle: React.CSSProperties = {
-  width: '100%', padding: '5px 10px',
-  background: 'var(--bg-canvas)', border: '1px solid var(--border-default)',
-  borderRadius: 'var(--r-sm)', fontSize: 'var(--t-sm)',
-  color: 'var(--fg-primary)',
-}
-
-function fieldCtlStyle(modified?: boolean): React.CSSProperties {
-  return modified ? { ...fieldInputStyle, borderColor: 'var(--warn)' } : fieldInputStyle
-}
-
-function TagField({ label, labelExtra, helpTooltip, help, className = '', children }: {
+function TagField({ htmlFor, label, labelExtra, helpTooltip, help, className = '', children }: {
+  htmlFor?: string
   label: string
-  /** label 行内后缀（对齐训练配置页 label 旁小字徽章 / 链接，如「全局设置」跳转）。 */
   labelExtra?: React.ReactNode
-  /** 静态说明放 ⓘ tooltip（对齐全局设置页 SettingsField.helpTooltip）。 */
   helpTooltip?: React.ReactNode
-  /** 控件下方常驻内容：留给警示 / 状态徽章等必须一直可见的信息。 */
   help?: React.ReactNode
   className?: string
   children: React.ReactNode
 }) {
   return (
     <div className={`py-1.5 ${className}`}>
-      <div className="flex items-center gap-2 text-sm font-medium text-fg-secondary mb-1">
-        <span>{label}</span>
+      <div className="mb-1 flex items-center gap-2 type-field-label">
+        {htmlFor ? <label htmlFor={htmlFor}>{label}</label> : <span>{label}</span>}
         {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
-        {labelExtra && (
-          <span className="text-[11px] font-normal">{labelExtra}</span>
-        )}
+        {labelExtra && <span className="text-[11px] font-normal">{labelExtra}</span>}
       </div>
       {children}
-      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+      {help && <div className="mt-1 type-field-help">{help}</div>}
     </div>
   )
 }
@@ -929,14 +1018,26 @@ function TagFieldNumber({ label, value, base, min, max, step = 1, disabled, onCh
   disabled: boolean; onChange: (v: number) => void; help?: React.ReactNode
 }) {
   const { t } = useTranslation()
+  const inputId = useId()
   const modified = value !== base
   return (
-    <TagField label={label} help={help}>
-      <input
-        type="number" min={min} max={max} step={step} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
+    <TagField htmlFor={inputId} label={label} help={help}>
+      <Input
+        id={inputId}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => {
+          const next = Number(event.target.value)
+          if (!Number.isNaN(next)) onChange(Math.max(min, Math.min(max, next)))
+        }}
         disabled={disabled}
-        className="input input-mono" style={fieldCtlStyle(modified)}
+        controlSize="sm"
+        surface="canvas"
+        mono
+        className={modified ? 'border-warn' : ''}
         title={modified ? `${t('tag.modified')} · ${base}` : undefined}
       />
     </TagField>
@@ -949,17 +1050,29 @@ function TagFieldSelect({ label, labelExtra, value, disabled, onChange, modified
   helpTooltip?: React.ReactNode; help?: React.ReactNode
   className?: string; title?: string; children: React.ReactNode
 }) {
+  const selectId = useId()
   return (
-    <TagField label={label} labelExtra={labelExtra} helpTooltip={helpTooltip} help={help} className={className}>
-      <select
+    <TagField
+      htmlFor={selectId}
+      label={label}
+      labelExtra={labelExtra}
+      helpTooltip={helpTooltip}
+      help={help}
+      className={className}
+    >
+      <Select
+        id={selectId}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
-        className="input input-mono" style={fieldCtlStyle(modified)}
+        controlSize="sm"
+        surface="canvas"
+        mono
+        className={modified ? 'border-warn' : ''}
         title={title}
       >
         {children}
-      </select>
+      </Select>
     </TagField>
   )
 }
@@ -969,10 +1082,11 @@ function TagFieldCheckbox({ label, checked, disabled, onChange }: {
 }) {
   return (
     <label className={`flex items-center gap-1.5 text-sm text-fg-secondary ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-      <input
-        type="checkbox" checked={checked} disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        style={{ height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
+      <Checkbox
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        controlSize="sm"
       />
       {label}
     </label>
@@ -984,126 +1098,145 @@ function PanelDot() {
 }
 
 // ---------------------------------------------------------------------------
-// 右侧打标状态面板（对齐正则集页 RegStatusPanel）：当前版本打标进度 + 本次打标
-// 配置摘要 + 此轮需要打标估算。下载中心已挪进各 tagger 的「高级参数」里。
+// 右栏：运行中把不可变任务与下一轮草稿分开；数据状态只承载持久化事实。
 // ---------------------------------------------------------------------------
 
 function TagStatusPanel({
+  currentTagger, scopeLabel, existingPolicyLabel, runEstimate, currentTriggerWord,
+  overwriteWarning,
   totalImages, taggedImages,
-  methodLabel, modelLabel, presetLabel, triggerWord,
-  latestTaggedAt, thisRoundNeed,
-  validationTotal, validationTagged, validationThisRoundNeed, isLive,
+  methodLabel, modelLabel, presetLabel, lastTriggerWord, latestTaggedAt,
+  validationTotal, validationTagged, isLive,
 }: {
+  currentTagger: string
+  scopeLabel: string
+  existingPolicyLabel: string
+  runEstimate: number | null
+  currentTriggerWord: string
+  overwriteWarning: boolean
   totalImages: number
   taggedImages: number
   methodLabel: string | null
   modelLabel: string | null
   presetLabel: string | null
-  triggerWord: string
+  lastTriggerWord: string
   latestTaggedAt: number | null
-  thisRoundNeed: number | null
   validationTotal: number
   validationTagged: number
-  validationThisRoundNeed: number | null
   isLive: boolean
 }) {
   const { t } = useTranslation()
-  const trigger = triggerWord.trim()
+  const hasHistory = methodLabel != null || latestTaggedAt != null
+
   return (
-    <div className="flex flex-col gap-3 min-w-0 overflow-y-auto">
-      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5">
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <PanelDot />
-          <span className="caption">{t('tag.statusPanelTitle')}</span>
-        </div>
+    <aside
+      aria-label={t('tag.statusTitle')}
+      className="flex min-w-0 flex-col gap-3 xl:min-h-0 xl:overflow-y-auto"
+    >
+      <Card as="section" padding="md" aria-labelledby="tag-run-plan-title">
+        <h2 id="tag-run-plan-title" className="type-panel-title mb-section">
+          {t(isLive ? 'tag.nextRunPlanTitle' : 'tag.runPlanTitle')}
+        </h2>
         <div className="flex flex-col gap-2">
-          <TagStatusImagesRow tagged={taggedImages} total={totalImages} />
-          {methodLabel && (
-            <TagStatusRow label={t('tag.statusMethod')}>
-              <span className="font-mono">{methodLabel}</span>
-            </TagStatusRow>
-          )}
-          {modelLabel && (
-            <TagStatusRow label={t('tag.statusModel')}>
-              <span className="font-mono break-all">{modelLabel}</span>
-            </TagStatusRow>
-          )}
-          {presetLabel && (
-            <TagStatusRow label={t('tag.statusPreset')}>
-              <span className="font-mono break-all">{presetLabel}</span>
-            </TagStatusRow>
-          )}
-          {trigger && (
-            <TagStatusRow label={t('tag.statusTrigger')}>
-              <span className="font-mono break-all">{trigger}</span>
-            </TagStatusRow>
-          )}
-          <TagStatusRow label={t('tag.statusLatest')}>
-            <span className="text-fg-secondary text-sm">
-              {latestTaggedAt ? formatAgo(latestTaggedAt, t) : '—'}
-            </span>
+          <TagStatusRow label={t('tag.fieldTagger')}>
+            <span className="font-mono">{currentTagger}</span>
           </TagStatusRow>
-        </div>
-        <TagStatusThisRound need={thisRoundNeed} />
-      </section>
-
-      {/* 验证集打标状态：仅当版本存在验证集图片时显示（与训练集 section 同款）。 */}
-      {validationTotal > 0 && (
-        <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <PanelDot />
-            <span className="caption">{t('tag.validationStatusPanelTitle')}</span>
-          </div>
-          <div className="flex flex-col gap-2">
-            <TagStatusImagesRow tagged={validationTagged} total={validationTotal} />
-          </div>
-          <TagStatusThisRound need={validationThisRoundNeed} />
-        </section>
-      )}
-
-      {isLive && (
-        <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-center">
-          <div className="badge badge-warn">{t('tag.taggingBadge')}</div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// 「图片 n / m 张」行（训练集 / 验证集 section 共用）。
-function TagStatusImagesRow({ tagged, total }: { tagged: number; total: number }) {
-  const { t } = useTranslation()
-  return (
-    <TagStatusRow label={t('tag.statusImages')}>
-      <span className="font-mono">
-        <span className="text-ok">{tagged}</span>
-        <span className="text-fg-tertiary text-2xs font-normal ml-1">
-          / {total} {t('tag.nImagesShort')}
-        </span>
-      </span>
-    </TagStatusRow>
-  )
-}
-
-// 「此轮需要打标」分隔行（训练集 / 验证集 section 共用）；null 显示 —。
-function TagStatusThisRound({ need }: { need: number | null }) {
-  const { t } = useTranslation()
-  return (
-    <div className="pt-2.5 border-t border-subtle">
-      <TagStatusRow label={t('tag.statusThisRound')}>
-        <span className="font-mono">
-          {need == null ? (
-            <span className="text-fg-tertiary">—</span>
-          ) : (
-            <>
-              <span className="text-accent">{need}</span>
-              <span className="text-fg-tertiary text-2xs font-normal ml-1">
-                {t('tag.nImagesShort')}
+          <TagStatusRow label={t('tag.scope')}>
+            <span>{scopeLabel}</span>
+          </TagStatusRow>
+          <TagStatusRow label={t('tag.onExisting')}>
+            <span>{existingPolicyLabel}</span>
+          </TagStatusRow>
+          <TagStatusRow label={t('tag.statusThisRound')}>
+            {runEstimate == null ? (
+              <span className="text-fg-secondary">{t('tag.scanAfterStart')}</span>
+            ) : (
+              <span className="font-mono text-accent">
+                {runEstimate} <span className="text-2xs font-normal text-fg-tertiary">{t('tag.nImagesShort')}</span>
               </span>
-            </>
+            )}
+          </TagStatusRow>
+          {currentTriggerWord && (
+            <TagStatusRow label={t('tag.statusTrigger')}>
+              <span className="break-all font-mono">{currentTriggerWord}</span>
+            </TagStatusRow>
           )}
+        </div>
+        {overwriteWarning && (
+          <Alert tone="warning" size="sm" className="mt-section">
+            {t('tag.overwriteInlineWarning')}
+          </Alert>
+        )}
+      </Card>
+
+      <Card as="section" padding="md" aria-labelledby="tag-data-status-title">
+        <h2 id="tag-data-status-title" className="type-panel-title mb-section">{t('tag.dataStatusTitle')}</h2>
+        <div className="flex flex-col gap-section">
+          <TagCoverage label={t('tag.trainingCoverage')} tagged={taggedImages} total={totalImages} />
+          {validationTotal > 0 && (
+            <TagCoverage label={t('tag.validationCoverage')} tagged={validationTagged} total={validationTotal} />
+          )}
+          <div className="border-t border-subtle pt-section">
+            <h3 className="type-field-label mb-related">{t('tag.lastRunTitle')}</h3>
+            {hasHistory ? (
+              <div className="flex flex-col gap-2">
+                {methodLabel && (
+                  <TagStatusRow label={t('tag.statusMethod')}>
+                    <span className="font-mono">{methodLabel}</span>
+                  </TagStatusRow>
+                )}
+                {modelLabel && (
+                  <TagStatusRow label={t('tag.statusModel')}>
+                    <span className="break-all font-mono">{modelLabel}</span>
+                  </TagStatusRow>
+                )}
+                {presetLabel && (
+                  <TagStatusRow label={t('tag.statusPreset')}>
+                    <span className="break-all font-mono">{presetLabel}</span>
+                  </TagStatusRow>
+                )}
+                {lastTriggerWord && (
+                  <TagStatusRow label={t('tag.statusTrigger')}>
+                    <span className="break-all font-mono">{lastTriggerWord}</span>
+                  </TagStatusRow>
+                )}
+                <TagStatusRow label={t('tag.statusLatest')}>
+                  <span className="text-sm text-fg-secondary">
+                    {latestTaggedAt ? formatAgo(latestTaggedAt, t) : '—'}
+                  </span>
+                </TagStatusRow>
+              </div>
+            ) : (
+              <p className="type-field-help">{t('tag.noPreviousRun')}</p>
+            )}
+          </div>
+        </div>
+      </Card>
+    </aside>
+  )
+}
+
+function TagCoverage({ label, tagged, total }: { label: string; tagged: number; total: number }) {
+  const { t } = useTranslation()
+  const valueText = t('tag.coverageValue', { tagged, total })
+  return (
+    <div className="flex flex-col gap-related">
+      <TagStatusRow label={label}>
+        <span className="font-mono">
+          <span className="text-ok">{tagged}</span>
+          <span className="ml-1 text-2xs font-normal text-fg-tertiary">
+            / {total} {t('tag.nImagesShort')}
+          </span>
         </span>
       </TagStatusRow>
+      <ProgressBar
+        label={label}
+        value={tagged}
+        max={Math.max(1, total)}
+        valueText={valueText}
+        size="xs"
+        tone={total > 0 && tagged >= total ? 'success' : 'accent'}
+      />
     </div>
   )
 }
@@ -1116,6 +1249,13 @@ function TagStatusRow({ label, children }: { label: string; children: React.Reac
       <span className="text-sm text-fg-primary text-right min-w-0 break-words">{children}</span>
     </div>
   )
+}
+
+function taggerLabel(name: string | null, t: TFunction): string {
+  if (name === 'wd14') return t('tag.taggerWd14Short')
+  if (name === 'cltagger') return t('tag.taggerCltaggerShort')
+  if (name === 'llm') return t('tag.taggerLlmShort')
+  return name ?? ''
 }
 
 // 最近一次 tag job 的参数：优先 params_decoded，退回解析 params 原始 JSON。

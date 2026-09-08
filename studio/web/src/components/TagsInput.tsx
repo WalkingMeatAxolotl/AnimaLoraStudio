@@ -19,12 +19,13 @@ export function parseTags(s: string): string[] {
  * blur 时文本归整成 `tags.join(', ')`，再进编辑态看到的是规范形式。
  * 给自带外层 label 的场景（Settings 的 SettingsField）直接用这个；要 140px
  * grid label 的用下面的 {@link TagsInput}。 */
-export function TagListInput({ value, onChange, placeholder, disabled, className = '', style, commitOnBlur = false }: {
+export function TagListInput({ value, onChange, placeholder, disabled, className = '', style, commitOnBlur = false, ariaLabel }: {
   value: string[]
   onChange: (v: string[]) => void
   placeholder?: string
   disabled?: boolean
   className?: string
+  ariaLabel?: string
   /** 内联样式透传（打标页 TagField 块用它对齐训练配置页控件视觉）。 */
   style?: React.CSSProperties
   /** true：编辑过程只更新本地文本，blur 时才上抛父一次（instant-apply 设置页用，
@@ -98,6 +99,7 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
             setEditing(false)
           }}
           disabled={disabled}
+          aria-label={ariaLabel}
           className={className}
           style={style}
         />
@@ -121,6 +123,7 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
   return (
     <div
       role="button"
+      aria-label={ariaLabel}
       tabIndex={disabled ? -1 : 0}
       onClick={() => { if (!disabled) setEditing(true) }}
       onFocus={() => { if (!disabled) setEditing(true) }}
@@ -157,6 +160,7 @@ export default function TagsInput({ label, value, placeholder, disabled, onChang
     <label className={'grid grid-cols-[140px_1fr] items-center gap-2 ' + className}>
       <span className="text-fg-tertiary font-mono text-xs">{label}</span>
       <TagListInput
+        ariaLabel={label}
         value={value}
         onChange={onChange}
         placeholder={placeholder}

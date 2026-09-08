@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
@@ -13,11 +13,18 @@ import {
   type Task,
   type Version,
 } from '../../../api/client'
+import ActionGroup from '../../../components/ActionGroup'
+import Alert from '../../../components/Alert'
 import BaseModelSelect from '../../../components/BaseModelSelect'
+import Button from '../../../components/Button'
+import Card from '../../../components/Card'
+import EmptyState from '../../../components/EmptyState'
+import { Checkbox, Input, Select, Textarea } from '../../../components/FormControl'
 import { InfoButton } from '../../../components/InfoButton'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import StepShell from '../../../components/StepShell'
+import { Tabs } from '../../../components/SelectionGroup'
 import { TranslatedTag } from '../../../components/tagDisplay/TranslatedTag'
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
@@ -65,7 +72,11 @@ export default function RegularizationPage() {
   const { confirm } = useDialog()
 
   const [reg, setReg] = useState<RegStatus | null>(null)
+  const [regLoading, setRegLoading] = useState(true)
+  const [regError, setRegError] = useState<string | null>(null)
   const [trainTags, setTrainTags] = useState<RegTagCount[]>([])
+  const [trainTagsLoading, setTrainTagsLoading] = useState(true)
+  const [trainTagsError, setTrainTagsError] = useState<string | null>(null)
   // excluded 既包含 train top-tag 上点掉的，也包含「自定义排除」输入框加的（这部分
   // 在 train top-tag 列表里查不到）。后端不存这份选择，切页面回来需要按
   // (project, version) 在 localStorage 恢复，不然用户加的自定义 tag 看着就丢了。
@@ -97,8 +108,7 @@ export default function RegularizationPage() {
     api.getLatestVersionJob(project.id, v, 'reg_build').then((r) => ({ item: r.job, log: r.log })),
   )
 
-  // B2（PR-2）：「设置 & 日志」+「先验生成」合并成单 tab「生成」；顶部 source picker
-  // 决定渲染 Booru 配置面板还是 AI 配置面板。「开始生成」按钮按 source 调对应 endpoint。
+  // 生成配置与历史任务合并为单一「生成」阶段；顶部来源选择决定表单与主操作语义。
   const [activeTab, setActiveTab] = useState<'generate' | 'images'>('generate')
   // 来源默认 AI 先验（#8 决策 2026-05-30）：对齐 DreamBooth 原论文 neutral prior。
   // Booru 路径保留作"省时间"备选（不烧 GPU、更快出图）。
@@ -134,6 +144,7 @@ export default function RegularizationPage() {
     return () => { alive = false }
   }, [project.id, vid])
   const [aiBusy, setAiBusy] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   // AI 先验 task：同上；hydrate 时顺带把 aiBusy 同步到 task 真实状态
   const {
     item: aiTask,
@@ -154,30 +165,42 @@ export default function RegularizationPage() {
 
   const refreshReg = useCallback(async () => {
     if (!vid) return
+    setRegLoading(true)
     try {
       const s = await api.getRegStatus(project.id, vid)
       // 在源头排序：预览 modal 的 onPick(idx) 直接索引 reg.files，
       // 缩略图网格也从 reg.files 顺序派生，两者必须同序。
       setReg({ ...s, files: [...s.files].sort(compareImagePath) })
+      setRegError(null)
     } catch (e) {
-      toast(t('reg.loadFailed', { error: String(e) }), 'error')
+      setRegError(String(e))
+    } finally {
+      setRegLoading(false)
     }
-  }, [project.id, vid, t, toast])
+  }, [project.id, vid])
 
   const refreshTrainTags = useCallback(async () => {
     if (!vid) return
+    setTrainTagsLoading(true)
     try {
       const items = await api.previewRegTags(project.id, vid, 30)
       setTrainTags(items)
-    } catch {
-      setTrainTags([])
+      setTrainTagsError(null)
+    } catch (e) {
+      setTrainTagsError(String(e))
+    } finally {
+      setTrainTagsLoading(false)
     }
   }, [project.id, vid])
 
   useEffect(() => {
+    setReg(null)
+    setRegError(null)
+    setTrainTags([])
+    setTrainTagsError(null)
     void refreshReg()
     void refreshTrainTags()
-  }, [refreshReg, refreshTrainTags])
+  }, [vid, refreshReg, refreshTrainTags])
 
   // 全局默认排除（Settings → 正则集）。null = 还没拉到 secrets；拉到前既不 seed 也
   // 不写盘，避免初始空值把某个 build 的本地记录覆盖成空、让种子永远不触发。
@@ -255,6 +278,7 @@ export default function RegularizationPage() {
         if (t.status === 'done' || t.status === 'failed' || t.status === 'canceled') {
           setAiBusy(false)
           void refreshReg()
+          void reload()
           if (t.status === 'done') setActiveTab('images')
         }
       }).catch(() => {})
@@ -263,7 +287,8 @@ export default function RegularizationPage() {
 
   const trainImageCount = activeVersion?.stats?.train_image_count ?? 0
   // 任意一种生成跑着都视为 live —— 防止 booru / AI 并发同时写 reg/。
-  const isLive = job?.status === 'running' || job?.status === 'pending' || aiBusy
+  const isTaskLive = job?.status === 'running' || job?.status === 'pending' || aiBusy
+  const isLive = isTaskLive || submitting
 
   // B1（PR-2）— 现有 reg 集结构推断：meta.build_mode 优先（新 meta 写入），
   // 否则看 reg.files 路径前缀（仅 1_data/ → flat；含 N_xxx 多种 → mirror）。
@@ -281,8 +306,8 @@ export default function RegularizationPage() {
     if (prefixes.size === 1 && prefixes.has('1_data')) return 'flat'
     return 'mirror'
   }, [reg])
-  // mode 跟现有结构不一致时禁用切换（incremental 沿用会撞结构；用户必须先清空）
-  const modeLocked = existingMode !== null && existingMode !== buildMode
+  // 增量模式必须沿用现有目录结构；全量模式会先清空，因此可选择新结构。
+  const modeLocked = existingMode !== null && mode === 'incremental'
 
   // 「此轮需要生成」：按当前来源 + 模式 + 目标数推算点「开始生成」会处理多少张。
   // 与后端一致：覆盖(full)=清空重建 → need=目标数；增量(incremental)=补足到目标
@@ -307,6 +332,20 @@ export default function RegularizationPage() {
     return { need, incremental }
   }, [source, aiIncremental, buildMode, targetCount, mode, trainImageCount, reg?.image_count])
 
+  const activeRun = useMemo(() => {
+    if (aiTask && (aiTask.status === 'running' || aiTask.status === 'pending')) {
+      return { id: aiTask.id, sourceLabel: t('reg.sourceAi'), status: aiTask.status }
+    }
+    if (job && (job.status === 'running' || job.status === 'pending')) {
+      return { id: job.id, sourceLabel: t('reg.sourceBooru'), status: job.status }
+    }
+    return null
+  }, [aiTask, job, t])
+  const draftSourceLabel = source === 'ai' ? t('reg.sourceAi') : t('reg.sourceBooru')
+  const draftRangeLabel = thisRound.incremental
+    ? t('reg.thisRoundIncremental')
+    : t('reg.thisRoundFull')
+
   // 现有 reg 集存在时，把 buildMode 自动对齐它（避免切到 version 看到错的初始值）。
   // 用户点 disabled 的下拉看到 tooltip 提示「先清空」。
   useEffect(() => {
@@ -329,6 +368,7 @@ export default function RegularizationPage() {
       toast(t('reg.noTrainForAi'), 'error')
       return
     }
+    setSubmitting(true)
     setAiBusy(true)
     setAiTask(null)
     setAiLogs([])
@@ -350,6 +390,8 @@ export default function RegularizationPage() {
     } catch (e) {
       toast(String(e), 'error')
       setAiBusy(false)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -372,6 +414,7 @@ export default function RegularizationPage() {
       target_count: parsedTarget,
       ...advanced,
     }
+    setSubmitting(true)
     try {
       const j = await api.startRegBuild(project.id, vid, body)
       setJob(j)
@@ -379,7 +422,27 @@ export default function RegularizationPage() {
       toast(t('reg.enqueued', { id: j.id }), 'success')
     } catch (e) {
       toast(String(e), 'error')
+    } finally {
+      setSubmitting(false)
     }
+  }
+
+  const startGeneration = async () => {
+    const replacesExisting = source === 'ai' ? !aiIncremental : mode === 'full'
+    if (replacesExisting && reg?.exists) {
+      const sourceLabel = source === 'ai' ? t('reg.sourceAi') : t('reg.sourceBooru')
+      const ok = await confirm(
+        t('reg.confirmFullBuild', {
+          current: reg.image_count,
+          target: thisRound.need,
+          source: sourceLabel,
+        }),
+        { tone: 'danger', okText: t('reg.confirmFullBuildOk') },
+      )
+      if (!ok) return
+    }
+    if (source === 'ai') await handleAiGenerate()
+    else await startBuild()
   }
 
   const onDelete = async () => {
@@ -389,7 +452,7 @@ export default function RegularizationPage() {
       await api.deleteReg(project.id, vid)
       toast(t('reg.deleted'), 'success')
       setReg(null)
-      void refreshReg()
+      await refreshReg()
       void reload()
     } catch (e) {
       toast(String(e), 'error')
@@ -452,147 +515,229 @@ export default function RegularizationPage() {
         },
       ]}
       actions={
-        <>
-          {/* 清空正则集：ghost（对齐训练配置页「定时训练」btn-ghost btn-sm）；
-              放先验生成左边。onDelete 内含 confirm 兜底，故不用 err 配色。 */}
-          {reg?.exists && (
-            <button
-              onClick={onDelete}
+        <ActionGroup
+          aria-label={t('reg.pageActionsLabel')}
+          secondary={reg?.exists && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => void onDelete()}
               disabled={isLive}
-              className="btn btn-ghost btn-sm"
               title={t('reg.deleteBtn')}
             >
               {t('reg.deleteBtn')}
-            </button>
+            </Button>
           )}
-          {/* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */}
-          <button
-            onClick={() => {
-              if (source === 'ai') void handleAiGenerate()
-              else void startBuild()
-            }}
-            disabled={isLive || trainImageCount <= 0}
-            className="btn btn-primary btn-sm"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            <span>
-              {isLive
-                ? t('reg.generatingBtn')
-                : source === 'ai'
-                  ? t('reg.aiGenerateBtn')
-                  : t('reg.startBuildBtn')}
-            </span>
-          </button>
-        </>
+          primary={(
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void startGeneration()}
+              disabled={isLive || trainImageCount <= 0}
+              loading={submitting}
+            >
+              {!submitting && (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
+              <span>
+                {isTaskLive
+                  ? t('reg.generatingBtn')
+                  : source === 'ai'
+                    ? t('reg.aiGenerateBtn')
+                    : t('reg.startBuildBtn')}
+              </span>
+            </Button>
+          )}
+        />
       }
-      belowHeader={
-        /* tab 贴到 header 下方全宽条（对齐任务详情页 nav：下划线式、active 橙字）。
-           状态栏移到「生成」tab 右栏，不再横跨顶部。 */
-        <nav className="flex items-center gap-0 border-b border-subtle px-page shrink-0">
-          <RegTab
-            active={activeTab === 'generate'}
-            onClick={() => setActiveTab('generate')}
-            label={t('reg.tabGenerate')}
-            live={isLive}
-          />
-          <RegTab
-            active={activeTab === 'images'}
-            onClick={() => setActiveTab('images')}
-            label={t('reg.tabImages')}
-            count={reg && reg.image_count > 0 ? reg.image_count : undefined}
-          />
-        </nav>
-      }
+      belowHeader={(
+        <Tabs
+          items={[
+            {
+              value: 'generate',
+              label: t('reg.tabGenerate'),
+              controls: 'reg-panel-generate',
+            },
+            {
+              value: 'images',
+              label: reg?.image_count
+                ? t('reg.tabImagesCount', { n: reg.image_count })
+                : t('reg.tabImages'),
+              controls: 'reg-panel-images',
+            },
+          ]}
+          value={activeTab}
+          onChange={setActiveTab}
+          ariaLabel={t('reg.tabsLabel')}
+          idPrefix="reg-tabs"
+          className="w-full px-page"
+        />
+      )}
     >
     <div className="flex flex-col h-full gap-3 min-h-0">
-
-      {/* 生成 tab：左右分栏（对齐打标页 1.5fr : 1fr）——左=生成参数，右=正则集状态 */}
       {activeTab === 'generate' ? (
-        <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
+        <div
+          id="reg-panel-generate"
+          role="tabpanel"
+          aria-labelledby="reg-tabs-generate"
+          className="grid flex-1 min-h-0 gap-3 overflow-y-auto xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)] xl:overflow-hidden"
+        >
+          <div className="flex min-w-0 flex-col xl:min-h-0 xl:overflow-y-auto">
+            {activeRun && (
+              <Alert
+                tone="info"
+                size="sm"
+                title={t('reg.currentTaskTitle', {
+                  source: activeRun.sourceLabel,
+                  id: activeRun.id,
+                })}
+                className="mb-3"
+              >
+                {t('reg.nextRunDraftHint')}
+              </Alert>
+            )}
 
-          {/* 左栏：来源切换 + AI / Booru 表单 */}
-          <div className="flex flex-col min-h-0 min-w-0 overflow-y-auto">
-            <div>
-              <SourceSegmented
-                source={source}
-                onChange={setSource}
+            <SourceSegmented source={source} onChange={setSource} />
+
+            {trainTagsError && (
+              <Alert
+                tone="warning"
+                size="sm"
+                title={t('reg.trainTagsLoadFailedTitle')}
+                action={(
+                  <Button variant="secondary" size="sm" onClick={() => void refreshTrainTags()}>
+                    {t('common.retry')}
+                  </Button>
+                )}
+                className="mb-3"
+              >
+                {t('reg.trainTagsLoadFailedHint')}
+              </Alert>
+            )}
+
+            {source === 'ai' ? (
+              <AiForm
+                trainTags={trainTags}
+                trainTagsLoading={trainTagsLoading}
+                trainTagsFailed={Boolean(trainTagsError)}
+                excluded={excluded}
+                onToggleExcluded={toggleTag}
+                neg={aiNeg} onNegChange={setAiNeg}
+                width={aiWidth} onWidthChange={setAiWidth}
+                height={aiHeight} onHeightChange={setAiHeight}
+                steps={aiSteps} onStepsChange={setAiSteps}
+                cfg={aiCfg} onCfgChange={setAiCfg}
+                seed={aiSeed} onSeedChange={setAiSeed}
+                baseModel={aiBaseModel} onBaseModelChange={setAiBaseModel}
+                family={aiFamily}
+                incremental={aiIncremental}
+                onIncrementalChange={setAiIncremental}
               />
-
-              {source === 'ai' ? (
-                <AiForm
-                  trainTags={trainTags}
-                  excluded={excluded}
-                  onToggleExcluded={toggleTag}
-                  neg={aiNeg} onNegChange={setAiNeg}
-                  width={aiWidth} onWidthChange={setAiWidth}
-                  height={aiHeight} onHeightChange={setAiHeight}
-                  steps={aiSteps} onStepsChange={setAiSteps}
-                  cfg={aiCfg} onCfgChange={setAiCfg}
-                  seed={aiSeed} onSeedChange={setAiSeed}
-                  baseModel={aiBaseModel} onBaseModelChange={setAiBaseModel}
-                  family={aiFamily}
-                  incremental={aiIncremental}
-                  onIncrementalChange={setAiIncremental}
-                />
-              ) : (
-                <BooruForm
-                  trainTags={trainTags}
-                  trainImageCount={trainImageCount}
-                  excluded={excluded}
-                  onToggleExcluded={toggleTag}
-                  apiSource={apiSource} onApiSourceChange={setApiSource}
-                  buildMode={buildMode} onBuildModeChange={setBuildMode}
-                  modeLocked={modeLocked}
-                  existingMode={existingMode}
-                  targetCount={targetCount} onTargetCountChange={setTargetCount}
-                  mode={mode} onModeChange={setMode}
-                  autoTag={autoTag} onAutoTagChange={setAutoTag}
-                  autoTagKind={autoTagKind} onAutoTagKindChange={setAutoTagKind}
-                  autoDedup={autoDedup} onAutoDedupChange={setAutoDedup}
-                  advanced={advanced} onAdvancedChange={setAdvanced}
-                />
-              )}
-            </div>
+            ) : (
+              <BooruForm
+                trainTags={trainTags}
+                trainTagsLoading={trainTagsLoading}
+                trainTagsFailed={Boolean(trainTagsError)}
+                trainImageCount={trainImageCount}
+                excluded={excluded}
+                onToggleExcluded={toggleTag}
+                apiSource={apiSource} onApiSourceChange={setApiSource}
+                buildMode={buildMode} onBuildModeChange={setBuildMode}
+                modeLocked={modeLocked}
+                existingMode={existingMode}
+                targetCount={targetCount} onTargetCountChange={setTargetCount}
+                mode={mode} onModeChange={setMode}
+                autoTag={autoTag} onAutoTagChange={setAutoTag}
+                autoTagKind={autoTagKind} onAutoTagKindChange={setAutoTagKind}
+                autoDedup={autoDedup} onAutoDedupChange={setAutoDedup}
+                advanced={advanced} onAdvancedChange={setAdvanced}
+              />
+            )}
           </div>
 
-          {/* 右栏：当前正则集状态（竖向面板；清空按钮已移到页头 actions） */}
-          <div className="min-w-0 overflow-y-auto">
+          <aside className="flex min-w-0 flex-col gap-3 xl:min-h-0 xl:overflow-y-auto">
+            <RegPlanPanel
+              source={source}
+              sourceLabel={draftSourceLabel}
+              rangeLabel={draftRangeLabel}
+              buildMode={buildMode}
+              target={thisRound.need}
+              excludedCount={excluded.size}
+              isNextRun={Boolean(activeRun)}
+            />
             <RegStatusPanel
               reg={reg}
+              loading={regLoading}
+              error={regError}
               autoTagKind={autoTagKind}
-              thisRoundNeed={thisRound.need}
-              thisRoundIncremental={thisRound.incremental}
+              onRetry={() => void refreshReg()}
             />
-          </div>
+          </aside>
         </div>
       ) : (
-        reg && reg.image_count > 0 ? (
-          <RegPreview
-            pid={project.id}
-            vid={vid}
-            reg={reg}
-            isLive={isLive}
-            onPick={(idx) => void openPreview(idx)}
-            onDeleted={() => {
-              void refreshReg()
-              void reload()
-            }}
-          />
-        ) : (
-          <section
-            className="flex-1 flex flex-col items-center justify-center gap-1.5 text-center rounded-md border border-subtle bg-surface text-fg-tertiary"
-            style={{ minHeight: 0 }}
-          >
-            <div className="text-sm text-fg-secondary font-medium">
-              {t('reg.emptyRegTitle')}
-            </div>
-            <div className="text-2xs">
-              {t('reg.emptyRegHint')}
-            </div>
-          </section>
-        )
+        <div
+          id="reg-panel-images"
+          role="tabpanel"
+          aria-labelledby="reg-tabs-images"
+          className="flex flex-1 min-h-0 flex-col gap-3"
+        >
+          {reg && reg.image_count > 0 ? (
+            <>
+              {regError && (
+                <Alert
+                  tone="warning"
+                  size="sm"
+                  title={t('reg.refreshErrorTitle')}
+                  action={(
+                    <Button variant="secondary" size="sm" onClick={() => void refreshReg()}>
+                      {t('common.retry')}
+                    </Button>
+                  )}
+                >
+                  {regError}
+                </Alert>
+              )}
+              <RegPreview
+                pid={project.id}
+                vid={vid}
+                reg={reg}
+                isLive={isLive}
+                onPick={(idx) => void openPreview(idx)}
+                onDeleted={() => {
+                  void refreshReg()
+                  void reload()
+                }}
+              />
+            </>
+          ) : regError && !reg ? (
+            <Alert
+              tone="danger"
+              title={t('reg.loadErrorTitle')}
+              action={(
+                <Button variant="secondary" size="sm" onClick={() => void refreshReg()}>
+                  {t('common.retry')}
+                </Button>
+              )}
+              className="w-full self-start"
+              role="alert"
+            >
+              {regError}
+            </Alert>
+          ) : (
+            <EmptyState
+              className="flex-1"
+              title={t('reg.emptyRegTitle')}
+              description={regLoading ? t('common.loading') : t('reg.emptyRegHint')}
+              action={!regLoading && (
+                <Button variant="primary" size="sm" onClick={() => setActiveTab('generate')}>
+                  {t('reg.goToGenerate')}
+                </Button>
+              )}
+            />
+          )}
+        </div>
       )}
 
       {previewIdx !== null && reg && reg.files[previewIdx] && (
@@ -620,60 +765,110 @@ export default function RegularizationPage() {
 }
 
 // ---------------------------------------------------------------------------
-// 子组件 — restyle（按设计稿 `tmp/reg-restyle-design/.../正则集 restyle.html`）
+// 子组件 — task-first Regularization 工作台（见 phase4b-regularization brief）
 // ---------------------------------------------------------------------------
 
-// 当前正则集状态：竖向面板（「生成」tab 右栏）。锚定打标页右栏卡片视觉
-// （rounded-md border bg-surface + 小圆点标题）。原横向 4-cell 状态条塞不进
-// 窄右栏，改成 label 左 / value 右的信息行竖排。清空按钮已移到页头 actions。
-function RegStatusPanel({
-  reg,
-  autoTagKind,
-  thisRoundNeed,
-  thisRoundIncremental,
+function RegPlanPanel({
+  source,
+  sourceLabel,
+  rangeLabel,
+  buildMode,
+  target,
+  excludedCount,
+  isNextRun,
 }: {
-  reg: RegStatus | null
-  autoTagKind: string
-  thisRoundNeed: number
-  thisRoundIncremental: boolean
+  source: 'ai' | 'booru'
+  sourceLabel: string
+  rangeLabel: string
+  buildMode: 'mirror' | 'flat'
+  target: number
+  excludedCount: number
+  isNextRun: boolean
 }) {
   const { t } = useTranslation()
-  const header = (
-    <div className="flex items-center gap-1.5 mb-2.5">
-      <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-      <span className="caption">{t('reg.statusPanelTitle')}</span>
-    </div>
-  )
-  // 底部「此轮需要生成」：随左侧设置实时变，生成前（reg 不存在）也要能看到。
-  const thisRoundRow = (
-    <div className="pt-2.5 border-t border-subtle">
-      <StatusRow label={t('reg.statusCellThisRound')}>
-        <span className="font-mono">
-          <span className="text-accent">{thisRoundNeed}</span>
-          <span className="text-fg-tertiary text-2xs font-normal ml-1">
-            {t('reg.nImagesShort')} · {thisRoundIncremental ? t('reg.thisRoundIncremental') : t('reg.thisRoundFull')}
+  return (
+    <Card as="section" radius="compact" padding="sm" aria-labelledby="reg-plan-title">
+      <PanelHeading
+        id="reg-plan-title"
+        title={t(isNextRun ? 'reg.nextRunPlanTitle' : 'reg.runPlanTitle')}
+      />
+      <div className="flex flex-col gap-2">
+        <StatusRow label={t('reg.statusCellSource')}>
+          <span className="font-mono">{sourceLabel}</span>
+        </StatusRow>
+        <StatusRow label={t('reg.modeLabel')}>
+          <span>{rangeLabel}</span>
+        </StatusRow>
+        {source === 'booru' && (
+          <StatusRow label={t('reg.buildModeLabel')}>
+            <span>{t(buildMode === 'mirror' ? 'reg.buildModeMirror' : 'reg.buildModeFlat')}</span>
+          </StatusRow>
+        )}
+        <StatusRow label={t('reg.statusCellThisRound')}>
+          <span className="font-mono text-accent">
+            {t('reg.nImages', { n: target })}
           </span>
-        </span>
-      </StatusRow>
-    </div>
+        </StatusRow>
+        <StatusRow label={t('reg.excludePlanLabel')}>
+          <span className="font-mono">{excludedCount}</span>
+        </StatusRow>
+      </div>
+    </Card>
   )
+}
+
+function RegStatusPanel({
+  reg,
+  loading,
+  error,
+  autoTagKind,
+  onRetry,
+}: {
+  reg: RegStatus | null
+  loading: boolean
+  error: string | null
+  autoTagKind: string
+  onRetry: () => void
+}) {
+  const { t } = useTranslation()
+  const header = <PanelHeading id="reg-status-title" title={t('reg.statusPanelTitle')} />
+
+  if (!reg && error) {
+    return (
+      <Card as="section" radius="compact" padding="sm" aria-labelledby="reg-status-title">
+        {header}
+        <Alert
+          tone="danger"
+          size="sm"
+          title={t('reg.loadErrorTitle')}
+          action={(
+            <Button variant="secondary" size="sm" onClick={onRetry}>
+              {t('common.retry')}
+            </Button>
+          )}
+          role="alert"
+        >
+          {error}
+        </Alert>
+      </Card>
+    )
+  }
+
   if (!reg) {
     return (
-      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5">
+      <Card
+        as="section"
+        radius="compact"
+        padding="sm"
+        aria-labelledby="reg-status-title"
+        aria-busy={loading || undefined}
+      >
         {header}
-        <p className="text-xs text-fg-tertiary m-0">{t('reg.statusLoading')}</p>
-      </section>
+        <p className="m-0 text-xs text-fg-tertiary">{t('reg.statusLoading')}</p>
+      </Card>
     )
   }
-  if (!reg.exists) {
-    return (
-      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5">
-        {header}
-        <p className="text-xs text-fg-tertiary m-0">{t('reg.statusNotExist')}</p>
-        {thisRoundRow}
-      </section>
-    )
-  }
+
   const m = reg.meta
   const sourceLabel = m
     ? m.generation_method === 'ai_base'
@@ -685,38 +880,72 @@ function RegStatusPanel({
       ? (m.auto_tag_kind ?? autoTagKind ?? 'wd14')
       : null
     : null
+
   return (
-    <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5">
+    <Card
+      as="section"
+      radius="compact"
+      padding="sm"
+      aria-labelledby="reg-status-title"
+      aria-busy={loading || undefined}
+    >
       {header}
-      <div className="flex flex-col gap-2">
-        <StatusRow label={t('reg.statusCellSet')}>
-          <span className="font-mono">
-            <span className="text-ok">{reg.image_count}</span>
-            {m && (
-              <span className="text-fg-tertiary text-2xs font-normal ml-1">
-                / {m.target_count} {t('reg.nImagesShort')}
-              </span>
-            )}
-          </span>
-        </StatusRow>
-        <StatusRow label={t('reg.statusCellSource')}>
-          <span className="font-mono">{sourceLabel}</span>
-        </StatusRow>
-        <StatusRow label={t('reg.statusCellTagger')}>
-          <span className="font-mono">
-            {taggerLabel
-              ? <span className="text-ok">✓ {taggerLabel}</span>
-              : <span className="text-fg-tertiary">{t('reg.statusTaggerOff')}</span>}
-          </span>
-        </StatusRow>
-        <StatusRow label={t('reg.statusCellLatest')}>
-          <span className="text-sm text-fg-primary">
-            {m ? formatAgo(m.generated_at, t) : '—'}
-          </span>
-        </StatusRow>
-      </div>
-      {thisRoundRow}
-    </section>
+      {error && (
+        <Alert
+          tone="warning"
+          size="sm"
+          title={t('reg.refreshErrorTitle')}
+          action={(
+            <Button variant="secondary" size="sm" onClick={onRetry}>
+              {t('common.retry')}
+            </Button>
+          )}
+          className="mb-3"
+        >
+          {error}
+        </Alert>
+      )}
+      {!reg.exists ? (
+        <p className="m-0 text-xs text-fg-tertiary">{t('reg.statusNotExist')}</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <StatusRow label={t('reg.statusCellSet')}>
+            <span className="font-mono">
+              <span className="text-ok">{reg.image_count}</span>
+              {m && (
+                <span className="ml-1 text-2xs font-normal text-fg-tertiary">
+                  / {m.target_count} {t('reg.nImagesShort')}
+                </span>
+              )}
+            </span>
+          </StatusRow>
+          <StatusRow label={t('reg.statusCellSource')}>
+            <span className="font-mono">{sourceLabel}</span>
+          </StatusRow>
+          <StatusRow label={t('reg.statusCellTagger')}>
+            <span className="font-mono">
+              {taggerLabel
+                ? <span className="text-ok">✓ {taggerLabel}</span>
+                : <span className="text-fg-tertiary">{t('reg.statusTaggerOff')}</span>}
+            </span>
+          </StatusRow>
+          <StatusRow label={t('reg.statusCellLatest')}>
+            <span className="text-sm text-fg-primary">
+              {m ? formatAgo(m.generated_at, t) : '—'}
+            </span>
+          </StatusRow>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function PanelHeading({ id, title }: { id: string; title: string }) {
+  return (
+    <div className="mb-2.5 flex items-center gap-1.5">
+      <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+      <h2 id={id} className="m-0 type-panel-title">{title}</h2>
+    </div>
   )
 }
 
@@ -740,45 +969,26 @@ function StatusRow({
   )
 }
 
-// Tab：设计稿 `.tab`，border-bottom 下划线（accent 色）。
-function RegTab({
-  active, onClick, label, count, live,
-}: {
-  active: boolean
-  onClick: () => void
-  label: string
-  count?: number
-  live?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        'inline-flex items-center gap-1.5 py-2 px-[18px] text-sm border-b-2 -mb-px bg-transparent cursor-pointer transition-colors ' +
-        (active
-          ? 'font-semibold text-accent border-accent'
-          : 'font-normal text-fg-tertiary border-transparent hover:text-fg-primary hover:border-default')
-      }
-    >
-      <span>{label}</span>
-      {count !== undefined && count > 0 && (
-        <span className="font-mono text-2xs px-1.5 py-px rounded-full text-fg-tertiary bg-overlay">
-          {count}
-        </span>
-      )}
-      {live && (
-        <span className="font-mono text-2xs px-1.5 py-px rounded-full text-warn bg-warn-soft">
-          live
-        </span>
-      )}
-    </button>
+function handleRadioGroupKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+  const options = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)'),
   )
+  if (options.length === 0) return
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  let next = current
+  if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = options.length - 1
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    next = (current - 1 + options.length) % options.length
+  } else {
+    next = (current + 1) % options.length
+  }
+  event.preventDefault()
+  options[next].focus()
+  options[next].click()
 }
 
-// 来源选择：container 卡片包住 + pill radio 切换，复用 tokens.css 的通用
-// pill-radio 样式（圆点 + accent 选中态），视觉与设置页更新通道一致。
-// 说明文字在控件下方随选择切换。
 export function SourceSegmented({
   source, onChange,
 }: {
@@ -787,11 +997,14 @@ export function SourceSegmented({
 }) {
   const { t } = useTranslation()
   return (
-    <section className="rounded-md border border-subtle bg-surface px-3.5 py-3 mb-3.5">
-      <label className="block text-sm font-medium text-fg-secondary mb-2">
-        {t('reg.sourceLabel')}
-      </label>
-      <div className="flex items-center gap-2 flex-wrap" role="radiogroup">
+    <Card as="section" radius="compact" padding="sm" className="mb-3.5">
+      <h2 className="mb-2 type-panel-title">{t('reg.sourceLabel')}</h2>
+      <div
+        className="flex flex-wrap items-center gap-2"
+        role="radiogroup"
+        aria-label={t('reg.sourcePickerLabel')}
+        onKeyDown={handleRadioGroupKeyDown}
+      >
         <SourceRadio
           on={source === 'ai'}
           onClick={() => onChange('ai')}
@@ -805,15 +1018,13 @@ export function SourceSegmented({
           sub={t('reg.sourceBooruSub')}
         />
       </div>
-      <p className="mt-2 text-xs text-fg-tertiary leading-relaxed">
+      <p className="mb-0 mt-2 text-xs leading-relaxed text-fg-tertiary">
         {source === 'ai' ? t('reg.sourceAiHint') : t('reg.sourceBooruHint')}
       </p>
-    </section>
+    </Card>
   )
 }
 
-// 单个来源 pill：沿用 tokens.css 的通用 pill-radio。主名 + 浅色副标题小字
-//（基底模型生成 / 简易·快）。
 function SourceRadio({
   on, onClick, label, sub,
 }: {
@@ -827,10 +1038,12 @@ function SourceRadio({
       type="button"
       role="radio"
       aria-checked={on}
+      tabIndex={on ? 0 : -1}
+      data-state={on ? 'active' : 'inactive'}
       onClick={onClick}
       className={`pill-radio pill-radio-content${on ? ' on' : ''}`}
     >
-      <span className="pill-radio-dot" />
+      <span className="pill-radio-dot" aria-hidden="true" />
       <span>{label}</span>
       <span className="text-2xs opacity-70">· {sub}</span>
     </button>
@@ -850,51 +1063,50 @@ function GrpCard({
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(!collapsible || defaultOpen !== false)
-  return (
-    <div className="rounded-lg border border-subtle bg-surface mb-3.5 overflow-hidden">
-      <div
-        onClick={collapsible ? () => setOpen((v) => !v) : undefined}
-        className={
-          'flex items-center gap-2.5 px-4 py-3 ' +
-          (collapsible ? 'cursor-pointer' : '')
-        }
-      >
-        <span className="text-sm font-semibold text-fg-primary">{title}</span>
-        {tag && (
+  const contentId = useId()
+  const heading = (
+    <>
+      <span className="type-panel-title">{title}</span>
+      {tag && (
+        <span className="badge badge-info">{tag}</span>
+      )}
+      {meta && <span className="text-xs text-fg-tertiary">{meta}</span>}
+      {collapsible && (
+        <span className="ml-auto inline-flex items-center gap-2 text-xs text-fg-tertiary">
+          <span>{open ? t('reg.grpCollapse') : t('reg.grpExpand')}</span>
           <span
-            className="font-mono text-2xs uppercase tracking-wider rounded-full px-2 py-0.5 border"
-            style={{
-              color: 'var(--accent)',
-              background: 'var(--accent-soft)',
-              borderColor: 'rgba(237,107,58,0.42)',
-            }}
+            aria-hidden="true"
+            className="inline-block transition-transform"
+            style={{ transform: open ? 'rotate(90deg)' : undefined }}
           >
-            {tag}
+            ›
           </span>
-        )}
-        {meta && (
-          <span className="text-xs text-fg-tertiary">{meta}</span>
-        )}
-        {collapsible && (
-          <span className="ml-auto inline-flex items-center gap-2 text-xs text-fg-tertiary">
-            <span className="font-mono">
-              {open ? t('reg.grpCollapse') : t('reg.grpExpand')}
-            </span>
-            <span
-              className="inline-block transition-transform"
-              style={{ transform: open ? 'rotate(90deg)' : undefined }}
-            >
-              ›
-            </span>
-          </span>
-        )}
-      </div>
+        </span>
+      )}
+    </>
+  )
+
+  return (
+    <Card radius="compact" className="mb-3.5 overflow-hidden">
+      {collapsible ? (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2.5 bg-transparent px-4 py-3 text-left text-fg-primary hover:bg-overlay"
+          aria-expanded={open}
+          aria-controls={contentId}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {heading}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2.5 px-4 py-3">{heading}</div>
+      )}
       {open && (
-        <div className="border-t border-subtle px-4 pt-1 pb-4">
+        <div id={contentId} className="border-t border-subtle px-4 pb-4 pt-1">
           {children}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -910,9 +1122,10 @@ const fieldInputStyle: React.CSSProperties = {
 // （helpTooltip，不占控件下方空间）；控件下方只留必须常驻的动态提示（hint 如锁定
 // 警示 / locked）。
 function Field({
-  label, helpTooltip, hint, locked, children,
+  label, htmlFor, helpTooltip, hint, locked, children,
 }: {
   label: React.ReactNode
+  htmlFor?: string
   /** 静态说明 → label 旁 ⓘ 点开弹层（对齐打标页 TagField.helpTooltip）。 */
   helpTooltip?: React.ReactNode
   /** 控件下方常驻：留给动态状态 / 锁定警示等必须一直可见的信息。 */
@@ -923,7 +1136,9 @@ function Field({
   return (
     <div className="py-1.5">
       <div className="flex items-center gap-2 text-sm font-medium text-fg-secondary mb-1">
-        <span>{label}</span>
+        {htmlFor
+          ? <label htmlFor={htmlFor}>{label}</label>
+          : <span>{label}</span>}
         {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
       </div>
       {children}
@@ -939,7 +1154,7 @@ function Field({
 
 // AI 表单 — grp 卡：出图（常用）/ 排除 tag / 采样（进阶）
 function AiForm({
-  trainTags,
+  trainTags, trainTagsLoading, trainTagsFailed,
   excluded, onToggleExcluded,
   neg, onNegChange,
   width, onWidthChange,
@@ -951,6 +1166,8 @@ function AiForm({
   incremental, onIncrementalChange,
 }: {
   trainTags: RegTagCount[]
+  trainTagsLoading: boolean
+  trainTagsFailed: boolean
   excluded: Set<string>
   onToggleExcluded: (tag: string) => void
   neg: string
@@ -972,35 +1189,40 @@ function AiForm({
       <GrpCard title={t('reg.grpRegSettings')}>
         <Field
           label={t('reg.modeLabel')}
+          htmlFor="reg-ai-mode"
           helpTooltip={t('reg.modeHintAi')}
         >
-          <select
-            className="select input"
-            style={fieldInputStyle}
+          <Select
+            id="reg-ai-mode"
+            controlSize="sm"
+            surface="canvas"
             value={incremental ? 'incremental' : 'full'}
             onChange={(e) => onIncrementalChange(e.target.value === 'incremental')}
           >
             <option value="incremental">{t('reg.modeIncrementalAi')}</option>
             <option value="full">{t('reg.modeFullAi')}</option>
-          </select>
+          </Select>
         </Field>
       </GrpCard>
 
       {/* 出图设置：负面 + 宽高 + 采样参数（原「采样进阶」改名，吸收负面/宽高）。
           放「排除 train tag」上面，默认折叠。 */}
       <GrpCard title={t('reg.grpImageSettings')} collapsible defaultOpen={false}>
-        <Field label={t('reg.negPrompt')}>
-          <textarea
-            className="input font-mono"
-            style={{ ...fieldInputStyle, minHeight: 78, lineHeight: 1.6 }}
+        <Field label={t('reg.negPrompt')} htmlFor="reg-ai-negative">
+          <Textarea
+            id="reg-ai-negative"
+            controlSize="sm"
+            surface="canvas"
+            className="font-mono"
             rows={3}
             value={neg}
             onChange={(e) => onNegChange(e.target.value)}
           />
         </Field>
         <div className="grid grid-cols-2 gap-3.5">
-          <Field label={t('reg.widthLabel')}>
+          <Field label={t('reg.widthLabel')} htmlFor="reg-ai-width">
             <UnitInput
+              id="reg-ai-width"
               value={width}
               onChange={onWidthChange}
               unit="px"
@@ -1009,8 +1231,9 @@ function AiForm({
               step={64}
             />
           </Field>
-          <Field label={t('reg.heightLabel')}>
+          <Field label={t('reg.heightLabel')} htmlFor="reg-ai-height">
             <UnitInput
+              id="reg-ai-height"
               value={height}
               onChange={onHeightChange}
               unit="px"
@@ -1021,21 +1244,25 @@ function AiForm({
           </Field>
         </div>
         <div className="grid grid-cols-3 gap-3.5">
-          <Field label={t('reg.stepsLabel')}>
-            <input
+          <Field label={t('reg.stepsLabel')} htmlFor="reg-ai-steps">
+            <Input
+              id="reg-ai-steps"
               type="number"
-              className="input font-mono"
-              style={fieldInputStyle}
+              controlSize="sm"
+              surface="canvas"
+              className="font-mono"
               value={steps}
               onChange={(e) => onStepsChange(Number(e.target.value) || 0)}
               min={1} max={150}
             />
           </Field>
-          <Field label="CFG Scale">
-            <input
+          <Field label="CFG Scale" htmlFor="reg-ai-cfg">
+            <Input
+              id="reg-ai-cfg"
               type="number"
-              className="input font-mono"
-              style={fieldInputStyle}
+              controlSize="sm"
+              surface="canvas"
+              className="font-mono"
               value={cfg}
               onChange={(e) => onCfgChange(Number(e.target.value) || 0)}
               min={0} max={20} step={0.5}
@@ -1043,12 +1270,15 @@ function AiForm({
           </Field>
           <Field
             label={t('reg.seedLabel')}
+            htmlFor="reg-ai-seed"
             helpTooltip={t('reg.seedHintRandom')}
           >
-            <input
+            <Input
+              id="reg-ai-seed"
               type="number"
-              className="input font-mono"
-              style={fieldInputStyle}
+              controlSize="sm"
+              surface="canvas"
+              className="font-mono"
               value={seed}
               onChange={(e) => onSeedChange(Number(e.target.value) || 0)}
               min={0}
@@ -1072,6 +1302,8 @@ function AiForm({
 
       <ExcludeTags
         trainTags={trainTags}
+        loading={trainTagsLoading}
+        failed={trainTagsFailed}
         excluded={excluded}
         onToggle={onToggleExcluded}
       />
@@ -1081,7 +1313,7 @@ function AiForm({
 
 // Booru 表单 — grp 卡：抓取（常用）/ 排除 tag / 进阶
 function BooruForm({
-  trainTags, trainImageCount,
+  trainTags, trainTagsLoading, trainTagsFailed, trainImageCount,
   excluded, onToggleExcluded,
   apiSource, onApiSourceChange,
   buildMode, onBuildModeChange, modeLocked, existingMode,
@@ -1093,6 +1325,8 @@ function BooruForm({
   advanced, onAdvancedChange,
 }: {
   trainTags: RegTagCount[]
+  trainTagsLoading: boolean
+  trainTagsFailed: boolean
   trainImageCount: number
   excluded: Set<string>
   onToggleExcluded: (tag: string) => void
@@ -1123,43 +1357,49 @@ function BooruForm({
           自动打标移到「正则集处理」卡） */}
       <GrpCard title={t('reg.grpRegSettings')}>
         <div className="grid grid-cols-2 gap-3.5">
-          <Field label={t('reg.source')}>
-            <select
-              className="select input"
-              style={fieldInputStyle}
+          <Field label={t('reg.source')} htmlFor="reg-booru-source">
+            <Select
+              id="reg-booru-source"
+              controlSize="sm"
+              surface="canvas"
               value={apiSource}
               onChange={(e) => onApiSourceChange(e.target.value as 'gelbooru' | 'danbooru')}
             >
               <option value="gelbooru">Gelbooru</option>
               <option value="danbooru">Danbooru</option>
-            </select>
+            </Select>
           </Field>
           <Field
             label={t('reg.buildModeLabel')}
+            htmlFor="reg-booru-structure"
             hint={modeLocked ? t('reg.buildModeLocked', { mode: existingMode }) : undefined}
           >
-            <select
-              className="select input"
-              style={fieldInputStyle}
+            <Select
+              id="reg-booru-structure"
+              controlSize="sm"
+              surface="canvas"
               value={buildMode}
               onChange={(e) => onBuildModeChange(e.target.value as 'mirror' | 'flat')}
               disabled={modeLocked}
             >
               <option value="flat">{t('reg.buildModeFlat')}</option>
               <option value="mirror">{t('reg.buildModeMirror')}</option>
-            </select>
+            </Select>
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3.5">
           <Field
             label={t('reg.targetCount')}
+            htmlFor="reg-booru-target"
             helpTooltip={t('reg.targetCountHint')}
             locked={mirror ? t('reg.targetMirrorLocked', { n: trainImageCount }) : undefined}
           >
-            <input
+            <Input
+              id="reg-booru-target"
               type="number"
-              className="input font-mono"
-              style={fieldInputStyle}
+              controlSize="sm"
+              surface="canvas"
+              className="font-mono"
               value={mirror ? String(trainImageCount) : targetCount}
               onChange={(e) => onTargetCountChange(e.target.value)}
               placeholder={String(trainImageCount)}
@@ -1169,17 +1409,19 @@ function BooruForm({
           </Field>
           <Field
             label={t('reg.modeLabel')}
+            htmlFor="reg-booru-mode"
             helpTooltip={t('reg.modeHintBooru')}
           >
-            <select
-              className="select input"
-              style={fieldInputStyle}
+            <Select
+              id="reg-booru-mode"
+              controlSize="sm"
+              surface="canvas"
               value={mode}
               onChange={(e) => onModeChange(e.target.value as 'full' | 'incremental')}
             >
               <option value="incremental">{t('reg.modeIncrementalBooru')}</option>
               <option value="full">{t('reg.modeFullBooru')}</option>
-            </select>
+            </Select>
           </Field>
         </div>
       </GrpCard>
@@ -1193,16 +1435,17 @@ function BooruForm({
           label={t('reg.autoTagLabel')}
         />
         {autoTag && (
-          <Field label={t('reg.autoTagKindLabel')}>
-            <select
-              className="select input"
-              style={fieldInputStyle}
+          <Field label={t('reg.autoTagKindLabel')} htmlFor="reg-booru-tagger">
+            <Select
+              id="reg-booru-tagger"
+              controlSize="sm"
+              surface="canvas"
               value={autoTagKind}
               onChange={(e) => onAutoTagKindChange(e.target.value as 'wd14' | 'cltagger')}
             >
               <option value="wd14">WD14</option>
               <option value="cltagger">CLTagger</option>
-            </select>
+            </Select>
           </Field>
         )}
         <AdvancedFields
@@ -1215,6 +1458,8 @@ function BooruForm({
 
       <ExcludeTags
         trainTags={trainTags}
+        loading={trainTagsLoading}
+        failed={trainTagsFailed}
         excluded={excluded}
         onToggle={onToggleExcluded}
         modeHint={t('reg.excludeHintBooru')}
@@ -1225,8 +1470,9 @@ function BooruForm({
 
 // 数字输入 + 单位后缀（px）
 function UnitInput({
-  value, onChange, unit, min, max, step,
+  id, value, onChange, unit, min, max, step,
 }: {
+  id: string
   value: number
   onChange: (v: number) => void
   unit: string
@@ -1234,10 +1480,12 @@ function UnitInput({
 }) {
   return (
     <div className="relative">
-      <input
+      <Input
+        id={id}
         type="number"
-        className="input font-mono"
-        style={{ ...fieldInputStyle, paddingRight: 36 }}
+        controlSize="sm"
+        surface="canvas"
+        className="font-mono pr-9"
         value={value}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
         min={min} max={max} step={step}
@@ -1262,12 +1510,10 @@ function CheckRow({
   return (
     <div className="flex items-center gap-2 py-1.5">
       <label className="flex items-center gap-3 cursor-pointer select-none">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
-          className="accent-accent cursor-pointer"
-          style={{ height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
+          className="cursor-pointer"
         />
         <span className="text-sm text-fg-primary">{label}</span>
       </label>
@@ -1278,9 +1524,11 @@ function CheckRow({
 
 // 排除 tag — train 高频 tag 一栏列出 + 自定义排除一栏
 export function ExcludeTags({
-  trainTags, excluded, onToggle, modeHint,
+  trainTags, loading, failed = false, excluded, onToggle, modeHint,
 }: {
   trainTags: RegTagCount[]
+  loading: boolean
+  failed?: boolean
   excluded: Set<string>
   onToggle: (tag: string) => void
   modeHint?: string
@@ -1329,13 +1577,21 @@ export function ExcludeTags({
       collapsible
       defaultOpen
     >
-      {trainTags.length > 0 && (
+      {loading ? (
+        <p className="m-0 text-xs text-fg-tertiary" aria-live="polite">
+          {t('common.loading')}
+        </p>
+      ) : failed ? (
+        <p className="m-0 text-xs text-fg-tertiary">{t('reg.excludeTagsUnavailable')}</p>
+      ) : trainTags.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {trainTags.map((info) => {
             const on = excluded.has(info.tag)
             return (
               <button
                 key={info.tag}
+                type="button"
+                aria-pressed={on}
                 onClick={() => onToggle(info.tag)}
                 className={
                   'inline-flex items-center gap-1.5 h-6 max-w-full overflow-hidden whitespace-nowrap px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
@@ -1364,6 +1620,8 @@ export function ExcludeTags({
             )
           })}
         </div>
+      ) : (
+        <p className="m-0 text-xs text-fg-tertiary">{t('reg.excludeNoTags')}</p>
       )}
       <div className="font-mono text-2xs uppercase tracking-wider text-fg-tertiary mt-4 mb-2 flex items-center gap-2">
         <span>{t('reg.tierCustom')}</span>
@@ -1388,6 +1646,7 @@ export function ExcludeTags({
                 <TranslatedTag tag={tag.replace(/_/g, ' ')} />
               </span>
               <button
+                type="button"
                 onClick={() => onToggle(tag)}
                 className="shrink-0 bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
                 aria-label={t('reg.excludeCustomRemoveAria', { tag })}
@@ -1400,10 +1659,15 @@ export function ExcludeTags({
       )}
       <div className="flex gap-2 mt-3">
         <div className="relative flex-1">
-          <input
+          <label htmlFor="reg-custom-exclude" className="sr-only">
+            {t('reg.excludeCustomTitle')}
+          </label>
+          <Input
+            id="reg-custom-exclude"
             ref={inputRef}
-            className="input font-mono w-full"
-            style={fieldInputStyle}
+            controlSize="sm"
+            surface="canvas"
+            className="w-full font-mono"
             value={draft}
             onChange={(e) => { setDraft(e.target.value); suggest.notifyChange() }}
             onKeyDown={(e) => {
@@ -1429,13 +1693,14 @@ export function ExcludeTags({
             positionDeps={[draft]}
           />
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={addCustom}
           disabled={!draft.trim()}
-          className="btn btn-secondary btn-sm"
         >
           {t('reg.excludeAdd')}
-        </button>
+        </Button>
       </div>
     </GrpCard>
   )
@@ -1465,18 +1730,24 @@ function AdvancedFields({
         />
         {value.aspect_ratio_filter_enabled && (
           <div className="grid grid-cols-2 gap-3.5 mt-1 mb-1.5">
-            <input
-              type="number" className="input font-mono"
-              style={fieldInputStyle}
+            <Input
+              aria-label={t('reg.minAspectLabel')}
+              type="number"
+              controlSize="sm"
+              surface="canvas"
+              className="font-mono"
               min={0.1} max={1} step={0.05}
               value={value.min_aspect_ratio}
               onChange={(e) =>
                 set('min_aspect_ratio', Math.max(0.1, Math.min(1, Number(e.target.value) || 0.5)))
               }
             />
-            <input
-              type="number" className="input font-mono"
-              style={fieldInputStyle}
+            <Input
+              aria-label={t('reg.maxAspectLabel')}
+              type="number"
+              controlSize="sm"
+              surface="canvas"
+              className="font-mono"
               min={1} max={10} step={0.1}
               value={value.max_aspect_ratio}
               onChange={(e) =>
@@ -1487,21 +1758,25 @@ function AdvancedFields({
         )}
       </div>
       {/* 聚类裁剪算法（原「后处理」） */}
-      <Field label={t('reg.postprocess')}>
+      <Field label={t('reg.postprocess')} htmlFor="reg-postprocess-method">
         <div className="grid grid-cols-2 gap-3.5">
-          <select
-            className="select input"
-            style={fieldInputStyle}
+          <Select
+            id="reg-postprocess-method"
+            controlSize="sm"
+            surface="canvas"
             value={value.postprocess_method}
             onChange={(e) => set('postprocess_method', e.target.value as 'smart' | 'stretch' | 'crop')}
           >
             <option value="smart">{t('reg.postprocessSmart')}</option>
             <option value="stretch">{t('reg.postprocessStretch')}</option>
             <option value="crop">{t('reg.postprocessCrop')}</option>
-          </select>
-          <input
-            type="number" className="input font-mono"
-            style={fieldInputStyle}
+          </Select>
+          <Input
+            aria-label={t('reg.maxCropLabel')}
+            type="number"
+            controlSize="sm"
+            surface="canvas"
+            className="font-mono"
             min={0.05} max={0.5} step={0.05}
             value={value.postprocess_max_crop_ratio}
             onChange={(e) =>
@@ -1673,49 +1948,64 @@ function RegPreview({
   }
 
   return (
-    <section className="rounded-md border border-subtle bg-surface p-2 flex-1 min-h-0 flex flex-col gap-2">
-      {/* tab 条（pill chip 风格，对齐 TagEdit）+ 选中数 + 删除按钮 */}
-      <div className="flex items-center gap-1 flex-wrap pb-1.5 border-b border-subtle">
-        <RegFolderTab
-          label={t('reg.folderAll')}
-          count={allItems.length}
-          active={activeFolder === null}
-          onClick={() => setActiveFolder(null)}
-        />
-        {folders.map((f) => (
+    <Card as="section" radius="compact" padding="sm" className="flex flex-1 min-h-0 flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-subtle pb-2">
+        <div
+          className="flex min-w-0 flex-wrap items-center gap-1"
+          role="radiogroup"
+          aria-label={t('reg.folderFilterLabel')}
+          onKeyDown={handleRadioGroupKeyDown}
+        >
           <RegFolderTab
-            key={f || '__root__'}
-            label={f || t('reg.folderRoot')}
-            count={folderCounts.get(f) ?? 0}
-            active={activeFolder === f}
-            onClick={() => setActiveFolder(f)}
+            label={t('reg.folderAll')}
+            count={allItems.length}
+            active={activeFolder === null}
+            onClick={() => setActiveFolder(null)}
           />
-        ))}
-        <span className="flex-1" />
-        {selected.size > 0 && (
-          <span className="text-2xs text-accent pr-2">
-            {t('reg.regPreviewSelected', { n: selected.size })}
-          </span>
-        )}
-        <button
-          onClick={() => void onDedup()}
-          disabled={dedupBusy || isLive}
-          className="btn btn-sm"
-          title={t('reg.dedupTitle')}
-        >
-          {dedupBusy ? t('reg.dedupRunning') : t('reg.dedupBtn')}
-        </button>
-        <button
-          onClick={() => void onDelete()}
-          disabled={selected.size === 0 || isLive || dedupBusy}
-          className="btn btn-sm bg-err-soft text-err border-err"
-          title={t('reg.deleteFilesTitle')}
-        >
-          {t('reg.deleteFilesBtn', { n: selected.size })}
-        </button>
+          {folders.map((folder) => (
+            <RegFolderTab
+              key={folder || '__root__'}
+              label={folder || t('reg.folderRoot')}
+              count={folderCounts.get(folder) ?? 0}
+              active={activeFolder === folder}
+              onClick={() => setActiveFolder(folder)}
+            />
+          ))}
+        </div>
+        <span className="min-w-2 flex-1" aria-hidden="true" />
+        <ActionGroup
+          status={selected.size > 0 && (
+            <span className="pr-1 text-xs text-accent">
+              {t('reg.regPreviewSelected', { n: selected.size })}
+            </span>
+          )}
+          secondary={(
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void onDedup()}
+              disabled={dedupBusy || isLive}
+              loading={dedupBusy}
+              title={t('reg.dedupTitle')}
+            >
+              {t('reg.dedupBtn')}
+            </Button>
+          )}
+          primary={(
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => void onDelete()}
+              disabled={selected.size === 0 || isLive || dedupBusy}
+              title={t('reg.deleteFilesTitle')}
+            >
+              {t('reg.deleteFilesBtn', { n: selected.size })}
+            </Button>
+          )}
+        />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 flex flex-col">
         <p className="text-2xs text-fg-tertiary px-1 pb-1 m-0">
           {t('reg.regPreviewTitle', { n: items.length })}
         </p>
@@ -1730,10 +2020,11 @@ function RegPreview({
           onActivate={openByName}
           onPreview={openByName}
           clickMode="activate"
-          ariaLabel="reg-preview"
+          ariaLabel={t('reg.imageGridLabel')}
+          className="flex-1 min-h-0"
         />
       </div>
-    </section>
+    </Card>
   )
 }
 
@@ -1745,17 +2036,21 @@ function RegFolderTab({
   active: boolean
   onClick: () => void
 }) {
-  // 跟 TagEdit / Preprocess 同款 pill chip 风格（rounded-full + bg-accent 主色填充）。
   return (
     <button
       type="button"
+      role="radio"
+      aria-checked={active}
+      tabIndex={active ? 0 : -1}
+      data-state={active ? 'active' : 'inactive'}
       onClick={onClick}
-      className={
-        'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
-        (active
+      className={[
+        'rounded-full px-2 py-0.5 text-xs font-medium transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1',
+        active
           ? 'bg-accent text-white'
-          : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
-      }
+          : 'bg-overlay text-fg-secondary hover:bg-accent-soft',
+      ].join(' ')}
     >
       <span className="font-mono">{label}</span>
       <span className="ml-1 opacity-70">{count}</span>
