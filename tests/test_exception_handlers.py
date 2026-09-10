@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from studio.domain.errors import (
@@ -67,6 +68,21 @@ def app() -> FastAPI:
     def _raise_domain_500():
         raise DomainError("upstream timed out", code="upstream.timeout",
                           http_status=503)
+
+    @a.patch("/validate_dict")
+    def _validate_dict(body: dict[str, str]):
+        return body
+
+    @a.get("/raise_request_validation_bytes")
+    def _raise_request_validation_bytes():
+        raise RequestValidationError([
+            {
+                "type": "dict_type",
+                "loc": ("body",),
+                "msg": "Input should be a valid dictionary",
+                "input": b'{"base_url":"http://127.0.0.1/v1"}',
+            }
+        ])
 
     return a
 
@@ -145,6 +161,32 @@ def test_domain_error_4xx_logs_info_not_exception(
     errors = [r for r in caplog.records
               if r.name == "studio.api.exception_handlers" and r.levelname == "ERROR"]
     assert errors == [], "4xx 不应 logger.exception（业务正常路径，不该 ERROR 噪音）"
+
+
+def test_request_validation_bytes_are_serialized_as_422(client: TestClient) -> None:
+    """缺 JSON Content-Type 时 FastAPI 把原始 body 放进 error.input（bytes）。"""
+    resp = client.patch(
+        "/validate_dict",
+        content=b'{"base_url":"http://127.0.0.1/v1"}',
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list)
+    assert detail[0]["type"] == "dict_type"
+
+
+def test_explicit_request_validation_bytes_do_not_crash_handler(
+    client: TestClient,
+) -> None:
+    """不同 FastAPI/Pydantic 版本都可能在 error.input 中保留原始 bytes。"""
+    resp = client.get("/raise_request_validation_bytes")
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["input"] == (
+        '{"base_url":"http://127.0.0.1/v1"}'
+    )
 
 
 # ── HTTPException backstop（Phase 3：包成 error 信封，不再发 legacy detail）──

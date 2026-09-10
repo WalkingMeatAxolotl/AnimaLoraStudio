@@ -33,6 +33,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -96,7 +97,10 @@ async def _request_validation_handler(
 ) -> JSONResponse:
     # pydantic 默认 detail 是 list[dict]；保现状（前端有专门处理）。
     # 不 dual-write 因为 body validation 不是 DomainError，不强行套 envelope。
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"detail": exc.errors()}),
+    )
 
 
 async def _http_exception_handler(

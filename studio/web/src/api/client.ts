@@ -2043,12 +2043,14 @@ async function req<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   const resp = await fetch(path, {
-    headers: {
-      Accept: 'application/json',
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-    },
     ...init,
+    headers,
   })
   if (!resp.ok) {
     const body = await resp.json().catch(() => null)
