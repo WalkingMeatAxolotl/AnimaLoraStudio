@@ -79,6 +79,40 @@ def test_pending_task_runs_to_completion(env) -> None:
     assert "done" in statuses
 
 
+def test_spawn_uses_existing_snapshot_when_live_config_is_gone(env) -> None:
+    """worker 必须消费 task snapshot；version/preset 原文件删除也不改变已提交 task。"""
+    from studio.services import task_snapshot
+
+    captured: dict[str, Any] = {}
+
+    def fast_cmd(task, cfg):
+        captured["config_path"] = Path(cfg)
+        captured["config_text"] = Path(cfg).read_text(encoding="utf-8")
+        return [sys.executable, "-c", "import sys; sys.exit(0)"]
+
+    sup = Supervisor(
+        cmd_builder=fast_cmd,
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+        poll_interval=0.05,
+    )
+    live = env["configs"] / "fake.yaml"
+    with db.connection_for(env["db"]) as conn:
+        tid = db.create_task(conn, name="t", config_name="fake")
+    frozen = task_snapshot.freeze_config(tid, live)
+    live.unlink()
+
+    sup.start()
+    try:
+        assert _wait_for(
+            lambda: _task_status(env["db"], tid) == "done", timeout=10,
+        )
+    finally:
+        sup.stop()
+
+    assert captured["config_path"] == frozen
+    assert captured["config_text"] == "epochs: 1\n"
+
+
 def test_default_cmd_builder_routes_by_task_type() -> None:
     """_default_cmd_builder 按 task_type 选择脚本（PR-9 commit 3）。"""
     from studio.paths import REPO_ROOT
@@ -423,8 +457,8 @@ def test_popen_disables_triton_probe(env, tmp_path, monkeypatch) -> None:
     assert captured["env"]["XFORMERS_FORCE_DISABLE_TRITON"] == "1"
 
 
-def test_config_path_takes_priority(env, tmp_path) -> None:
-    """PP6.3：task.config_path 设了就用它，不再读 _configs_dir。"""
+def test_config_path_is_legacy_snapshot_source(env, tmp_path) -> None:
+    """历史 task 的 config_path 优先作为补冻来源，worker 只接收 snapshot。"""
     captured: dict[str, Any] = {}
 
     explicit_cfg = tmp_path / "private" / "config.yaml"
@@ -452,7 +486,10 @@ def test_config_path_takes_priority(env, tmp_path) -> None:
     finally:
         sup.stop()
 
-    assert captured["cfg"] == str(explicit_cfg)
+    from studio.services import task_snapshot
+
+    assert captured["cfg"] == str(task_snapshot.snapshot_config_path(tid))
+    assert Path(captured["cfg"]).read_text(encoding="utf-8") == "epochs: 1\n"
 
 
 def test_finalize_version_writes_output_lora_path(env, tmp_path, monkeypatch) -> None:

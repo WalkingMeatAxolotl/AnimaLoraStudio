@@ -77,6 +77,15 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+def begin_immediate(conn: sqlite3.Connection) -> None:
+    """在读取写入前置条件前取得 SQLite reserved write lock。
+
+    适用于必须把「检查当前状态 → 写 DB → 写关联文件」串成一个不可插队事务的
+    路径。调用方负责最终 commit/rollback；普通 DAO 不应默认扩大锁范围。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+
+
 @contextmanager
 def connection_for(path: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
     conn = connect(path)
@@ -127,13 +136,15 @@ def create_task(
     params: Optional[dict[str, Any]] = None,
     project_id: Optional[int] = None,
     version_id: Optional[int] = None,
+    commit: bool = True,
 ) -> int:
     """建 pending（或 scheduled）task。
 
     R-2 台账合并：tasks 表承接全部工作项。`task_type` 缺省 'train'（老调用方
     兼容）；数据作业类（download/tag/…）带 `params`（kind 专属参数 JSON）+
-    project_id/version_id 入库。写路径切换（services 从 create_job 改到这里）
-    在 R-3。
+    project_id/version_id 入库。`commit=False` 供“DB 行 + task 文件快照”组成一个
+    对其他连接不可见的创建事务；调用方完成文件写入后负责 commit/rollback。
+    写路径切换（services 从 create_job 改到这里）在 R-3。
     """
     if task_type is not None and task_type not in VALID_TASK_TYPES:
         raise ValueError(f"invalid task_type: {task_type!r}")
@@ -156,8 +167,10 @@ def create_task(
          _json.dumps(params) if params is not None else None,
          project_id, version_id),
     )
-    conn.commit()
-    return int(cur.lastrowid)
+    task_id = int(cur.lastrowid)
+    if commit:
+        conn.commit()
+    return task_id
 
 
 def get_task(conn: sqlite3.Connection, task_id: int) -> Optional[dict[str, Any]]:

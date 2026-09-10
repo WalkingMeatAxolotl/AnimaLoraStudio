@@ -696,11 +696,19 @@ class Supervisor:
         _trace_token = bind_trace_id(trace_id)
         try:
             cfg_path = self._resolve_task_config_path(task)
-            if not cfg_path.exists():
+            try:
+                snapshot_path = self._freeze_task_snapshot(int(task["id"]), cfg_path)
+            except FileNotFoundError:
                 self._fail_task_config_missing(task, cfg_path)
                 return
-
-            self._freeze_task_snapshot(int(task["id"]), cfg_path)
+            except Exception as exc:
+                self._fail_task_snapshot(task, exc)
+                return
+            # 新 task 在 enqueue 时已有 snapshot；历史 task 在上面补冻。后续所有
+            # 读取（validation split + worker cmd）都只消费不可变的 task 配置。
+            # `is not None` 保留少量 monkeypatch 旧测试的兼容性。
+            if snapshot_path is not None:
+                cfg_path = snapshot_path
 
             # task-scoped 档案：monitor state 一律落 tasks/<id>/monitor/state.json，
             # 跟 version 解耦（之前在 versions/<label>/monitor/task_<id>/state.json，
@@ -831,19 +839,41 @@ class Supervisor:
             }
         )
 
-    def _freeze_task_snapshot(self, task_id: int, cfg_path: Path) -> None:
-        """ADR-0007 §11.7 / PR-3 commit 4：task 启动 → 冻结当时的 config
-        到 studio_data/tasks/{tid}/snapshot/config.yaml。失败不阻 task
-        启动（snapshot 是 forensics 不是必需）。
-        """
-        try:
-            from ..services import task_snapshot
-            task_snapshot.freeze_config(task_id, cfg_path)
-        except Exception:
-            logger.warning(
-                "config snapshot freeze failed: task_id=%s; the task runs against "
-                "the live config", task_id, exc_info=True,
+    def _fail_task_snapshot(
+        self, task: dict[str, Any], exc: Exception,
+    ) -> None:
+        """无法建立执行快照时 fail closed，绝不退回可变 live config。"""
+        logger.error(
+            "config snapshot unavailable: task_id=%s", task["id"], exc_info=exc,
+        )
+        with db.connection_for(self._db_path) as conn:
+            now = time.time()
+            db.update_task(
+                conn,
+                task["id"],
+                status="failed",
+                started_at=now,
+                finished_at=now,
+                error_msg=f"config snapshot unavailable: {exc}",
             )
+        self._on_event({
+            "type": "task_state_changed",
+            "task_id": task["id"],
+            "status": "failed",
+        })
+
+    def _freeze_task_snapshot(self, task_id: int, cfg_path: Path) -> Path:
+        """返回 task 的执行权威配置；仅为历史 task 补建 snapshot。
+
+        新 task 已在 enqueue/retry 创建事务内冻结。已有 snapshot 永不覆盖，保证
+        scheduled/pending/resume 始终消费提交时的参数。补冻失败由调用方 fail closed。
+        """
+        from ..services import task_snapshot
+
+        existing = task_snapshot.snapshot_config_path(task_id)
+        if existing.is_file():
+            return existing
+        return task_snapshot.freeze_config(task_id, cfg_path)
 
     def _make_task_log_callback(
         self, slot: _Slot, tid: int

@@ -85,7 +85,90 @@
   grid-template-columns: minmax(0, 1fr) 100px 160px 80px;
 }
 
+/* Side-by-side preview follows the dev geometry: data 3:1, YAML 3:2.
+ * The collapse rail stays reachable when the preview gives its space to the draft. */
+.train-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) var(--s-6) minmax(18rem, 1fr);
+  gap: var(--space-field);
+  overflow: hidden;
+}
+.train-workbench[data-preview-tab="config"] {
+  grid-template-columns: minmax(0, 3fr) var(--s-6) minmax(20rem, 2fr);
+}
+.train-workbench[data-preview-open="false"] {
+  grid-template-columns: minmax(0, 1fr) var(--s-6);
+}
+.train-preset-trigger { flex: 0 1 auto; max-width: min(24rem, 100%); }
+.train-config-toolbar {
+  --train-section-index-width: 10.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--train-section-index-width);
+  column-gap: var(--space-field);
+  align-items: center;
+}
+.train-config-toolbar-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-related);
+}
+.train-config-toolbar-mode {
+  grid-column: 2;
+  justify-self: end;
+}
+.train-section-index { width: var(--train-section-index-width); }
+.train-preview-rail { position: relative; display: flex; justify-content: center; }
+.train-preview-rail::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  width: 1px;
+  background: var(--border-subtle);
+}
+.train-preview-toggle {
+  position: relative;
+  align-self: start;
+  flex: none;
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+  background: var(--bg-surface);
+}
+.train-run-summary {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  padding: var(--space-field);
+}
+.train-section-select { display: none; }
+.train-section-index { display: block; }
+
 @media (max-width: 1280px) {
+  .train-workbench[data-preview-open][data-preview-tab] {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    overflow-y: auto;
+  }
+  .train-preview-rail { min-height: 24px; justify-content: flex-end; }
+  .train-preview-rail::before { inset-inline: 0; inset-block: 50% auto; width: auto; height: 1px; }
+  .train-preview-toggle { transform: rotate(90deg); }
+  .train-workbench > .train-draft { min-height: auto; }
+  .train-workbench .train-form-layout { display: block; flex: none; }
+  .train-workbench .train-stats-tab { flex: none; overflow-y: visible; }
+  .train-workbench .train-yaml-tab { flex: none; height: min(70vh, 36rem); }
+  .train-workbench .train-config-scroll {
+    width: 100%;
+    min-height: auto;
+    overflow-y: visible;
+  }
+  .train-section-select { display: block; }
+  .train-section-index { display: none; }
+  .train-config-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+
   /* AppShell keeps primary navigation and actions visible while auxiliary
      resource meters yield at the compact-desktop breakpoint. */
   .ui-app-shell-topbar {

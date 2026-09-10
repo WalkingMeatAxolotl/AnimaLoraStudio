@@ -13,11 +13,13 @@ from studio.schema import TrainingConfig
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from studio.infrastructure import paths as _paths
     dbfile = tmp_path / "studio.db"
     db.init_db(dbfile)
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
     from studio.services.presets import io as presets_io
@@ -319,6 +321,52 @@ def test_enqueue_creates_task_with_ids_and_config_path(
     # ADR-0007 PR-5: version.status 由 supervisor 在 spawn 时推 training；enqueue 时仍 preparing
 
 
+def test_enqueue_freezes_config_before_return(client: TestClient, env) -> None:
+    """ADR-0007：enqueue 响应成功时 snapshot 已存在，后改草稿不影响它。"""
+    from studio.services import task_snapshot
+
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl", lora_rank=64)
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+    task = client.post(f"/api/projects/{pid}/versions/{vid}/queue").json()
+    snapshot = task_snapshot.snapshot_config_path(task["id"])
+    assert snapshot.is_file()
+    frozen = snapshot.read_bytes()
+
+    cfg = client.get(f"/api/projects/{pid}/versions/{vid}/config").json()["config"]
+    cfg["lora_rank"] = 8
+    assert client.put(
+        f"/api/projects/{pid}/versions/{vid}/config", json=cfg,
+    ).status_code == 200
+    assert snapshot.read_bytes() == frozen
+
+
+def test_enqueue_snapshot_failure_rolls_back_task(
+    client: TestClient, env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """冻结失败不能留下会被 supervisor 拉走的 pending task。"""
+    from studio.api.routers.projects import training
+
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+
+    def fail_freeze(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(training.task_snapshot, "freeze_config", fail_freeze)
+    with pytest.raises(OSError, match="disk full"):
+        client.post(f"/api/projects/{pid}/versions/{vid}/queue")
+    with db.connection_for(env["db"]) as conn:
+        assert db.list_tasks(conn) == []
+
+
 def test_project_specific_defaults_paths_match_config_form(
     client: TestClient, env
 ) -> None:
@@ -389,6 +437,89 @@ def test_enqueue_rejects_active_task(client: TestClient, env) -> None:
     assert r2.status_code == 409
 
 
+def test_concurrent_enqueue_serializes_active_check(
+    client: TestClient, env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并发请求必须在 active 检查前串行化，只能创建一个 task。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+
+    from studio.api.routers.projects import training
+    from studio.domain.errors import ConflictError
+
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+
+    first_in_freeze = Event()
+    release_first = Event()
+    second_at_lock = Event()
+    real_freeze = training.task_snapshot.freeze_config
+    real_begin = db.begin_immediate
+    begin_count = 0
+    begin_count_lock = Lock()
+
+    def blocking_first_freeze(*args, **kwargs):
+        if not first_in_freeze.is_set():
+            first_in_freeze.set()
+            assert release_first.wait(timeout=5)
+        return real_freeze(*args, **kwargs)
+
+    def traced_begin(conn):
+        nonlocal begin_count
+        with begin_count_lock:
+            begin_count += 1
+            call_number = begin_count
+        if call_number == 2:
+            second_at_lock.set()
+        return real_begin(conn)
+
+    monkeypatch.setattr(training.task_snapshot, "freeze_config", blocking_first_freeze)
+    monkeypatch.setattr(db, "begin_immediate", traced_begin)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(training.enqueue_version_training, pid, vid)
+        assert first_in_freeze.wait(timeout=5)
+        second = pool.submit(training.enqueue_version_training, pid, vid)
+        try:
+            assert second_at_lock.wait(timeout=5)
+        finally:
+            release_first.set()
+
+        created = first.result(timeout=5)
+        with pytest.raises(ConflictError) as caught:
+            second.result(timeout=5)
+
+    assert caught.value.code == "version.has_active_task"
+    with db.connection_for(env["db"]) as conn:
+        tasks = db.list_tasks(conn)
+    assert [task["id"] for task in tasks] == [created["id"]]
+
+
+def test_enqueue_rejects_paused_task(client: TestClient, env) -> None:
+    """暂停任务仍持有可恢复训练上下文，必须先处理再提交下一轮。"""
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+    task = client.post(f"/api/projects/{pid}/versions/{vid}/queue").json()
+    with db.connection_for(env["db"]) as conn:
+        conn.execute("UPDATE tasks SET status = 'paused' WHERE id = ?", (task["id"],))
+        conn.commit()
+
+    response = client.post(f"/api/projects/{pid}/versions/{vid}/queue")
+    assert response.status_code == 409
+    assert response.json()["error"]["details"] == {
+        "task_id": task["id"],
+        "status": "paused",
+    }
+
+
 def test_enqueue_with_schedule_creates_scheduled_task(
     client: TestClient, env
 ) -> None:
@@ -411,6 +542,16 @@ def test_enqueue_with_schedule_creates_scheduled_task(
     assert task["scheduled_at"] == pytest.approx(future)
     assert task["project_id"] == pid
     assert task["config_path"] and task["config_path"].endswith("config.yaml")
+
+    from studio.services import task_snapshot
+    snapshot = task_snapshot.snapshot_config_path(task["id"])
+    frozen = snapshot.read_bytes()
+    cfg = client.get(f"/api/projects/{pid}/versions/{vid}/config").json()["config"]
+    cfg["lora_rank"] = 8
+    assert client.put(
+        f"/api/projects/{pid}/versions/{vid}/config", json=cfg,
+    ).status_code == 200
+    assert snapshot.read_bytes() == frozen
 
 
 def test_enqueue_rejects_when_scheduled_active(client: TestClient, env) -> None:

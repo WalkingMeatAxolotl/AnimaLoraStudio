@@ -1,21 +1,23 @@
 """Task config snapshot — ADR-0007 §11.7。
 
-task 启动时把当时的 version config.yaml 冻结一份到
+task 创建时把当时的训练配置冻结一份到
 ``studio_data/tasks/{task_id}/snapshot/config.yaml``。
 
 设计要点：
 - **仅冻 config**，不冻 caption / 图 / 正则集（跨 OS export OK，磁盘代价 KB 级）
 - 心智分离 UI：task 详情独立 [关联配置] tab，**不点 task 跳 version config 编辑页**
   → 让 user 理解 config 是历史快照，caption / 图是 version 当前状态
-- 冻结时机：supervisor `_spawn_task` 把 cfg_path 给 worker 之前
-- 失败不阻塞 task 启动（snapshot 是 forensics 不是必需）
+- 冻结时机：enqueue/retry 创建 task 的同一事务内；supervisor 只为历史 task 补冻
+- snapshot 是 worker 的执行权威源；冻结失败不得留下可调度的新 task
 
 用 user 视角："点 task 详情 [关联配置] 看当时跑的什么参数，按'套用此配置'按钮
 跳到 ⑦ 训练 phase 页面 + prefill → 编辑 → 训练 = 新 task" （§11.7 流程）。
 """
 from __future__ import annotations
 
+import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,15 +47,24 @@ def has_snapshot(task_id: int) -> bool:
 
 
 def freeze_config(task_id: int, source: Path) -> Path:
-    """复制 source yaml 到 ``snapshot_config_path(task_id)``，返回目标路径。
+    """原子复制 source 到 task snapshot，返回执行权威路径。
 
-    重复调用会覆盖（同 task_id 重启场景）。source 不存在时 raise FileNotFoundError。
+    重复调用会覆盖（仅供显式复制语义使用）；调用方若要保留已有快照，必须先用
+    :func:`has_snapshot` 判断。source 不存在时 raise FileNotFoundError。
     """
-    if not source.exists():
+    if not source.is_file():
         raise FileNotFoundError(f"snapshot source not found: {source}")
     dst = snapshot_config_path(task_id)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, dst)
+    tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, tmp)
+        with tmp.open("r+b") as fp:
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
     return dst
 
 

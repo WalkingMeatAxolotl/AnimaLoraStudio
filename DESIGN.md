@@ -323,6 +323,9 @@ layout does not jump.
 Placement follows editing scope:
 
 - Use the page or step header for short, viewport-contained edits and quick actions.
+  Workspace steps keep stable page-level task actions (including Train's Start and
+  Schedule) in the header even when their inner parameter panels are long. Review
+  content does not justify moving or duplicating these actions in a panel footer.
 - Use a footer action area for long or scroll-heavy forms that require deliberate review
   before submit. Make it sticky only when the final action would otherwise be difficult
   to reach, and reserve content space so it never obscures fields.
@@ -331,6 +334,12 @@ Placement follows editing scope:
 - Autosave surfaces show `SaveIndicator` status instead of a redundant Save button.
   If an error Toast already announces the same failure, disable the indicator's error
   announcement so assistive technology receives it only once.
+  Train waits for the latest draft to save before SPA departure, version switching,
+  submission, or preset creation/application/export. These boundaries temporarily
+  disable draft editing; ordinary autosave and an active task do not. Failed saves
+  keep the draft on the page with one local retry alert, without automatic retry
+  loops or duplicate error Toasts. Retrying saves the draft; the user can then repeat
+  the intended action. Browser refresh/close retains the unsaved-work warning.
 
 Status copy precedes controls and uses a stable polite live region. At narrow widths,
 action groups may wrap, but the primary action remains last and right-aligned. Snapshot
@@ -677,6 +686,30 @@ source-image header. Do not restore a permanent statistics rail or
 format-distribution chart at the expense of the ImageGrid. The source grid remains
 the only image scroll owner, permanent deletion keeps confirmation, and a failed
 refresh retains loaded images with an in-place retry.
+
+Train preserves a collapsible side preview: the draft/data view is approximately
+3:1, while YAML receives approximately 3:2 for readable code. The divider handle
+remains reachable when closed; open/closed state and selected tab are persisted,
+and collapsing returns the preview's space to the draft. This is an attached
+workspace, not an overlay Drawer. Start and Schedule stay in the StepShell header
+alongside one SaveIndicator, never in a duplicate bottom bar. The preset trigger is
+content-sized with a safe maximum, not flex-grown across the row. Preset actions
+stay left while the visibly labelled Parameter display mode occupies the toolbar's
+far-right column directly above the section-index rail. At compact widths, when the
+index is hidden, the mode remains against the toolbar's right edge.
+The preview uses compact right-anchored peer Dataset stats / YAML Tabs. An isolated
+summary div shows only the configured base-model filename/display name, LoRA type,
+filename prefix, epochs, and estimated total steps. Labels stay near left-aligned
+values. Do not substitute the family's global default for the configured model or
+repeat rank, precision and optimizer fields. Dataset stats owns samples, batch/GA
+or NaViT pack derivation, step-cap explanation and size distribution. It retains
+the full `steps/epoch × epochs → natural total → max_steps-capped total` derivation
+even though the final estimate also appears in the identity summary, because the
+data view must explain how that number was obtained. No generic Ready badge implies
+preflight validation. Active tasks remain distinguishable from the next-run draft;
+a task-details entry stays visible in the header when its preview is collapsed.
+Compact desktop stacks the attached preview under one workspace scroller and
+retains the collapse control; YAML keeps a bounded code scrollport.
 
 Tagging and Regularization share one async-planner layout contract. At wide desktop,
 the editable setup column and the status rail use a consistent `3fr / 2fr` ratio;

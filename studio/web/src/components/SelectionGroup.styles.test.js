@@ -7,6 +7,15 @@ import { expect, it } from 'vitest'
 // Vitest's css:false stubs CSS imports; read the source from its studio/web cwd.
 const tokens = readFileSync(resolve('src/styles/tokens.css'), 'utf8')
 
+it('allows horizontal tabs overflow without creating a vertical scrollbar', () => {
+  const underline = tokens.slice(tokens.indexOf('.ui-selection-underline {')).split('}')[0]
+  expect(underline).toContain('overflow-x: auto')
+  expect(underline).toContain('overflow-y: hidden')
+  const item = tokens.match(/^\.ui-selection-item\s*\{([^}]*)\}/m)?.[1]
+  expect(item).toBeDefined()
+  expect(item).toContain('color: var(--fg-secondary)')
+})
+
 it('scopes natural sizing, wrapping and full labels to the opt-in selection recipe', () => {
   const rule = (selector) => {
     const start = tokens.indexOf(`${selector} {`)

@@ -33,6 +33,7 @@ export default {
           DEFAULT: 'var(--accent)',
           hover:   'var(--accent-hover)',
           soft:    'var(--accent-soft)',
+          strong:  'var(--accent-strong)',
           fg:      'var(--accent-fg)',
         },
 

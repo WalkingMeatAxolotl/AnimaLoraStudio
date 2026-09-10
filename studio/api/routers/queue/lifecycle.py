@@ -35,6 +35,7 @@ from ....domain.errors import (
 )
 from ....infrastructure.event_bus import bus
 from ....paths import USER_PRESETS_DIR, task_dir
+from ....services import task_snapshot
 from ....supervisor.resources import (
     JOB_KIND_RESOURCE_CLASS,
     RESOURCE_EXCLUSIVE,
@@ -211,10 +212,22 @@ def enqueue(body: EnqueueRequest) -> dict[str, Any]:
         )
     name = body.name or body.config_name
     with db.connection_for() as conn:
-        task_id = db.create_task(
-            conn, name=name, config_name=body.config_name, priority=body.priority,
-            scheduled_at=body.scheduled_at,
-        )
+        task_id: int | None = None
+        try:
+            # 显式保留 writer slot，确保 DB 行与磁盘 snapshot 在一个不可插队的
+            # 创建事务内发布；调用方异常路径统一 rollback。
+            db.begin_immediate(conn)
+            task_id = db.create_task(
+                conn, name=name, config_name=body.config_name, priority=body.priority,
+                scheduled_at=body.scheduled_at, commit=False,
+            )
+            task_snapshot.freeze_config(task_id, cfg_path)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            if task_id is not None:
+                task_snapshot.snapshot_config_path(task_id).unlink(missing_ok=True)
+            raise
         task = db.get_task(conn, task_id)
     bus.publish({
         "type": "task_state_changed",
@@ -434,30 +447,57 @@ def retry_task(task_id: int) -> dict[str, Any]:
     不复制：status / pid / *_at / exit_code / error_msg / monitor_state_path
     （都是「上次跑」的产物；新任务从 pending 开始，supervisor 会重新解析）。
     """
+    new_id: int | None = None
     with db.connection_for() as conn:
-        original = db.get_task(conn, task_id)
-        if not original:
-            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
-        if original["status"] not in db.TERMINAL_STATUSES:
-            raise ValidationError(
-                "Only finished tasks can be retried",
-                code="task.not_retryable", http_status=400,
+        try:
+            original = db.get_task(conn, task_id)
+            if not original:
+                raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
+            if original["status"] not in db.TERMINAL_STATUSES:
+                raise ValidationError(
+                    "Only finished tasks can be retried",
+                    code="task.not_retryable", http_status=400,
+                )
+            new_id = db.create_task(
+                conn,
+                name=original["name"],
+                config_name=original["config_name"],
+                priority=original["priority"],
+                commit=False,
             )
-        new_id = db.create_task(
-            conn,
-            name=original["name"],
-            config_name=original["config_name"],
-            priority=original["priority"],
-        )
-        copy_fields: dict[str, Any] = {}
-        # R-3：task_type / params 必须一并复制——数据作业类 task 重跑靠它们
-        # 路由 worker 与还原参数（漏了会退化成 train 跑错脚本）。
-        for k in ("config_path", "project_id", "version_id", "task_type", "params"):
-            if original.get(k) is not None:
-                copy_fields[k] = original[k]
-        if copy_fields:
-            db.update_task(conn, new_id, **copy_fields)
-        new_task = db.get_task(conn, new_id)
+            copy_fields: dict[str, Any] = {}
+            # R-3：task_type / params 必须一并复制——数据作业类 task 重跑靠它们
+            # 路由 worker 与还原参数（漏了会退化成 train 跑错脚本）。
+            for k in ("config_path", "project_id", "version_id", "task_type", "params"):
+                if original.get(k) is not None:
+                    copy_fields[k] = original[k]
+            if copy_fields:
+                cols = ", ".join(f"{key} = ?" for key in copy_fields)
+                conn.execute(
+                    f"UPDATE tasks SET {cols} WHERE id = ?",
+                    [*copy_fields.values(), new_id],
+                )
+
+            # Retry 必须复制原 task 的冻结配置，而不是重新读取 version 当前草稿。
+            # 历史 train task 没有 snapshot 时才退回它记录的 config_path / preset。
+            kind = original.get("task_type") or "train"
+            if kind == "train":
+                source = task_snapshot.snapshot_config_path(task_id)
+                if not source.is_file():
+                    explicit = original.get("config_path")
+                    source = (
+                        Path(str(explicit)) if explicit
+                        else USER_PRESETS_DIR / f"{original['config_name']}.yaml"
+                    )
+                task_snapshot.freeze_config(new_id, source)
+
+            conn.commit()
+            new_task = db.get_task(conn, new_id)
+        except Exception:
+            conn.rollback()
+            if new_id is not None:
+                task_snapshot.snapshot_config_path(new_id).unlink(missing_ok=True)
+            raise
     bus.publish(
         {"type": "task_state_changed", "task_id": new_id, "status": "pending"}
     )

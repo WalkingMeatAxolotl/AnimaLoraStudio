@@ -566,6 +566,7 @@ select option:checked {
   display: flex;
   gap: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 3px 3px 0;
   border-bottom: 1px solid var(--border-subtle);
   scrollbar-width: thin;
@@ -578,7 +579,7 @@ select option:checked {
   gap: 6px;
   border: 0;
   background: transparent;
-  color: var(--fg-tertiary);
+  color: var(--fg-secondary);
   font-family: var(--font-sans);
   font-weight: 500;
   line-height: 1.35;

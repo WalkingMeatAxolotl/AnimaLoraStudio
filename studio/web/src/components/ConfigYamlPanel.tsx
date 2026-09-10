@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ConfigData } from '../api/client'
+import Alert from './Alert'
+import Button from './Button'
 import { useToast } from './Toast'
 
 /**
@@ -28,16 +30,19 @@ export default function ConfigYamlPanel({
   const { t } = useTranslation()
   const { toast } = useToast()
   const [yamlText, setYamlText] = useState('')
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
     let alive = true
     const timer = setTimeout(() => {
+      setLoadError(null)
       api.previewConfigYaml(config)
         .then((r) => { if (alive) setYamlText(r.yaml) })
-        .catch(() => { /* 网络抖动保留上次文本;下次变更会重试 */ })
+        .catch((error) => { if (alive) setLoadError(String(error)) })
     }, 300)
     return () => { alive = false; clearTimeout(timer) }
-  }, [config])
+  }, [config, retryKey])
 
   // safe_dump 顶级键顶格 —— 行首非空白即一个落盘字段(多行字符串续行有缩进)
   const fieldCount = yamlText
@@ -63,6 +68,20 @@ export default function ConfigYamlPanel({
           }}
         >{t('common.copy')}</button>
       </div>
+      {loadError && (
+        <Alert
+          tone="danger"
+          size="sm"
+          className="mb-2 shrink-0"
+          action={(
+            <Button variant="secondary" size="xs" onClick={() => setRetryKey((value) => value + 1)}>
+              {t('common.retry')}
+            </Button>
+          )}
+        >
+          {t('common.yamlPreviewFailed', { error: loadError })}
+        </Alert>
+      )}
       <pre className="flex-1 min-h-0 m-0 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre overflow-auto">
         {yamlText}
       </pre>

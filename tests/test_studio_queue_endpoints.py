@@ -23,6 +23,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     from studio.api.routers import logs as _logs_router
     from studio.api.routers.queue import lifecycle as _queue_lifecycle
+    from studio.infrastructure import paths as _paths
 
     dbfile = tmp_path / "studio.db"
     db.init_db(dbfile)
@@ -39,6 +40,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)  # connect() 默认路径
     # PR-6 commit 6：queue lifecycle 用自己 import 的 USER_PRESETS_DIR
     monkeypatch.setattr(_queue_lifecycle, "USER_PRESETS_DIR", presets)
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
     # PR-6 commit 1：logs router 用自己 import 的 LOGS_DIR
     monkeypatch.setattr(_logs_router, "LOGS_DIR", logs)
     return tmp_path
@@ -72,6 +74,19 @@ def client(isolated: Path) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
+
+
+def test_enqueue_freezes_preset_snapshot(client: TestClient, isolated: Path) -> None:
+    from studio.services import task_snapshot
+
+    task = client.post("/api/queue", json={"config_name": "good"}).json()
+    snapshot = task_snapshot.snapshot_config_path(task["id"])
+    assert snapshot.read_text(encoding="utf-8") == "epochs: 1\n"
+
+    (isolated / "presets" / "good.yaml").write_text(
+        "epochs: 99\n", encoding="utf-8",
+    )
+    assert snapshot.read_text(encoding="utf-8") == "epochs: 1\n"
 
 
 def test_empty_queue(client: TestClient) -> None:
@@ -135,6 +150,21 @@ def test_retry_terminal_creates_new(client: TestClient) -> None:
     new_id = resp.json()["id"]
     assert new_id != tid
     assert resp.json()["status"] == "pending"
+
+
+def test_retry_copies_frozen_config(client: TestClient, isolated: Path) -> None:
+    from studio.services import task_snapshot
+
+    original = client.post("/api/queue", json={"config_name": "good"}).json()
+    with db.connection_for() as conn:
+        db.update_task(conn, original["id"], status="failed")
+    original_snapshot = task_snapshot.snapshot_config_path(original["id"]).read_bytes()
+    (isolated / "presets" / "good.yaml").write_text(
+        "epochs: 99\n", encoding="utf-8",
+    )
+
+    retried = client.post(f"/api/queue/{original['id']}/retry").json()
+    assert task_snapshot.snapshot_config_path(retried["id"]).read_bytes() == original_snapshot
 
 
 def test_retry_running_400(client: TestClient) -> None:

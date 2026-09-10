@@ -1,23 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useOutletContext } from 'react-router-dom'
+import { useBlocker, useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
-  type BucketDistribution,
   type ConfigData,
   type PresetSummary,
   type ProjectDetail,
   type RegStatus,
   type SchemaResponse,
+  type Task,
   type Version,
   type VersionConfigResponse,
 } from '../../../api/client'
-import { parseFolderMeta } from '../../../lib/folderMeta'
-import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ActionGroup from '../../../components/ActionGroup'
+import Alert from '../../../components/Alert'
 import Button from '../../../components/Button'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
-import ConfigYamlPanel from '../../../components/ConfigYamlPanel'
+import EmptyState from '../../../components/EmptyState'
+import { Input, Select } from '../../../components/FormControl'
 import { useDialog } from '../../../components/Dialog'
 import SaveIndicator from '../../../components/SaveIndicator'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
@@ -27,12 +27,22 @@ import type { SaveStatus } from '../../../lib/SettingsData'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../../lib/useAdvancedMode'
+import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import {
   PRESET_NAME_RE,
   defaultsFromSchema,
   generateUniquePresetName,
 } from '../../../lib/preset-helpers'
 import FamilySwitchDialog from '../../../components/FamilySwitchDialog'
+import Modal from '../../../components/Modal'
+import { SegmentedControl } from '../../../components/SelectionGroup'
+import { useEventStream } from '../../../lib/useEventStream'
+import { schemaGroupLabel } from '../../../lib/schema'
+import TrainPlanPanel, {
+  LoadError,
+  TrainRunSummary,
+  useTrainDatasetPlan,
+} from './train/TrainPlanPanel'
 
 // 全局模型字段来自全局设置，对版本维度只读
 const GLOBAL_MODEL_FIELDS = [
@@ -46,11 +56,12 @@ interface Ctx {
   project: ProjectDetail
   activeVersion: Version | null
   reload: () => Promise<void>
+  setVersionSwitchGuard: (guard: (() => Promise<boolean>) | null) => void
 }
 
 export default function TrainPage() {
-  const { t } = useTranslation()
-  const { project, activeVersion, reload } = useOutletContext<Ctx>()
+  const { t, i18n } = useTranslation()
+  const { project, activeVersion, reload, setVersionSwitchGuard } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const { confirm, prompt } = useDialog()
   const navigate = useNavigate()
@@ -61,7 +72,20 @@ export default function TrainPage() {
   const [configResp, setConfigResp] = useState<VersionConfigResponse | null>(null)
   const [config, setConfig] = useState<ConfigData | null>(null)
   const [reg, setReg] = useState<RegStatus | null>(null)
+  const [schemaError, setSchemaError] = useState<string | null>(null)
+  const [configError, setConfigError] = useState<string | null>(null)
+  const [presetsError, setPresetsError] = useState<string | null>(null)
+  const [regError, setRegError] = useState<string | null>(null)
+  const [activeTask, setActiveTask] = useState<Task | null>(null)
+  const [taskLoading, setTaskLoading] = useState(true)
+  const [taskError, setTaskError] = useState<string | null>(null)
+  const taskRequestRef = useRef(0)
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const saveErrorRef = useRef<string | null>(null)
+  const forceSaveRef = useRef(false)
+  const boundaryDoneRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null)
+  const leavePromiseRef = useRef<Promise<boolean> | null>(null)
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [droppedFields, setDroppedFields] = useState<string[]>([])
   const [defaultedFields, setDefaultedFields] = useState<string[]>([])
@@ -69,7 +93,7 @@ export default function TrainPage() {
   /** 已落盘的 config JSON 快照，dirty 判断的 baseline。 */
   const savedJsonRef = useRef<string | null>(null)
   /** 当前 config 的同步镜像。React setState 是 queued 的，事件 handler 跑完才
-   * flush；onEnqueue / cleanup-on-unmount 需要立刻读到最新值，不能等 React
+   * flush；flush / navigation guards 需要立刻读到最新值，不能等 React
    * commit。所有 setConfig 都走 setConfigSync 包装，写 ref 同步、写 state 异步。 */
   const configRef = useRef<ConfigData | null>(null)
   /** 当前在飞的 save promise，dedup 重叠的保存请求。 */
@@ -90,6 +114,9 @@ export default function TrainPage() {
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
+  const scheduleInputRef = useRef<HTMLInputElement | null>(null)
+  const pickerId = useId()
+  const scheduleInputId = useId()
 
   // 「新建预设」=一键创建+套用：点 + 新建预设 卡片直接生成 <slug>_<label> 命名
   // 的预设、写全局池、fork 到当前 version。不弹中间表单，避免用户点了 + 就以为
@@ -113,6 +140,7 @@ export default function TrainPage() {
    * 切族不是裸字段编辑——弹结构化确认对话框（后端重算路径 + 重置族风味
    * 字段），用户取消则保持旧值不动。其余字段变更原样透传 setConfigSync。 */
   const onFormChange = useCallback((v: ConfigData) => {
+    if (busyRef.current) return
     const prev = configRef.current
     const prevFamily = String(prev?.model_family ?? 'anima')
     const nextFamily = String(v.model_family ?? 'anima')
@@ -132,6 +160,7 @@ export default function TrainPage() {
 
   const refreshConfig = useCallback(async () => {
     if (!vid) return
+    setConfigError(null)
     try {
       const r = await api.getVersionConfig(project.id, vid)
       setConfigResp(r)
@@ -141,27 +170,92 @@ export default function TrainPage() {
       // 顶部 banner 渲染。dropped_fields 兜底 schema 演进时丢弃的旧字段。
       applyPresetWarnings(r)
     } catch (e) {
-      toast(t('train.loadConfigFailed', { error: e }), 'error')
+      setConfigError(String(e))
     }
-  }, [project.id, vid, toast, setConfigSync, t, applyPresetWarnings])
+  }, [project.id, vid, setConfigSync, applyPresetWarnings])
+
+  const refreshSchema = useCallback(async () => {
+    setSchemaError(null)
+    try {
+      setSchema(await api.schema())
+    } catch (e) {
+      setSchemaError(String(e))
+    }
+  }, [])
+
+  const refreshPresets = useCallback(async () => {
+    setPresetsError(null)
+    try {
+      setPresets(await api.listPresets())
+    } catch (e) {
+      setPresetsError(String(e))
+    }
+  }, [])
 
   useEffect(() => {
-    api.schema().then(setSchema).catch((e) => toast(t('train.loadSchemaFailed', { error: e }), 'error'))
-    api.listPresets().then(setPresets).catch(() => setPresets([]))
+    void refreshSchema()
+    void refreshPresets()
     api.getSecrets().then((s) => setAutoSyncPaths(s.models?.auto_sync_paths ?? true)).catch(() => {})
-  }, [toast, t])
+  }, [refreshPresets, refreshSchema])
 
   useEffect(() => {
+    setConfigResp(null)
+    setConfigSync(null)
+    setSaveStatus({ state: 'idle' })
+    savedJsonRef.current = null
     setDroppedFields([])
     setDefaultedFields([])
     void refreshConfig()
-  }, [refreshConfig])
+  }, [refreshConfig, setConfigSync])
 
-  // 拉 reg 状态用于显示「训练集 + 正则」分布
-  useEffect(() => {
+  // 拉 reg 状态用于显示「训练集 + 正则」分布。
+  const refreshReg = useCallback(async () => {
     if (!vid) return
-    api.getRegStatus(project.id, vid).then(setReg).catch(() => setReg(null))
+    setRegError(null)
+    try {
+      setReg(await api.getRegStatus(project.id, vid))
+    } catch (e) {
+      setRegError(String(e))
+    }
   }, [project.id, vid])
+
+  useEffect(() => {
+    setReg(null)
+    void refreshReg()
+  }, [refreshReg])
+
+  const refreshActiveTask = useCallback(async (showLoading = false) => {
+    if (!vid) return
+    const requestId = ++taskRequestRef.current
+    if (showLoading) setTaskLoading(true)
+    setTaskError(null)
+    try {
+      const tasks = await api.listQueueLive()
+      if (requestId !== taskRequestRef.current) return
+      setActiveTask(tasks.find((task) => (
+        task.project_id === project.id
+        && task.version_id === vid
+        && ['train', 'reg_ai', 'generate'].includes(task.task_type ?? 'train')
+      )) ?? null)
+    } catch (e) {
+      if (requestId === taskRequestRef.current) setTaskError(String(e))
+    } finally {
+      if (requestId === taskRequestRef.current) setTaskLoading(false)
+    }
+  }, [project.id, vid])
+
+  useEffect(() => {
+    setActiveTask(null)
+    void refreshActiveTask(true)
+  }, [refreshActiveTask])
+
+  useEventStream((event) => {
+    if (event.type !== 'task_state_changed') return
+    // 事件不携带 project/version；后台刷新不切换首次加载状态，因此可以查询
+    // 所有 task 事件而不让 Start/Schedule 闪烁，并能发现另一标签页新建的 task。
+    void refreshActiveTask()
+    if (activeTask && event.task_id === activeTask.id) void reload()
+  }, { onOpen: () => { void refreshActiveTask() } })
 
 
   // config 里的值就是训练实际用的值：字段一律可编辑，系统不在背后改写已保存的
@@ -216,88 +310,162 @@ export default function TrainPage() {
     [configResp?.project_specific_fields, configResp?.project_specific_defaults, t, settingsDrawer],
   )
 
-  /** 落盘 cfg。串行化保证：如果上一次 save 还在飞，等它跑完再决定是否要再
-   * save；这样多次 setConfig + debounce 不会丢任何一次的内容。
-   *
-   * 注意 race：用户在 await 期间可能又改了 config —— 那时不能用 server 返回的
-   * 归一化结果去覆盖 React state（会清空他正在打字的字段）。靠 reference
-   * 比对 configRef.current === cfg 区分：
-   *   - 相等 → 用户没动过，安全 sync server 归一化结果到 UI
-   *   - 不等 → 用户有新内容，只更新 savedJson baseline，UI state 不动；
-   *            useEffect debounce 会自然为新内容触发下一轮 save 收敛 */
-  const persistConfig = useCallback(async (cfg: ConfigData, force = false): Promise<void> => {
-    while (inFlightSaveRef.current) {
-      await inFlightSaveRef.current
+  const clearSaveDebounce = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
     }
-    // force：内容没变也要 PUT（「清理旧字段」重写 yaml —— 磁盘上的旧键不在
-    // GET 归一化结果里，JSON diff 看不出差异）。
-    if (!force && JSON.stringify(cfg) === savedJsonRef.current) return
-    const p = (async () => {
-      setSaveStatus({ state: 'saving' })
+  }, [])
+
+  /** One writer drains the latest draft, not a snapshot captured by a timer.
+   * A failed drain stops here; only a new edit or explicit action retries it. */
+  const flushConfig = useCallback((force = false): Promise<void> => {
+    clearSaveDebounce()
+    if (force) forceSaveRef.current = true
+    if (inFlightSaveRef.current) return inFlightSaveRef.current
+    const drain = async () => {
+      let wrote = false
       try {
-        const r = await api.putVersionConfig(project.id, vid!, cfg)
-        setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
-        // baseline 用 server 归一化后的 r.config，下次 dirty diff 才不会假阳性。
-        savedJsonRef.current = JSON.stringify(r.config)
-        if (configRef.current === cfg) {
-          configRef.current = r.config
-          setConfig(r.config)
+        while (vid && configRef.current) {
+          const cfg = configRef.current
+          if (!forceSaveRef.current && JSON.stringify(cfg) === savedJsonRef.current) break
+          saveErrorRef.current = null
+          setSaveStatus({ state: 'saving' })
+          const r = await api.putVersionConfig(project.id, vid, cfg)
+          wrote = true
+          forceSaveRef.current = false
+          savedJsonRef.current = JSON.stringify(r.config)
+          setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
+          // An old response must never replace edits made while it was in flight.
+          if (configRef.current === cfg) {
+            configRef.current = r.config
+            setConfig(r.config)
+          }
+          applyPresetWarnings({})
         }
-        // PUT 全量重写 yaml（tolerant validate + prune），磁盘上不再有旧字段 /
-        // 非法值 —— 兼容横幅的信息已过期，清掉。
-        applyPresetWarnings({})
-        setSaveStatus({ state: 'saved', at: Date.now() })
+        saveErrorRef.current = null
+        if (wrote && configRef.current) setSaveStatus({ state: 'saved', at: Date.now() })
       } catch (e) {
+        saveErrorRef.current = String(e)
         setSaveStatus({ state: 'error', error: String(e) })
         throw e
+      } finally {
+        clearSaveDebounce()
+        inFlightSaveRef.current = null
       }
-    })()
-    inFlightSaveRef.current = p
-    try { await p } finally { inFlightSaveRef.current = null }
-  }, [project.id, vid, applyPresetWarnings])
+    }
+    // Defer the drain so even a no-op flush releases the assigned promise.
+    const promise = Promise.resolve().then(drain)
+    inFlightSaveRef.current = promise
+    return promise
+  }, [project.id, vid, applyPresetWarnings, clearSaveDebounce])
 
-  // ── auto-save ─────────────────────────────────────────────────────────
-  // config 变化 → 600ms 后没新改动就落盘。中途又改 → cleanup clearTimeout 重置。
+  const finishBoundary = useCallback(() => {
+    busyRef.current = false
+    setBusy(false)
+    boundaryDoneRef.current?.resolve()
+    boundaryDoneRef.current = null
+  }, [])
+
+  const beginBoundary = useCallback(async () => {
+    if (busyRef.current) return false
+    busyRef.current = true
+    setBusy(true)
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => { resolve = done })
+    boundaryDoneRef.current = { promise, resolve }
+    try {
+      await flushConfig()
+      return true
+    } catch {
+      // The local recovery alert is the sole announcement for save failures.
+      finishBoundary()
+      return false
+    }
+  }, [flushConfig, finishBoundary])
+
+  const saveBeforeLeave = useCallback((): Promise<boolean> => {
+    if (leavePromiseRef.current) return leavePromiseRef.current
+    const leave = async () => {
+      if (boundaryDoneRef.current) {
+        await boundaryDoneRef.current.promise
+        if (saveErrorRef.current) return false
+      }
+      if (!(await beginBoundary())) return false
+      finishBoundary()
+      return true
+    }
+    const promise = leave().finally(() => { leavePromiseRef.current = null })
+    leavePromiseRef.current = promise
+    return promise
+  }, [beginBoundary, finishBoundary])
+
+  // Debounce ordinary edits. Do not depend on save status or translation/toast
+  // callbacks: a failed request or a render must not schedule another retry.
   useEffect(() => {
-    if (!config) return
-    if (JSON.stringify(config) === savedJsonRef.current) return
+    if (!config || JSON.stringify(config) === savedJsonRef.current) return
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null
-      void persistConfig(config).catch((e) => toast(t('train.saveFailed', { error: e }), 'error'))
+      void flushConfig().catch(() => {})
     }, 600)
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current)
-        debounceTimerRef.current = null
-      }
-    }
-  }, [config, persistConfig, toast, t])
+    return clearSaveDebounce
+  }, [config, flushConfig, clearSaveDebounce])
 
-  // 卸载时（路由切走）如果还有 dirty 没落盘 → fire-and-forget 把 PUT 发出去。
-  // fetch 一旦发起，浏览器会继续送，不需要 await。catch 静默以免 cleanup 抛出。
+  const blocker = useBlocker(useCallback(() => (
+    busyRef.current || forceSaveRef.current || Boolean(inFlightSaveRef.current)
+    || Boolean(configRef.current && JSON.stringify(configRef.current) !== savedJsonRef.current)
+  ), []))
   useEffect(() => {
-    return () => {
+    if (blocker.state !== 'blocked') return
+    let cancelled = false
+    void saveBeforeLeave().then((saved) => {
+      if (cancelled) return
+      if (saved) blocker.proceed()
+      else blocker.reset()
+    })
+    return () => { cancelled = true }
+  }, [blocker, saveBeforeLeave])
+
+  useEffect(() => {
+    setVersionSwitchGuard(saveBeforeLeave)
+    return () => setVersionSwitchGuard(null)
+  }, [setVersionSwitchGuard, saveBeforeLeave])
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
       const cur = configRef.current
-      if (!cur || !vid) return
-      if (JSON.stringify(cur) === savedJsonRef.current) return
-      void api.putVersionConfig(project.id, vid, cur).catch(() => {})
+      const dirty = Boolean(cur && JSON.stringify(cur) !== savedJsonRef.current)
+      if (!dirty && !forceSaveRef.current && !inFlightSaveRef.current && !busyRef.current) return
+      event.preventDefault()
+      event.returnValue = ''
     }
-  }, [project.id, vid])
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [])
 
   const filteredPresets = useMemo(
     () => presets.filter((p) => !pickerSearch || p.name.toLowerCase().includes(pickerSearch.toLowerCase())),
     [presets, pickerSearch],
   )
 
-  // 右侧 SchemaSectionIndex 的 IntersectionObserver root + 跳转目标
+  // 配置表单的局部滚动根与章节锚点。
   const schemaScrollRef = useRef<HTMLDivElement | null>(null)
-  // 右侧训练集分布预览抽屉的展开/收起（持久化）。收起时把横向空间让给表单。
-  const [previewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
-  const [previewTab, setPreviewTab] = useLocalStorageState<'stats' | 'config'>('train.previewTab', 'stats')
+  const previewToggleRef = useRef<HTMLButtonElement | null>(null)
+  const [storedPreviewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
+  const previewOpen = storedPreviewOpen !== false
+  const [storedPreviewTab, setPreviewTab] = useLocalStorageState<'stats' | 'config'>('train.previewTab', 'stats')
+  const previewTab = storedPreviewTab === 'config' ? 'config' : 'stats'
+  const datasetPlan = useTrainDatasetPlan({ projectId: project.id, activeVersion, reg, config })
+  const [compactGroup, setCompactGroup] = useState('')
   const visibleGroups = useMemo(
     () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
     [schema, advancedMode],
   )
+  useEffect(() => {
+    if (!visibleGroups.some((group) => group.key === compactGroup)) {
+      setCompactGroup(visibleGroups[0]?.key ?? '')
+    }
+  }, [compactGroup, visibleGroups])
 
   // popover 关闭：点外面 / Esc
   useEffect(() => {
@@ -307,7 +475,11 @@ export default function TrainPage() {
       if (pickerPopRef.current?.contains(target) || pickerAnchorRef.current?.contains(target)) return
       setPickerOpen(false)
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPickerOpen(false) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setPickerOpen(false)
+      pickerAnchorRef.current?.focus()
+    }
     document.addEventListener('mousedown', onDocClick)
     document.addEventListener('keydown', onKey)
     return () => {
@@ -329,7 +501,7 @@ export default function TrainPage() {
       )
       if (!ok) return
     }
-    setBusy(true)
+    if (!(await beginBoundary())) return
     try {
       const r = await api.forkPresetForVersion(project.id, vid, name)
       applyPresetWarnings(r)
@@ -340,7 +512,7 @@ export default function TrainPage() {
     } catch (e) {
       toast(String(e), 'error')
     } finally {
-      setBusy(false)
+      finishBoundary()
     }
   }
 
@@ -356,7 +528,7 @@ export default function TrainPage() {
     })
     if (!name) return
     const trimmed = name.trim()
-    setBusy(true)
+    if (!(await beginBoundary())) return
     try {
       await api.saveVersionConfigAsPreset(project.id, vid, trimmed, false)
       const list = await api.listPresets()
@@ -383,7 +555,7 @@ export default function TrainPage() {
         toast(msg, 'error')
       }
     } finally {
-      setBusy(false)
+      finishBoundary()
     }
   }
 
@@ -418,7 +590,7 @@ export default function TrainPage() {
       if (!ok) return
     }
 
-    setBusy(true)
+    if (!(await beginBoundary())) return
     try {
       const fresh = await api.getVersionConfig(project.id, vid).catch(() => null)
       const psd =
@@ -452,51 +624,46 @@ export default function TrainPage() {
     } catch (e) {
       toast(String(e), 'error')
     } finally {
-      setBusy(false)
+      finishBoundary()
     }
   }
+
+  const submitBlocked = taskLoading || Boolean(taskError) || busy || !configResp?.has_config || Boolean(activeTask)
 
   const onEnqueue = async (scheduledAt?: number) => {
     if (!configResp?.has_config) {
       toast(t('train.noPresetError'), 'error')
       return
     }
-    setBusy(true)
+    if (activeTask) {
+      toast(t('train.activeTaskBlocks', { id: activeTask.id }), 'error')
+      return
+    }
+    if (!(await beginBoundary())) return
     try {
-      // 1. 干掉等待中的 debounce save；不然它可能在 enqueue 之后才 fire，导致
-      //    worker 起来时读的是旧 config。
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current)
-        debounceTimerRef.current = null
-      }
-      // 2. 等任何正在飞的 save 跑完（debounce 刚刚 fire 的那一次）。
-      if (inFlightSaveRef.current) await inFlightSaveRef.current
-      // 3. 用 configRef（不是 config closure）再 diff 一次。覆盖「用户在 input
-      //    里敲完值不离开焦点直接点开始训练」的场景：input.onBlur (commit) 同步
-      //    setConfig 入队但 React 还没 flush，config closure 是旧的，但 configRef
-      //    在 setConfigSync 里同步更新过了。
-      const cur = configRef.current
-      if (cur && JSON.stringify(cur) !== savedJsonRef.current) {
-        await persistConfig(cur)
-      }
       const task = await api.enqueueVersionTraining(
         project.id, vid, scheduledAt != null ? { scheduledAt } : undefined,
       )
       if (scheduledAt != null) {
         toast(t('train.scheduledNav', {
           id: task.id,
-          time: new Date(scheduledAt * 1000).toLocaleString('zh-CN', { hour12: false }),
+          time: new Date(scheduledAt * 1000).toLocaleString(
+            i18n.resolvedLanguage?.startsWith('zh') ? 'zh-CN' : 'en-US',
+            { hour12: false },
+          ),
         }), 'success')
       } else {
         toast(t('train.enqueuedNav', { id: task.id }), 'success')
       }
       setScheduleOpen(false)
+      setActiveTask(task)
       void reload()
-      navigate('/queue')
+      navigate(`/queue/${task.id}`)
     } catch (e) {
       toast(String(e), 'error')
+      void refreshActiveTask()
     } finally {
-      setBusy(false)
+      finishBoundary()
     }
   }
 
@@ -518,117 +685,65 @@ export default function TrainPage() {
   }
 
   return (
+    <>
     <StepShell
       title={t('steps.train.title')}
       subtitle={t('steps.train.subtitle')}
-      actions={
-        <>
-          {/* 0.17 P-B — 定时训练：延迟 N 小时 / 指定时间，建成 scheduled task。
-              样式对齐项目页「导入项目」（btn-ghost btn-sm）。 */}
-          <button
-            onClick={() => setScheduleOpen(true)}
-            disabled={busy || !configResp?.has_config}
-            className="btn btn-ghost btn-sm"
-            title={t('train.scheduleHint')}
-            data-testid="train-schedule-btn"
-          >
-            {t('train.scheduleBtn')}
-          </button>
-          {/* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */}
-          <button
-            onClick={() => void onEnqueue()}
-            disabled={busy || !configResp?.has_config}
-            className="btn btn-primary btn-sm"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            <span>{t('train.startTrainBtn')}</span>
-          </button>
-          {scheduleOpen && (
-            <div
-              role="dialog"
-              aria-modal="true"
-              className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
-              onMouseDown={(e) => { if (e.target === e.currentTarget) setScheduleOpen(false) }}
-              data-testid="train-schedule-modal"
-            >
-              <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[440px] p-6 flex flex-col gap-4 shadow-xl">
-                <h2 className="m-0 text-lg font-semibold text-fg-primary">
-                  {t('train.scheduleBtn')}
-                </h2>
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
-                    {t('train.scheduleDelaySection')}
-                  </span>
-                  <div className="flex gap-1.5">
-                    {[1, 2, 4, 8].map((h) => (
-                      <button
-                        key={h}
-                        onClick={() => void onEnqueue(Date.now() / 1000 + h * 3600)}
-                        disabled={busy}
-                        className="btn btn-secondary btn-sm flex-1"
-                        data-testid={`train-schedule-delay-${h}h`}
-                      >
-                        +{h}h
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
-                    {t('train.scheduleAbsoluteSection')}
-                  </span>
-                  <input
-                    type="datetime-local"
-                    className="input"
-                    value={scheduleTime}
-                    min={toLocalInputValue(new Date())}
-                    onChange={(e) => setScheduleTime(e.target.value)}
-                    data-testid="train-schedule-time"
-                  />
-                </div>
-                <div className="flex gap-2 justify-end mt-1">
-                  <button
-                    onClick={() => setScheduleOpen(false)}
-                    className="btn btn-secondary"
-                  >
-                    {t('common.cancel')}
-                  </button>
-                  <button
-                    onClick={onScheduleAbsolute}
-                    disabled={busy || !scheduleTime}
-                    className="btn btn-primary"
-                    data-testid="train-schedule-confirm"
-                  >
-                    {t('train.scheduleConfirm')}
-                  </button>
-                </div>
-              </div>
+      actions={(
+        <ActionGroup
+          role="group"
+          aria-label={t('train.pageActions')}
+          status={(
+            <div className="flex items-center gap-related">
+              {activeTask && !previewOpen && (
+                <Button variant="ghost" size="sm" onClick={() => navigate(`/queue/${activeTask.id}`)}>
+                  #{activeTask.id} · {t(`status.${activeTask.status}`)}
+                </Button>
+              )}
+              <SaveIndicator status={saveStatus} announceError={false} />
             </div>
           )}
-        </>
-      }
+          secondary={(
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setScheduleOpen(true)}
+              disabled={submitBlocked}
+              data-testid="train-schedule-btn"
+            >
+              {t('train.scheduleBtn')}
+            </Button>
+          )}
+          primary={(
+            <Button variant="primary" size="sm" onClick={() => void onEnqueue()} disabled={submitBlocked} loading={busy}>
+              {t('train.startTrainBtn')}
+            </Button>
+          )}
+        />
+      )}
     >
-      <div className="flex flex-col h-full gap-3 min-h-0">
+      <div className="flex flex-col h-full min-h-0">
+        <div className="train-workbench flex-1 min-h-0" data-preview-open={previewOpen} data-preview-tab={previewTab}>
 
-        {/* 两栏布局：左（预设 + config 编辑） / 右（估算面板） */}
-        <div className="flex gap-3 flex-1 min-h-0">
-
-          {/* 左栏：配置表单（flex-[3] 与右预览 flex-[1] 还原老 grid 3:1 比例） */}
-          <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto flex-[3]">
+          {/* 左栏：配置工作区 */}
+          <div className="train-draft flex flex-col gap-3 min-h-0 min-w-0">
 
           {/* 预设 picker：dropdown 入口。0.8.2 起承认 version yaml 是 first-class
               「项目专属配置」，不再显示「绑定哪个预设」+「已自定义」标签 —— 这套
               判定逻辑骗人（全局模型 4 字段 fork 时被注入绝对路径，跟全局预设
               相对路径 diff 永远存在）。预设变成纯"模板起点"概念。 */}
-          <section className="flex items-center gap-2.5 shrink-0 relative flex-wrap">
+          <section aria-label={t('train.configToolbar')} className="train-config-toolbar shrink-0 relative">
+            <div className="train-config-toolbar-main">
             <button
               ref={pickerAnchorRef}
+              type="button"
+              aria-expanded={pickerOpen}
+              aria-controls={pickerId}
+              aria-haspopup="dialog"
               onClick={() => { setPickerOpen((v) => !v); setPickerSearch('') }}
               disabled={busy}
               className={[
-                'flex items-center gap-3 min-w-[300px] pl-3.5 pr-3 py-2.5',
+                'train-preset-trigger flex items-center gap-related min-w-0 pl-3.5 pr-3 py-2.5',
                 'rounded-md border transition-[border-color,background] duration-100',
                 pickerOpen
                   ? 'border-accent bg-accent-soft'
@@ -639,7 +754,7 @@ export default function TrainPage() {
                 ? t('train.pickerTitleConfigured')
                 : t('train.pickerTitleEmpty')}
             >
-              <span className="text-[10px] uppercase tracking-[0.08em] text-fg-tertiary font-semibold">
+              <span className="caption uppercase tracking-[0.08em]">
                 {t('train.configChip')}
               </span>
               <span className={[
@@ -650,30 +765,73 @@ export default function TrainPage() {
                   ? t('train.scopedConfigLabel', { title: project.title, label: activeVersion.label })
                   : t('train.notConfiguredLabel')}
               </span>
-              <span className="text-fg-tertiary text-md">▾</span>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`shrink-0 text-fg-tertiary transition-transform ${pickerOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
             </button>
-            <ActionGroup
-              status={<SaveIndicator status={saveStatus} announceError={false} />}
-              secondary={(
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void onSaveAsPreset()}
-                  disabled={busy || !configResp?.has_config}
-                  title={t('train.saveAsPresetTitle')}
-                >
-                  {t('train.saveAsPreset')}
-                </Button>
-              )}
-            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void onSaveAsPreset()}
+              disabled={busy || !configResp?.has_config}
+              title={t('train.saveAsPresetTitle')}
+            >
+              {t('train.saveAsPreset')}
+            </Button>
+            </div>
+            {configResp?.has_config && config && (
+              <div className="train-config-toolbar-mode flex shrink-0 items-center gap-related" data-train-display-mode>
+                <span className="text-sm text-fg-secondary">{t('train.parameterDisplay')}</span>
+                <SegmentedControl
+                value={advancedMode ? 'advanced' : 'simple'}
+                onChange={(value) => {
+                  const wantsAdvanced = value === 'advanced'
+                  if (wantsAdvanced !== advancedMode) toggleAdvancedMode()
+                }}
+                items={[
+                  { value: 'simple', label: t('train.simpleMode') },
+                  { value: 'advanced', label: t('train.advancedMode') },
+                ]}
+                ariaLabel={t('train.modeLabel')}
+                idPrefix="train-mode"
+                layout="content"
+                className="shrink-0"
+              />
+              </div>
+            )}
 
             {/* popover */}
             {pickerOpen && (
               <div
+                id={pickerId}
                 ref={pickerPopRef}
                 role="dialog"
                 aria-label={t('train.presetLabel')}
-                className="absolute top-[calc(100%+6px)] left-0 w-[480px] max-h-[480px] overflow-hidden rounded-md border border-subtle bg-surface shadow-lg flex flex-col z-50"
+                onKeyDown={(event) => {
+                  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+                  const choices = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-preset-choice]'),
+                  )
+                  if (choices.length === 0) return
+                  const current = choices.indexOf(document.activeElement as HTMLButtonElement)
+                  const next = event.key === 'ArrowDown'
+                    ? (current + 1) % choices.length
+                    : (current <= 0 ? choices.length - 1 : current - 1)
+                  event.preventDefault()
+                  choices[next]?.focus()
+                }}
+                className="absolute top-[calc(100%+6px)] left-0 w-[480px] max-w-[calc(100vw-2rem)] max-h-[480px] overflow-hidden rounded-md border border-subtle bg-surface shadow-lg flex flex-col z-50"
               >
                 {/* search */}
                 <div className="p-2.5 border-b border-subtle flex items-center gap-2">
@@ -683,8 +841,9 @@ export default function TrainPage() {
                       className="absolute left-2 text-fg-tertiary pointer-events-none">
                       <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
                     </svg>
-                    <input
+                    <Input
                       autoFocus
+                      aria-label={t('train.filterPresets')}
                       className="input w-full pl-7 text-sm"
                       placeholder={t('train.filterPresets')}
                       value={pickerSearch}
@@ -700,6 +859,7 @@ export default function TrainPage() {
                         非空时藏起来 —— 用户在搜旧的，新建是另一条意图。 */}
                     {!pickerSearch && (
                       <button
+                        data-preset-choice
                         onClick={() => void startCreatePreset()}
                         disabled={busy}
                         className={[
@@ -717,6 +877,7 @@ export default function TrainPage() {
                       // "active = 当前绑定" 概念，全部一视同仁地作为可用模板。
                       return (
                         <button
+                          data-preset-choice
                           key={p.name}
                           onClick={() => { setPickerOpen(false); void onForkPreset(p.name) }}
                           disabled={busy}
@@ -744,64 +905,117 @@ export default function TrainPage() {
             )}
           </section>
 
+            {saveStatus.state === 'error' && (
+              <Alert tone="danger" size="sm" role="alert" action={(
+                <Button variant="secondary" size="sm" disabled={busy} onClick={() => { void flushConfig().catch(() => {}) }}>
+                  {t('common.retry')}
+                </Button>
+              )}>
+                {t('train.saveFailed', { error: saveStatus.error })}
+              </Alert>
+            )}
+
+            {(schemaError || configError || presetsError || taskError) && (
+              <div className="space-y-2 shrink-0" aria-live="polite">
+                {schemaError && <LoadError message={t('train.loadSchemaFailed', { error: schemaError })} onRetry={refreshSchema} />}
+                {configError && <LoadError message={t('train.loadConfigFailed', { error: configError })} onRetry={refreshConfig} />}
+                {presetsError && <LoadError message={t('train.loadPresetsFailed', { error: presetsError })} onRetry={refreshPresets} />}
+                {taskError && (
+                  <LoadError
+                    message={t('train.loadTaskFailed', { error: taskError })}
+                    onRetry={() => { void refreshActiveTask(true) }}
+                  />
+                )}
+              </div>
+            )}
+
+            {configResp?.has_config && config && visibleGroups.length > 0 && (
+              <label className="train-section-select shrink-0">
+                <span className="caption block mb-1">{t('settings.pageIndex')}</span>
+                <Select
+                  value={compactGroup || visibleGroups[0].key}
+                  onChange={(event) => {
+                    const key = event.target.value
+                    setCompactGroup(key)
+                    document.getElementById(`schema-group-${key}`)?.scrollIntoView({ block: 'start' })
+                  }}
+                >
+                  {visibleGroups.map((group) => (
+                    <option key={group.key} value={group.key}>
+                      {schemaGroupLabel(group.key, group.label, t)}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            )}
+
+            <div className="train-form-layout flex flex-1 min-h-0 gap-3">
             {configResp === null || !schema ? (
               <ConfigSkeleton label={t('train.loadingConfig')} />
             ) : !configResp.has_config ? (
-              <div className="flex-1 flex items-center justify-center text-fg-tertiary text-sm rounded-md border border-dashed border-dim">
-                {t('train.noConfigHint')}
-              </div>
+              <EmptyState
+                embedded
+                className="flex-1 border border-dashed border-dim"
+                title={t('train.notConfiguredLabel')}
+                description={t('train.noConfigHint')}
+                action={(
+                  <ActionGroup
+                    secondary={(
+                      <Button variant="secondary" onClick={() => { setPickerOpen(true); setPickerSearch(''); pickerAnchorRef.current?.focus() }}>
+                        {t('train.choosePreset')}
+                      </Button>
+                    )}
+                    primary={(
+                      <Button variant="primary" onClick={() => void startCreatePreset()} disabled={busy}>
+                        {t('train.newPreset')}
+                      </Button>
+                    )}
+                  />
+                )}
+              />
             ) : config ? (
-              <section ref={schemaScrollRef} className="flex-1 min-h-0 overflow-y-auto pr-1">
-                <div className="flex justify-end mb-2">
-                  <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
-                    <button
-                      type="button"
-                      onClick={() => !advancedMode || toggleAdvancedMode()}
-                      className={`px-3 py-1 transition-colors ${!advancedMode ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
-                    >
-                      {t('train.simpleMode')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => advancedMode || toggleAdvancedMode()}
-                      className={`px-3 py-1 transition-colors ${advancedMode ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
-                    >
-                      {t('train.advancedMode')}
-                    </button>
-                  </div>
-                </div>
+              <section ref={schemaScrollRef} className="train-config-scroll flex-1 min-w-0 min-h-0 overflow-y-auto pr-1">
                 {(droppedFields.length > 0 || defaultedFields.length > 0) && (
-                  <div className="mb-3 rounded-md border border-amber-400/50 bg-amber-950/60 px-3.5 py-2.5 text-xs text-amber-100 space-y-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
-                      <button
-                        type="button"
+                  <Alert
+                    tone="warning"
+                    size="sm"
+                    className="mb-3"
+                    title={t('presets.compatNoticeTitle')}
+                    action={(
+                      <Button
+                        variant="secondary"
+                        size="xs"
                         onClick={() => {
                           const cur = configRef.current
                           if (!cur) return
-                          void persistConfig(cur, true)
+                          void flushConfig(true)
                             .then(() => toast(t('presets.cleanLegacyDone'), 'success'))
-                            .catch((e) => toast(t('train.saveFailed', { error: e }), 'error'))
+                            .catch(() => {})
                         }}
-                        className="shrink-0 rounded border border-amber-400/50 bg-transparent px-2 py-0.5 text-[11px] font-medium text-amber-200 hover:bg-amber-400/10 cursor-pointer"
+                        disabled={busy || saveStatus.state === 'saving'}
                         title={t('presets.cleanLegacyTitle')}
                       >
                         {t('presets.cleanLegacyBtn')}
-                      </button>
+                      </Button>
+                    )}
+                  >
+                    <div className="space-y-1">
+                      {droppedFields.length > 0 && (
+                        <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-xs opacity-80">{droppedFields.join(', ')}</code></div>
+                      )}
+                      {defaultedFields.length > 0 && (
+                        <div>{t('presets.defaultedFieldsBody')}<code className="ml-1 text-xs opacity-80">{defaultedFields.join(', ')}</code></div>
+                      )}
                     </div>
-                    {droppedFields.length > 0 && (
-                      <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{droppedFields.join(', ')}</code></div>
-                    )}
-                    {defaultedFields.length > 0 && (
-                      <div>{t('presets.defaultedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{defaultedFields.join(', ')}</code></div>
-                    )}
-                  </div>
+                  </Alert>
                 )}
                 <SchemaForm
                   schema={schema}
                   values={config}
                   onChange={onFormChange}
-                  autoHints={makeAutoHints(config, setConfigSync)}
+                  autoHints={makeAutoHints(config, onFormChange)}
+                  disabledFields={busy ? Object.keys(schema.schema.properties ?? {}) : []}
+                  disabledHints={busy ? Object.fromEntries(Object.keys(schema.schema.properties ?? {}).map((name) => [name, false])) : undefined}
                   advancedMode={advancedMode}
                 />
                 {familySwitchTarget && config && (
@@ -809,6 +1023,7 @@ export default function TrainPage() {
                     target={familySwitchTarget}
                     config={config}
                     onApply={(switched) => {
+                      if (busyRef.current) return
                       setConfigSync(switched)
                       setFamilySwitchTarget(null)
                     }}
@@ -819,493 +1034,121 @@ export default function TrainPage() {
             ) : (
               <ConfigSkeleton label={t('train.loadingConfig')} />
             )}
-          </div>
 
-        {/* 中栏：章节锚点导航（固定窄列，始终可见） */}
-        {configResp?.has_config && config && visibleGroups.length > 0 && (
-          <div className="shrink-0 w-[168px] overflow-y-auto">
-            <SchemaSectionIndex
-              groups={visibleGroups}
-              scrollContainer={schemaScrollRef}
-            />
-          </div>
-        )}
-
-        {/* 把手：单竖线 + 顶部圆圈 ›/‹ —— 分隔预览抽屉 */}
-        <div className="relative w-3 shrink-0 self-stretch flex justify-center">
-          <div className="w-px bg-subtle" />
-          <button
-            type="button"
-            onClick={() => setPreviewOpen((v) => !v)}
-            title={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
-            aria-label={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
-            className="absolute top-1 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full border border-subtle bg-surface text-fg-tertiary hover:text-accent hover:border-accent flex items-center justify-center text-xs leading-none shadow-sm"
-          >
-            {previewOpen ? '›' : '‹'}
-          </button>
-        </div>
-
-        {/* 右栏：预览抽屉（可收回），双 tab：数据分布 / YAML 预览。数据分布保持
-            与左表单 flex-[3] 的 3:1 老比例；YAML tab 加宽到 3:2（yaml 行长，1/4
-            宽不断折行看不清）。收起时整列不渲染、空间归表单。YAML 预览 = 按
-            show_when 裁剪后的 yaml，实时跟随表单，与落盘 config.yaml 同内容。 */}
-        {previewOpen && (
-          <div className={`${previewTab === 'config' ? 'flex-[2]' : 'flex-[1]'} min-w-0 flex flex-col min-h-0`}>
-            {/* tab 条靠右：切 YAML tab 时抽屉加宽、左缘会移动，右对齐锚在固定的
-                右缘上，切换时开关自身不跟着跳。 */}
-            <div className="shrink-0 mb-2 flex justify-end">
-              <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('stats')}
-                  className={`px-3 py-1 transition-colors ${previewTab === 'stats' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
-                >
-                  {t('train.previewTabStats')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewTab('config')}
-                  className={`px-3 py-1 transition-colors ${previewTab === 'config' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
-                >
-                  {t('train.previewTabYaml')}
-                </button>
-              </div>
-            </div>
-            {previewTab === 'stats' ? (
-              <div className="flex-1 min-h-0 overflow-y-auto">
-                <DatasetStatsPanel
-                  projectId={project.id}
-                  activeVersion={activeVersion}
-                  reg={reg}
-                  config={config}
+            {configResp?.has_config && config && visibleGroups.length > 0 && (
+              <div className="train-section-index shrink-0 overflow-y-auto">
+                <SchemaSectionIndex
+                  groups={visibleGroups}
+                  scrollContainer={schemaScrollRef}
                 />
               </div>
-            ) : config ? (
-              <ConfigYamlPanel
-                config={config}
-                fileLabel="config.yaml"
-                className="flex-1 flex flex-col min-h-0"
-              />
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-fg-tertiary text-sm rounded-md border border-dashed border-dim">
-                {t('train.noConfigHint')}
-              </div>
             )}
+            </div>
           </div>
-        )}
+
+          <div className="train-preview-rail">
+            <Button
+              ref={previewToggleRef}
+              variant="ghost"
+              size="xs"
+              className="train-preview-toggle"
+              aria-label={t(previewOpen ? 'train.collapsePreview' : 'train.expandPreview')}
+              title={t(previewOpen ? 'train.collapsePreview' : 'train.expandPreview')}
+              aria-expanded={previewOpen}
+              aria-controls="train-preview-panel"
+              onClick={() => {
+                setPreviewOpen(!previewOpen)
+                previewToggleRef.current?.focus()
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d={previewOpen ? 'm9 5 7 7-7 7' : 'm15 5-7 7 7 7'} />
+              </svg>
+            </Button>
+          </div>
+          <TrainPlanPanel
+            plan={datasetPlan}
+            previewOpen={previewOpen}
+            previewTab={previewTab}
+            onPreviewTabChange={setPreviewTab}
+            projectId={project.id}
+            activeVersion={activeVersion}
+            config={config}
+            reg={reg}
+            regError={regError}
+            onRetryReg={refreshReg}
+            activeTask={activeTask}
+            taskLoading={taskLoading}
+            saveStatus={saveStatus}
+          />
       </div>
     </div>
     </StepShell>
-  )
-}
-
-/** config.resolution 归一成 number[]（schema 是 list[int]，旧 config / 标量也兜底）。 */
-function configResolutions(config: ConfigData | null): number[] {
-  const r = config?.resolution as unknown
-  if (Array.isArray(r)) return r.length ? (r as number[]) : [1024]
-  if (typeof r === 'number') return [r]
-  return [1024]
-}
-
-/** 文件夹有效样本数 = repeat × 图数 × 分辨率档数（px 文件夹固定 1 档；否则跟 config 列表）。 */
-function folderEffective(name: string, imageCount: number, resoCount: number): number {
-  const { reso, repeat } = parseFolderMeta(name)
-  return repeat * imageCount * (reso ? 1 : resoCount)
-}
-
-/** reg.files 形如 `5_concept/12345.png` —— 按首段文件夹聚合计数。 */
-function aggregateRegFolders(files: string[]): Array<{ name: string; image_count: number }> {
-  const m = new Map<string, number>()
-  for (const f of files) {
-    const idx = f.indexOf('/')
-    if (idx < 0) continue
-    const folder = f.slice(0, idx)
-    m.set(folder, (m.get(folder) ?? 0) + 1)
-  }
-  return Array.from(m.entries())
-    .map(([name, image_count]) => ({ name, image_count }))
-    .sort((a, b) => a.name.localeCompare(b.name))
-}
-
-/** 训练集 + 正则集分布右栏面板。
- *
- * 显示每个 repeat 文件夹（Kohya 风格 N_label）的 raw 图数 + 有效图数（repeat × imgs），
- * train / reg 分两块汇总，最后给出有效图数总和——这是 anima_train 单 epoch 的实际样本数。
- */
-function DatasetStatsPanel({
-  projectId,
-  activeVersion,
-  reg,
-  config,
-}: {
-  projectId: number
-  activeVersion: Version | null
-  reg: RegStatus | null
-  config: ConfigData | null
-}) {
-  const { t } = useTranslation()
-  const trainFolders = activeVersion?.stats?.train_folders ?? []
-  const regFolders = useMemo(
-    () => (reg && reg.exists ? aggregateRegFolders(reg.files) : []),
-    [reg]
-  )
-
-  const resoCount = configResolutions(config).length
-  const trainEffective = trainFolders.reduce(
-    (s, f) => s + folderEffective(f.name, f.image_count, resoCount),
-    0,
-  )
-  const regEffective = regFolders.reduce(
-    (s, f) => s + folderEffective(f.name, f.image_count, resoCount),
-    0,
-  )
-  const totalEffective = trainEffective + regEffective
-
-  // 桶分布 + NaViT 打包预估（后端用真 BucketManager / NavitPackBatchSampler 算）。
-  // fetch 在本层做（而非 BucketPreview 内部）：navit 模式下步数公式也吃这份数据。
-  const vid = activeVersion?.id ?? 0
-  const navitOn = config?.navit_packing === true
-  const [dist, setDist] = useState<BucketDistribution | null>(null)
-  const distSig = JSON.stringify([
-    config?.resolution,
-    config?.aspect_ratio_limit,
-    // 文件夹名单（含 px 前缀 / repeat / 图数）—— 改名加 px 也要触发重取，不能只看总数
-    activeVersion?.stats?.train_folders,
-    // navit 打包预估的输入 —— 任何一项变了包数都可能变
-    config?.navit_packing,
-    config?.navit_native_resolution,
-    config?.navit_token_budget,
-    config?.navit_max_images_per_pack,
-    config?.navit_pack_strategy,
-    config?.navit_pack_ffd_window,
-    config?.navit_drop_last,
-    config?.navit_native_over_budget,
-    config?.seed,
-    reg?.exists,
-    reg && reg.exists ? reg.files.length : 0,
-  ])
-  useEffect(() => {
-    if (!projectId || !vid) return
-    let cancelled = false
-    api.getBucketDistribution(projectId, vid)
-      .then((d) => { if (!cancelled) setDist(d) })
-      .catch(() => { if (!cancelled) setDist(null) })
-    return () => { cancelled = true }
-  }, [projectId, vid, distSig])
-
-  // 单 epoch 优化器步数估算（与 sd-scripts max_train_steps 同语义）。
-  // - 常规路径：样本 ÷ (batch × ga)。不算 AR bucketing 损失（每桶最后一 batch
-  //   可能不满），相同 AR 数据集误差 < 5%。
-  // - navit_packing：batch_size 不参与分批（NavitPackBatchSampler 按 token 预算
-  //   拼包，一步 = 一包）——steps/epoch = ceil(包数 ÷ ga)，包数来自后端真打包模拟；
-  //   模拟结果没到手前不显示估算（宁缺毋假）。
-  // schema 字段：batch_size / grad_accum / epochs / max_steps（max_steps=0 表示不限）。
-  const bs = Number(config?.batch_size) || 1
-  const ga = Number(config?.grad_accum) || 1
-  const epochs = Number(config?.epochs) || 0
-  const maxSteps = Number(config?.max_steps) || 0
-  const navitEst = navitOn ? (dist?.navit ?? null) : null
-  const stepsPerEpoch = navitOn
-    ? (navitEst && navitEst.packs_per_epoch > 0
-        ? Math.ceil(navitEst.packs_per_epoch / ga)
-        : null)
-    : (totalEffective > 0 ? Math.ceil(totalEffective / (bs * ga)) : null)
-  const naturalTotal = stepsPerEpoch !== null && epochs > 0
-    ? stepsPerEpoch * epochs
-    : null
-  const finalTotal = naturalTotal !== null && maxSteps > 0
-    ? Math.min(maxSteps, naturalTotal)
-    : naturalTotal
-  const maxStepsTruncates =
-    maxSteps > 0 && naturalTotal !== null && maxSteps < naturalTotal
-  // navit 下有效样本以真打包模拟为准（native 收拢多分辨率 fan-out、含 reg），
-  // 前端 folderEffective 的 resoCount fan-out 在该模式下会虚算
-  const shownEffective = navitEst && navitEst.samples > 0
-    ? navitEst.samples
-    : totalEffective
-
-  return (
-    <div className="flex flex-col gap-3 min-w-0">
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <div className="flex items-center gap-1.5 mb-2.5">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-          <span className="caption uppercase tracking-[0.06em] text-xs">{t('train.statsTitle')}</span>
-        </div>
-
-        <FolderSection
-          title="train/"
-          folders={trainFolders}
-          effective={trainEffective}
-          resoCount={resoCount}
-          empty={t('train.noTrainImages')}
-        />
-
-        <div className="h-2" />
-
-        <FolderSection
-          title="reg/"
-          folders={regFolders}
-          effective={regEffective}
-          resoCount={resoCount}
-          empty={reg && !reg.exists ? t('train.regNotBuilt') : t('train.noRegImages')}
-        />
-
-        {/* 总计 + 步数估算（不含 AR bucketing 误差；navit 走真打包模拟） */}
-        <div className="mt-2.5 pt-2 border-t border-subtle flex flex-col gap-1 text-xs">
-          <Row label={t('train.effectiveSamples')} value={String(shownEffective)} bold />
-          {navitOn ? (
-            navitEst && navitEst.packs_per_epoch > 0 ? (
-              <>
-                <Row
-                  label={t('train.navitPackLine')}
-                  value={`≈ ${navitEst.packs_per_epoch}`}
-                  dim
-                />
-                {ga > 1 && stepsPerEpoch !== null && (
-                  <Row
-                    label={t('train.navitGaLine', { ga })}
-                    value={`≈ ${stepsPerEpoch} steps/epoch`}
-                    dim
-                  />
-                )}
-              </>
-            ) : (
-              <Row label={t('train.navitEstimating')} value="…" dim />
-            )
-          ) : (
-            stepsPerEpoch !== null && (
-              <Row
-                label={`÷ batch × ga (${bs} × ${ga})`}
-                value={`≈ ${stepsPerEpoch} steps/epoch`}
-                dim
-              />
-            )
+    {scheduleOpen && (
+    <Modal
+      onClose={() => setScheduleOpen(false)}
+      title={t('train.scheduleBtn')}
+      description={t('train.scheduleDescription')}
+      initialFocusRef={scheduleInputRef}
+      size="sm"
+      footer={(
+        <ActionGroup
+          secondary={(
+            <Button variant="secondary" onClick={() => setScheduleOpen(false)}>
+              {t('common.cancel')}
+            </Button>
           )}
-          {naturalTotal !== null && (
-            <Row
-              label={`× epochs (${epochs})`}
-              value={`≈ ${naturalTotal} steps`}
-              dim
-            />
-          )}
-          {finalTotal !== null && (
-            <Row
-              label={maxStepsTruncates ? t('train.maxStepsLabel', { n: maxSteps }) : t('train.totalSteps')}
-              value={`≈ ${finalTotal}`}
-              bold
-            />
-          )}
-        </div>
-      </div>
-
-      <BucketPreview dist={dist} />
-
-      <MaskedLossHint
-        projectId={projectId}
-        vid={activeVersion?.id ?? 0}
-        maskedLoss={config?.masked_loss === true}
-      />
-    </div>
-  )
-}
-
-/** 训练集有 mask 但 masked_loss 关闭时的提示（决策 D7：只提示不代开）。 */
-function MaskedLossHint({
-  projectId, vid, maskedLoss,
-}: {
-  projectId: number
-  vid: number
-  maskedLoss: boolean
-}) {
-  const { t } = useTranslation()
-  const [maskCount, setMaskCount] = useState(0)
-
-  useEffect(() => {
-    if (!projectId || !vid) return
-    let cancelled = false
-    api.listCropWorkspaceTrain(projectId, vid)
-      .then((r) => {
-        if (!cancelled) {
-          setMaskCount(r.images.filter((im) => im.mask_mtime != null).length)
-        }
-      })
-      .catch(() => { if (!cancelled) setMaskCount(0) })
-    return () => { cancelled = true }
-  }, [projectId, vid])
-
-  if (maskCount === 0 || maskedLoss) return null
-  return (
-    <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-xs text-fg-secondary leading-relaxed">
-      {t('train.maskedLossHint', { n: maskCount })}
-    </div>
-  )
-}
-
-/** 训练集实际分布面板（数据由 DatasetStatsPanel 统一 fetch）。
- *  - 常规 / navit 非 native：ARB 桶分布（后端用真 BucketManager 算）。trainer 用
- *    drop_last=False —— 桶不满只出短 batch、不丢图，所以这里不做丢图警告。
- *  - navit-native：训练绕过 ARB 桶（每图原生尺寸 floor-16px），显示原生尺寸
- *    直方图（真打包模拟返回），不再展示实际不存在的桶。 */
-function BucketPreview({ dist }: { dist: BucketDistribution | null }) {
-  const { t } = useTranslation()
-  if (!dist) return null
-
-  if (dist.navit?.native) {
-    const sizes = dist.navit.sizes
-    if (sizes.length === 0) return null
-    const top = sizes.slice(0, 10)
-    const rest = sizes.slice(10)
-    const restCount = rest.reduce((s, x) => s + x.count, 0)
-    return (
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <div className="flex items-center gap-1.5 mb-2.5">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-          <span className="caption uppercase tracking-[0.06em] text-xs">{t('train.navitDistTitle')}</span>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          {top.map((b) => (
-            <div
-              key={`${b.w}x${b.h}`}
-              className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
+          primary={(
+            <Button
+              variant="primary"
+              onClick={onScheduleAbsolute}
+              disabled={submitBlocked || !scheduleTime}
+              loading={busy}
+              data-testid="train-schedule-confirm"
             >
-              <span className="text-fg-tertiary">{b.w}×{b.h}</span>
-              <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
-              <span className="text-fg-primary">{b.count}</span>
-            </div>
-          ))}
-          {rest.length > 0 && (
-            <div className="text-xs font-mono text-fg-tertiary pl-1">
-              {t('train.navitDistMore', { kinds: rest.length, n: restCount })}
-            </div>
+              {t('train.scheduleConfirm')}
+            </Button>
           )}
-        </div>
-        <div className="text-[10px] text-fg-tertiary mt-2">
-          {t('train.navitDistHint')}
-          {dist.navit.downscaled > 0 && (
-            <> {t('train.navitDistDownscaled', { n: dist.navit.downscaled })}</>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  if (dist.groups.length === 0) return null
-
-  return (
-    <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-      <div className="flex items-center gap-1.5 mb-2.5">
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-        <span className="caption uppercase tracking-[0.06em] text-xs">{t('train.bucketDistTitle')}</span>
-      </div>
-      <div className="flex flex-col gap-2">
-        {dist.groups.map((g) => (
-          <div key={g.reso}>
-            <div className="text-xs font-mono text-fg-secondary mb-1">{g.reso}px</div>
-            <div className="flex flex-col gap-0.5">
-              {g.buckets.map((b) => (
-                <div
-                  key={`${b.w}x${b.h}`}
-                  className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
-                >
-                  <span className="text-fg-tertiary">{b.w}×{b.h}</span>
-                  <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
-                  <span className="text-fg-primary">{b.count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="text-[10px] text-fg-tertiary mt-2">
-        {dist.navit ? t('train.navitBucketHint') : t('train.bucketDistHint')}
-      </div>
-    </div>
-  )
-}
-
-function FolderSection({
-  title,
-  folders,
-  effective,
-  resoCount,
-  empty,
-}: {
-  title: string
-  folders: Array<{ name: string; image_count: number }>
-  effective: number
-  resoCount: number
-  empty: string
-}) {
-  const { t } = useTranslation()
-  return (
-    <div>
-      <div className="flex items-baseline justify-between text-xs mb-1">
-        <span className="font-mono text-fg-secondary font-medium">{title}</span>
-        {folders.length > 0 && (
-          <span className="font-mono text-fg-tertiary">∑ {effective}</span>
-        )}
-      </div>
-      {folders.length === 0 ? (
-        <div className="text-xs text-fg-tertiary pl-1">{empty}</div>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {folders.map((f) => {
-            const { reso, repeat, label } = parseFolderMeta(f.name)
-            const folderResos = reso ? 1 : resoCount
-            const eff = repeat * f.image_count * folderResos
-            const resoTag = reso ? `${reso}px` : null
-            return (
-              <div
-                key={f.name}
-                className="flex items-baseline gap-1.5 text-xs font-mono text-fg-secondary pl-1"
-                title={folderResos > 1
-                  ? t('train.folderTipReso', { name: f.name, repeat, imgs: f.image_count, resos: folderResos, total: eff })
-                  : t('train.folderTip', { name: f.name, repeat, imgs: f.image_count, total: eff })}
-              >
-                <span className="text-fg-tertiary">{label}</span>
-                {resoTag && <span className="text-[10px] text-accent">{resoTag}</span>}
-                <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
-                <span>
-                  <span className="text-accent">{repeat}</span>
-                  <span className="text-fg-tertiary"> × </span>
-                  <span className="text-fg-primary">{f.image_count}</span>
-                  {folderResos > 1 && (
-                    <>
-                      <span className="text-fg-tertiary"> × </span>
-                      <span className="text-accent">{folderResos}</span>
-                    </>
-                  )}
-                  <span className="text-fg-tertiary"> = </span>
-                  <span className="text-fg-primary font-semibold">{eff}</span>
-                </span>
-              </div>
-            )
-          })}
-        </div>
+        />
       )}
-    </div>
-  )
-}
-
-function Row({
-  label,
-  value,
-  bold,
-  dim,
-}: {
-  label: string
-  value: string
-  bold?: boolean
-  dim?: boolean
-}) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-      <span style={{ color: dim ? 'var(--fg-tertiary)' : 'var(--fg-secondary)' }}>{label}</span>
-      <span style={{
-        fontFamily: 'var(--font-mono)',
-        color: bold ? 'var(--accent)' : dim ? 'var(--fg-tertiary)' : 'var(--fg-primary)',
-        fontWeight: bold ? 700 : 500,
-      }}>{value}</span>
-    </div>
+    >
+      <div className="space-y-5" data-testid="train-schedule-modal">
+        <Alert tone="info" size="sm">{t('train.scheduleSnapshotHint')}</Alert>
+        <TrainRunSummary config={config} plan={datasetPlan} />
+        <section className="space-y-2">
+          <h3 className="caption">{t('train.scheduleDelaySection')}</h3>
+          <div className="grid grid-cols-4 gap-2">
+            {[1, 2, 4, 8].map((hours) => (
+              <Button
+                key={hours}
+                variant="secondary"
+                size="sm"
+                onClick={() => void onEnqueue(Date.now() / 1000 + hours * 3600)}
+                disabled={submitBlocked}
+                data-testid={`train-schedule-delay-${hours}h`}
+              >
+                +{hours}h
+              </Button>
+            ))}
+          </div>
+        </section>
+        <section className="space-y-2">
+          <label htmlFor={scheduleInputId} className="caption block">
+            {t('train.scheduleAbsoluteSection')}
+          </label>
+          <Input
+            ref={scheduleInputRef}
+            id={scheduleInputId}
+            type="datetime-local"
+            value={scheduleTime}
+            min={toLocalInputValue(new Date())}
+            onChange={(event) => setScheduleTime(event.target.value)}
+            data-testid="train-schedule-time"
+          />
+        </section>
+      </div>
+    </Modal>
+    )}
+    </>
   )
 }

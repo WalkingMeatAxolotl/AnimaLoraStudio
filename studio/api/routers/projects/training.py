@@ -78,7 +78,7 @@ from ....services.dataset import scan as datasets
 from ....domain import RegAiConfig
 from ....infrastructure.event_bus import bus
 from ....paths import STUDIO_DATA, safe_join
-from ....services import model_downloader, version_config
+from ....services import model_downloader, task_snapshot, version_config
 from ....services import presets as preset_flow
 from ....services.tagging import caption_snapshot
 from ....services.reg import builder as reg_builder, dedup as reg_dedup
@@ -866,18 +866,21 @@ def enqueue_version_training(
     scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:
+        # 在 active 检查前取得 reserved write lock：WAL 下普通 SELECT 看不到另一
+        # 未提交 enqueue；若不先锁，两条并发请求都可能通过检查后各插一条。
+        db.begin_immediate(conn)
         # 该 version 当前是否已有 active GPU task（R-5：台账合并后 tasks 也装
         # 数据作业，pending 打标不该挡训练入队——只查 GPU 类型）
         active = conn.execute(
             "SELECT id, status FROM tasks "
-            "WHERE version_id = ? AND status IN ('pending', 'running', 'scheduled') "
+            "WHERE version_id = ? AND status IN ('pending', 'running', 'scheduled', 'paused') "
             "AND COALESCE(task_type, 'train') IN ('train', 'reg_ai', 'generate') "
             "LIMIT 1",
             (vid,),
         ).fetchone()
         if active:
             raise ConflictError(
-                "This version already has a running task; "
+                "This version already has an active task; "
                 "wait for it to finish or cancel it",
                 code="version.has_active_task",
                 details={"task_id": active["id"], "status": active["status"]},
@@ -892,15 +895,25 @@ def enqueue_version_training(
         # ADR-0009 PR-1 C6: 同 db.create_task — 存 ContextVar trace_id
         from studio.infrastructure.logging import get_trace_id, new_trace_id
         req_tid = get_trace_id() or f"bg-{new_trace_id()}"
-        cur = conn.execute(
-            "INSERT INTO tasks(name, config_name, status, priority, created_at, "
-            "project_id, version_id, config_path, request_trace_id, scheduled_at) "
-            "VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
-            (task_name, config_name, status, time.time(), pid, vid,
-             str(cfg_path), req_tid, scheduled_at),
-        )
-        tid = int(cur.lastrowid)
-        conn.commit()
+        tid: int | None = None
+        try:
+            cur = conn.execute(
+                "INSERT INTO tasks(name, config_name, status, priority, created_at, "
+                "project_id, version_id, config_path, request_trace_id, scheduled_at) "
+                "VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
+                (task_name, config_name, status, time.time(), pid, vid,
+                 str(cfg_path), req_tid, scheduled_at),
+            )
+            tid = int(cur.lastrowid)
+            # ADR-0007 §11.7：提交响应前冻结。task 行尚未 commit，supervisor
+            # 看不到半成品；文件失败则 rollback，不留下可调度的 active task。
+            task_snapshot.freeze_config(tid, cfg_path)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            if tid is not None:
+                task_snapshot.snapshot_config_path(tid).unlink(missing_ok=True)
+            raise
         # ADR-0007 PR-5: version.status 由 supervisor 在 _spawn_task 推到 training；
         # project 无 stage；这里不再 advance。
         task = db.get_task(conn, tid)

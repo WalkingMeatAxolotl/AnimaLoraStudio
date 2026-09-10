@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigData } from '../api/client'
 import { api } from '../api/client'
@@ -38,6 +39,24 @@ describe('ConfigYamlPanel', () => {
     expect(screen.getByText('config.yaml')).toBeInTheDocument()
     // schema.fieldCount → 顶级键 2 项(顶格行计数)
     expect(screen.getByText('2 项')).toBeInTheDocument()
+  })
+
+  it('shows preview failures and retries without discarding the previous preview', async () => {
+    const user = userEvent.setup()
+    const spy = vi.spyOn(api, 'previewConfigYaml')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ yaml: 'lora_rank: 32\n' })
+    renderPanel({ lora_rank: 32 })
+
+    expect(await screen.findByText(/YAML 预览更新失败/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+
+    await waitFor(
+      () => expect(document.querySelector('pre')?.textContent).toContain('lora_rank: 32'),
+      { timeout: 2000 },
+    )
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/YAML 预览更新失败/)).not.toBeInTheDocument()
   })
 
   it('shows the hint when provided', async () => {

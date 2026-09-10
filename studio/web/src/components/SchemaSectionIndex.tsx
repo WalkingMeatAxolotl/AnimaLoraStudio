@@ -61,18 +61,20 @@ export default function SchemaSectionIndex({
   const onJump = (key: string) => {
     const el = document.getElementById(`schema-group-${key}`)
     if (!el) return
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' })
     setActive(key)
   }
 
   if (groups.length === 0) return null
 
   return (
-    <nav className="flex flex-col gap-0.5">
+    <nav className="flex flex-col gap-0.5" aria-label={t('settings.pageIndex')}>
       <div className="caption mb-2 px-2">{t('settings.pageIndex')}</div>
       {groups.map((g) => (
         <button
           key={g.key}
+          aria-current={active === g.key ? 'location' : undefined}
           onClick={() => onJump(g.key)}
           className={`text-left text-xs px-2 py-1.5 rounded-sm transition-colors border-l-2 bg-transparent ${
             active === g.key
