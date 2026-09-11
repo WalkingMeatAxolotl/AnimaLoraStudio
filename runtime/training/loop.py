@@ -21,6 +21,7 @@ from studio.infrastructure.log_messages import msg
 from training.context import TrainingContext
 from training.loss_weighting import compute_loss_weight
 from training.noise import make_noise, noise_params_from_args
+from training.observation import TrainingObserver
 from training.observability import render_curve_panel
 from training.sample_runner import run_sample
 from training.snapshot import (
@@ -253,9 +254,11 @@ class _BucketSwitchCacheRelease:
         )
 
 
-def run(ctx: TrainingContext) -> None:
+def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
+    if observer is not None:
+        observer.loop_started(ctx)
 
     step_start_time = time.perf_counter()
 
@@ -449,6 +452,8 @@ def run(ctx: TrainingContext) -> None:
             sra_align_loss_log = None
             sra_weighted_loss_log = None
             sra_effective_weight_log = None
+            if observer is not None:
+                observer.forward_started(ctx, batch_size=bs)
             with torch.autocast("cuda", dtype=ctx.dtype):
                 if navit_latents is not None:
                     # ── NaViT / Patch-n-Pack 块对角打包路径 ──
@@ -650,6 +655,9 @@ def run(ctx: TrainingContext) -> None:
                 else:
                     loss.backward()
 
+            if observer is not None:
+                observer.backward_finished(ctx, loss_is_finite=loss_is_finite)
+
             if is_group_end:
                 nan_stats["epoch_steps_total"] += 1
                 # 组内所有 micro-batch 都被跳过 → 无梯度可结算：不 step、不推进
@@ -657,6 +665,8 @@ def run(ctx: TrainingContext) -> None:
                 # fp16 下 GradScaler 对空梯度组 step 会直接 assert 崩）。
                 if not any(p.grad is not None for p in ctx.trainable_params):
                     _note_skipped_step()
+                    if observer is not None:
+                        observer.optimizer_step_finished(ctx, reason="no_gradients")
                     continue
                 if ctx.scaler is not None:
                     ctx.scaler.unscale_(ctx.optimizer)
@@ -678,6 +688,8 @@ def run(ctx: TrainingContext) -> None:
                     ctx.optimizer.zero_grad()
                     if ctx.scaler is not None:
                         ctx.scaler.update()
+                    if observer is not None:
+                        observer.optimizer_step_finished(ctx, reason="nonfinite_gradients")
                     continue
 
                 if ctx.grad_clip > 0:
@@ -694,6 +706,8 @@ def run(ctx: TrainingContext) -> None:
                 nan_stats["consecutive_skipped"] = 0
                 nan_stats["error_emitted"] = False
                 ctx.global_step += 1
+                if observer is not None:
+                    observer.optimizer_step_finished(ctx, reason="updated")
 
                 # 自适应采样器：刷新采样分布；baseline 是 no-op
                 ctx.timestep_sampler.maybe_refresh(ctx.global_step)
@@ -989,3 +1003,6 @@ def run(ctx: TrainingContext) -> None:
         # 检查 max_steps
         if args.max_steps and ctx.global_step >= args.max_steps:
             break
+
+    if observer is not None:
+        observer.loop_finished(ctx)

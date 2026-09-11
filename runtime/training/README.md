@@ -1,10 +1,13 @@
 # `runtime/training/` — 训练流水线包
 
-`anima_train.py` 调起的训练全流程实现。ADR 0003 把原 2901 行单文件拆成本子包，**main()** 现在只保留 phase 编排：
+`anima_train.py` 调起的训练全流程实现。ADR 0003 把原 2901 行单文件拆成本子包；**main()** 解析参数后调用唯一的 `run_training(args, observer=None)` 编排：
 
 ```python
 def main():
-    args = parse_args()
+    run_training(parse_args())
+
+# run_training 的 phase 顺序（默认 observer=None）：
+def run_training(args, *, observer=None):
     ctx = TrainingContext(args=args)
     phases.bootstrap.run(ctx)
     phases.models.run(ctx)
@@ -129,6 +132,23 @@ phases.finalize.run(ctx)               ──  final save + cleanup
 ```
 
 **ctx 是单一可变状态包**，phase 函数签名都是 `run(ctx: TrainingContext) -> None`，in-place 改 ctx 上的字段。不返回值，不要做 `ctx = phase.run(ctx)` 模式。
+
+## 可选边界观察（嵌入式调用）
+
+`observation.py:TrainingObserver` 是通用同步通知契约，不是 adapter/plugin 调度。
+`anima_train.run_training(args, observer=...)` 和 `loop.run(ctx, observer=...)`
+只在 observer 非 None 时通知 phase、loop、共享 F/B 和 optimizer update 边界；
+默认不创建计时器、同步、hooks、profiler 或新状态字段，只有少量空值分支。
+CLI `main()` 签名、re-export、phase 顺序和原训练控制流不变。
+
+- F/B 范围从共享 autocast 前到 backward/非有限 loss 跳过之后，**不含**前置
+  dataloader、VAE/文本编码、标准路径噪声准备，也不含 optimizer。
+- `optimizer_step_finished(reason=...)` 区分 `updated`、`no_gradients`、
+  `nonfinite_gradients`；成功通知在 global_step 增加后，累积尾组仍由原 loop 判定。
+- observer 不得修改 ctx、tensor、RNG 或控制流。异常传播；中断不伪造 finished。
+  hooks 等调用方资源必须自行 finally 清理。
+- 时钟/CUDA同步/隐私白名单/结果持久化全部留在 tools，不向 runtime 反向导入。
+  使用者见 [LyCORIS eager 基准](../../docs/user-guide/lycoris-benchmark.md)。
 
 ## 加变体：3-4 步本地操作
 
