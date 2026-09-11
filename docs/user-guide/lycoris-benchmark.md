@@ -2,7 +2,31 @@
 
 此工具为 issue #567 的 eager 基线提供可重放证据，不是性能优化或训练质量评估。
 固定 **LyCORIS 4.0.0 / resolved backend `torch`**，拒绝 auto/compile/Triton/TileLang，
-不探测执行后回退，不安装依赖、不修改生产 dtype/bypass/算法。生产 CLI 默认不采集。
+不安装依赖、不修改生产 dtype/bypass/算法。生产 CLI 默认不采集基准数据；生产训练对
+显式 optional backend 的启动前检查见下一节。
+
+## 生产训练的 optional backend preflight（R2）
+
+未设置 `LYCORIS_KERNEL_BACKEND` 时仍固定为 `torch`，不会启动 probe 子进程。显式设置
+`auto`、`triton`、`tilelang` 或 `compile` 时，LoRA/LoKr/LoHa 训练会在加载大 DiT 和父进程
+首次导入 LyCORIS 前启动一次隔离子进程：使用当前训练 dtype、算法和 DoRA/FP8 路径，
+通过生产 `LycorisAdapter` 执行一个有界的 64×64 CUDA forward/backward，并检查输出、
+输入梯度及全部 adapter 梯度有限。`tlora_use_ortho=false` 的兼容 T-LoRA 也走相同启动
+检查，避免不可用 backend 在 LyCORIS 注入日志解析时才报错；默认 Ortho T-LoRA 不需要。
+
+probe 有 120 秒硬超时，不写跨进程缓存。缺少 backend/DLL、导入或编译失败、CUDA
+不可用、异常/非有限梯度、超时或无效 worker 响应都会令**本次训练进程**把 backend 改回
+`torch`，并只记录一条包含 requested/configured/reason 的汇总诊断；子进程 stderr 不复制
+到训练日志。普通训练随后继续使用 eager 路径，不会等到第一批数据才暴露已知的
+`TritonMissing`。
+
+当前 Ortho 与默认的 Ortho T-LoRA 使用自己的 eager 数学路径，不导入 LyCORIS，因而
+不注册这项 probe。兼容 T-LoRA 虽使用 LyCORIS wrapper，但自定义 `make_weight` 不调用 v4
+fused dispatcher；其 probe 只验证 backend 可解析以及兼容注入/F/B，不代表获得 kernel
+加速。所有 probe 都只证明该代表性调用在当前 Python/Torch/CUDA/设备上可执行，
+**不证明所有真实 shape 都支持，也不证明每个训练算子实际使用 fused kernel**；真实训练
+中的 shape、OOM 或运行时错误仍会正常抛出，不能被 probe 吞掉。R2 不负责安装 optional
+kernel 依赖，安装和支持矩阵属于 roadmap R3/R4。
 
 ## 三种入口，不混称训练
 

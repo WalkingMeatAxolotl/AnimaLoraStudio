@@ -18,6 +18,23 @@ from typing import Any
 from training.adapters.protocol import AdapterProtocol
 
 
+def prepare(args, *, device: str, dtype, fp8_base: bool = False):
+    """Run the optional-kernel preflight before importing LyCORIS itself."""
+    from utils.lycoris_backend import prepare_lycoris_backend
+
+    return prepare_lycoris_backend(
+        algorithm=str(args.lora_type),
+        device=str(device),
+        dtype=str(dtype).removeprefix("torch."),
+        rank=int(args.lora_rank),
+        alpha=float(args.lora_alpha),
+        factor=int(args.lokr_factor),
+        weight_decompose=bool(getattr(args, "lora_dora", False)),
+        rs_lora=bool(getattr(args, "lora_rs", False)),
+        fp8_base=bool(fp8_base),
+    )
+
+
 def build(args, *, preset: dict[str, Any]) -> AdapterProtocol:
     """从 args 与显式 family preset 实例化 LycorisAdapter。"""
     from utils.lycoris_adapter import LycorisAdapter

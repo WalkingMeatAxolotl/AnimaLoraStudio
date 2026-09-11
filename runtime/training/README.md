@@ -150,6 +150,24 @@ CLI `main()` 签名、re-export、phase 顺序和原训练控制流不变。
 - 时钟/CUDA同步/隐私白名单/结果持久化全部留在 tools，不向 runtime 反向导入。
   使用者见 [LyCORIS eager 基准](../../docs/user-guide/lycoris-benchmark.md)。
 
+## LyCORIS optional kernel preflight
+
+`phases.models.run()` 在解析模型路径后、加载大 DiT 前，通过 adapter registry 的
+`prepare_adapter(...)` 可选 hook 运行启动准备。LoRA/LoKr/LoHa 的 hook 调用
+`utils.lycoris_backend.prepare_lycoris_backend()`；默认 `torch` 直接返回，显式
+`auto/triton/tilelang/compile` 则在隔离子进程做生产 wrapper 的代表性 CUDA
+forward/backward。失败或超时只把当前训练进程回退到 `torch`，不把失败的编译器/CUDA
+状态带入正式训练。
+
+该 hook 不是算法 dispatch，也不进入 `AdapterProtocol` 的逐步训练接口。兼容
+`tlora_use_ortho=false` 路径同样通过 LyCORIS preparer 验证 backend 解析与注入；默认 Ortho
+T-LoRA 和普通 Ortho 不导入 LyCORIS，preparer 直接跳过。probe 无磁盘/跨任务缓存，每个
+opt-in 训练任务按自己的依赖、设备、dtype 与 adapter 路径重测一次；通过只代表
+preflight case 可执行，真实 shape 的运行时错误仍须正常传播。
+
+用户行为、失败分类和局限见
+[LyCORIS eager 基准](../../docs/user-guide/lycoris-benchmark.md#生产训练的-optional-backend-preflightr2)。
+
 ## 加变体：3-4 步本地操作
 
 ### 加一个新 LoRA 变体（如 T-LoRA / OFT / VeRA）

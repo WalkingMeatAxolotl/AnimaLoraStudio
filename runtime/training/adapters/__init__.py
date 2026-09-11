@@ -16,8 +16,10 @@ from typing import Any, Callable
 from training.adapters import lycoris, ortho, tlora
 from training.adapters.protocol import AdapterProtocol, StepContext
 
-__all__ = ["AdapterProtocol", "StepContext", "BUILDERS", "build_adapter",
-           "validate_schema_consistency"]
+__all__ = [
+    "AdapterProtocol", "StepContext", "BUILDERS", "PREPARERS",
+    "build_adapter", "prepare_adapter", "validate_schema_consistency",
+]
 
 
 # 单一 truth source：所有 adapter 工厂的注册表
@@ -28,6 +30,25 @@ BUILDERS: dict[str, Callable[..., AdapterProtocol]] = {
     "ortho": ortho.build,
     "tlora": tlora.build,
 }
+
+# Optional setup hook.  Adapters backed by LyCORIS register here.  The
+# compatibility T-LoRA path needs backend resolution/injection preflight even
+# though its custom make_weight math does not use a fused dispatcher; its
+# preparer returns early when the Ortho implementation is selected.
+PREPARERS: dict[str, Callable[..., Any]] = {
+    "lokr": lycoris.prepare,
+    "loha": lycoris.prepare,
+    "lora": lycoris.prepare,
+    "tlora": tlora.prepare,
+}
+
+
+def prepare_adapter(args, *, device: str, dtype, fp8_base: bool = False):
+    """Run an adapter-specific preflight before large model loading/injection."""
+    prepare = PREPARERS.get(getattr(args, "lora_type", None))
+    if prepare is None:
+        return None
+    return prepare(args, device=device, dtype=dtype, fp8_base=fp8_base)
 
 
 def build_adapter(args, *, preset: dict[str, Any]) -> AdapterProtocol:
