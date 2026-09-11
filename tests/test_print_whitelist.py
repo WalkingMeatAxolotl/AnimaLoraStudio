@@ -29,6 +29,7 @@ WHITELIST: dict[str, set[str]] = {
     # 独立 CLI 工具的结果输出
     "utils/caption_utils.py": {"<__main__>"},
     # stdout 协议行
+    "utils/_lycoris_probe_worker.py": {"_emit"},
     "studio/workers/preprocess_worker.py": {"emit_event"},
 }
 

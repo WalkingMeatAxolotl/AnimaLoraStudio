@@ -45,7 +45,7 @@ PREPARERS: dict[str, Callable[..., Any]] = {
 
 def prepare_adapter(args, *, device: str, dtype, fp8_base: bool = False):
     """Run an adapter-specific preflight before large model loading/injection."""
-    prepare = PREPARERS.get(args.lora_type)
+    prepare = PREPARERS.get(getattr(args, "lora_type", None))
     if prepare is None:
         return None
     return prepare(args, device=device, dtype=dtype, fp8_base=fp8_base)

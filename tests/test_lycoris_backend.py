@@ -351,9 +351,16 @@ def test_adapter_registry_prepares_only_kernel_backed_algorithms(
         dtype="bfloat16",
         fp8_base=False,
     )
+    missing = adapters.prepare_adapter(
+        argparse.Namespace(),
+        device="cpu",
+        dtype="float32",
+        fp8_base=False,
+    )
 
     assert result == "decision"
     assert skipped is None
+    assert missing is None
     assert calls == [("lora", {"device": "cuda", "dtype": "bfloat16", "fp8_base": False})]
 
 
