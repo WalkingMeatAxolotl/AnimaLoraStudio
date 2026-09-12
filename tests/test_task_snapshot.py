@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from studio import db, server
@@ -44,6 +45,50 @@ def test_freeze_config_creates_file(isolated, tmp_path: Path) -> None:
     assert dst == task_snapshot.snapshot_config_path(7)
     assert dst.exists()
     assert dst.read_text(encoding="utf-8") == "lr: 0.001\nbatch_size: 4\n"
+
+
+def test_freeze_training_config_materializes_random_seeds(
+    isolated, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = tmp_path / "training.yaml"
+    src.write_text(
+        "seed: 0\nsample_seed: 0\neval_validation_split_seed: 0\nepochs: 1\n",
+        encoding="utf-8",
+    )
+    values = iter((101, 202, 303))
+    monkeypatch.setattr(task_snapshot, "_new_random_seed", lambda: next(values))
+
+    dst = task_snapshot.freeze_training_config(11, src)
+    frozen = yaml.safe_load(dst.read_text(encoding="utf-8"))
+
+    assert frozen == {
+        "seed": 101,
+        "sample_seed": 202,
+        "eval_validation_split_seed": 303,
+        "epochs": 1,
+    }
+    assert "seed: 0" in src.read_text(encoding="utf-8")
+
+
+def test_freeze_training_config_keeps_explicit_seeds(
+    isolated, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = tmp_path / "training.yaml"
+    src.write_text(
+        "seed: 7\nsample_seed: 8\neval_validation_split_seed: 9\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        task_snapshot, "_new_random_seed",
+        lambda: pytest.fail("explicit seeds must not be replaced"),
+    )
+
+    frozen = task_snapshot.freeze_training_config(12, src)
+    assert yaml.safe_load(frozen.read_text(encoding="utf-8")) == {
+        "seed": 7,
+        "sample_seed": 8,
+        "eval_validation_split_seed": 9,
+    }
 
 
 def test_freeze_config_overwrites_existing(isolated, tmp_path: Path) -> None:

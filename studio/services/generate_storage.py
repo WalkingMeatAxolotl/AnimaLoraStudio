@@ -442,6 +442,26 @@ def flush_disk_store_summary(task_id: int, total: Optional[int] = None) -> None:
     )
 
 
+def _record_resolved_seed(task_id: int, seed: int) -> None:
+    """Replace a task's ``0`` sentinel with the seed actually used by daemon."""
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+        raw = (task or {}).get("generate_params")
+        if not raw:
+            return
+        try:
+            params = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(params, dict) or int(params.get("seed") or 0) != 0:
+            return
+        params["seed"] = int(seed)
+        db.update_task(
+            conn, task_id,
+            generate_params=json.dumps(params, ensure_ascii=False),
+        )
+
+
 def handle_image_done(
     task_id: int,
     filename: str,
@@ -453,9 +473,14 @@ def handle_image_done(
     save_to_disk: bool,
 ) -> None:
     """daemon reader 线程调(cache put 之后)。快路径同步、慢路径入 executor。"""
+    resolved_seed = int(snapshot.get("seed") or 0)
+    if resolved_seed:
+        _record_resolved_seed(task_id, resolved_seed)
     if not save_to_disk:
         # temp:图只活在加密 cache,台账记 filename(session 结束 → 已释放)
         item: dict[str, Any] = {"cache": filename}
+        if resolved_seed:
+            item["seed"] = resolved_seed
         if mode == "xy" and xy_info is not None:
             item["xi"] = int(xy_info.get("xi", 0))
             item["yi"] = int(xy_info.get("yi", 0))
@@ -513,7 +538,11 @@ def _write_single(
     idx = next_image_index(target_dir, "single")
     target = target_dir / f"{DISPLAY_LABELS['single']} {idx}.png"
     atomic_write_png(target, payload)
-    _append_image(task_id, {"file": _rel_posix(target), "src": filename})
+    item: dict[str, Any] = {"file": _rel_posix(target), "src": filename}
+    resolved_seed = int(snapshot.get("seed") or 0)
+    if resolved_seed:
+        item["seed"] = resolved_seed
+    _append_image(task_id, item)
     return target
 
 
@@ -541,9 +570,13 @@ def _write_xy_cell(
     payload = inject_png_metadata(data, enriched, mode="single", external=external)
     target = folder / f"cell x{xi} y{yi}.png"
     atomic_write_png(target, payload)
-    _append_image(
-        task_id, {"file": _rel_posix(target), "src": filename, "xi": xi, "yi": yi},
-    )
+    item: dict[str, Any] = {
+        "file": _rel_posix(target), "src": filename, "xi": xi, "yi": yi,
+    }
+    resolved_seed = int(snapshot.get("seed") or 0)
+    if resolved_seed:
+        item["seed"] = resolved_seed
+    _append_image(task_id, item)
     return target
 
 

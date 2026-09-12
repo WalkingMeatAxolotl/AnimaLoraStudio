@@ -169,13 +169,18 @@ class TrainingContext:
         else:
             getattr(_emit_logger, level, _emit_logger.info)(msg)
 
-    def get_next_sample_prompt(self) -> str:
-        """取下一个采样提示词（轮换；sample_prompts 为空则返回默认）。"""
+    def get_next_sample(self) -> tuple[str, int]:
+        """Return the next rotating prompt and its stable seed offset."""
         if not self.sample_prompts:
-            return "1girl, masterpiece"
-        prompt = self.sample_prompts[self.sample_prompt_idx % len(self.sample_prompts)]
+            return "1girl, masterpiece", 0
+        prompt_index = self.sample_prompt_idx % len(self.sample_prompts)
+        prompt = self.sample_prompts[prompt_index]
         self.sample_prompt_idx += 1
-        return prompt
+        return prompt, prompt_index
+
+    def get_next_sample_prompt(self) -> str:
+        """Backward-compatible prompt-only wrapper."""
+        return self.get_next_sample()[0]
 
     def handle_interrupt(self, sig, frame) -> None:
         """Pause / Ctrl+C 信号处理（ADR 0006 Addendum 1 方案 Δ）：Pause = Cancel + 立即释放 GPU。

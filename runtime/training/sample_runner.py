@@ -39,7 +39,7 @@ def run_sample(
     - 异常兜底：sample 出错不应中断训练，只 log warn
     - wandb：wandb_key 传入则 log_image；caption / step 也传过去
     - monitor_state.json：永远尝试 push sample_path 给前端预览
-    - seed_offset：baseline 模式下用 i 偏移让多 prompt 测出不同图
+    - seed_offset：多 prompt 用稳定 index 偏移，使同一 prompt 的 baseline / 后续采样共享噪声
 
     sample_path 必须由 caller 决定（baseline 编号 / step / epoch 不在本函数判断）。
     """
