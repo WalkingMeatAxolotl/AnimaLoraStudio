@@ -14,6 +14,10 @@
   xformers：               GET /api/xformers/status
                            POST /api/xformers/install      pip 直装（要重启）
 
+  triton：                 GET /api/triton/status         受支持矩阵 + 安装状态
+                           POST /api/triton/install        精确 pin、--no-deps 安装
+                           DELETE /api/triton/install      卸载 Triton（要重启）
+
   llm-tagger admin：       POST /api/llm-tagger/models/refresh  拉 /models 写 preset.model_ids
                            POST /api/llm-tagger/test            连通性测试（不写 secrets）
 
@@ -40,6 +44,7 @@ from ...services.runtime import (
     onnxruntime as onnxruntime_setup,
     pending_install,
     torch as torch_setup,
+    triton as triton_setup,
     xformers as xformers_setup,
 )
 
@@ -269,6 +274,33 @@ def xformers_install() -> dict[str, Any]:
     """
     try:
         return xformers_setup.install()
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+# Triton runtime --------------------------------------------------------
+
+
+@router.get("/api/triton/status")
+def triton_status() -> dict[str, Any]:
+    """返回受审计 Triton 制品、环境兼容性与待重启状态。"""
+    return triton_setup.current_status()
+
+
+@router.post("/api/triton/install")
+def triton_install() -> dict[str, Any]:
+    """安装/修复精确 pin 的平台 Triton wheel，不解析或替换 Torch 依赖。"""
+    try:
+        return triton_setup.install()
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@router.delete("/api/triton/install")
+def triton_uninstall() -> dict[str, Any]:
+    """卸载 Triton 发行包；普通 eager Torch 训练保持可用。"""
+    try:
+        return triton_setup.uninstall()
     except RuntimeError as exc:
         raise HTTPException(500, str(exc)) from exc
 

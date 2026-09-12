@@ -224,6 +224,47 @@ def test_torch_reinstall_invalid_target_returns_400(
     assert body["error"]["details"]["target"] == "xpu"
 
 
+def test_triton_routes_proxy_runtime_service(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.services.runtime import triton as triton_setup
+
+    status = {
+        "state": "available", "installed": True, "available": True,
+        "installed_packages": {"triton-windows": "3.8.0.post28"},
+        "package": "triton-windows", "version": "3.8.0.post28",
+        "expected_package": "triton-windows", "expected_version": "3.8.0.post28",
+        "compatible": True, "reason": "available", "restart_required": False,
+        "environment": {"supported": True},
+    }
+    monkeypatch.setattr(triton_setup, "current_status", lambda: status)
+    monkeypatch.setattr(
+        triton_setup, "install", lambda: {**status, "restart_required": True},
+    )
+    monkeypatch.setattr(
+        triton_setup, "uninstall",
+        lambda: {**status, "installed": False, "available": False},
+    )
+
+    assert client.get("/api/triton/status").json()["available"] is True
+    assert client.post("/api/triton/install").json()["restart_required"] is True
+    assert client.delete("/api/triton/install").json()["installed"] is False
+
+
+def test_triton_install_failure_returns_500(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.services.runtime import triton as triton_setup
+
+    monkeypatch.setattr(
+        triton_setup, "install",
+        lambda: (_ for _ in ()).throw(RuntimeError("unsupported Triton environment")),
+    )
+    response = client.post("/api/triton/install")
+    assert response.status_code == 500
+    assert "unsupported Triton environment" in response.json()["error"]["message"]
+
+
 def test_flash_attention_status_returns_env_and_candidates(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -57,6 +57,15 @@ def test_explicit_backend_override_is_preserved(
     assert lycoris_backend.os.environ["LYCORIS_KERNEL_BACKEND"] == "triton"
 
 
+def test_explicit_config_backend_overrides_ambient_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYCORIS_KERNEL_BACKEND", "auto")
+
+    assert lycoris_backend.configure_lycoris_backend("torch") == "torch"
+    assert lycoris_backend.os.environ["LYCORIS_KERNEL_BACKEND"] == "torch"
+
+
 def test_backend_normalizes_case_and_whitespace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -153,6 +162,28 @@ def test_safe_default_does_not_start_probe_process(
 
     assert decision.status == "safe_default"
     assert decision.configured == "torch"
+
+
+def test_triton_policy_falls_back_before_probe_for_unsupported_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        lycoris_backend,
+        "_run_probe_process",
+        lambda *args, **kwargs: pytest.fail("policy rejection must not spawn a probe"),
+    )
+
+    unsupported = _prepare(requested_backend="triton", algorithm="lokr")
+    assert unsupported.reason == "unsupported_algorithm"
+    assert unsupported.configured == "torch"
+
+    dora = _prepare(requested_backend="triton", weight_decompose=True)
+    assert dora.reason == "dora_not_supported"
+    assert dora.configured == "torch"
+
+    dropout = _prepare(requested_backend="triton", rank_dropout=0.1)
+    assert dropout.reason == "dropout_not_supported"
+    assert dropout.configured == "torch"
 
 
 def test_successful_probe_preserves_requested_backend(
@@ -402,6 +433,10 @@ def test_lycoris_preparer_forwards_effective_training_path(
         "weight_decompose": True,
         "rs_lora": False,
         "fp8_base": True,
+        "requested_backend": None,
+        "dropout": 0.0,
+        "rank_dropout": 0.0,
+        "module_dropout": 0.0,
     }
 
 
