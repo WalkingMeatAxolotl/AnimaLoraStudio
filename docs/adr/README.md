@@ -24,7 +24,7 @@
 | 0016 | [分阶段升级 LyCORIS v4 并隔离实验性 kernel backend](0016-adopt-lycoris-v4-with-safe-kernel-rollout.md) | Accepted（eager 基线已落地） | 2026-09-04 |
 | 0017 | [分离 LLM 预设、用户设置与服务凭证的持久化边界](0017-split-llm-preset-settings-credentials.md) | Proposed | 2026-09-06 |
 | 0018 | [用提案式 ONNX 检测生成可撤销的头部空间遮罩](0018-proposal-based-auto-head-mask.md) | Accepted | 2026-09-06 |
-| 0019 | [在 stable 升级前开放受限的 Triton 实验通道](0019-restricted-triton-opt-in.md) | Proposed | 2026-09-12 |
+| 0019 | [在 stable 升级前开放受限的 Triton 实验通道](0019-restricted-triton-opt-in.md) | Accepted | 2026-09-12 |
 | 0020 | [在任务边界解析随机种子并冻结比较组](0020-task-scoped-random-seeds.md) | Accepted | 2026-09-12 |
 
 ## 状态值

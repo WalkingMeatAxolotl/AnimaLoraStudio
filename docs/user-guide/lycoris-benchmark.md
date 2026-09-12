@@ -1,4 +1,4 @@
-# LyCORIS eager 基准（R1，开发者 CLI）
+# LyCORIS 基准（R1 eager 基线与 R5 后端对照，开发者 CLI）
 
 此工具为 issue #567 的 eager 基线提供可重放证据，不是性能优化或训练质量评估。
 固定 **LyCORIS 4.0.0 / resolved backend `torch`**，拒绝 auto/compile/Triton/TileLang，
@@ -41,10 +41,85 @@ kernel 依赖，安装和支持矩阵属于 roadmap R3/R4。
   self k/v/output 与 cross q/output 的等形层未逐个测量，AdaLN/完整 attention 未测。
 - `replay`：校验某个合成 reference，精确恢复 input、base、完整 adapter state、
   cotangent，再比较 output、input-gradient、每个 trainable adapter gradient。
-- `train`：**Anima LoRA 或 LoKr + 工具生成 RGB 图片和公开合成 captions**，通过
-  原 `anima_train.run_training` 唯一 pipeline 训练。不是自写训练循环，且不接用户数据。
-  Krea2/FP8、原生 TLoRA、DoRA 新矩阵和任何 optional kernel 执行不在 R1 范围。
-  项目已有 TLoRA/DoRA/bypass/resume regression 仍须作为验收门禁。
+- `train`：通过原 `anima_train.run_training` 唯一 pipeline，以**工具生成 RGB 图片和公开合成 captions**
+  训练；不是自写训练循环，且不接用户数据。schema v1 覆盖 R1 的 Anima LoRA/LoKr eager
+  基线；schema v2 覆盖 R5 的 Anima LoRA/LoHa Torch/Triton 受控对照。Krea2/FP8、原生
+  TLoRA、DoRA 新矩阵仍不在此工具的当前训练范围，相关 regression 仍须作为验收门禁。
+
+## R5 Torch/Triton 受控对照
+
+R5 使用两份除 `backend` 外逐字段相同的 version=2 配置：
+
+- `tools/benchmark_configs/lycoris_r5_torch_v2.json`
+- `tools/benchmark_configs/lycoris_r5_triton_v2.json`
+
+固定 Anima 512px、bf16、SDPA、batch/grad_accum=1、rank8/alpha4、AdamW 1e-4，
+仅覆盖 LoRA/LoHa；DoRA 及三种 dropout 均为 0。每条件 5 个全新进程，每进程 5 个成功
+update warmup + 20 个成功 update 连续测量。R5 将一次 F/B、CUDA profiler 和 dispatcher
+诊断放在 warmup 内，并在测量边界移除 shape/dispatcher hooks；headline 窗口不逐步同步，
+仍包含 fetch、encode、optimizer、监控和窗口内 epoch IO。
+
+安装 Triton 并重启 Studio 后，分别为每个算法创建两个全新仓库外目录：
+
+```powershell
+# LoRA Torch；LoHa 只需将 --scenario 改为 loha，并使用另一目录。
+.\venv\Scripts\python.exe tools/benchmark_lycoris.py train `
+  --config tools/benchmark_configs/lycoris_r5_torch_v2.json --scenario lora --device cuda `
+  --transformer $env:BENCH_TRANSFORMER --vae $env:BENCH_VAE `
+  --text-encoder $env:BENCH_TEXT_ENCODER --t5-tokenizer $env:BENCH_T5_TOKENIZER `
+  --output $env:R5_LORA_TORCH
+
+# LoRA Triton；LoHa 同理使用独立目录。
+.\venv\Scripts\python.exe tools/benchmark_lycoris.py train `
+  --config tools/benchmark_configs/lycoris_r5_triton_v2.json --scenario lora --device cuda `
+  --transformer $env:BENCH_TRANSFORMER --vae $env:BENCH_VAE `
+  --text-encoder $env:BENCH_TEXT_ENCODER --t5-tokenizer $env:BENCH_T5_TOKENIZER `
+  --output $env:R5_LORA_TRITON
+```
+
+生产 preflight 若回退、最终 runtime backend 不一致，或 warmup 观测到的 dispatcher 不是
+所请求 backend，worker 会失败，不能把 Torch 结果误标为 Triton。正确性复用 R1 的 Torch
+reference；Triton replay 必须使用 CUDA，且只允许 LoRA/LoHa bypass：
+
+```powershell
+.\venv\Scripts\python.exe tools/benchmark_lycoris.py replay --device cuda --backend triton `
+  --manifest $env:R1_REFERENCE_MANIFEST
+```
+
+两组完整结果通过固定规则比较并写入新的仓库外文件：
+
+```powershell
+.\venv\Scripts\python.exe tools/benchmark_lycoris.py compare `
+  --torch-result "$env:R5_LORA_TORCH/public/result.json" `
+  --triton-result "$env:R5_LORA_TRITON/public/result.json" `
+  --output $env:R5_LORA_COMPARISON
+```
+
+比较采用固定 seed 的 20,000 次独立 percentile bootstrap，报告全部 raw repeats、min/max、
+sample stdev、MAD、Triton/Torch 中位吞吐比及 95% CI。只有点估计至少 `1.05`、CI 下界
+大于 `1.0`、窗口峰值 reserved 显存比不超过 `1.05`，并且所有运行完整且 dispatcher
+一致，才标记为 candidate；否则保持 Torch 默认。首次 update、warmup、F/B 和 kernel sum
+只作为诊断，不替代端到端吞吐结论。冷启动摊销值用“首次 update 中位数差 ÷ 稳态每 update
+节省秒数”计算；若 Triton 没有稳态点估计收益，则明确记为不可摊销。该值不参与准入门槛。
+
+### 2026-09-12 R5 结果
+
+Windows / RTX 5090 / Torch 2.11.0+cu128 / Triton 3.8.0.post28 上完成 20 个
+全新进程（四个条件各 5 次），所有进程都完成 5 次预热与 20 次测量更新，参数保持有限
+且发生变化；每个 Torch/Triton 进程分别只观察到对应 backend 的 2,800 次 dispatch。
+
+| 算法 | Torch 中位数 | Triton 中位数 | Triton/Torch（95% CI） | 首次 update 中位数 |
+|---|---:|---:|---:|---:|
+| LoRA | 1.395 upd/s | 1.444 upd/s | 1.035×（0.988–1.050） | 7.53s → 19.10s |
+| LoHa | 1.060 upd/s | 1.047 upd/s | 0.988×（0.965–1.026） | 9.82s → 57.93s |
+
+两种算法的测量窗口峰值 reserved 显存比均为 1.00×。吞吐 MAD 为 LoRA Torch 0.0068 /
+Triton 0.0132 updates/s、LoHa Torch 0.0255 / Triton 0.0059 updates/s。按中位数点估计，
+LoRA 需约 477 个 update 才能摊销首次 update 多出的 11.57 秒，但其收益未通过稳定性门槛，
+该值仅是诊断；LoHa 因无稳态点估计收益而不可摊销。LoRA 点估计约提升 3.5%，
+但低于预注册的 5% 门槛且置信区间跨 1；LoHa 略慢。两者都判定
+`no_stable_gain`，因此保持 Torch 默认，不把 Triton 标为性能推荐项，也不继续扩展
+Krea 2 性能矩阵。Triton 仍保留为明确标注的受限实验选项。
 
 ## CPU 流程验证
 
@@ -135,7 +210,10 @@ workspace/
 监控路径会推导 samples/state 的 task 根，也绑定在 private run 根。
 运行不继承 WandB/Studio task ID/代理/token/PYTHONPATH，禁用 HF 联网和 telemetry、
 外部日志、auto-install；子进程缓存、home/temp 均指向 private。
-训练 worker 另用 Python audit hook 拒绝 socket connect/DNS 和外部 subprocess/installer。
+训练 worker 另用 Python audit hook 拒绝 socket connect/DNS 和任意未授权 subprocess/installer；
+schema v2 仅允许精确的仓库内 `_lycoris_probe_worker.py`、固定 Triton package 内的
+`ptxas(.exe)`（输入输出限于 private tmp），以及确认系统不存在时的 `rocm-sdk` 失败式
+backend 查询。
 这**不是 OS sandbox**：信任本地资产与仓库代码，不抵御原生扩展或并发恶意目录替换。
 不上传、不自动清理 workspace。确认磁盘空间（真实 epoch state 可很大）后再跑。
 
@@ -151,7 +229,8 @@ workspace/
   两边界间的 dataloader fetch、TE/VAE、累积、optimizer、监控和 epoch IO；不含 setup、
   finalize、最后 update 后的尾部 IO（单独报告 loop_tail）。不使用日志 EMA 或倒数均值。
   throughput 不装 shape hooks/profiler、不做每步 F/B 同步。只在首步、warmup/终点等
-  边界同步。首次成功 update latency 包含第一批 fetch，另列 phase/process wall。
+  边界同步。首次成功 update latency 包含第一批 fetch，另列 phase/process wall。R5 的
+  shape/dispatcher/F/B/kernel 诊断只发生在 warmup，并在 headline 窗口前移除或关闭。
 - **F/B diagnostic**：单独 pass，在共享 autocast 前至 backward/非有限 loss 跳过后的
   边界同步；含模型+loss+backward及有限性检查，不含 optimizer、前置文本/VAE/噪声准备。
   不是 adapter-only 时间。记录 backward 是否真正执行；grad_accum 的每个 microbatch
