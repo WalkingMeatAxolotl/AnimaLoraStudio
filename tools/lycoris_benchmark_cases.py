@@ -10,7 +10,9 @@ import torch
 from safetensors.torch import load_file, save_file
 from torch import nn
 
-from tools.benchmark_lycoris import eager_backend, metadata, read_json, write_json
+from tools.benchmark_lycoris import (
+    activate_backend, eager_backend, metadata, read_json, runtime_backend, write_json,
+)
 
 TOLERANCES = {"float32": {"atol": 1e-5, "rtol": 1e-5},
               "bfloat16": {"atol": 0.02, "rtol": 0.02}}
@@ -63,8 +65,8 @@ def discover_cases(profile: str, resolution: int, text_tokens: int) -> list[Laye
     return cases
 
 
-def build_fixture(case: LayerCase, config: dict, device: str):
-    eager_backend()
+def build_fixture(case: LayerCase, config: dict, device: str, *, backend: str | None = None):
+    activate_backend(config, config["algorithm"], device, override=backend)
     from training.families.anima.preset import ANIMA_PRESET
     from utils.lycoris_adapter import LycorisAdapter
 
@@ -142,8 +144,12 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def save_reference(case, config, fixture, directory: Path) -> Path:
+def save_reference(case, config, fixture, directory: Path, *, backend: dict | None = None) -> Path:
     _, layer, adapter, x, cotangent = fixture
+    source_backend = backend or eager_backend()
+    if source_backend.get("resolved") != "torch":
+        raise ValueError("reference source must use the torch backend")
+    source_backend = {key: source_backend[key] for key in ("version", "requested", "resolved")}
     values = vector_jacobian(layer, adapter, x, cotangent)
     with torch.no_grad():
         base = torch.nn.functional.linear(x, layer.weight, layer.bias)
@@ -158,8 +164,8 @@ def save_reference(case, config, fixture, directory: Path) -> Path:
     payload = directory / "tensors.safetensors"
     save_file(values, str(payload))
     manifest = {
-        "schema_version": 1, "kind": "synthetic_layer_reference", "backend": eager_backend(),
-        "source_environment": metadata(str(x.device)),
+        "schema_version": 1, "kind": "synthetic_layer_reference", "backend": source_backend,
+        "source_environment": metadata(str(x.device), source_backend),
         "case": asdict(case), "experiment": config,
         "adapter": adapter_metadata(adapter), "tolerance": TOLERANCES[config["dtype"]],
         "loss": "sum(output.float * cotangent.float)", "file": payload.name,
@@ -170,7 +176,7 @@ def save_reference(case, config, fixture, directory: Path) -> Path:
     return path
 
 
-def replay_reference(path: Path, device: str) -> dict:
+def replay_reference(path: Path, device: str, *, backend: str = "torch") -> dict:
     from tools.benchmark_lycoris import validate_config
 
     manifest = read_json(path)
@@ -191,8 +197,10 @@ def replay_reference(path: Path, device: str) -> dict:
     case = next((c for c in candidates if json.loads(json.dumps(asdict(c))) == manifest["case"]), None)
     if case is None or manifest["tolerance"] != TOLERANCES[config["dtype"]]:
         raise ValueError("unknown shape/layout or tolerance")
-    if manifest["backend"] != eager_backend():
-        raise ValueError("reference backend/version mismatch")
+    if manifest["backend"] != {"version": "4.0.0", "requested": "torch", "resolved": "torch"}:
+        raise ValueError("reference source must be LyCORIS 4.0.0 torch")
+    if backend not in {"torch", "triton"}:
+        raise ValueError("replay backend must be torch or triton")
     payload = path.parent / manifest["file"]
     if payload.is_symlink() or file_hash(payload) != manifest["sha256"]:
         raise ValueError("reference hash mismatch")
@@ -201,7 +209,8 @@ def replay_reference(path: Path, device: str) -> dict:
         raise ValueError("reference inventory mismatch")
     validate_values({k: v for k, v in tensors.items() if k in {"input", "cotangent", "output", "input_gradient"}
                      or k.startswith("gradient.")})
-    fixture = build_fixture(case, config, device)
+    fixture = build_fixture(case, config, device, backend=backend)
+    target_backend = runtime_backend(backend)
     _, layer, adapter, x, cotangent = fixture
     expected = {"input": x, "cotangent": cotangent, "base.weight": layer.weight,
                 "output": cotangent, "input_gradient": x}
@@ -211,8 +220,16 @@ def replay_reference(path: Path, device: str) -> dict:
     expected.update({f"gradient.{k}": p for k, p in adapter.network.named_parameters() if p.requires_grad})
     if tensor_inventory({k: v.detach().cpu().contiguous() for k, v in expected.items()}) != manifest["tensors"]:
         raise ValueError("reference full key/shape/dtype mismatch")
-    if adapter_metadata(adapter) != manifest["adapter"]:
+    actual_adapter = adapter_metadata(adapter)
+    source_adapter = manifest["adapter"]
+    without_bypass = lambda rows: [{k: v for k, v in row.items() if k != "bypass"} for row in rows]
+    if without_bypass(actual_adapter) != without_bypass(source_adapter):
         raise ValueError("reference adapter path mismatch")
+    if backend == "torch" and actual_adapter != source_adapter:
+        raise ValueError("torch replay adapter metadata mismatch")
+    if backend == "triton" and (config["algorithm"] not in {"lora", "loha"}
+                                or not all(row["bypass"] for row in actual_adapter)):
+        raise ValueError("Triton replay must use LoRA/LoHa bypass")
     with torch.no_grad():
         layer.weight.copy_(tensors["base.weight"])
         if layer.bias is not None:
@@ -234,4 +251,5 @@ def replay_reference(path: Path, device: str) -> dict:
         base = torch.nn.functional.linear(x, layer.weight, layer.bias)
         if not torch.count_nonzero(actual["output"] - base):
             raise ValueError("replayed adapter is degenerate")
-    return {"schema_version": 1, "status": "passed", "kind": manifest["kind"], "errors": errors}
+    return {"schema_version": 1, "status": "passed", "kind": manifest["kind"],
+            "source_backend": manifest["backend"], "target_backend": target_backend, "errors": errors}

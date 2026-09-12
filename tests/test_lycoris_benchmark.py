@@ -14,12 +14,71 @@ from tools import benchmark_lycoris as bench
 from tools import lycoris_benchmark_cases as cases
 
 CONFIG = Path(__file__).resolve().parents[1] / "tools/benchmark_configs/lycoris_cpu_smoke_v1.json"
+R5_TORCH = Path(__file__).resolve().parents[1] / "tools/benchmark_configs/lycoris_r5_torch_v2.json"
+R5_TRITON = Path(__file__).resolve().parents[1] / "tools/benchmark_configs/lycoris_r5_triton_v2.json"
 
 
 @pytest.fixture
 def config(monkeypatch):
     monkeypatch.setenv("LYCORIS_KERNEL_BACKEND", "torch")
     return bench.validate_config(bench.read_json(CONFIG))
+
+
+def test_r5_configs_are_matched_and_preregistered():
+    torch_config = bench.validate_config(bench.read_json(R5_TORCH))
+    triton_config = bench.validate_config(bench.read_json(R5_TRITON))
+    assert torch_config["schema_version"] == triton_config["schema_version"] == 2
+    assert torch_config["backend"] == "torch" and triton_config["backend"] == "triton"
+    assert {k: v for k, v in torch_config.items() if k != "backend"} == {
+        k: v for k, v in triton_config.items() if k != "backend"
+    }
+    assert torch_config["algorithms"] == ["lora", "loha"]
+    assert (torch_config["repeats"], torch_config["warmup"], torch_config["measured"]) == (5, 5, 20)
+
+
+def test_bootstrap_ratio_and_comparison_gate(tmp_path):
+    base = bench.read_json(R5_TORCH)
+    trial = bench.read_json(R5_TRITON)
+    for backend, config, values, memory, first_update in (
+        ("torch", base, [1.0] * 5, 100, 3.0),
+        ("triton", trial, [1.1] * 5, 102, 5.0),
+    ):
+        public = tmp_path / backend
+        public.mkdir()
+        bench.write_json(public / "experiment.json", config)
+        rows = []
+        for algorithm in config["algorithms"][:1]:
+            for index, value in enumerate(values):
+                rows.append({
+                    "run_id": f"{algorithm}-0-r5-{index}", "status": "complete",
+                    "requested": {"algorithm": algorithm, "backend": backend},
+                    "dispatch_choices": {backend: 1},
+                    "training_it_s": {"value": value},
+                    "window_memory": {"peak_reserved": {"value": memory}},
+                    "first_update_seconds": {"value": first_update},
+                })
+        bench.write_json(public / "result.json", {"status": "complete", "runs": rows})
+    result = bench.compare_training_results(tmp_path / "torch/result.json", tmp_path / "triton/result.json")
+    assert result["decision"] == "candidate"
+    assert set(result["comparisons"]) == {"lora"}
+    assert all(value["accepted"] for value in result["comparisons"].values())
+    assert result["comparisons"]["lora"]["triton_over_torch"]["ci95"] == [1.1, 1.1]
+    assert result["comparisons"]["lora"]["throughput"]["torch"]["median_absolute_deviation"]["value"] == 0
+    assert result["comparisons"]["lora"]["triton_first_update_extra_seconds"]["value"] == 2
+    assert result["comparisons"]["lora"]["cold_start_amortization_updates"]["value"] == pytest.approx(22.0)
+
+
+def test_cold_start_amortization_reports_no_steady_savings():
+    result = bench.cold_start_amortization(1.0, 0.9, 3.0, 5.0)
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "no_steady_state_savings"
+
+
+def test_v2_rejects_unapproved_backend():
+    config = bench.read_json(R5_TRITON)
+    config["backend"] = "auto"
+    with pytest.raises(ValueError, match="torch or triton"):
+        bench.validate_config(config)
 
 
 @pytest.mark.parametrize("algorithm", ["lora", "lokr", "loha"])
@@ -47,6 +106,20 @@ def test_architecture_derived_shapes_and_layouts(profile, channels):
     assert discovered[1].input_shape == (1, 512, 1024)
     assert discovered[2].input_shape == (1, 1, 32, 32, channels)
     assert all(c.provenance == "architecture_derived_synthetic" for c in discovered)
+
+
+def test_cross_backend_replay_uses_torch_reference(tmp_path, config, monkeypatch):
+    experiment = {**config, "algorithm": "lora"}
+    case = cases.discover_cases("cpu-smoke", 512, 512)[0]
+    manifest = cases.save_reference(
+        case, experiment, cases.build_fixture(case, experiment, "cpu"), tmp_path / "cross-backend",
+    )
+    monkeypatch.setattr(cases, "activate_backend", lambda *args, **kwargs: {"resolved": "triton"})
+    monkeypatch.setattr(cases, "runtime_backend", lambda requested: {"requested": requested, "resolved": requested})
+    result = cases.replay_reference(manifest, "cpu", backend="triton")
+    assert result["status"] == "passed"
+    assert result["source_backend"]["resolved"] == "torch"
+    assert result["target_backend"]["resolved"] == "triton"
 
 
 @pytest.mark.parametrize("value", [{}, [], {"schema_version": 999}, {"unknown": 1}])

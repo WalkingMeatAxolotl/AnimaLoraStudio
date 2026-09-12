@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,11 @@ from tools import lycoris_benchmark_training as training
 @pytest.fixture
 def config():
     return bench.validate_config(bench.read_json(bench.REPO / "tools/benchmark_configs/lycoris_eager_v1.json"))
+
+
+@pytest.fixture
+def r5_config():
+    return bench.validate_config(bench.read_json(bench.REPO / "tools/benchmark_configs/lycoris_r5_torch_v2.json"))
 
 
 @pytest.fixture
@@ -93,6 +99,17 @@ def test_args_use_authoritative_normalization_and_isolated_paths(tmp_path, asset
         training.assert_safe_args(args, work)
 
 
+def test_r5_args_use_loha_backend_and_fixed_dropout(tmp_path, assets, r5_config):
+    work = training.create_workspace(tmp_path / "r5-work")
+    args = training.make_training_args(r5_config, assets, work, "loha")
+    assert args.lora_type == "loha" and args.lycoris_backend == "torch"
+    assert args.max_steps == 25
+    assert args.lora_dropout == args.lora_rank_dropout == args.lora_module_dropout == 0
+    assert args.lora_dora is False
+    with pytest.raises(ValueError):
+        training.make_training_args(r5_config, assets, work, "lokr")
+
+
 @pytest.mark.parametrize("key,value", [("sample_every", 1), ("attention_backend", "flash_attn"),
                                        ("blocks_to_swap", 1), ("mixed_precision", "fp16"), ("images", 0)])
 def test_training_profile_is_bounded(config, key, value):
@@ -105,6 +122,7 @@ def test_offline_no_external_logging_or_inherited_private_environment(tmp_path, 
     for key in ("WANDB_API_KEY", "LORA_TASK_ID", "PYTHONPATH", "HF_TOKEN", "HTTPS_PROXY", "ANIMA_TRACE_ID"):
         monkeypatch.setenv(key, "PRIVATE_CANARY")
     env = training.isolated_environment(tmp_path)
+    assert training.isolated_environment(tmp_path, backend="triton")["LYCORIS_KERNEL_BACKEND"] == "triton"
     assert "PRIVATE_CANARY" not in json.dumps(env)
     assert env["WANDB_MODE"] == "disabled" and env["WANDB_ENABLED"] == "0"
     assert env["HF_HUB_OFFLINE"] == env["TRANSFORMERS_OFFLINE"] == "1"
@@ -112,7 +130,50 @@ def test_offline_no_external_logging_or_inherited_private_environment(tmp_path, 
     for event in ("socket.connect", "socket.getaddrinfo", "subprocess.Popen", "os.system", "os.posix_spawn"):
         with pytest.raises(PermissionError):
             training.deny_network_and_processes(event, ())
+    probe = bench.REPO / "utils" / "_lycoris_probe_worker.py"
+    command = [sys.executable, str(probe)]
+    training.deny_network_and_processes("subprocess.Popen", (None, command, None, {}))
+    with pytest.raises(PermissionError):
+        training.deny_network_and_processes(
+            "subprocess.Popen", (None, command + ["--spoof"], None, {}),
+        )
     training.deny_network_and_processes("open", ())
+
+
+def test_triton_subprocess_allowlist_is_exact_and_temp_bounded(tmp_path, monkeypatch):
+    temporary = tmp_path / "tmp"
+    temporary.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temporary))
+    ptxas = tmp_path / ("ptxas.exe" if training.os.name == "nt" else "ptxas")
+    ptxas.write_bytes(b"trusted test fixture")
+    monkeypatch.setattr(training, "_trusted_ptxas_path", lambda: ptxas.resolve())
+
+    training.deny_network_and_processes(
+        "subprocess.Popen", (None, [str(ptxas), "--version"], None, None),
+    )
+    source = temporary / "kernel.ptx"
+    source.write_text("// synthetic")
+    command = [str(ptxas), "-lineinfo", "-v", "--regAllocOptLevel=2", "--gpu-name=sm_120a",
+               str(source), "-o", str(source) + ".o"]
+    training.deny_network_and_processes("subprocess.Popen", (None, command, None, None))
+
+    escaped = command[:-1] + [str(tmp_path / "escaped.ptx.o")]
+    with pytest.raises(PermissionError):
+        training.deny_network_and_processes("subprocess.Popen", (None, escaped, None, None))
+    with pytest.raises(PermissionError):
+        training.deny_network_and_processes(
+            "subprocess.Popen", (None, [str(tmp_path / "fake-ptxas"), "--version"], None, None),
+        )
+
+
+def test_rocm_discovery_only_allowed_when_executable_is_absent(monkeypatch):
+    command = (None, "rocm-sdk path --root", None, None)
+    monkeypatch.setattr(training.shutil, "which", lambda name: None)
+    training.deny_network_and_processes("subprocess.Popen", command)
+    monkeypatch.setattr(training.shutil, "which", lambda name: "C:/untrusted/rocm-sdk.exe")
+    with pytest.raises(PermissionError):
+        training.deny_network_and_processes("subprocess.Popen", command)
+
 
 
 class Clock:
@@ -159,6 +220,37 @@ def test_throughput_counts_successful_updates_not_attempts_or_ema(config):
     assert result["window_counts"] == {"microbatches": 7, "images": 11, "loss_skipped": 2, "skipped_groups": 2}
     assert result["loop_tail_seconds"]["value"] == 4
     assert result["fb_diagnostics"] == []
+
+
+def test_r5_observer_uses_warmup_diagnostics_without_timing_them(tmp_path, monkeypatch, r5_config):
+    r5_config.update(warmup=1, measured=2)
+    ctx = _make_ctx(tmp_path, [_batch() for _ in range(6)], monkeypatch)
+    monkeypatch.setattr(training, "runtime_backend", lambda requested: {"requested": requested, "resolved": requested})
+    monkeypatch.setattr(training.BenchmarkObserver, "_install_dispatch_observer", lambda self: None)
+    observer = training.BenchmarkObserver(r5_config, "r5", "cpu")
+    observer.dispatch_choices["torch"] = 1
+    loop_mod.run(ctx, observer=observer)
+    result = observer.result()
+    assert result["status"] == "complete" and result["training_it_s"]["value"] > 0
+    assert len(result["fb_diagnostics"]) == 2  # grad_accum=2, warmup only
+    assert result["kernel_unavailable"]["unavailable_reason"] == "cpu_no_cuda"
+    assert result["dispatch_choices"] == {"torch": 1}
+    assert result["backend"]["resolved"] == "torch"
+
+
+def test_r5_dispatch_observer_restores_modules(monkeypatch, r5_config):
+    from lycoris.functional import locon, loha
+
+    monkeypatch.setattr(locon, "choose", lambda *args, **kwargs: "triton")
+    monkeypatch.setattr(loha, "choose", lambda *args, **kwargs: "triton")
+    patched = {module: module.choose for module in (locon, loha)}
+    observer = training.BenchmarkObserver(r5_config, "r5", "cpu")
+    observer._install_dispatch_observer()
+    assert locon.choose(None) == loha.choose(None) == "triton"
+    assert observer.dispatch_choices == {"triton": 2}
+    observer.close()
+    assert locon.choose is patched[locon]
+    assert loha.choose is patched[loha]
 
 
 @pytest.mark.parametrize("mode", ["throughput", "fb", "kernel"])
