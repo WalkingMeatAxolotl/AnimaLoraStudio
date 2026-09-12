@@ -120,11 +120,17 @@ describe('Preprocess inpaint contracts', () => {
   })
 
   it('opens setup to explain the save prerequisite while unsaved edits block Start', async () => {
+    let finishWorkspace!: (value: { images: CropWorkspaceItem[] }) => void
+    vi.mocked(api.listCropWorkspaceTrain).mockReturnValue(new Promise((resolve) => {
+      finishWorkspace = resolve
+    }))
     const user = userEvent.setup()
     renderPage()
-    await screen.findByRole('group', { name: '涂抹工作集图片' })
+    expect(screen.getByText('加载工作集...')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Draw stroke' })).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Draw stroke' }))
+    await act(async () => finishWorkspace({ images: [image] }))
+    await user.click(await screen.findByRole('button', { name: 'Draw stroke' }))
     const autoMask = screen.getByRole('button', { name: '自动遮罩' })
     expect(autoMask).toBeEnabled()
     await user.click(autoMask)
@@ -136,10 +142,10 @@ describe('Preprocess inpaint contracts', () => {
   it('saves a mask-only edit without overwriting the source image', async () => {
     const user = userEvent.setup()
     renderPage()
-    await screen.findByRole('group', { name: '涂抹工作集图片' })
 
+    const drawStroke = await screen.findByRole('button', { name: 'Draw stroke' })
     await user.click(within(screen.getByRole('radiogroup', { name: '模式' })).getByRole('radio', { name: '训练遮罩' }))
-    await user.click(screen.getByRole('button', { name: 'Draw stroke' }))
+    await user.click(drawStroke)
     expect(screen.getByRole('button', { name: '保存当前图' })).toBeEnabled()
     expect(screen.getByRole('radio', { name: '待保存 1' })).toHaveAttribute('aria-checked', 'false')
 
