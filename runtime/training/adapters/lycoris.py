@@ -32,6 +32,10 @@ def prepare(args, *, device: str, dtype, fp8_base: bool = False):
         weight_decompose=bool(getattr(args, "lora_dora", False)),
         rs_lora=bool(getattr(args, "lora_rs", False)),
         fp8_base=bool(fp8_base),
+        requested_backend=getattr(args, "lycoris_backend", None),
+        dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),
+        rank_dropout=float(getattr(args, "lora_rank_dropout", 0.0) or 0.0),
+        module_dropout=float(getattr(args, "lora_module_dropout", 0.0) or 0.0),
     )
 
 

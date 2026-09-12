@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 240,
+  "count": 243,
   "routes": [
     {
       "path": "/",
@@ -1831,6 +1831,30 @@
         "GET"
       ],
       "name": "torch_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/triton/install",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "triton_uninstall",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/triton/install",
+      "methods": [
+        "POST"
+      ],
+      "name": "triton_install",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/triton/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "triton_status",
       "type": "APIRoute"
     },
     {

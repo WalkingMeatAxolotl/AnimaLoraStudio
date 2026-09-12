@@ -63,13 +63,19 @@ def _installed_version() -> str | None:
         return None
 
 
-def configure_lycoris_backend() -> str:
-    """Set the safe Studio default before any LyCORIS module is imported.
+def configure_lycoris_backend(requested_backend: str | None = None) -> str:
+    """Set the selected backend before any LyCORIS module is imported.
 
-    The environment variable is the upstream public configuration surface, so
-    an explicit valid value always wins.  Empty values are treated as unset.
+    Studio training configs pass ``requested_backend`` explicitly.  The
+    environment variable remains a compatibility surface for benchmarks and
+    third-party launchers when no config value is supplied.  Empty values use
+    the safe eager default.
     """
-    requested = os.environ.get(_ENV_NAME, "").strip().lower()
+    requested = (
+        str(requested_backend).strip().lower()
+        if requested_backend is not None
+        else os.environ.get(_ENV_NAME, "").strip().lower()
+    )
     if not requested:
         requested = _DEFAULT_BACKEND
     elif requested not in _VALID_BACKENDS:
@@ -233,6 +239,10 @@ def prepare_lycoris_backend(
     weight_decompose: bool = False,
     rs_lora: bool = False,
     fp8_base: bool = False,
+    requested_backend: str | None = None,
+    dropout: float = 0.0,
+    rank_dropout: float = 0.0,
+    module_dropout: float = 0.0,
     timeout_seconds: float = _DEFAULT_PROBE_TIMEOUT_SECONDS,
 ) -> LycorisBackendDecision:
     """Probe an explicit optional backend before the parent imports LyCORIS.
@@ -243,7 +253,7 @@ def prepare_lycoris_backend(
     """
     global _OPTIONAL_DECISION_REPORTED
 
-    requested = configure_lycoris_backend()
+    requested = configure_lycoris_backend(requested_backend)
     if requested == _DEFAULT_BACKEND:
         return _decision(
             requested=requested,
@@ -253,6 +263,22 @@ def prepare_lycoris_backend(
         )
     if requested not in _OPTIONAL_BACKENDS:  # defensive; configure validated it
         return _fallback_decision(requested, reason="invalid_backend")
+    # R4a deliberately supports only direct Triton LoRA/LoHa bypass.  Keeping
+    # these guards beside backend selection protects bare CLI/older snapshots
+    # even when they bypass TrainingConfig's declarative UI rules.
+    if requested == "triton":
+        if algorithm not in {"lora", "loha"}:
+            return _fallback_decision(
+                requested, reason="unsupported_algorithm", detail=algorithm,
+            )
+        if weight_decompose:
+            return _fallback_decision(requested, reason="dora_not_supported")
+        if any(float(value) != 0.0 for value in (
+            dropout, rank_dropout, module_dropout,
+        )):
+            return _fallback_decision(
+                requested, reason="dropout_not_supported",
+            )
     if str(device).split(":", 1)[0].lower() != "cuda":
         return _fallback_decision(requested, reason="cuda_unavailable")
     if algorithm not in {"lora", "lokr", "loha", "tlora"}:

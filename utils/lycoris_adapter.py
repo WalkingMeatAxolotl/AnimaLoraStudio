@@ -184,13 +184,14 @@ class LycorisAdapter:
         if self.rs_lora:
             extra["rs_lora"] = True
 
-        # algo='lora' (LoCon) 默认走 bypass_mode：lycoris LoConModule 默认 forward 会
-        # rebuild ΔW=up@down (out,in) 再多跑一次 F.linear，等于每层 ~2× FLOPs。
-        # bypass_mode=True 走 bypass_forward_diff = org_forward(x) + lora_up(lora_down(x))，
-        # 是 LoRA 论文 + sd-scripts + PEFT 的标准 forward；对外行为完全等价但 ~2× 快。
-        # DoRA(weight_decompose) 路径数学上必须 rebuild —— lycoris bypass forward 不走 wd
-        # 分支，会让 DoRA 静默失效；这里 guard。参考 lycoris docs/Network-Args.md "Bypass Mode"。
-        if self.algo == "lora" and not self.weight_decompose:
+        # LoRA always uses its established low-rank bypass.  The R4a Triton
+        # experiment additionally enables LoHa bypass only after the parent
+        # preflight preserved a direct ``triton`` decision.  DoRA must rebuild;
+        # LoKr/T-LoRA/Ortho stay on their existing paths.
+        if (
+            self.algo == "lora"
+            or (self.algo == "loha" and _LYCORIS_KERNEL_BACKEND == "triton")
+        ) and not self.weight_decompose:
             extra["bypass_mode"] = True
 
         # Krea2 FP8 checkpoints keep frozen Linear weights in float8 and

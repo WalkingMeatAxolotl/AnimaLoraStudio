@@ -1809,6 +1809,34 @@ export interface XformersInstallResult {
   restart_required: boolean
 }
 
+export interface TritonEnvironment {
+  platform: string
+  python_version: string
+  torch_version: string | null
+  torch_cuda_version: string | null
+  torch_cuda_available: boolean
+  supported: boolean
+  reason: string
+  expected_package: string | null
+  expected_version: string | null
+}
+
+export interface TritonStatus {
+  state: 'not_installed' | 'available' | 'incompatible' | 'restart_required'
+  installed: boolean
+  available: boolean
+  installed_packages: Record<string, string>
+  package: string | null
+  version: string | null
+  expected_package: string | null
+  expected_version: string | null
+  compatible: boolean
+  reason: string
+  restart_required: boolean
+  environment: TritonEnvironment
+  stdout_tail?: string
+}
+
 export type TaskStatus =
   'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused' | 'scheduled'
 
@@ -3409,6 +3437,13 @@ export const api = {
    *  当前 torch+cu 组合。装完必须重启 Studio（C extension 不能热替换）。 */
   installXformers: () =>
     req<XformersInstallResult>('/api/xformers/install', { method: 'POST' }),
+
+  // LyCORIS Triton 实验 backend（精确 pin、安装不解析 Torch 依赖） ---------
+  getTritonStatus: () => req<TritonStatus>('/api/triton/status'),
+  installTriton: () =>
+    req<TritonStatus>('/api/triton/install', { method: 'POST' }),
+  uninstallTriton: () =>
+    req<TritonStatus>('/api/triton/install', { method: 'DELETE' }),
 
   // PP7 — 训练集导出 / 导入 -----------------------------------------------
   /** 当前 version 的 train/ 打包 zip 直链。<a href download> 触发即可,

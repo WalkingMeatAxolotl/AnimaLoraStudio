@@ -77,13 +77,35 @@ def test_legacy_yaml_config_loads_with_only_old_fields():
     assert cfg.lora_dropout == 0.0
 
 
+def test_lycoris_backend_defaults_to_torch_and_allows_supported_triton() -> None:
+    assert TrainingConfig().lycoris_backend == "torch"
+    cfg = TrainingConfig(lora_type="loha", lycoris_backend="triton")
+    assert cfg.lycoris_backend == "triton"
+
+
+def test_triton_backend_rejects_unsupported_adapter_semantics() -> None:
+    import pytest
+
+    for payload in (
+        {"lora_type": "lokr", "lycoris_backend": "triton"},
+        {"lora_type": "ortho", "lycoris_backend": "triton"},
+        {"lora_type": "tlora", "lycoris_backend": "triton"},
+        {"lora_type": "lora", "lycoris_backend": "triton", "lora_dora": True},
+        {"lora_type": "lora", "lycoris_backend": "triton", "lora_dropout": 0.1},
+        {"lora_type": "lora", "lycoris_backend": "triton", "lora_rank_dropout": 0.1},
+        {"lora_type": "loha", "lycoris_backend": "triton", "lora_module_dropout": 0.1},
+    ):
+        with pytest.raises(Exception):
+            TrainingConfig(**payload)
+
+
 def test_new_fields_in_lora_group():
     """所有新字段归入 'lora' UI 分组"""
     schema = TrainingConfig.model_json_schema()
     props = schema["properties"]
     for f in (
         "lora_dora", "lora_rs", "lora_dropout", "lora_rank_dropout", "lora_module_dropout",
-        "tlora_min_rank", "tlora_alpha_rank_scale", "tlora_use_ortho",
+        "lycoris_backend", "tlora_min_rank", "tlora_alpha_rank_scale", "tlora_use_ortho",
     ):
         assert f in props, f"字段缺失: {f}"
         assert props[f].get("group") == "lora", f"{f} 不在 lora 分组"

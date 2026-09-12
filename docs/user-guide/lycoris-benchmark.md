@@ -7,6 +7,10 @@
 
 ## 生产训练的 optional backend preflight（R2）
 
+Studio 训练通过 `lycoris_backend` 字段显式选择后端，默认 `torch`，不启动 probe。
+受限的 Triton 安装与训练通道见 [Triton 实验性训练后端](triton-backend.md)。
+下面的环境变量入口保留给未传显式 backend 配置的底层调用和开发工具。
+
 未设置 `LYCORIS_KERNEL_BACKEND` 时仍固定为 `torch`，不会启动 probe 子进程。显式设置
 `auto`、`triton`、`tilelang` 或 `compile` 时，LoRA/LoKr/LoHa 训练会在加载大 DiT 和父进程
 首次导入 LyCORIS 前启动一次隔离子进程：使用当前训练 dtype、算法和 DoRA/FP8 路径，

@@ -272,8 +272,24 @@ class TrainingConfig(BaseModel):
             "lora",
             # option 级禁值（forbid，R2 v2）：navit 是 B=1 打包序列 + 逐图 t，
             # T-LoRA rank mask 按 batch 维匹配 timestep，维度不匹配
-            option_disable_when={"tlora": "navit_packing==true"},
-            disable_hint="T-LoRA 的 rank mask 按 batch 维匹配 timestep，与 NaViT 打包（B=1 逐图 t）不兼容",
+            option_disable_when={
+                "lokr": "lycoris_backend==triton",
+                "ortho": "lycoris_backend==triton",
+                "tlora": "navit_packing==true||lycoris_backend==triton",
+            },
+            disable_hint="Triton 实验路径首批只支持普通 LoRA / LoHa；LoKr、Ortho 与 T-LoRA 保持 Torch 路径",
+        ),
+    )
+    lycoris_backend: Literal["torch", "triton"] = Field(
+        "torch",
+        description="LyCORIS 计算后端。Torch 为默认稳定路径；Triton 为 LoRA / LoHa 的实验性 CUDA bypass，需先在设置 → 系统 → 环境安装，并在训练前通过能力探测",
+        json_schema_extra=_meta(
+            "lora",
+            advanced=True,
+            option_disable_when={
+                "triton": "lora_type==lokr||lora_type==ortho||lora_type==tlora||lora_dora==true",
+            },
+            disable_hint="Triton 实验路径仅支持非 DoRA 的 LoRA / LoHa；其他算法继续使用 Torch",
         ),
     )
     lora_rank: int = Field(
@@ -313,7 +329,13 @@ class TrainingConfig(BaseModel):
     lora_dora: bool = Field(
         False,
         description="DoRA：分解权重为方向 + 幅度独立训练；收敛通常更稳，显存略增",
-        json_schema_extra=_meta("lora", advanced=True),
+        json_schema_extra=_meta(
+            "lora",
+            advanced=True,
+            disable_when="lycoris_backend==triton",
+            disable_value=False,
+            disable_hint="DoRA 必须重建权重，与 Triton bypass 路径不兼容",
+        ),
     )
     lora_rs: bool = Field(
         False,
@@ -323,17 +345,32 @@ class TrainingConfig(BaseModel):
     lora_dropout: float = Field(
         0.0, ge=0.0, le=1.0,
         description="LoRA 输入特征的随机丢弃概率：越大正则化越强、收敛越慢；0 = 关闭",
-        json_schema_extra=_meta("lora", advanced=True),
+        json_schema_extra=_meta(
+            "lora", advanced=True,
+            disable_when="lycoris_backend==triton",
+            disable_value=0.0,
+            disable_hint="Triton 实验路径首版固定关闭所有 adapter dropout，避免未验证的随机执行路径",
+        ),
     )
     lora_rank_dropout: float = Field(
         0.0, ge=0.0, le=1.0,
         description="LoRA 内部 rank 维度的随机丢弃概率（每步随机激活部分 rank）：越大正则化越强；0 = 关闭",
-        json_schema_extra=_meta("lora", advanced=True),
+        json_schema_extra=_meta(
+            "lora", advanced=True,
+            disable_when="lycoris_backend==triton",
+            disable_value=0.0,
+            disable_hint="LyCORIS 4.0.0 的 rank dropout 尚未通过 Triton 路径准入，必须显式关闭",
+        ),
     )
     lora_module_dropout: float = Field(
         0.0, ge=0.0, le=1.0,
         description="整个 LoRA 模块的随机跳过概率（stochastic depth）：每步以此概率完全不应用此模块；越大正则化越强；0 = 关闭",
-        json_schema_extra=_meta("lora", advanced=True),
+        json_schema_extra=_meta(
+            "lora", advanced=True,
+            disable_when="lycoris_backend==triton",
+            disable_value=0.0,
+            disable_hint="Triton 实验路径首版固定关闭所有 adapter dropout，避免未验证的随机执行路径",
+        ),
     )
     lora_reg_dims: Optional[dict[str, int]] = Field(
         None,
