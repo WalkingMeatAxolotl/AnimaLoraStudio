@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import random
+import secrets
 from pathlib import Path
 
 import torch
@@ -21,6 +22,12 @@ from training.observability import init_wandb_monitor
 
 
 logger = logging.getLogger(__name__)
+_RANDOM_SEED_MAX = 2**31 - 1
+
+
+def _new_random_seed() -> int:
+    """Draw a non-zero seed without consuming the trainer RNG stream."""
+    return secrets.randbelow(_RANDOM_SEED_MAX) + 1
 
 
 def _maybe_apply_pause_snapshot(args, resume_state_path: Path) -> None:
@@ -67,20 +74,25 @@ def _maybe_apply_pause_snapshot(args, resume_state_path: Path) -> None:
         args.sample_prompts = sp
 
 
+def _resolve_training_seed(args) -> None:
+    """Resolve the CLI fallback where a task snapshot still contains ``seed=0``."""
+    if int(getattr(args, "seed", 0) or 0):
+        return
+    args.seed = _new_random_seed()
+    logger.info(msg("train.seed_random", seed=args.seed))
+
+
 def _resolve_sample_seed(args) -> None:
-    """sample_seed=0 → 训练开始时随机抽一次写回 args，并 log。
+    """Resolve a random sample seed once for this training run.
 
-    Why：sample_seed=0 走 sample_runner 时不调 torch.manual_seed，整批
-    采样跟着 global RNG 漂移，跨 epoch 同 prompt 出图不同 → 看不出是
-    模型收敛还是噪声变了。抽一次固定下来，整轮训练同 prompt 同 seed。
-
-    与 pause snapshot 协作：snapshot 写整份 args.dict()，resolved 值会
-    被 freeze；resume 经 _maybe_apply_pause_snapshot 灌回，跨 pause 仍
-    用同一 seed。用户重新起 task 时若 yaml 还是 0，启动重抽一次新随机。
+    New Studio tasks normally arrive with all random seeds already materialized in
+    their frozen config.  This remains the direct-CLI and legacy-snapshot fallback.
+    The system entropy source is deliberately independent from ``args.seed`` so two
+    runs with the same explicit training seed do not repeat an automatic sample seed.
     """
     if int(getattr(args, "sample_seed", 0) or 0):
         return
-    args.sample_seed = random.randint(1, 2**31 - 1)
+    args.sample_seed = _new_random_seed()
     logger.info(msg("train.sample_seed_random", seed=args.sample_seed))
 
 
@@ -164,12 +176,12 @@ def run(ctx: TrainingContext) -> None:
     # 延迟导入：保留原 main() 顺序 —— ensure_dependencies 之后才能 import numpy/PIL
     import numpy as np
 
-    # 设置随机种子
+    # 设置随机种子。Studio 在 task 创建时已物化；CLI / 历史 snapshot 由这里兜底。
+    _resolve_training_seed(args)
+    _resolve_sample_seed(args)
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
-
-    _resolve_sample_seed(args)
 
     ctx.device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.mixed_precision == "bf16":

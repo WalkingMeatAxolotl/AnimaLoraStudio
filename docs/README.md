@@ -24,6 +24,7 @@
 | [auto-head-mask.md](user-guide/auto-head-mask.md) / [English](user-guide/auto-head-mask.en.md) | 自动头部遮罩：识别模型、未保存编辑、训练限制 |
 | [tagging-guide.md](user-guide/tagging-guide.md) | Anima 标签格式、最佳实践、tag 顺序（booru tag 生态；Krea 2 用自然语言 caption） |
 | [training-tips.md](user-guide/training-tips.md) | 训练参数、按族显存配置、Krea 2 专章、过拟合/欠拟合排查、ComfyUI 用法 |
+| [random-seeds.md](user-guide/random-seeds.md) | 训练、测试、XY 与评估中的 `0=随机` 作用域和复现规则 |
 | [optimizers.md](user-guide/optimizers.md) | 各优化器（Lion / Prodigy / PPSF / SOAP 等）起步参数与换算 |
 | [regularization.md](user-guide/regularization.md) | 正则化方案分析报告（weight decay / 梯度裁剪 / dropout 等，2025-02，历史参考） |
 | [caption-format.md](user-guide/caption-format.md) | JSON caption 格式 + 分类 shuffle（Anima tag 生态） |

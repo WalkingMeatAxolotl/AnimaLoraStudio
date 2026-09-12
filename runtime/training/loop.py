@@ -830,7 +830,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
-                    prompt = ctx.get_next_sample_prompt()
+                    prompt, prompt_seed_offset = ctx.get_next_sample()
                     prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
                     ctx.emit(msg("train.sampling_step", step=ctx.global_step, prompt=prompt_short))
                     run_sample(
@@ -840,6 +840,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                         wandb_key="samples/step",
                         wandb_caption=f"step {ctx.global_step}: {prompt}",
                         wandb_step=ctx.global_step,
+                        seed_offset=prompt_seed_offset,
                     )
 
                 # 定期保存 LoRA 权重（按 step）
@@ -918,7 +919,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
 
             # 采样（轮换提示词）
             if args.sample_every > 0 and ctx.current_epoch % args.sample_every == 0:
-                prompt = ctx.get_next_sample_prompt()
+                prompt, prompt_seed_offset = ctx.get_next_sample()
                 prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
                 ctx.emit(msg("train.sampling_epoch", epoch=ctx.current_epoch, prompt=prompt_short))
                 run_sample(
@@ -928,6 +929,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                     wandb_key="samples/epoch",
                     wandb_caption=f"epoch {ctx.current_epoch}: {prompt}",
                     wandb_step=ctx.global_step,
+                    seed_offset=prompt_seed_offset,
                 )
 
             # 定期保存训练状态（epoch 版）

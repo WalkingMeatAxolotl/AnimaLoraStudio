@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from studio import db, server
@@ -81,12 +82,16 @@ def test_enqueue_freezes_preset_snapshot(client: TestClient, isolated: Path) -> 
 
     task = client.post("/api/queue", json={"config_name": "good"}).json()
     snapshot = task_snapshot.snapshot_config_path(task["id"])
-    assert snapshot.read_text(encoding="utf-8") == "epochs: 1\n"
+    frozen = yaml.safe_load(snapshot.read_text(encoding="utf-8"))
+    assert frozen["epochs"] == 1
+    assert frozen["sample_seed"] > 0
+    assert frozen["eval_validation_split_seed"] > 0
+    assert (isolated / "presets" / "good.yaml").read_text(encoding="utf-8") == "epochs: 1\n"
 
     (isolated / "presets" / "good.yaml").write_text(
         "epochs: 99\n", encoding="utf-8",
     )
-    assert snapshot.read_text(encoding="utf-8") == "epochs: 1\n"
+    assert yaml.safe_load(snapshot.read_text(encoding="utf-8"))["epochs"] == 1
 
 
 def test_empty_queue(client: TestClient) -> None:

@@ -135,7 +135,10 @@ def run(task_id: int) -> int:
     ))
 
     try:
-        _stage_generate(session_id, task_id, project, version, vdir, progress)
+        _stage_generate(
+            session_id, task_id, project, version, vdir,
+            dict(plan.get("generation") or {}), progress,
+        )
         for runner in runners:
             _stage_metric(session_id, runner, project, version, vdir, progress)
         return _stage_aggregate(session_id, progress)
@@ -156,6 +159,7 @@ def _stage_generate(
     project: dict[str, Any],
     version: dict[str, Any],
     vdir: Path,
+    generation: dict[str, Any],
     progress: TaskLogLike,
 ) -> None:
     eval_root = eval_session.samples_root(session_id)
@@ -172,7 +176,8 @@ def _stage_generate(
     # 断点续跑时只为真正要跑的候选起 daemon（上面先算 pending）。
     with eval_generation.DaemonSampleGenerator(progress, task_id=task_id) as generate:
         _generate_candidates(
-            session_id, candidates, generate, project, version, vdir, eval_root, progress,
+            session_id, candidates, generate, project, version, vdir, eval_root,
+            generation, progress,
         )
 
 
@@ -184,6 +189,7 @@ def _generate_candidates(
     version: dict[str, Any],
     vdir: Path,
     eval_root: Path,
+    generation: dict[str, Any],
     progress: TaskLogLike,
 ) -> None:
     for cand in candidates:
@@ -223,6 +229,7 @@ def _generate_candidates(
                     auto_source={"eval_session_id": session_id, "candidate_id": cid},
                     eval_root=eval_root,
                     baseline=cand.get("role") == "baseline",
+                    generation_override=generation or None,
                 )
                 run_id = str(run["run_id"])
                 with db.connection_for() as conn:

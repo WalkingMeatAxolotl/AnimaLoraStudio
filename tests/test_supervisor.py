@@ -113,6 +113,25 @@ def test_spawn_uses_existing_snapshot_when_live_config_is_gone(env) -> None:
     assert captured["config_text"] == "epochs: 1\n"
 
 
+def test_legacy_reg_ai_snapshot_does_not_add_training_seed_fields(env) -> None:
+    import json
+
+    cfg = env["configs"] / "reg_ai.json"
+    cfg.write_text('{"seed": 321, "steps": 20}', encoding="utf-8")
+    sup = Supervisor(
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+    )
+
+    frozen = sup._freeze_task_snapshot(
+        {"id": 991, "task_type": "reg_ai"}, cfg,
+    )
+
+    assert json.loads(frozen.read_text(encoding="utf-8")) == {
+        "seed": 321,
+        "steps": 20,
+    }
+
+
 def test_default_cmd_builder_routes_by_task_type() -> None:
     """_default_cmd_builder 按 task_type 选择脚本（PR-9 commit 3）。"""
     from studio.paths import REPO_ROOT
@@ -489,7 +508,11 @@ def test_config_path_is_legacy_snapshot_source(env, tmp_path) -> None:
     from studio.services import task_snapshot
 
     assert captured["cfg"] == str(task_snapshot.snapshot_config_path(tid))
-    assert Path(captured["cfg"]).read_text(encoding="utf-8") == "epochs: 1\n"
+    frozen = task_snapshot.read_snapshot_config(tid)
+    assert frozen is not None
+    assert frozen["config"]["epochs"] == 1
+    assert int(frozen["config"]["sample_seed"]) > 0
+    assert int(frozen["config"]["eval_validation_split_seed"]) > 0
 
 
 def test_finalize_version_writes_output_lora_path(env, tmp_path, monkeypatch) -> None:

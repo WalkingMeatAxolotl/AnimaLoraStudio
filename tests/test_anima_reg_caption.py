@@ -235,6 +235,32 @@ def test_txt_caption_path_unchanged(reg_module, tmp_path: Path) -> None:
 # _scan_train：mask sidecar 不算训练图
 # ---------------------------------------------------------------------------
 
+def test_incremental_plan_preserves_full_scan_seed_offsets(
+    reg_module, tmp_path: Path,
+) -> None:
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir()
+    entries = [
+        {"subfolder": "", "stem": stem, "img": tmp_path / f"{stem}.png"}
+        for stem in ("a", "b", "c")
+    ]
+    # 模拟 a 已在上一次运行完成；剩余图片不能重新从 base+0 编号。
+    (reg_dir / "a_ai_101.png").write_bytes(b"png")
+
+    pending = reg_module._plan_generation_entries(
+        entries, reg_dir, incremental=True,
+    )
+
+    assert [item["stem"] for item in pending] == ["b", "c"]
+    assert [item["_seed_offset"] for item in pending] == [1, 2]
+    assert [
+        item["_seed_offset"]
+        for item in reg_module._plan_generation_entries(
+            entries, reg_dir, incremental=False,
+        )
+    ] == [0, 1, 2]
+
+
 def test_scan_train_ignores_mask_sidecar(reg_module, tmp_path: Path) -> None:
     """{stem}.mask sidecar 后缀不在 IMAGE_EXTS —— 递归扫描天然不命中，
     不会把 mask 计入生成清单（曾有 bug：老 masks/ 目录布局下 mask 被当

@@ -1213,7 +1213,7 @@ class TrainingConfig(BaseModel):
     )
     seed: int = Field(
         42,
-        description="训练随机种子",
+        description="训练随机种子（0=每个新训练任务随机；重试/续训保持不变）",
         json_schema_extra=_meta("output"),
     )
     resume_lora: Optional[str] = Field(
@@ -1277,7 +1277,7 @@ class TrainingConfig(BaseModel):
     )
     sample_seed: int = Field(
         0,
-        description="采样种子（0=随机）",
+        description="采样种子（0=每个新训练任务随机一次；同一 prompt 跨 epoch 保持不变）",
         json_schema_extra=_meta("sample"),
     )
     sample_negative_prompt: str = Field(
@@ -1310,7 +1310,7 @@ class TrainingConfig(BaseModel):
     )
     eval_validation_split_seed: int = Field(
         0, ge=0,
-        description="验证集随机划分的种子，固定后划分结果可复现。",
+        description="验证集随机划分种子（0=每个新训练任务随机；同一任务重试保持不变）。",
         json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
     )
     eval_checkpoint_skip_count: int = Field(

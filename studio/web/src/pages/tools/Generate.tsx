@@ -939,7 +939,7 @@ export default function GeneratePage() {
       const batch = mode === 'xy' ? 1 : Math.max(1, batchSize)
       let firstId: number | null = null
       for (let i = 0; i < batch; i++) {
-        const taskSeed = seed + i
+        const taskSeed = seed === 0 ? 0 : seed + i
         const snap: GenerateParamsSnapshot = { ...baseSnapshot, seed: taskSeed }
         const body: GenerateRequest = {
           prompts: mergedPrompts,

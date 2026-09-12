@@ -650,6 +650,48 @@ describe('GeneratePage 端到端 smoke', () => {
       })
     )
 
+  it('single 随机批量保持每个 task 的 0 哨兵，显式 seed 才递增', async () => {
+    seedPrefs({ mode: 'single', seed: 0 })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+    const batchInput = screen.getByRole('spinbutton', { name: '批次数量' })
+    await user.clear(batchInput)
+    await user.type(batchInput, '3')
+
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).endsWith('/api/generate')
+          && (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(posts).toHaveLength(3)
+      const seeds = posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).seed)
+      expect(seeds).toEqual([0, 0, 0])
+    })
+  })
+
+  it('single 显式 seed 批量按图片递增以保持可复现', async () => {
+    seedPrefs({ mode: 'single', seed: 42 })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+    const batchInput = screen.getByRole('spinbutton', { name: '批次数量' })
+    await user.clear(batchInput)
+    await user.type(batchInput, '3')
+
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).endsWith('/api/generate')
+          && (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(posts).toHaveLength(3)
+      const seeds = posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).seed)
+      expect(seeds).toEqual([42, 43, 44])
+    })
+  })
+
   it('single 提交只用 singleLoras（不带 xyLoras）', async () => {
     seedPrefs({ mode: 'single', singleLoras: [A], xyLoras: [B] })
     const user = userEvent.setup()

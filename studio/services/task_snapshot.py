@@ -16,7 +16,7 @@ task 创建时把当时的训练配置冻结一份到
 from __future__ import annotations
 
 import os
-import shutil
+import secrets
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -26,6 +26,30 @@ import yaml
 from ..paths import task_dir
 
 SNAPSHOT_CONFIG_FILENAME = "config.yaml"
+_RANDOM_SEED_MAX = 2**31 - 1
+_RANDOM_SEED_DEFAULTS = {
+    "seed": 42,
+    "sample_seed": 0,
+    "eval_validation_split_seed": 0,
+}
+
+
+def _new_random_seed() -> int:
+    """Return a non-zero seed without consuming any trainer RNG state."""
+    return secrets.randbelow(_RANDOM_SEED_MAX) + 1
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(data)
+        with tmp.open("r+b") as fp:
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def snapshot_dir(task_id: int) -> Path:
@@ -52,19 +76,42 @@ def freeze_config(task_id: int, source: Path) -> Path:
     重复调用会覆盖（仅供显式复制语义使用）；调用方若要保留已有快照，必须先用
     :func:`has_snapshot` 判断。source 不存在时 raise FileNotFoundError。
     """
+    dst = snapshot_config_path(task_id)
     if not source.is_file():
         raise FileNotFoundError(f"snapshot source not found: {source}")
+    _atomic_write(dst, source.read_bytes())
+    return dst
+
+
+def freeze_training_config(task_id: int, source: Path) -> Path:
+    """Freeze a new training task's executable config with random seeds resolved.
+
+    Studio exposes ``0`` as the random sentinel for all user-facing training seed
+    fields.  Resolution belongs to task creation, before validation splitting or
+    trainer startup, so the snapshot is sufficient to retry and reproduce the
+    task.  The editable source config remains unchanged and can therefore create
+    a fresh set of seeds for the next task.
+    """
+    if not source.is_file():
+        raise FileNotFoundError(f"snapshot source not found: {source}")
+    parsed = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    if not isinstance(parsed, dict):
+        raise ValueError("training config must be a YAML mapping")
+
+    for field, default in _RANDOM_SEED_DEFAULTS.items():
+        value = parsed.get(field, default)
+        try:
+            is_random = int(value) == 0
+        except (TypeError, ValueError):
+            is_random = False  # TrainingConfig will report the invalid value.
+        if is_random:
+            parsed[field] = _new_random_seed()
+
+    rendered = yaml.safe_dump(
+        parsed, allow_unicode=True, sort_keys=False, default_flow_style=False,
+    ).encode("utf-8")
     dst = snapshot_config_path(task_id)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        shutil.copy2(source, tmp)
-        with tmp.open("r+b") as fp:
-            fp.flush()
-            os.fsync(fp.fileno())
-        os.replace(tmp, dst)
-    finally:
-        tmp.unlink(missing_ok=True)
+    _atomic_write(dst, rendered)
     return dst
 
 
