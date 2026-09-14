@@ -93,6 +93,8 @@ Open <http://127.0.0.1:8765/>, click "+ New project" on the projects page, and t
 
 View tasks on the **Queue** page; open **task detail** for logs / monitoring / output (with one-click full zip download).
 
+Opening a full-screen image preview focuses its image surface. Use arrow keys to browse and Tab / Shift+Tab to cycle through the image surface and its Close, zoom and navigation controls; Escape closes the preview and returns to its opener. Enter / Space on a focused button performs only that button's action, never an additional image add/remove action. Curation's add/remove shortcuts apply only to the focused preview surface, and holding a key does not repeatedly submit changes. Ctrl / Cmd+K does not open global search while the preview is open.
+
 The preprocessing overview's **Processed dataset / Deleted** views support arrow keys and Home/End; switching views clears the current selection. Images scroll independently so selection and undo controls stay visible. Select all in the processed view selects only processed images. Failed loads offer Retry; failed refreshes retain existing images instead of showing an empty dataset.
 
 The Upscale page's resolution filter also supports arrow keys and Home/End and clears selection when changed. Choose Custom for a separate 256–4096-pixel input, or Off for direct 4× output. Folders with a resolution prefix continue to set the target resolution automatically.

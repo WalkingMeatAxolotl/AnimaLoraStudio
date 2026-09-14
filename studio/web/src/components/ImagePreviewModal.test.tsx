@@ -1,8 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode, useState } from 'react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import ImagePreviewModal from './ImagePreviewModal'
+import Modal from './Modal'
+import i18n from '../i18n'
 
 // jsdom 没实现 pointer capture；useZoomPan 的查看器 handlers 在 pointerdown
 // 时会调它，stub 掉避免抛错（不影响 tap 判定——命中记录走 e.target）。
@@ -23,6 +26,17 @@ function firePointer(el: Element, type: 'pointerdown' | 'pointermove' | 'pointer
   fireEvent(el, new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init }))
 }
 
+function PreviewHarness() {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>Open preview</button>
+      <button type="button">Background action</button>
+      {open && <ImagePreviewModal src="/a.png" caption="a.png" onClose={() => setOpen(false)} />}
+    </>
+  )
+}
+
 describe('ImagePreviewModal', () => {
   it('× 按钮常显，点击关闭', async () => {
     const user = userEvent.setup()
@@ -32,21 +46,198 @@ describe('ImagePreviewModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('ESC 关闭；焦点在 input 内时不抢（防御）', async () => {
+  it('portals a named dialog outside the workspace and initially focuses the preview', () => {
+    const { container } = render(<ImagePreviewModal src="/a.png" caption="a.png" onClose={() => {}} />)
+    const dialog = screen.getByRole('dialog', { name: '图片预览' })
+    expect(container).not.toContainElement(dialog)
+    expect(document.body).toContainElement(dialog)
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAccessibleDescription('a.png')
+    expect(dialog).toHaveFocus()
+  })
+
+  it('traps Tab in preview controls and restores the connected opener after Escape', async () => {
+    const user = userEvent.setup()
+    render(<StrictMode><PreviewHarness /></StrictMode>)
+    const opener = screen.getByRole('button', { name: 'Open preview' })
+    await user.click(opener)
+    const dialog = screen.getByRole('dialog', { name: '图片预览' })
+    const close = within(dialog).getByRole('button', { name: '关闭' })
+    const last = within(dialog).getByRole('button', { name: '100%' })
+    expect(dialog).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(last).toHaveFocus()
+    await user.tab()
+    expect(dialog).toHaveFocus()
+    await user.tab()
+    expect(close).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(dialog).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(last).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
+  })
+
+  it.each(['{Enter}', ' '])('keeps the close button native for %s without accepting an image', async (key) => {
     const user = userEvent.setup()
     const onClose = vi.fn()
-    render(
-      <>
-        <input aria-label="outside" />
-        <ImagePreviewModal src="/a.png" onClose={onClose} />
-      </>
-    )
-    await user.click(screen.getByRole('textbox', { name: 'outside' }))
-    await user.keyboard('{Escape}')
-    expect(onClose).not.toHaveBeenCalled()
-    await user.keyboard('{Tab}')
-    await user.keyboard('{Escape}')
+    const onAccept = vi.fn()
+    const onDelete = vi.fn()
+    render(<ImagePreviewModal src="/a.png" onClose={onClose} onAccept={onAccept} onDelete={onDelete} />)
+    screen.getByRole('button', { name: '关闭' }).focus()
+    await user.keyboard(key)
     expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+
+  it('keeps zoom and navigation buttons native instead of triggering business shortcuts', async () => {
+    const user = userEvent.setup()
+    const onAccept = vi.fn()
+    const onDelete = vi.fn()
+    const onPrev = vi.fn()
+    render(<ImagePreviewModal src="/a.png" onClose={() => {}} hasPrev onPrev={onPrev} onAccept={onAccept} onDelete={onDelete} />)
+    const zoom = screen.getByRole('button', { name: '适应窗口' })
+    const zoomClick = vi.fn()
+    zoom.addEventListener('click', zoomClick)
+    zoom.focus()
+    await user.keyboard('{Enter} {Delete}{Backspace}')
+    expect(zoomClick).toHaveBeenCalledTimes(2)
+    screen.getByRole('button', { name: '上一张' }).focus()
+    await user.keyboard('{Enter}')
+    expect(onPrev).toHaveBeenCalledTimes(1)
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+
+  it('does not handle business shortcuts or Escape dispatched outside the preview', () => {
+    const onClose = vi.fn()
+    const onAccept = vi.fn()
+    const onDelete = vi.fn()
+    render(<ImagePreviewModal src="/a.png" onClose={onClose} onAccept={onAccept} onDelete={onDelete} />)
+    for (const key of ['Enter', ' ', 'Delete', 'Backspace', 'Escape']) fireEvent.keyDown(document, { key })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+
+  it('blocks Ctrl/Cmd+K inside the preview without leaking to global search', () => {
+    render(<ImagePreviewModal src="/a.png" onClose={() => {}} />)
+    const globalSearch = vi.fn()
+    window.addEventListener('keydown', globalSearch)
+    try {
+      const dialog = screen.getByRole('dialog', { name: '图片预览' })
+      for (const modifier of ['ctrlKey', 'metaKey']) {
+        expect(fireEvent.keyDown(dialog, { key: 'k', [modifier]: true })).toBe(false)
+        expect(fireEvent.keyDown(screen.getByRole('button', { name: '关闭' }), { key: 'K', [modifier]: true })).toBe(false)
+      }
+      expect(globalSearch).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', globalSearch)
+    }
+  })
+
+  it('ignores modified, composing, and repeated mutation shortcuts', () => {
+    const onAccept = vi.fn()
+    const onDelete = vi.fn()
+    render(<ImagePreviewModal src="/a.png" onClose={() => {}} onAccept={onAccept} onDelete={onDelete} />)
+    const dialog = screen.getByRole('dialog', { name: '图片预览' })
+    for (const key of ['Enter', ' ', 'Delete', 'Backspace']) {
+      for (const flag of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'repeat', 'isComposing']) {
+        fireEvent.keyDown(dialog, { key, [flag]: true })
+      }
+    }
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+
+  it('preserves focus on an existing control when the displayed image changes', () => {
+    const onClose = vi.fn()
+    const view = render(<ImagePreviewModal src="/a.png" caption="a.png" onClose={onClose} />)
+    const zoom = screen.getByRole('button', { name: '100%' })
+    zoom.focus()
+    view.rerender(<ImagePreviewModal src="/b.png" caption="b.png" onClose={onClose} />)
+    expect(zoom).toHaveFocus()
+    expect(screen.getByRole('dialog')).toHaveAccessibleDescription('b.png')
+  })
+
+  it('returns to the image surface after controls so keyboard-only acceptance remains reachable', async () => {
+    const user = userEvent.setup()
+    const onAccept = vi.fn()
+    render(<ImagePreviewModal src="/a.png" onClose={() => {}} onAccept={onAccept} />)
+    screen.getByRole('button', { name: '100%' }).focus()
+    await user.tab()
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(onAccept).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['body', 'documentElement'] as const)('recovers %s fallback when the focused navigation button disappears', (fallback) => {
+    const props = { src: '/a.png', onClose: vi.fn(), onNext: vi.fn(), hasNext: true }
+    const view = render(<ImagePreviewModal {...props} />)
+    screen.getByRole('button', { name: '下一张' }).focus()
+    // Simulate the alternate document fallback; do not claim this executes Firefox.
+    const active = fallback === 'documentElement'
+      ? vi.spyOn(document, 'activeElement', 'get').mockReturnValue(document.documentElement)
+      : null
+    try {
+      view.rerender(<ImagePreviewModal {...props} src="/b.png" hasNext={false} />)
+    } finally {
+      active?.mockRestore()
+    }
+    expect(screen.getByRole('dialog')).toHaveFocus()
+  })
+
+  it('includes both compare readouts in the same focus cycle and skips disabled controls', async () => {
+    const user = userEvent.setup()
+    render(<ImagePreviewModal src="/a.png" compareSrc="/b.png" onClose={() => {}} />)
+    const dialog = screen.getByRole('dialog')
+    const zoomButtons = within(dialog).getAllByRole('button', { name: '100%' })
+    zoomButtons[1].setAttribute('disabled', '')
+    await user.tab({ shift: true })
+    expect(within(dialog).getAllByRole('button', { name: '适应窗口' })[1]).toHaveFocus()
+    await user.tab()
+    expect(dialog).toHaveFocus()
+    await user.tab()
+    expect(within(dialog).getByRole('button', { name: '关闭' })).toHaveFocus()
+  })
+
+  it('does not handle Escape from a later confirmation and regains focus when it closes', async () => {
+    const user = userEvent.setup()
+    const onPreviewClose = vi.fn()
+    function ConfirmationHarness() {
+      const [confirm, setConfirm] = useState(false)
+      return (
+        <>
+          <ImagePreviewModal src="/a.png" onClose={onPreviewClose} onDelete={() => setConfirm(true)} />
+          {confirm && <Modal title="Remove image?" onClose={() => setConfirm(false)}><button>Cancel removal</button></Modal>}
+        </>
+      )
+    }
+    render(<ConfirmationHarness />)
+    const preview = screen.getByRole('dialog', { name: '图片预览' })
+    await user.keyboard('{Delete}')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel removal' })).toHaveFocus())
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Remove image?' })).not.toBeInTheDocument()
+    expect(onPreviewClose).not.toHaveBeenCalled()
+    expect(preview).toHaveFocus()
+  })
+
+  it('updates English accessible names without resetting focused controls', async () => {
+    const view = render(<ImagePreviewModal src="/a.png" onClose={() => {}} />)
+    screen.getByRole('button', { name: '100%' }).focus()
+    try {
+      await act(async () => { await i18n.changeLanguage('en') })
+      expect(screen.getByRole('dialog', { name: 'Image preview' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '100%' })).toHaveFocus()
+    } finally {
+      view.unmount()
+      await act(async () => { await i18n.changeLanguage('zh') })
+    }
   })
 
   it('caption 与 index/total 计数渲染在底 bar', () => {

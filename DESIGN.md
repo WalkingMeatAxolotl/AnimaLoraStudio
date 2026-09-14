@@ -391,6 +391,25 @@ Toast must not duplicate an error already announced inside the modal. Toast feed
 above the modal layer when an operation keeps the dialog open. Do not recreate modal
 backdrops, panel geometry, focus listeners, or title linkage in feature code.
 
+### Full-screen image preview
+
+`ImagePreviewModal` is a specialized protected dialog, not an ordinary modal card.
+Keep its black media plane, zoom/pan, compare layout, caption/count bar and directional
+navigation. Portal it outside the AppShell stacking context, above workspace content
+but below ordinary confirmations and Toast feedback; a local workspace z-index must
+not turn it into a layer above every global message.
+
+Opening focuses the preview surface so its documented image shortcuts are immediately
+available. Tab and Shift+Tab cycle through the image surface and its controls, so a
+keyboard user can return from zoom controls to the image's accept/delete shortcuts.
+Escape closes it and restores
+the still-connected opener without scrolling the underlying workspace. Changing the
+image does not reset focus. Enter/Space on Close, zoom or navigation buttons retains
+that button's native action, never the image's accept/delete action. Image shortcuts
+belong only to non-interactive preview content, ignore composing/modified input, and
+do not repeat data mutations while a key is held. Do not use window-level business
+key handlers that can act on a background page.
+
 ### Background model prerequisites and direct-edit task setup
 
 Settings owns model acquisition and selection through the shared model-source
@@ -621,6 +640,14 @@ Geometry and scroll responsibility are fixed:
   and restores the invoking search control after Escape or backdrop close.
   Drawers may inert the app root; overlays must not alter shell width or
   introduce a second body scrollbar.
+
+Global command search must not interrupt an already blocking task surface. While an
+overlay Drawer, Modal or full-screen image preview is active, Ctrl/Cmd+K does not open
+another command palette. When the palette itself is active, the same shortcut may
+still close it. ImagePreviewModal is the first bounded adoption of this rule; the
+existing Topbar/Modal/Drawer entry paths remain explicit migration debt until their
+separate interaction-coordination slice. Do not silently allow overlapping focus traps
+or solve keyboard ownership by continually raising z-index values.
 
 App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
 1280px breakpoint. Route-specific workbench restructuring is a later Layout
