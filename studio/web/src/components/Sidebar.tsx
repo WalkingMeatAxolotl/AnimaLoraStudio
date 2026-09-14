@@ -702,7 +702,7 @@ export default function Sidebar() {
       <nav
         id="primary-navigation"
         aria-label={t('sidebar.navigation')}
-        className={`ui-app-shell-sidebar-nav flex-1 flex flex-col gap-0.5 ${collapsed ? 'px-2 py-2.5' : 'px-2 py-3.5'}`}
+        className={`ui-app-shell-sidebar-nav flex-1 flex flex-col gap-0.5 ${collapsed ? 'ui-app-shell-sidebar-nav-collapsed px-1 py-2.5' : 'px-2 py-3.5'}`}
       >
         <NavItem to="/" label={t('nav.projects')} icon={I.folder} active={location.pathname === '/'} collapsed={collapsed} prominent />
 
@@ -739,7 +739,7 @@ export default function Sidebar() {
           aria-expanded={!collapsed}
           aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
           title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
-          className={`mt-related w-full ${collapsed ? '' : 'justify-start'}`}
+          className={`mt-related ${collapsed ? 'mx-auto' : 'w-full justify-start'}`}
         >
           {collapsed ? I.chevR : I.chevL}
           {!collapsed && <span>{t('sidebar.collapseLabel')}</span>}
