@@ -99,6 +99,18 @@ body,
   scrollbar-gutter: stable;
 }
 
+/* A reserved one-sided scrollbar gutter shifts icon-only navigation off the
+ * rail's center axis. Collapsed mode balances thin gutters on both sides so
+ * scrolling remains available without moving the icon geometry. */
+.ui-app-shell-sidebar-nav-collapsed {
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+}
+
+.ui-app-shell-sidebar-nav-collapsed::-webkit-scrollbar {
+  width: 4px;
+}
+
 .ui-app-shell-topbar {
   min-width: 0;
   gap: var(--s-3);
