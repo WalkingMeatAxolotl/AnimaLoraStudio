@@ -28,6 +28,8 @@ studio.bat
 
 首次运行会自动：建 `venv/` → 按 GPU 驱动检测装对应 CUDA torch（cu118 至 cu130）→ 装 `requirements.txt` → 构建前端 → 起后端 → 自动开浏览器到 <http://127.0.0.1:8765/>。首次启动会弹引导 modal，按 checklist 一键安装底模 + ONNX Runtime + 训练加速包。
 
+使用 `Ctrl/Cmd+K` 开关全局命令搜索。普通任务弹窗或设置抽屉打开时不会再开启搜索；关闭当前阻断界面后恢复使用。
+
 > 如果驱动检测失败导致装了 CPU 版 torch，可在 Settings → 系统 → PyTorch 一键重装 CUDA 版；也可通过 `studio.bat --torch cu128`（或 `studio.sh --torch cu128`）显式指定。
 
 ### 其它启动方式

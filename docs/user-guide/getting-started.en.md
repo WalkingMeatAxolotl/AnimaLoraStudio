@@ -28,6 +28,8 @@ studio.bat
 
 On first run, the launcher automatically: creates `venv/` → installs the matching CUDA torch (cu118 through cu130) based on the detected GPU driver → installs `requirements.txt` → builds the frontend → starts the backend → opens the browser to <http://127.0.0.1:8765/>. A first-run onboarding modal then walks through installing base models, ONNX Runtime, and training acceleration with one click.
 
+Use `Ctrl / Cmd+K` to open and close global command search. It will not open search over an active task modal or Settings drawer; finish or close that task before opening search again.
+
 > If GPU detection falls back to CPU torch, reinstall the CUDA build from Settings → System → PyTorch with one click, or specify it explicitly via `studio.bat --torch cu128` (or `studio.sh --torch cu128`).
 
 ### Alternative launch
