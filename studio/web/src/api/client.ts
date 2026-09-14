@@ -1647,6 +1647,8 @@ export interface LoraCatalogSource {
   item_count: number
   error: string | null
   project_archived: boolean
+  created_at: number | null
+  updated_at: number | null
 }
 
 export interface LoraCatalogResponse {

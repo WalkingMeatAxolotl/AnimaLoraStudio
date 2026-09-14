@@ -111,7 +111,11 @@ def test_catalog_aggregates_project_default_and_recursive_external_sources(
 
     sources = {source["source_type"] for source in body["sources"]}
     assert sources == {"project", "studio_models", "external"}
+    project_source = next(source for source in body["sources"] if source["source_type"] == "project")
+    assert project_source["created_at"] == project["created_at"]
+    assert project_source["updated_at"] >= project["updated_at"]
     assert all(source["error"] is None for source in body["sources"])
+    assert all("created_at" in source and "updated_at" in source for source in body["sources"])
 
 
 def test_catalog_deduplicates_normalized_full_paths_but_not_basenames(

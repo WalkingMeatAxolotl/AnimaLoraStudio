@@ -299,7 +299,8 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(galleryAction.compareDocumentPosition(datasetAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     await user.click(galleryAction)
-    expect(screen.getByTestId('prompt-gallery-drawer')).toBeInTheDocument()
+    const galleryDrawer = screen.getByTestId('prompt-gallery-drawer')
+    expect(galleryDrawer).toBeInTheDocument()
     await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
     const selectedGalleryCard = screen.getByRole('button', { name: '选择图片 #42' })
     expect(selectedGalleryCard).toHaveAttribute('aria-pressed', 'true')
@@ -312,10 +313,13 @@ describe('GeneratePage 端到端 smoke', () => {
       expect(stored.datasetPrompt).toBe('fresh gallery prompt')
     })
 
+    await user.click(screen.getByRole('tab', { name: '参数' }))
+    expect(galleryDrawer).toBeVisible()
+    await user.click(screen.getByRole('tab', { name: '提示词' }))
+
     const galleryRequestsBeforeClose = fetchMock.mock.calls.filter(
       ([url]) => String(url).startsWith('/api/gallery/search'),
     ).length
-    const galleryDrawer = screen.getByTestId('prompt-gallery-drawer')
     const galleryList = screen.getByTestId('gallery-image-list')
     galleryList.scrollTop = 137
     await user.click(datasetAction)
@@ -335,7 +339,7 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(lastEnqueueBody).toBeNull()
   })
 
-  it('auto-generates with the newly tagged prompt instead of stale persisted prompt', async () => {
+  it('auto-tags the selected gallery image before generating with the fresh prompt', async () => {
     const previousImpl = fetchMock.getMockImplementation()!
     const jsonOk = (body: unknown) => Promise.resolve({
       ok: true, status: 200, json: async () => body,
@@ -368,8 +372,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await openPromptsTab(user)
     await user.click(screen.getByRole('button', { name: '从画廊选取' }))
     await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
-    await user.click(screen.getByRole('switch', { name: '自动生成' }))
-    await user.click(screen.getByRole('button', { name: '打标' }))
+    await user.click(screen.getByRole('switch', { name: '自动打标' }))
+    await user.click(screen.getByRole('button', { name: /开始生成/ }))
 
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     expect(lastEnqueueBody!.prompts).toEqual(['base prompt, fresh gallery prompt'])
