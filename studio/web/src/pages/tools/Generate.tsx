@@ -18,7 +18,7 @@ import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
-import GalleryPickerDrawer from './generate/GalleryPickerDrawer'
+import GalleryPickerDrawer, { type GalleryPickerDrawerHandle } from './generate/GalleryPickerDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
@@ -105,6 +105,10 @@ type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
 type GenerateDatasetOverride = {
   datasetPick: DatasetPick | null
   datasetPrompt: string
+}
+
+function galleryDatasetOverride(prompt: string): GenerateDatasetOverride {
+  return { datasetPick: null, datasetPrompt: prompt }
 }
 
 /** 识别官方 variant key 与常见 custom 文件名中的 FP8 标记。
@@ -375,6 +379,8 @@ export default function GeneratePage() {
   const [datasetPickerMounted, setDatasetPickerMounted] = useState(false)
   const [galleryPickerOpen, setGalleryPickerOpen] = useState(false)
   const [galleryPickerMounted, setGalleryPickerMounted] = useState(false)
+  const galleryPickerRef = useRef<GalleryPickerDrawerHandle>(null)
+  const [autoTaggingForGenerate, setAutoTaggingForGenerate] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
   const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>(
     'studio:generate:sidebarTab:v2',
@@ -398,12 +404,7 @@ export default function GeneratePage() {
       setSidebarTab('lora')
       return
     }
-    if (sidebarTab !== 'lora') setCatalogDrawerOpen(false)
-    if (sidebarTab !== 'prompts') {
-      setDatasetPickerOpen(false)
-      setGalleryPickerOpen(false)
-    }
-    if (mode !== 'xy' || sidebarTab !== 'xy') setAxisDrawerOpen(false)
+    if (mode !== 'xy') setAxisDrawerOpen(false)
   }, [mode, sidebarTab, setSidebarTab])
   const [logOpen, setLogOpen] = useState(false)
   // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
@@ -994,6 +995,23 @@ export default function GeneratePage() {
     }
   }
 
+  const handleGenerateWithAutoTag = async () => {
+    if (submitting || autoTaggingForGenerate) return
+    const gallery = galleryPickerRef.current
+    if (!gallery?.isAutoTagEnabled()) {
+      await handleGenerate()
+      return
+    }
+    setAutoTaggingForGenerate(true)
+    try {
+      const taggedPrompt = await gallery.tagForGenerate()
+      if (taggedPrompt == null) return
+      await handleGenerate(galleryDatasetOverride(taggedPrompt))
+    } finally {
+      setAutoTaggingForGenerate(false)
+    }
+  }
+
   const handleCancel = async () => {
     if (!currentTask) return
     try {
@@ -1046,12 +1064,10 @@ export default function GeneratePage() {
       ? t('generate.generateImageCount', { count: xyImageCount })
       : t('generate.startGenerate')
 
-  const attachedDrawerOpen = (
-    (catalogDrawerOpen && sidebarTab === 'lora')
-    || (datasetPickerOpen && sidebarTab === 'prompts')
-    || (galleryPickerOpen && sidebarTab === 'prompts')
-    || (axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy')
-  )
+  const attachedDrawerOpen = catalogDrawerOpen
+    || datasetPickerOpen
+    || galleryPickerOpen
+    || (axisDrawerOpen && mode === 'xy')
 
   return (
     <div className="fade-in flex flex-col" style={{ height: '100%', overflow: 'hidden' }}>
@@ -1470,15 +1486,15 @@ export default function GeneratePage() {
                 <button
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
-                  onClick={() => void handleGenerate()}
-                  disabled={submitting}
+                  onClick={() => void handleGenerateWithAutoTag()}
+                  disabled={submitting || autoTaggingForGenerate}
                   title={
                     activeBlockingTask
                       ? t('generate.queuedBehindActiveTask', { id: activeBlockingTask.id })
                       : undefined
                   }
                 >
-                  {generateLabel}
+                  {autoTaggingForGenerate ? t('generate.galleryTagging') : generateLabel}
                 </button>
                 {/* 0.17 P-I：batch size（每次入队 task 数），固定宽不抖动、无 label，hover
                     显示「批次数量」。取消已移右上。xy 一次一个矩阵、不适用。 */}
@@ -1500,7 +1516,7 @@ export default function GeneratePage() {
 
           {catalogDrawerMounted && (
             <LoraCatalogDrawer
-              open={catalogDrawerOpen && sidebarTab === 'lora'}
+              open={catalogDrawerOpen}
               onClose={() => setCatalogDrawerOpen(false)}
               loras={loras}
               ui={loraUi}
@@ -1509,24 +1525,20 @@ export default function GeneratePage() {
           )}
           {galleryPickerMounted && (
             <GalleryPickerDrawer
-              open={galleryPickerOpen && sidebarTab === 'prompts'}
-              onApplyPrompt={async (prompt, autoGenerate) => {
-                const datasetOverride: GenerateDatasetOverride = {
-                  datasetPick: null,
-                  datasetPrompt: prompt,
-                }
+              ref={galleryPickerRef}
+              open={galleryPickerOpen}
+              onApplyPrompt={(prompt) => {
                 setPrefs((current) => ({
                   ...current,
-                  ...datasetOverride,
+                  ...galleryDatasetOverride(prompt),
                 }))
-                if (autoGenerate) await handleGenerate(datasetOverride)
               }}
               onClose={() => setGalleryPickerOpen(false)}
             />
           )}
           {datasetPickerMounted && (
             <PromptFromDatasetPicker
-              open={datasetPickerOpen && sidebarTab === 'prompts'}
+              open={datasetPickerOpen}
               variant="drawer"
               value={datasetPick}
               onChange={setDatasetPick}
@@ -1535,7 +1547,7 @@ export default function GeneratePage() {
           )}
           {axisDrawerMounted && (
             <XYAxisEditorDrawer
-              open={axisDrawerOpen && mode === 'xy' && sidebarTab === 'xy'}
+              open={axisDrawerOpen && mode === 'xy'}
               label={activeAxis}
               draft={activeAxis === 'Y' ? visibleYDraft : xDraft}
               otherAxis={activeAxis === 'X' ? yDraft?.axis ?? null : xDraft.axis}

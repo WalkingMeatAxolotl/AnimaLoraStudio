@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LoraCatalogItem, LoraEntry } from '../../../api/client'
-import LoraCatalogDrawer from './LoraCatalogDrawer'
+import LoraCatalogDrawer, { sortCatalogSources } from './LoraCatalogDrawer'
 import type { LoraUiState } from './loraSelection'
 
 const fetchMock = vi.fn()
@@ -15,6 +15,8 @@ const source = {
   item_count: 1,
   error: null,
   project_archived: false,
+  created_at: null,
+  updated_at: null,
 } as const
 const projectSource = {
   source_type: 'project',
@@ -24,6 +26,8 @@ const projectSource = {
   item_count: 2,
   error: null,
   project_archived: false,
+  created_at: 100,
+  updated_at: 200,
 } as const
 const item = {
   path: 'D:/ComfyUI/models/loras/styles/ink.safetensors',
@@ -75,6 +79,7 @@ function Harness() {
 }
 
 beforeEach(() => {
+  window.localStorage.clear()
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   fetchMock.mockImplementation((input: string | URL | Request) => {
@@ -86,6 +91,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('LoraCatalogDrawer', () => {
+  it('sorts project sources like the Projects page and keeps un-timestamped directories last', () => {
+    const olderProject = {
+      ...projectSource,
+      source_id: 'project:2',
+      source_label: 'Zulu project',
+      created_at: 50,
+      updated_at: 300,
+    }
+    expect(sortCatalogSources([source, projectSource, olderProject], 'updated').map((entry) => entry.source_id))
+      .toEqual(['project:2', 'project:1', 'external:0'])
+    expect(sortCatalogSources([source, projectSource, olderProject], 'created').map((entry) => entry.source_id))
+      .toEqual(['project:1', 'project:2', 'external:0'])
+    expect(sortCatalogSources([source, projectSource, olderProject], 'title').map((entry) => entry.source_id))
+      .toEqual(['project:1', 'external:0', 'project:2'])
+  })
+
   it('keeps the top-right close button visible and closes the drawer', async () => {
     const user = userEvent.setup()
     render(<Harness />)
@@ -180,16 +201,72 @@ describe('LoraCatalogDrawer', () => {
     expect(sourceCards[0]).toHaveTextContent('Alpha project')
     expect(sourceCards[1]).toHaveTextContent('loras')
 
+    const sort = screen.getByRole('combobox', { name: '排序' })
     const filter = screen.getByRole('combobox', { name: '筛选' })
+    expect(sort).toHaveValue('updated')
+    expect(sort.compareDocumentPosition(filter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await user.selectOptions(sort, 'title')
     await user.selectOptions(filter, 'project')
     expect(screen.queryByRole('button', { name: /^loras / })).not.toBeInTheDocument()
     await user.selectOptions(filter, 'non_project')
 
     await user.click(screen.getByRole('button', { name: /^loras / }))
     expect(await screen.findByText('ink')).toBeInTheDocument()
+    const itemSort = screen.getByRole('combobox', { name: '排序' })
+    expect(itemSort).toHaveValue('name')
+    await user.selectOptions(itemSort, 'mtime')
+    await waitFor(() => expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).toContain('sort=mtime'))
+    expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).toContain('order=desc')
     expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).toContain('source=external%3A0')
     expect(screen.queryByText('ink.safetensors')).not.toBeInTheDocument()
     expect(screen.getByText('styles')).toBeInTheDocument()
+  })
+
+  it('places project item sorting after search and the version filter at the far right', async () => {
+    const projectItems: LoraCatalogItem[] = [
+      {
+        ...item,
+        path: 'G:/AnimaLoraStudio/studio_data/projects/alpha/v1.safetensors',
+        name: 'v1.safetensors',
+        relative_path: 'v1/v1.safetensors',
+        source_type: 'project',
+        source_id: projectSource.source_id,
+        source_label: projectSource.source_label,
+        project_id: 1,
+        version_id: 1,
+        project_title: projectSource.source_label,
+        version_label: 'v1',
+        kind: 'final',
+      },
+      {
+        ...item,
+        path: 'G:/AnimaLoraStudio/studio_data/projects/alpha/v2.safetensors',
+        name: 'v2.safetensors',
+        relative_path: 'v2/v2.safetensors',
+        source_type: 'project',
+        source_id: projectSource.source_id,
+        source_label: projectSource.source_label,
+        project_id: 1,
+        version_id: 2,
+        project_title: projectSource.source_label,
+        version_label: 'v2',
+        kind: 'final',
+      },
+    ]
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      return Promise.resolve(response(url.includes('source=project%3A1') ? projectItems : []))
+    })
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.click(await screen.findByRole('button', { name: /^Alpha project/ }))
+    await waitFor(() => expect(screen.getAllByTestId('lora-catalog-item')).toHaveLength(2))
+    const search = screen.getByRole('textbox', { name: '搜索当前来源中的 LoRA…' })
+    const sort = screen.getByRole('combobox', { name: '排序' })
+    const version = screen.getByRole('combobox', { name: '版本' })
+    expect(search.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(sort.compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('toggles a LoRA with an ordinary row click and has no detail or add controls', async () => {

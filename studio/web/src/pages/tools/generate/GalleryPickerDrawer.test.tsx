@@ -68,10 +68,10 @@ describe('GalleryPickerDrawer', () => {
     expect(card).toHaveAttribute('aria-pressed', 'true')
     expect(card).toHaveTextContent('✓')
     await user.selectOptions(screen.getByRole('combobox', { name: '打标方式' }), 'llm')
-    const autoGenerate = screen.getByRole('switch', { name: '自动生成' })
+    const autoTag = screen.getByRole('switch', { name: '自动打标' })
     const tagButton = screen.getByRole('button', { name: '打标' })
-    expect(autoGenerate.compareDocumentPosition(tagButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    await user.click(autoGenerate)
+    expect(autoTag.compareDocumentPosition(tagButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await user.click(autoTag)
     await user.click(tagButton)
 
     await waitFor(() => expect(api.tagGalleryImage).toHaveBeenCalledWith({
@@ -80,9 +80,9 @@ describe('GalleryPickerDrawer', () => {
       image_url: 'https://cdn.donmai.us/sample.jpg',
       tagger: 'llm',
     }))
-    expect(onApplyPrompt).toHaveBeenCalledWith('tagged, prompt', true)
+    expect(onApplyPrompt).toHaveBeenCalledWith('tagged, prompt')
     expect(window.localStorage.getItem('studio:generate:gallery:tagger')).toBe('"llm"')
-    expect(window.localStorage.getItem('studio:generate:gallery:autoGenerate')).toBe('true')
+    expect(window.localStorage.getItem('studio:generate:gallery:autoTag')).toBe('true')
   })
 
   it('reuses tag autocomplete and inserts Booru tags without submitting early', async () => {
@@ -181,7 +181,7 @@ describe('GalleryPickerDrawer', () => {
     window.localStorage.setItem('studio:generate:gallery:dateFrom', '"2025-03-01"')
     window.localStorage.setItem('studio:generate:gallery:dateTo', '"2025-03-31"')
     window.localStorage.setItem('studio:generate:gallery:page', '8')
-    window.localStorage.setItem('studio:generate:gallery:autoGenerate', 'true')
+    window.localStorage.setItem('studio:generate:gallery:autoTag', 'true')
 
     setup()
 
@@ -199,7 +199,7 @@ describe('GalleryPickerDrawer', () => {
     expect(screen.getByRole('button', { name: '时间过滤（已启用）' })).toHaveAttribute('data-active', 'true')
     expect(screen.queryByLabelText('开始日期')).not.toBeInTheDocument()
     expect(screen.getByRole('spinbutton', { name: '页码' })).toHaveValue(8)
-    expect(screen.getByRole('switch', { name: '自动生成' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('switch', { name: '自动打标' })).toHaveAttribute('aria-checked', 'true')
 
     await userEvent.setup().click(screen.getByRole('button', { name: '分级过滤' }))
     expect(screen.getByRole('checkbox', { name: '存疑' })).toBeChecked()

@@ -18,6 +18,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LoraEntry } from '../../../api/client'
+import Button from '../../../components/Button'
 import {
   applyLoraText,
   LoraTextError,
@@ -109,16 +110,21 @@ function SortableLoraCard({
           <div className="font-mono text-xs text-fg-primary truncate" title={name}>{name}</div>
           {missing && <div className="text-2xs text-err truncate mt-0.5">{t('generate.loraNotFoundHint')}</div>}
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm text-err shrink-0 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+        <Button
+          variant="ghost"
+          size="md"
+          iconOnly
+          className="shrink-0 text-err opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={onRemove}
           title={t('generate.removeLora')}
           aria-label={`${t('generate.removeLora')} ${name}`}
         >
-          ×
-        </button>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </Button>
         {!missing && (
           <input
             type="number"

@@ -60,7 +60,8 @@ describe('SidebarLoras', () => {
     expect(weight).toHaveAttribute('max', '1.5')
     expect(weight).toHaveAttribute('step', '0.05')
     const remove = screen.getByRole('button', { name: /移除 LoRA ink/ })
-    expect(remove).toHaveClass('opacity-0', 'pointer-events-none', 'group-hover:opacity-100', 'group-hover:pointer-events-auto', 'group-focus-within:opacity-100')
+    expect(remove).toHaveClass('btn-icon', 'opacity-0', 'pointer-events-none', 'group-hover:opacity-100', 'group-hover:pointer-events-auto', 'group-focus-within:opacity-100')
+    expect(remove).not.toHaveClass('btn-sm')
     expect(remove.nextElementSibling).toBe(weight)
 
     expect(screen.getByRole('button', { name: '拖动调整顺序 ink' })).toHaveClass('cursor-grab')
