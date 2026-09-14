@@ -110,6 +110,15 @@ function useBreadcrumbs(): Crumb[] {
 
 // ── Topbar ──────────────────────────────────────────────────────────────────
 
+function hasBlockingTaskDialog(): boolean {
+  return Array.from(document.querySelectorAll<HTMLElement>(
+    '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]',
+  )).some((dialog) => (
+    !dialog.hasAttribute('data-command-palette-root') &&
+    !dialog.closest('[hidden], [aria-hidden="true"], [inert]')
+  ))
+}
+
 export default function Topbar() {
   const { t } = useTranslation()
   const crumbs = useBreadcrumbs()
@@ -153,6 +162,7 @@ export default function Topbar() {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
+        if (hasBlockingTaskDialog()) return
         setPaletteOpen((p) => !p)
       }
     }
@@ -292,7 +302,9 @@ export default function Topbar() {
           variant="secondary"
           size="sm"
           iconOnly
-          onClick={() => setPaletteOpen(true)}
+          onClick={() => {
+            if (!hasBlockingTaskDialog()) setPaletteOpen(true)
+          }}
           title={t('topbar.search')}
           aria-label={t('topbar.searchAriaLabel')}
           aria-haspopup="dialog"
