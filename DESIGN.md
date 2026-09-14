@@ -280,7 +280,10 @@ under individual settings.
 
 Use `Alert` for persistent, in-flow information, success confirmation, warnings, and
 errors. `Toast` remains the transient notification pattern and reuses Alert's visual
-tones without changing its timer or invocation API.
+tones without changing its timer or invocation API. Its notification host is portalled
+to `document.body`, outside the inert application root, so Drawer background protection
+does not hide live feedback from assistive technology. Notifications do not move focus
+or create a second live copy inside the active dialog.
 
 | Tone | Meaning | Typical use |
 | --- | --- | --- |
