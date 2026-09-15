@@ -69,14 +69,6 @@ vi.mock('../../../components/ImageGrid', () => ({
     </div>
   ),
 }))
-vi.mock('../../../components/ImagePreviewModal', () => ({
-  default: ({ shortcutHint, onClose }: { shortcutHint?: string; onClose: () => void }) => (
-    <div role="dialog" aria-label="图片预览">
-      <span>{shortcutHint}</span>
-      <button type="button" onClick={onClose}>关闭预览</button>
-    </div>
-  ),
-}))
 
 const trainView: CurationView = {
   left: [
@@ -135,6 +127,36 @@ beforeEach(() => {
 })
 
 describe('Curation workspace', () => {
+  it('closes the real image preview from its button without adding to the dataset', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+    const opener = screen.getByRole('button', { name: '预览 a.png' })
+    await user.click(opener)
+    const dialog = screen.getByRole('dialog', { name: '图片预览' })
+    within(dialog).getByRole('button', { name: '关闭' }).focus()
+    await user.keyboard('{Enter}')
+    expect(api.copyToTrain).not.toHaveBeenCalled()
+    expect(api.copyToValidation).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
+  })
+
+  it('retains the explicit preview accept shortcut and current-folder payload', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+    await user.click(screen.getByRole('button', { name: '预览 a.png' }))
+    expect(screen.getByRole('dialog', { name: '图片预览' })).toHaveFocus()
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(api.copyToTrain).toHaveBeenCalledWith(1, 2, {
+      files: ['a.png'], dest_folder: '1_data',
+    }))
+    expect(api.copyToValidation).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: '图片预览' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
   it('shows training as the explicit default and adds selected images to the active folder', async () => {
     const user = userEvent.setup()
     renderPage()
