@@ -1,0 +1,10 @@
+/* Full-screen media keeps its black plane; focus must remain visible in either theme. */
+.ui-image-preview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ui-image-preview button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
