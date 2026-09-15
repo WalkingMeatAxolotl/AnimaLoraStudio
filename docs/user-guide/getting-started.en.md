@@ -95,6 +95,8 @@ Open <http://127.0.0.1:8765/>, click "+ New project" on the projects page, and t
 
 View tasks on the **Queue** page; open **task detail** for logs / monitoring / output (with one-click full zip download).
 
+Settings and Tagging open the same LLM preset editor. Focus enters the editor and Tab / Shift+Tab stay inside. Escape exits like Done or the close button, triggering the active field's existing blur commit; it does not undo instantly saved changes. Deleting or resetting a built-in preset uses a confirmation view in the same dialog. Cancel or Escape returns to the editor content and initiating action without closing Settings behind it. While the confirmed request runs, it cannot be submitted twice; failures let you retry or return to editing from the same confirmation view. If deletion removes the original edit action, focus returns to the still-open Settings drawer.
+
 The preprocessing overview's **Processed dataset / Deleted** views support arrow keys and Home/End; switching views clears the current selection. Images scroll independently so selection and undo controls stay visible. Select all in the processed view selects only processed images. Failed loads offer Retry; failed refreshes retain existing images instead of showing an empty dataset.
 
 The Upscale page's resolution filter also supports arrow keys and Home/End and clears selection when changed. Choose Custom for a separate 256–4096-pixel input, or Off for direct 4× output. Folders with a resolution prefix continue to set the target resolution automatically.

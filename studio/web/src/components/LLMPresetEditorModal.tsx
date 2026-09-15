@@ -1,19 +1,22 @@
 // LLMPresetEditorModal —— LLM tagger 预设的全字段编辑器（居中 modal）。
 //
 // 全局唯一的预设编辑入口：设置页预设列表的「编辑」和打标页的「编辑预设」都开
-// 这个 modal，字段只在这里维护一份。数据面走 SettingsDataProvider（instant-apply
-// commitSecrets 即时落盘），modal 自身无草稿/保存按钮。
+// 这个 modal，字段只在这里维护一份。preset/credential 各走资源 API，
+// SettingsDataProvider 只承载保存状态；字段即时提交，没有整页草稿/保存按钮。
 //
-// 布局参考打标页字段范式：label 上 / 控件全宽在下 / 两列 grid，分节平铺不折叠。
+// 参数与提示词保留专业双栏；Modal 拥有键盘生命周期，危险确认复用同一个壳层。
 import type { TFunction } from 'i18next'
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { api, type LLMPreset } from '../api/client'
 import { MASK } from '../pages/tools/settings/constants'
 import { useSettingsData } from '../lib/SettingsData'
-import { useDialog } from './Dialog'
 import { useToast } from './Toast'
+import ActionGroup from './ActionGroup'
+import Alert from './Alert'
+import Badge from './Badge'
+import Button from './Button'
+import Modal from './Modal'
 import LLMMessagesEditor from './LLMMessagesEditor'
 
 // 内置预设 label 的 i18n 映射（id → key）；自定义预设直接显示 label。
@@ -31,18 +34,32 @@ export function llmPresetLabel(preset: LLMPreset, t: TFunction): string {
   return key ? t(key, { defaultValue: preset.label }) : preset.label
 }
 
+interface EditorConfirmation {
+  action: 'delete' | 'reset'
+  presetId: string
+  label: string
+}
+
 export default function LLMPresetEditorModal({ presetId, onClose }: {
   presetId: string
   onClose: () => void
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const { confirm } = useDialog()
   const { secrets, reloadSecrets, runSave } = useSettingsData()
   // 另存为副本后切到新预设继续编辑
   const [editingId, setEditingId] = useState(presetId)
   const [modelsBusy, setModelsBusy] = useState(false)
   const [testBusy, setTestBusy] = useState(false)
+  const [confirmation, setConfirmation] = useState<EditorConfirmation | null>(null)
+  const [confirmationBusy, setConfirmationBusy] = useState(false)
+  const [confirmationError, setConfirmationError] = useState('')
+  const confirmationBusyRef = useRef(false)
+  const editorContentRef = useRef<HTMLDivElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const cancelButtonRef = useRef<HTMLButtonElement>(null)
+  const returnActionRef = useRef<HTMLButtonElement | null>(null)
+  const scrollSnapshotRef = useRef<{ element: HTMLElement; top: number; left: number }[]>([])
   const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const etagRef = useRef('')
 
@@ -54,12 +71,71 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
     etagRef.current = preset?.etag ?? ''
   }, [preset])
 
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const surface = opener?.closest<HTMLElement>('[role="dialog"], [role="main"], main')
+    return () => {
+      // Deleting a preset can remove its Settings row before Modal restores the
+      // opener. Return to that still-active task surface, not the inert page.
+      if (opener && !opener.isConnected && surface?.isConnected &&
+        !surface.closest('[hidden], [aria-hidden="true"], [inert]')) {
+        surface.focus({ preventScroll: true })
+      }
+    }
+  }, [])
+
+  // These are view transitions inside one Modal, not another focus trap.
+  useEffect(() => {
+    if (!confirmation && !returnActionRef.current) return
+    let restoreFrame: number | undefined
+    const frame = requestAnimationFrame(() => {
+      if (confirmation) {
+        if (confirmationBusy) {
+          editorContentRef.current?.closest<HTMLElement>('[role="alertdialog"]')?.focus()
+        } else {
+          cancelButtonRef.current?.focus()
+        }
+      } else {
+        // Auto-growing textareas remeasure in ResizeObserver after the reveal
+        // frame, temporarily shrinking the scroll range. Restore only after
+        // that measurement so it cannot clamp the retained offset back to zero.
+        restoreFrame = requestAnimationFrame(() => {
+          for (const { element, top, left } of scrollSnapshotRef.current) {
+            element.scrollTop = top
+            element.scrollLeft = left
+          }
+          const target = returnActionRef.current?.isConnected ? returnActionRef.current : closeButtonRef.current
+          target?.focus({ preventScroll: true })
+          returnActionRef.current = null
+          scrollSnapshotRef.current = []
+        })
+      }
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      if (restoreFrame !== undefined) cancelAnimationFrame(restoreFrame)
+    }
+  }, [confirmation, confirmationBusy])
+
+  // A queued Save as copy may change the edited object. Never reuse a confirmation
+  // for a different preset, even when an earlier resource request finishes later.
+  useEffect(() => {
+    if (confirmation && confirmation.presetId !== editingId && !confirmationBusyRef.current) {
+      setConfirmation(null)
+      setConfirmationError('')
+    }
+  }, [confirmation, editingId])
+
   if (!secrets || !preset) return null
 
-  const enqueueMutation = (operation: () => Promise<void>) => {
+  const enqueueMutation = (operation: () => Promise<void>, onError?: (error: unknown) => void) => {
     mutationQueueRef.current = mutationQueueRef.current
       .then(() => runSave(operation))
-      .catch((error) => toast(String(error), 'error'))
+      .catch((error) => {
+        if (onError) onError(error)
+        else toast(String(error), 'error')
+      })
+    return mutationQueueRef.current
   }
 
   const patchPreset = (patch: Partial<LLMPreset>) => {
@@ -157,34 +233,81 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
     document.body.removeChild(a)
   }
 
-  const deletePreset = async () => {
-    if (preset.builtin || presets.length <= 1 || !preset.etag) return
-    const label = preset.label
-    if (!(await confirm(t('settings.confirmDeletePreset', { label }), { tone: 'danger' }))) return
-    enqueueMutation(async () => {
-      const current = presetRef.current
-      if (!current?.etag) return
-      if (secrets.llm_tagger.current_preset === current.id) {
-        const replacement = presets.find((item) => item.id !== current.id)
-        if (!replacement) return
-        await api.setDefaultLLMPreset(replacement.id)
-      }
-      await api.deleteLLMPreset(current.id, etagRef.current || current.etag)
-      await reloadSecrets()
-      toast(t('llmPreset.deleted', { label }), 'success')
-      onClose()
-    })
+  const blurEditorField = () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && editorContentRef.current?.contains(active)) active.blur()
   }
 
-  const resetToBuiltin = async () => {
-    if (!preset.builtin || !preset.etag) return
-    if (!(await confirm(t('settings.confirmResetPreset', { label: llmPresetLabel(preset, t) }), { tone: 'danger' }))) return
-    enqueueMutation(async () => {
+  const beginConfirmation = (action: EditorConfirmation['action'], initiator: HTMLButtonElement) => {
+    if (confirmationBusyRef.current || !preset.etag) return
+    if (action === 'delete' && (preset.builtin || presets.length <= 1)) return
+    if (action === 'reset' && !preset.builtin) return
+    blurEditorField()
+    returnActionRef.current = initiator
+    scrollSnapshotRef.current = Array.from(
+      editorContentRef.current?.querySelectorAll<HTMLElement>('[data-llm-editor-scroll]') ?? [],
+    ).map((element) => ({ element, top: element.scrollTop, left: element.scrollLeft }))
+    setConfirmationError('')
+    setConfirmation({ action, presetId: preset.id, label: llmPresetLabel(preset, t) })
+  }
+
+  const cancelConfirmation = () => {
+    if (confirmationBusyRef.current) return
+    setConfirmation(null)
+    setConfirmationError('')
+  }
+
+  const requestClose = () => {
+    if (confirmationBusyRef.current) return
+    if (confirmation) {
+      cancelConfirmation()
+      return
+    }
+    // The existing sortable owns Escape while a message is being dragged. Its
+    // document listener still receives this event and cancels before a later exit.
+    if (editorContentRef.current?.querySelector('[aria-roledescription="sortable"][aria-pressed="true"]')) return
+    blurEditorField()
+    onClose()
+  }
+
+  const runConfirmedAction = () => {
+    if (!confirmation || confirmationBusyRef.current) return
+    const pending = confirmation
+    confirmationBusyRef.current = true
+    setConfirmationBusy(true)
+    setConfirmationError('')
+    void enqueueMutation(async () => {
       const current = presetRef.current
-      if (!current?.etag) return
-      await api.resetLLMPreset(current.id, etagRef.current || current.etag)
-      await reloadSecrets()
+      if (!current || current.id !== pending.presetId) {
+        setConfirmation(null)
+        return
+      }
+      if (!current.etag) throw new Error('Preset ETag is missing; reload settings')
+      if (pending.action === 'delete') {
+        if (current.builtin || presets.length <= 1) {
+          setConfirmation(null)
+          return
+        }
+        if (secrets.llm_tagger.current_preset === current.id) {
+          const replacement = presets.find((item) => item.id !== current.id)
+          if (!replacement) return
+          await api.setDefaultLLMPreset(replacement.id)
+        }
+        await api.deleteLLMPreset(current.id, etagRef.current || current.etag)
+        await reloadSecrets()
+        toast(t('llmPreset.deleted', { label: pending.label }), 'success')
+      } else {
+        if (!current.builtin) {
+          setConfirmation(null)
+          return
+        }
+        await api.resetLLMPreset(current.id, etagRef.current || current.etag)
+        await reloadSecrets()
+      }
       onClose()
+    }, (error) => setConfirmationError(String(error))).finally(() => {
+      confirmationBusyRef.current = false
+      setConfirmationBusy(false)
     })
   }
 
@@ -193,46 +316,82 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
     && !preset.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
   const assistHelp = t('llmPreset.assistTaggerHelp').split('%TAGS%').join('{{tags}}')
 
-  // Portal 到 body：modal 是全局层（打标页/设置抽屉两处入口同款），不挂在抽屉
-  // DOM 里；幕布与公告中心同款（bg-black/35，无磨砂）。
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="llm-preset-editor-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
-      data-testid="llm-preset-editor-modal"
-      onClick={onClose}
-    >
-      <div
-        className="w-[80vw] max-h-[88vh] flex flex-col bg-elevated border border-dim rounded-lg shadow-xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* header */}
-        <div className="flex items-center gap-2.5 px-6 py-4 border-b border-subtle shrink-0">
-          <h2 id="llm-preset-editor-title" className="m-0 text-base font-semibold text-fg-primary">
-            {t('llmPreset.title')}
-          </h2>
-          <span className="text-sm text-fg-tertiary truncate">{llmPresetLabel(preset, t)}</span>
-          {preset.builtin && (
-            <span className="text-xs px-1.5 py-0.5 rounded-sm font-mono bg-overlay text-fg-tertiary shrink-0">
-              {t('llmPreset.builtin')}
-            </span>
+  return (
+    <Modal
+      title={confirmation ? t('common.dialogConfirmTitle') : (
+        <span className="flex min-w-0 flex-wrap items-baseline gap-related">
+          <span>{t('llmPreset.title')}</span>
+          <span className="min-w-0 break-words text-sm font-normal text-fg-tertiary">{llmPresetLabel(preset, t)}</span>
+          {preset.builtin && <Badge tone="neutral" size="sm">{t('llmPreset.builtin')}</Badge>}
+        </span>
+      )}
+      description={confirmation ? t(
+        confirmation.action === 'delete' ? 'settings.confirmDeletePreset' : 'settings.confirmResetPreset',
+        { label: confirmation.label },
+      ) : undefined}
+      role={confirmation ? 'alertdialog' : 'dialog'}
+      size={confirmation ? 'sm' : 'wide'}
+      panelClassName={confirmation ? '' : 'h-[88dvh]'}
+      bodyClassName={confirmation ? '!p-0' : '!overflow-hidden !p-0 flex flex-1 flex-col'}
+      initialFocusRef={closeButtonRef}
+      closeOnEscape={!confirmationBusy}
+      closeOnBackdrop={!confirmationBusy}
+      onClose={requestClose}
+      testId="llm-preset-editor-modal"
+      headerActions={!confirmation && (
+        <Button ref={closeButtonRef} variant="ghost" size="sm" iconOnly onClick={requestClose}
+          aria-label={t('common.close', { defaultValue: 'Close' })}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </Button>
+      )}
+      footer={(
+        <>
+          <div hidden={Boolean(confirmation)}>
+            <div className="flex flex-wrap items-center gap-related">
+              <div className="mr-auto flex flex-wrap items-center gap-related">
+                {preset.builtin && (
+                  <Button variant="danger" size="sm" onClick={(event) => beginConfirmation('reset', event.currentTarget)}>
+                    {t('llmPreset.resetBuiltin')}
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" onClick={saveAsCopy}>{t('llmPreset.saveAsCopy')}</Button>
+                <Button variant="ghost" size="sm" onClick={exportPreset} title={t('llmPreset.exportTitle')}>
+                  {t('llmPreset.export')}
+                </Button>
+              </div>
+              <ActionGroup
+                secondary={!preset.builtin && presets.length > 1 ? (
+                  <Button variant="danger" size="sm" onClick={(event) => beginConfirmation('delete', event.currentTarget)}>
+                    {t('common.delete')}
+                  </Button>
+                ) : undefined}
+                primary={<Button variant="primary" onClick={requestClose}>{t('llmPreset.done')}</Button>}
+              />
+            </div>
+          </div>
+          {confirmation && (
+            <ActionGroup
+              secondary={(
+                <Button ref={cancelButtonRef} variant="secondary" onClick={cancelConfirmation} disabled={confirmationBusy}>
+                  {t('common.cancel')}
+                </Button>
+              )}
+              primary={(
+                <Button variant="danger" loading={confirmationBusy} onClick={runConfirmedAction}>
+                  {t('common.confirm')}
+                </Button>
+              )}
+            />
           )}
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('common.close', { defaultValue: 'Close' })}
-            className="w-7 h-7 grid place-items-center text-fg-tertiary bg-transparent border-none rounded-sm cursor-pointer hover:bg-overlay hover:text-fg-primary transition-colors"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* body：左（参数）/ 右（提示词消息）= 1:2，两列各自独立滚动 */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[1fr_2fr]">
-          <div className="min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4 border-r border-subtle">
+        </>
+      )}
+    >
+      <div ref={editorContentRef} hidden={Boolean(confirmation)} className="h-full min-h-0">
+        {/* Preserve both input subtrees and their scroll owners across confirmation. */}
+        <div className="h-full min-h-0 grid grid-cols-1 md:grid-cols-[1fr_2fr]">
+          <div data-llm-editor-scroll="parameters" className="min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4 border-r border-subtle">
           <EditorSection title={t('llmPreset.sectionBasic')}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
               <MTextField
@@ -384,7 +543,7 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
         </div>
 
           {/* 右列：提示词消息（自适应高度的消息编辑器，长了随本列滚动） */}
-          <div className="min-h-0 overflow-y-auto px-5 py-4">
+          <div data-llm-editor-scroll="messages" className="min-h-0 overflow-y-auto px-5 py-4">
             <EditorSection title={t('llmPreset.sectionMessages')}>
               <div className="flex flex-col gap-1.5">
                 {preset.endpoint === 'responses' && (
@@ -398,33 +557,13 @@ export default function LLMPresetEditorModal({ presetId, onClose }: {
             </EditorSection>
           </div>
         </div>
-
-        {/* footer */}
-        <div className="flex items-center gap-2 px-6 py-3.5 border-t border-subtle shrink-0">
-          {preset.builtin && (
-            <button type="button" onClick={() => void resetToBuiltin()} className="btn btn-ghost btn-sm text-err">
-              {t('llmPreset.resetBuiltin')}
-            </button>
-          )}
-          <button type="button" onClick={saveAsCopy} className="btn btn-ghost btn-sm">
-            {t('llmPreset.saveAsCopy')}
-          </button>
-          <button type="button" onClick={exportPreset} title={t('llmPreset.exportTitle')} className="btn btn-ghost btn-sm">
-            {t('llmPreset.export')}
-          </button>
-          <span className="flex-1" />
-          {!preset.builtin && presets.length > 1 && (
-            <button type="button" onClick={() => void deletePreset()} className="btn btn-ghost btn-sm text-err">
-              {t('common.delete')}
-            </button>
-          )}
-          <button type="button" onClick={onClose} className="btn btn-primary">
-            {t('llmPreset.done')}
-          </button>
-        </div>
       </div>
-    </div>,
-    document.body,
+      {confirmation && confirmationError && (
+        <div className="p-page">
+          <Alert tone="danger" role="alert">{confirmationError}</Alert>
+        </div>
+      )}
+    </Modal>
   )
 }
 
