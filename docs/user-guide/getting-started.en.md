@@ -49,6 +49,8 @@ Read [Upgrading to v0.27](upgrading-v0.27.en.md) first: stop jobs and back up da
 
 ## Download models
 
+While Settings is open, transient success and error messages remain above it and accessible to assistive technology. They do not move keyboard focus or unlock the page behind the drawer.
+
 After launch, go to the model download center under **Settings → Training**. Downloads are grouped by model family (Anima / Krea 2) — grab only the family you plan to train (defaults to `./models/`); Anima-only users can skip the large Krea 2 files:
 
 | Item | Source | Path | Size |
