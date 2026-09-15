@@ -394,6 +394,30 @@ Toast must not duplicate an error already announced inside the modal. Toast feed
 above the modal layer when an operation keeps the dialog open. Do not recreate modal
 backdrops, panel geometry, focus listeners, or title linkage in feature code.
 
+### Confirmation inside an instant-save editor
+
+When a modal editor needs confirmation for deleting or resetting its current object,
+use a confirmation view in the same Modal, not a second stacked dialog. Keep the editor's
+input state and scroll context mounted but non-interactive during confirmation. Cancel,
+Escape, and backdrop return to editing and its initiating action without closing the
+underlying Drawer. While the confirmed destructive request runs, prevent duplicate
+execution and unsafe dismissal; failure keeps a recoverable view in the same task.
+
+The LLM preset editor is the first adoption. Its parameter and prompt-message panes are
+a specialist side-by-side workspace: retain the `1fr / 2fr` desktop ratio and independent
+column scrolling within a viewport-bounded `wide` Modal, with existing footer action
+groups kept together. This is not permission to widen ordinary forms. The shared shell
+still owns title linkage, focus trapping, scroll protection and opener restoration.
+If confirmed deletion removes the original edit action, return focus to its still-active
+Drawer or main task surface rather than the inert background.
+
+Instant-save editors do not acquire a whole-form draft through this migration. Closing
+by Escape is equivalent to Done or the close control: first blur the active editor field
+so its existing commit path can run, then close. It does not undo applied changes; Enter
+inside a message textarea remains a newline. Preset/credential APIs, ETags and the serial
+mutation queue remain feature-owned. Other editor consumers migrate only in their own
+bounded slices, not by changing the behavior of every Modal.
+
 ### Full-screen image preview
 
 `ImagePreviewModal` is a specialized protected dialog, not an ordinary modal card.
