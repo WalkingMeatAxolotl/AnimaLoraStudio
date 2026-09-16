@@ -3,7 +3,7 @@
  *  目前只覆盖 SnapshotConfigTab 的 refetch trap：父组件每 2s 浅 clone task
  *  做 elapsed time tick，旧实现 [task] 作 deps 会让 snapshot config 也跟着
  *  2s 重拉 —— 浏览器卡顿、loading flash。 */
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -197,6 +197,74 @@ function renderDetailPage() {
 function getTaskCalls(): number {
   return fetchMock.mock.calls.filter(([u]) => u === QUEUE_ITEM_URL).length
 }
+
+describe('QueueDetailPage 重试状态恢复', () => {
+  function mockRetry(retryResponse: () => Promise<Response>, taskType: 'train' | 'generate' = 'train') {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === `${QUEUE_ITEM_URL}/retry`) return retryResponse()
+      if (url === QUEUE_ITEM_URL) {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 119, task_type: taskType, status: 'failed', finished_at: 1200,
+          is_resumable: taskType === 'train',
+        })))
+      }
+      if (url === '/api/queue/120') {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 120, name: 'new task', task_type: taskType, status: 'pending', started_at: null,
+        })))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+  }
+
+  it.each([
+    { taskType: 'train', label: '重新训练' },
+    { taskType: 'generate', label: '重试' },
+  ] as const)('$label 请求失败后释放按钮，并允许再次重试', async ({ taskType, label }) => {
+    const user = userEvent.setup()
+    let rejectRetry!: (reason: Error) => void
+    const retryResponse = vi.fn<() => Promise<Response>>()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRetry = reject }))
+      .mockResolvedValueOnce(queueItemResponse(makeTask({ id: 120, status: 'pending' })))
+    mockRetry(retryResponse, taskType)
+    renderDetailPage()
+
+    const retryButton = await screen.findByRole('button', { name: label })
+    const deleteButton = screen.getByRole('button', { name: '删除记录' })
+    await user.click(retryButton)
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+    expect(retryButton).toBeDisabled()
+    expect(deleteButton).toBeDisabled()
+    if (taskType === 'train') expect(screen.getByTestId('detail-resume-btn')).toBeDisabled()
+    await user.click(retryButton)
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+
+    await act(async () => { rejectRetry(new Error('retry offline')) })
+    expect(await screen.findByText('Error: retry offline')).toBeInTheDocument()
+    await waitFor(() => expect(retryButton).toBeEnabled())
+    expect(deleteButton).toBeEnabled()
+    if (taskType === 'train') expect(screen.getByTestId('detail-resume-btn')).toBeEnabled()
+
+    await user.click(retryButton)
+    expect(retryResponse).toHaveBeenCalledTimes(2)
+    expect(await screen.findByRole('heading', { name: '#120', level: 1 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
+  })
+
+  it('首次重试成功后跳到新任务，且新任务操作不继承 busy', async () => {
+    const user = userEvent.setup()
+    const retryResponse = vi.fn().mockResolvedValue(queueItemResponse(makeTask({ id: 120, status: 'pending' })))
+    mockRetry(retryResponse)
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '重新训练' }))
+
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(`${QUEUE_ITEM_URL}/retry`, expect.objectContaining({ method: 'POST' }))
+    expect(await screen.findByRole('heading', { name: '#120', level: 1 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
+  })
+})
 
 describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
   beforeEach(() => {

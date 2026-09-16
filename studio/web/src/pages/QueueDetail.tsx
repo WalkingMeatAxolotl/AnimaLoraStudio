@@ -269,7 +269,7 @@ export default function QueueDetailPage() {
     setBusy(true)
     try { const newTask = await api.retryTask(task.id); toast(t('queueDetail.retryQueued', { id: newTask.id }), 'success'); navigate(`/queue/${newTask.id}`) }
     catch (e) { toast(String(e), 'error'); setBusy(false) }
-    finally { setBusy(true) }
+    finally { setBusy(false) }
   }
 
   const remove = async () => {
