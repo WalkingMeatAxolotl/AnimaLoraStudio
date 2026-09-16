@@ -3,13 +3,14 @@
  *  目前只覆盖 SnapshotConfigTab 的 refetch trap：父组件每 2s 浅 clone task
  *  做 elapsed time tick，旧实现 [task] 作 deps 会让 snapshot config 也跟着
  *  2s 重拉 —— 浏览器卡顿、loading flash。 */
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
 import { ToastProvider } from '../components/Toast'
 import type { Task } from '../api/client'
+import i18n from '../i18n'
 import QueueDetailPage, { OutputsTab, SnapshotConfigTab } from './QueueDetail'
 
 const SNAPSHOT_URL_PREFIX = '/api/queue/'
@@ -264,6 +265,55 @@ describe('QueueDetailPage 重试状态恢复', () => {
     expect(await screen.findByRole('heading', { name: '#120', level: 1 })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
   })
+})
+
+describe('QueueDetailPage 删除范围提示', () => {
+  afterEach(async () => {
+    await act(async () => { await i18n.changeLanguage('zh') })
+  })
+
+  const languages = [
+    {
+      language: 'zh', open: '删除记录', title: '删除任务记录', cancel: '取消',
+      common: '同时删除本任务目录中的日志、监控、配置快照、样图，以及本任务的恢复点。此操作无法撤销。',
+      train: '版本级 LoRA 训练产物不受影响。',
+      generate: '还会删除本次生成的图片、XY 输出目录和临时缓存。',
+    },
+    {
+      language: 'en', open: 'Delete record', title: 'Delete task record', cancel: 'Cancel',
+      common: "This also deletes the logs, monitor data, config snapshots and samples in this task's folder, along with its recovery checkpoints. This cannot be undone.",
+      train: 'Version-level LoRA training outputs are not affected.',
+      generate: 'This also deletes the images, XY output folders and temporary cache from this render task.',
+    },
+  ] as const
+
+  for (const copy of languages) {
+    it.each(['train', 'generate', 'tag'] as const)(`${copy.language}：%s 的删除提示准确，取消不删除任务`, async (taskType) => {
+      await i18n.changeLanguage(copy.language)
+      const user = userEvent.setup()
+      fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+        ? Promise.resolve(queueItemResponse(makeTask({
+          id: 119, name: 'example-task-119', task_type: taskType, status: 'done', finished_at: 1200,
+        })))
+        : Promise.resolve(new Response('', { status: 404 })))
+      renderDetailPage()
+
+      await user.click(await screen.findByRole('button', { name: copy.open }))
+      const heading = screen.getByRole('heading', { name: copy.title })
+      const panel = heading.closest('header')!.parentElement!
+      expect(panel).toHaveTextContent('#119 example-task-119')
+      expect(panel).toHaveTextContent(copy.common)
+      expect(panel.textContent!.includes(copy.train)).toBe(taskType === 'train')
+      expect(panel.textContent!.includes(copy.generate)).toBe(taskType === 'generate')
+      const deleteCalls = () => fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')
+      expect(deleteCalls()).toHaveLength(0)
+
+      await user.click(within(panel).getByRole('button', { name: copy.cancel }))
+      expect(screen.queryByRole('heading', { name: copy.title })).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: '#119', level: 1 })).toBeInTheDocument()
+      expect(deleteCalls()).toHaveLength(0)
+    })
+  }
 })
 
 describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {

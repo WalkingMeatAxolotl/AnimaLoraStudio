@@ -571,10 +571,13 @@ export default function QueueDetailPage() {
               <br />
               <span className="text-fg-tertiary text-xs">
                 {t('queueDetail.deleteNote')}
+                {kind === 'train' && <> {t('queueDetail.deleteTrainNote')}</>}
+                {kind === 'generate' && <> {t('queueDetail.deleteGenerateNote')}</>}
               </span>
             </>
           }
           confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
           danger
           onConfirm={remove}
           onCancel={() => setConfirmDelete(false)}
