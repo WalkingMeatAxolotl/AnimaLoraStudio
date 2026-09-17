@@ -5,7 +5,7 @@ import {
   api, type QueueHistoryPage, type QueueHoldState, type Task,
   type TaskStatus, type TaskType,
 } from '../api/client'
-import { DATA_VIEW_KINDS } from './queue/jobUtils'
+import { DATA_VIEW_KINDS, fmtJobAgo as fmtAgo, fmtJobDuration as fmtDuration, fmtJobTime, fmtJobUntil as fmtUntil } from './queue/jobUtils'
 import Alert from '../components/Alert'
 import Button from '../components/Button'
 import Card from '../components/Card'
@@ -13,6 +13,7 @@ import EmptyState from '../components/EmptyState'
 import { Input, Select } from '../components/FormControl'
 import ListToolbar from '../components/ListToolbar'
 import PageHeader from '../components/PageHeader'
+import ProgressBar from '../components/ProgressBar'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -52,54 +53,15 @@ const DEFAULT_TYPE_FILTER: TaskKind = 'train'
 const QUEUE_TASKS_LIST_TOOLBAR_ID = 'queue-tasks-list-toolbar'
 const QUEUE_JOBS_LIST_TOOLBAR_ID = 'queue-jobs-list-toolbar'
 
-function fmtAgo(ts: number): string {
-  const sec = Math.max(0, Date.now() / 1000 - ts)
-  if (sec < 60) return '刚刚'
-  if (sec < 3600) return `${Math.floor(sec / 60)}m 前`
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h 前`
-  return `${Math.floor(sec / 86400)}d 前`
-}
-
-/** scheduled task 的计划时间：绝对（本地时区）+「约 X 后」相对提示。 */
+/** scheduled task 的计划时间（本地时区、当前界面语言）。 */
 function fmtScheduledAbs(ts: number): string {
-  return new Date(ts * 1000).toLocaleString('zh-CN', {
-    hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
-}
-
-function fmtUntil(ts: number): string {
-  const sec = ts - Date.now() / 1000
-  if (sec <= 0) return '即将开始'
-  if (sec < 60) return '1m 内'
-  if (sec < 3600) return `${Math.ceil(sec / 60)}m 后`
-  if (sec < 86400) {
-    const h = Math.floor(sec / 3600); const m = Math.round((sec % 3600) / 60)
-    return m ? `${h}h ${m}m 后` : `${h}h 后`
-  }
-  return `${Math.ceil(sec / 86400)}d 后`
-}
-
-function fmtDuration(start: number | null, end: number | null): string {
-  if (!start) return '—'
-  const e = end ?? Date.now() / 1000
-  const sec = Math.max(0, e - start)
-  if (sec < 60) return `${sec.toFixed(0)}s`
-  const m = Math.floor(sec / 60); const s = Math.floor(sec % 60)
-  if (m < 60) return `${m}m ${s}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
+  return fmtJobTime(ts, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function fmtDurationShort(ms: number): string {
   if (ms < 60e3) return `${Math.round(ms / 1e3)}s`
   if (ms < 3600e3) return `${Math.round(ms / 60e3)}m`
   return `${(ms / 3600e3).toFixed(1)}h`
-}
-
-/** running task 的「已运行 Xm」标签；非 running 返 null。 */
-function estimateEta(task: Task): string | null {
-  if (task.status !== 'running' || !task.started_at) return null
-  const elapsed = (Date.now() / 1000 - task.started_at) * 1000
-  return `已运行 ${fmtDurationShort(elapsed)}`
 }
 
 /** 历史分页持久底栏（GPU / 数据两个视图共用同款，P-G 反馈统一）。
@@ -161,8 +123,8 @@ function PaginationBar({
 /** 队列行卡片。0.17 P-A 从 QueuePage 内联 map 抽出，供三个分区复用同一行渲染。
  *  monitor 只对 running 且 id===runningTaskId 的那行有意义；evalInfo 只对 terminal
  *  且仍在评估的行有值。 */
-function QueueTaskRow({
-  task, runningTaskId, monitor, evalInfo, isWaitingForRelease, prevAhead,
+export function QueueTaskRow({
+  task, runningTaskId, monitor, evalInfo, isWaitingForRelease,
   onOpen, onResume, onCancelPaused, onStartNow, onCancelScheduled,
 }: {
   task: Task
@@ -170,7 +132,6 @@ function QueueTaskRow({
   monitor: { step?: number | null; total_steps?: number | null } | null
   evalInfo?: EvalProgress
   isWaitingForRelease: boolean
-  prevAhead: number
   onOpen: (id: number) => void
   onResume: (task: Task) => void | Promise<void>
   onCancelPaused: (task: Task) => void | Promise<void>
@@ -197,7 +158,13 @@ function QueueTaskRow({
   const isTerminal = ['done', 'failed', 'canceled'].includes(task.status)
   const hasProject = !!(task.project_id && task.version_id)
   const kind = taskKind(task)
-  const eta = estimateEta(task)
+  const eta = isRunning && task.started_at
+    ? t('queue.elapsed', { time: fmtDurationShort(Math.max(0, Date.now() - task.started_at * 1000)) })
+    : null
+  const step = task.id === runningTaskId ? monitor?.step : null
+  const totalSteps = task.id === runningTaskId ? monitor?.total_steps : null
+  const hasSteps = step != null && totalSteps != null && Number.isFinite(step)
+    && Number.isFinite(totalSteps) && step >= 0 && totalSteps > 0
   const tone = STATUS_TONE[task.status]
 
   // 0.17 P-H 跳转列：按类型跳原生页看结果/配置。train→训练配置页、reg_ai→正则集、
@@ -233,10 +200,10 @@ function QueueTaskRow({
         </span>
 
         <div style={{ minWidth: 0 }}>
-          <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap">
+          <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap" title={task.name}>
             {task.name}
           </div>
-          <div className="font-mono text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
+          <div className="font-mono text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap" title={task.config_name}>
             {task.config_name}
           </div>
         </div>
@@ -258,38 +225,18 @@ function QueueTaskRow({
           {isRunning ? (
             <div className="flex flex-col gap-0.5">
               <span className="font-mono text-fg-tertiary text-xs">
-                {(() => {
-                  if (
-                    task.id === runningTaskId &&
-                    monitor?.step != null &&
-                    monitor.total_steps != null &&
-                    monitor.total_steps > 0
-                  ) {
-                    return `step ${monitor.step.toLocaleString()} / ${monitor.total_steps.toLocaleString()}`
-                  }
-                  return fmtDuration(task.started_at, null)
-                })()}
+                {hasSteps ? `step ${step.toLocaleString()} / ${totalSteps.toLocaleString()}` : fmtDuration(task.started_at, null)}
               </span>
-              <div className="h-1 bg-overlay rounded-sm overflow-hidden">
-                {(() => {
-                  const haveSteps =
-                    task.id === runningTaskId &&
-                    monitor?.step != null &&
-                    monitor.total_steps != null &&
-                    monitor.total_steps > 0
-                  if (haveSteps) {
-                    const pct = Math.max(
-                      0,
-                      Math.min(100, (monitor!.step! / monitor!.total_steps!) * 100),
-                    )
-                    return <div className="h-full bg-accent rounded-sm" style={{ width: `${pct}%` }} />
-                  }
-                  return <div className="h-full bg-accent/40 rounded-sm animate-pulse" style={{ width: '20%' }} />
-                })()}
-              </div>
+              <ProgressBar
+                label={t('queue.progressLabel', { id: task.id })}
+                value={hasSteps ? step : null}
+                max={hasSteps ? totalSteps : undefined}
+                valueText={hasSteps ? undefined : t('queue.progressUnknown')}
+                size="xs"
+              />
             </div>
           ) : task.error_msg ? (
-            <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap block text-xs">
+            <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap block text-xs" title={task.error_msg}>
               {task.error_msg}
             </span>
           ) : isPaused ? (
@@ -323,7 +270,7 @@ function QueueTaskRow({
             <>
               {eta && <span className="text-accent">{eta}</span>}
               {eta && <br />}
-              <span className="text-xs">{fmtAgo(task.started_at!)} 开始</span>
+              <span className="text-xs">{task.started_at ? t('queue.startedAgo', { time: fmtAgo(task.started_at) }) : '—'}</span>
             </>
           ) : isPaused ? (
             /* 暂停时间在左侧 duration 列（pausedAtStep），操作在右侧 action 列 */
@@ -350,17 +297,12 @@ function QueueTaskRow({
             <span>
               <span>{fmtAgo(task.finished_at)}</span>
               <br />
-              <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
+              <span className="text-xs text-fg-tertiary">{t('queue.ended')}</span>
             </span>
           ) : (
-            <span className="flex flex-col items-end gap-0.5">
-              <span>{t('queue.ahead', { n: prevAhead })}</span>
-              {isWaitingForRelease && (
-                <span className="text-xs text-warn">
-                  {t('queue.waitingForRelease')}
-                </span>
-              )}
-            </span>
+            isWaitingForRelease ? (
+              <span className="text-xs text-warn">{t('queue.waitingForRelease')}</span>
+            ) : <span>—</span>
           )}
         </span>
 
@@ -657,14 +599,6 @@ export default function QueuePage() {
     [liveSorted],
   )
 
-  const prevCount = useCallback((taskId: number): number => {
-    let count = 0
-    for (const t of liveSorted) {
-      if (t.id === taskId) break
-      if (t.status === 'running' || t.status === 'pending') count++
-    }
-    return count
-  }, [liveSorted])
 
 
   const requestPause = (task: Task) => {
@@ -821,7 +755,6 @@ export default function QueuePage() {
       monitor={monitor}
       evalInfo={evalMap.get(task.id)}
       isWaitingForRelease={task.status === 'pending' && holdState?.held === true}
-      prevAhead={prevCount(task.id)}
       onOpen={(id) => navigate(`/queue/${id}`)}
       onResume={resumeTask}
       onCancelPaused={cancelPaused}

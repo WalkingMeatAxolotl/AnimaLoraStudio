@@ -143,10 +143,10 @@ export default function DataJobsPanel({
             #{task.id}
           </span>
           <div style={{ minWidth: 0 }}>
-            <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap">
+            <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap" title={KIND_LABEL[kindOf] ?? kindOf}>
               {KIND_LABEL[kindOf] ?? kindOf}
             </div>
-            <div className="text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
+            <div className="text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap" title={`${projectLabel}${task.version_id ? ` · v${task.version_id}` : ''}`}>
               {projectLabel}{task.version_id ? ` · v${task.version_id}` : ''}
             </div>
           </div>

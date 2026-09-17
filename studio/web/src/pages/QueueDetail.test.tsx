@@ -199,6 +199,17 @@ function getTaskCalls(): number {
   return fetchMock.mock.calls.filter(([u]) => u === QUEUE_ITEM_URL).length
 }
 
+describe('QueueDetailPage 完整参数', () => {
+  it('详情展示超过200字符的参数全文', async () => {
+    const value = `${'长参数'.repeat(100)} END-OF-PARAM`
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: 'tag', status: 'done', params_decoded: { tag: value } })))
+      : Promise.resolve(new Response('', { status: 404 })))
+    renderDetailPage()
+    expect(await screen.findByText(value)).toHaveClass('break-all')
+  })
+})
+
 describe('QueueDetailPage 加载失败恢复', () => {
   beforeEach(() => {
     FakeEventSource.instances = []

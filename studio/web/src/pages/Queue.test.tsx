@@ -14,7 +14,7 @@ import { DialogProvider } from '../components/Dialog'
 import { ToastProvider } from '../components/Toast'
 import { api, type QueueHistoryPage, type Task } from '../api/client'
 import i18n from '../i18n'
-import QueuePage, { taskKind } from './Queue'
+import QueuePage, { QueueTaskRow, taskKind } from './Queue'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -84,6 +84,53 @@ function renderQueue() {
     </MemoryRouter>,
   )
 }
+
+describe('QueueTaskRow 状态与信息', () => {
+  function renderRow(task: Task, monitor: { step?: number | null; total_steps?: number | null } | null = null) {
+    return render(<MemoryRouter><QueueTaskRow task={task} runningTaskId={task.id} monitor={monitor}
+      isWaitingForRelease={false} onOpen={vi.fn()} onResume={vi.fn()} onCancelPaused={vi.fn()}
+      onStartNow={vi.fn()} onCancelScheduled={vi.fn()} /></MemoryRouter>)
+  }
+
+  it.each([
+    { monitor: null, value: undefined },
+    { monitor: { step: 0, total_steps: 100 }, value: '0' },
+    { monitor: { step: 40, total_steps: 100 }, value: '40' },
+    { monitor: { step: 4, total_steps: 0 }, value: undefined },
+    { monitor: { step: -1, total_steps: 100 }, value: undefined },
+    { monitor: { step: Number.NaN, total_steps: 100 }, value: undefined },
+  ])('仅有效步数显示定量进度：$monitor', ({ monitor, value }) => {
+    renderRow(makeTask(), monitor)
+    const progress = screen.getByRole('progressbar', { name: '任务 #1 进度' })
+    if (value == null) {
+      expect(progress).not.toHaveAttribute('aria-valuenow')
+      expect(progress).toHaveAttribute('data-state', 'indeterminate')
+      expect(progress).toHaveAttribute('aria-valuetext', '进度未知')
+    } else {
+      expect(progress).toHaveAttribute('aria-valuenow', value)
+      expect(progress).toHaveAttribute('aria-valuemax', '100')
+    }
+  })
+
+  it.each(['done', 'failed', 'canceled'] as const)('%s 的结束时间不再一律称为完成', (status) => {
+    renderRow(makeTask({ status, finished_at: 1200 }))
+    expect(screen.getByText('结束')).toBeInTheDocument()
+    if (status !== 'done') expect(screen.queryByText('完成')).not.toBeInTheDocument()
+  })
+
+  it('等待任务不再声称前方任务数量；长名称、配置和错误保留完整提示', () => {
+    const name = 'Long task '.repeat(25).trim()
+    const config = 'long-config-'.repeat(25)
+    const error = 'Full error '.repeat(25).trim()
+    const view = renderRow(makeTask({ status: 'pending', name, config_name: config }))
+    expect(screen.queryByText(/前面.*个/)).not.toBeInTheDocument()
+    expect(screen.getByTitle(name)).toHaveTextContent(name.trim())
+    expect(screen.getByTitle(config)).toHaveTextContent(config)
+    view.unmount()
+    renderRow(makeTask({ status: 'failed', error_msg: error }))
+    expect(screen.getByTitle(error)).toHaveTextContent(error.trim())
+  })
+})
 
 describe('QueuePage 取消当前任务提示', () => {
   afterEach(async () => {

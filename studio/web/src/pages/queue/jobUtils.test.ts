@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Task } from '../../api/client'
-import { jobJumpPath } from './jobUtils'
+import i18n from '../../i18n'
+import { fmtJobAgo, fmtJobTime, fmtJobUntil, fmtParamValue, jobJumpPath } from './jobUtils'
 
 function task(over: Partial<Task>): Task {
   return {
@@ -10,6 +11,38 @@ function task(over: Partial<Task>): Task {
     project_id: 7, version_id: 9, ...over,
   } as Task
 }
+
+describe('队列时间与完整参数', () => {
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await i18n.changeLanguage('zh')
+  })
+
+  it.each([
+    { lang: 'zh', locale: 'zh-CN', now: '刚刚', ago: '2m 前', until: '1h 2m 后', soon: '即将开始' },
+    { lang: 'en', locale: 'en-US', now: 'Just now', ago: '2m ago', until: 'In 1h 2m', soon: 'Starting soon' },
+  ])('$lang 使用界面语言显示过去/计划时间', async (copy) => {
+    await i18n.changeLanguage(copy.lang)
+    const now = new Date('2026-09-17T04:00:00Z').getTime()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    expect(fmtJobAgo(now / 1000)).toBe(copy.now)
+    expect(fmtJobAgo(now / 1000 - 120)).toBe(copy.ago)
+    expect(fmtJobUntil(now / 1000 + 3720)).toBe(copy.until)
+    expect(fmtJobUntil(now / 1000 - 1)).toBe(copy.soon)
+    expect(fmtJobTime(now / 1000)).toBe(new Date(now).toLocaleString(copy.locale, { hour12: false }))
+    expect(fmtJobTime(null)).toBe('—')
+  })
+
+  it('长字符串、对象和嵌套数组不在格式化阶段截断', () => {
+    const long = `${'x'.repeat(500)} full-tail`
+    const t = (key: string) => key
+    expect(fmtParamValue(long, t)).toBe(long)
+    expect(fmtParamValue({ prompt: long }, t)).toBe(JSON.stringify({ prompt: long }))
+    expect(fmtParamValue([{ prompt: long }], t)).toContain(long)
+    expect(fmtParamValue(true, t)).toBe('field.yes')
+    expect(fmtParamValue(null, t)).toBe('—')
+  })
+})
 
 describe('jobJumpPath', () => {
   it('评估跳概览的评估 tab —— 不是训练页', () => {

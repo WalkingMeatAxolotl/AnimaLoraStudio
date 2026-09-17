@@ -26,7 +26,7 @@ import LogView from '../components/LogView'
 import { useTaskLog } from '../lib/useTaskLog'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { taskKind } from './Queue'
-import { fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
+import { fmtJobTime as fmtTime, fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'metrics' | 'samples' | 'outputs' | 'snapshot'
 
@@ -77,11 +77,6 @@ const STATUS_TONE: Record<TaskStatus, BadgeTone> = {
 }
 
 const TERMINAL: ReadonlyArray<TaskStatus> = ['done', 'failed', 'canceled']
-
-function fmtTime(ts: number | null | undefined): string {
-  if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
-}
 
 function fmtDuration(start?: number | null, end?: number | null): string {
   if (!start) return '—'
