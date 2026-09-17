@@ -97,13 +97,24 @@
 }
 .ui-queue-row-actions { position: relative; z-index: 2; }
 
-.ui-queue-detail-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.ui-queue-detail-title {
+.ui-queue-detail-heading {
+  flex: 0 1 auto;
+  max-width: min(36rem, 46vw);
+}
+.ui-queue-detail-task-name,
+.ui-queue-detail-config {
   min-width: 0;
-  max-width: min(24rem, 32vw);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ui-queue-detail-task-name {
+  display: inline-block;
+  color: var(--fg-primary);
+}
+.ui-queue-detail-config {
+  display: inline-block;
+  max-width: min(16rem, 24vw);
 }
 .ui-queue-output-actions { flex-wrap: wrap; }
 .ui-queue-output-path { flex: 1 1 20rem; }
@@ -231,8 +242,8 @@
   }
   .ui-queue-task-timing,
   .ui-queue-job-timing { display: none; }
-  .ui-queue-detail-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ui-queue-detail-title { max-width: min(18rem, 40vw); }
+  .ui-queue-detail-heading { max-width: min(24rem, 40vw); }
+  .ui-queue-detail-config { max-width: min(12rem, 20vw); }
 
   .banner-shell { padding: 10px 14px; }
   .banner-shell-icon { width: 26px; height: 26px; font-size: 13px; }

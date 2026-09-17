@@ -341,7 +341,7 @@ describe('QueueDetailPage 重试状态恢复', () => {
 
     await user.click(retryButton)
     expect(retryResponse).toHaveBeenCalledTimes(2)
-    expect(await screen.findByRole('heading', { name: '#120', level: 1 })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '#120 new task', level: 1 })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
   })
 
@@ -355,7 +355,7 @@ describe('QueueDetailPage 重试状态恢复', () => {
 
     expect(retryResponse).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith(`${QUEUE_ITEM_URL}/retry`, expect.objectContaining({ method: 'POST' }))
-    expect(await screen.findByRole('heading', { name: '#120', level: 1 })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '#120 new task', level: 1 })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
   })
 })
@@ -415,7 +415,7 @@ describe('QueueDetailPage 删除范围提示', () => {
       await user.keyboard('{Escape}')
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
       expect(opener).toHaveFocus()
-      expect(screen.getByRole('heading', { name: '#119', level: 1 })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: '#119 example-task-119', level: 1 })).toBeInTheDocument()
       expect(deleteCalls()).toHaveLength(0)
     })
   }
@@ -508,6 +508,7 @@ describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
       if (url === QUEUE_ITEM_URL) {
         return Promise.resolve(queueItemResponse(makeTask({
           id: 119, status: 'running', is_pausable: pausable,
+          started_at: Math.floor(Date.now() / 1000) - 125,
         })))
       }
       return Promise.resolve({
@@ -518,16 +519,17 @@ describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
 
     renderDetailPage()
 
-    // 初始：running header 已渲染（PID 卡片），但 is_pausable=false → 暂停按钮不在
+    // 运行摘要进入紧凑身份栏，不再用四张常驻卡挤压日志/监控空间。
     await waitFor(() => expect(screen.getByText('取消任务')).toBeInTheDocument())
-    const stats = screen.getByTestId('queue-detail-stats')
-    expect(stats).toHaveClass('ui-queue-detail-stats')
-    expect(stats.querySelector('[title="train"]'))
-      .toHaveClass('overflow-hidden', 'text-ellipsis')
-    expect(screen.getByText('train', { selector: '.ui-queue-detail-title' }))
-      .toHaveAttribute('title', 'train')
-    expect(screen.getByText('train.yaml', { selector: '.ui-queue-detail-title' }))
-      .toHaveAttribute('title', 'train.yaml')
+    expect(screen.queryByTestId('queue-detail-stats')).not.toBeInTheDocument()
+    const header = screen.getByTestId('queue-detail-header')
+    expect(within(header).getByRole('heading', { name: '#119 train', level: 1 }))
+      .toHaveClass('ui-queue-detail-heading')
+    expect(within(header).getByText('train.yaml'))
+      .toHaveClass('ui-queue-detail-config')
+    expect(within(header).getByTestId('queue-detail-running-duration'))
+      .toHaveTextContent(/^· 2m/)
+    expect(screen.queryByRole('link', { name: '← 队列' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '取消任务' })).toHaveClass('btn-warn', 'btn-sm')
     for (const statusBadge of screen.getAllByText('运行中')) {
       expect(statusBadge).toHaveClass('badge-accent')

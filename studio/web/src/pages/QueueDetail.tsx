@@ -97,37 +97,6 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-// ── StatCard ────────────────────────────────────────────────────────────────
-function StatCard({ label, value, sub, mono, large, tone }: {
-  label: string
-  value: string
-  sub?: string
-  mono?: boolean
-  large?: boolean
-  tone?: 'accent' | 'ok' | 'warn' | 'err' | 'neutral'
-}) {
-  const toneClass = tone ? `text-${tone}` : 'text-fg-primary'
-  return (
-    <div className="flex min-w-0 flex-col gap-1 px-[18px] py-3.5 bg-surface rounded-md border border-subtle">
-      <span className="text-xs text-fg-tertiary font-mono tracking-widest uppercase">
-        {label}
-      </span>
-      <span
-        className={`${large ? 'text-3xl' : 'text-xl'} overflow-hidden text-ellipsis whitespace-nowrap font-semibold ${mono ? 'font-mono' : 'font-sans'} tabular-nums ${toneClass}`}
-        title={value}
-        style={{ letterSpacing: '-0.02em', lineHeight: 1.1 }}
-      >
-        {value}
-      </span>
-      {sub && (
-        <span className="text-xs text-fg-tertiary font-mono">
-          {sub}
-        </span>
-      )}
-    </div>
-  )
-}
-
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function QueueDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -355,28 +324,37 @@ export default function QueueDetailPage() {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
-      <header className="px-6 py-4 border-b border-subtle flex flex-col gap-2 shrink-0 bg-canvas">
-        <div className="flex items-center gap-2.5 flex-wrap">
-          <Link
-            to="/queue"
-            className={buttonClassName({ variant: 'ghost', size: 'sm', className: 'no-underline' })}
-          >
-            {t('queueDetail.backToQueue')}
-          </Link>
-          <span className="text-fg-tertiary">/</span>
-          <h1 className="m-0 text-xl font-semibold font-mono">
-            #{taskId}
+      <header
+        className="ui-queue-detail-header px-page py-3 border-b border-subtle flex flex-col gap-1.5 shrink-0 bg-canvas"
+        data-testid="queue-detail-header"
+      >
+        <div className="ui-queue-detail-header-row flex items-center gap-2.5 flex-wrap min-w-0">
+          <h1 className="ui-queue-detail-heading m-0 min-w-0 flex items-baseline gap-2 text-xl font-semibold">
+            <span className="font-mono shrink-0">#{taskId}</span>
+            {task && (
+              <span className="ui-queue-detail-task-name font-sans" title={task.name}>
+                {task.name}
+              </span>
+            )}
           </h1>
           {task && (
-            <>
-              <span className="ui-queue-detail-title text-fg-secondary text-md" title={task.name}>{task.name}</span>
-              <code className="ui-queue-detail-title text-xs text-fg-tertiary font-mono" title={`${task.config_name}.yaml`}>{task.config_name}.yaml</code>
-            </>
+            <code className="ui-queue-detail-config text-xs text-fg-tertiary font-mono" title={`${task.config_name}.yaml`}>
+              {task.config_name}.yaml
+            </code>
           )}
           {status && (
             <Badge tone={STATUS_TONE[status]} active={status === 'running'}>
               {STATUS_LABEL[status]}
             </Badge>
+          )}
+          {task?.status === 'running' && (
+            <span
+              className="text-sm text-fg-secondary font-mono tabular-nums"
+              title={t('queueDetail.duration')}
+              data-testid="queue-detail-running-duration"
+            >
+              · {fmtDuration(task.started_at, null)}
+            </span>
           )}
           {evalProgress?.active && (
             <Badge tone="accent" active title={t('eval.evaluatingHint')}>
@@ -524,16 +502,6 @@ export default function QueueDetailPage() {
           >
             {error}
           </Alert>
-        )}
-
-        {/* Stat cards for running tasks */}
-        {task && task.status === 'running' && (
-          <div className="ui-queue-detail-stats grid gap-2.5 mt-1" data-testid="queue-detail-stats">
-            <StatCard label={t('queueDetail.duration')} value={fmtDuration(task.started_at, null)} mono large tone="accent" />
-            <StatCard label={t('queueDetail.startTime')} value={fmtTime(task.started_at)} mono />
-            <StatCard label="Config" value={task.config_name} mono />
-            <StatCard label="PID" value={task.pid ? String(task.pid) : '—'} mono />
-          </div>
         )}
       </header>
 
