@@ -494,6 +494,55 @@ describe('QueueDetailPage 确认框忙碌保护', () => {
   })
 })
 
+describe('QueueDetailPage Overview 语义排版', () => {
+  it('按任务、时间与技术信息分组，长路径跨列且保留全部字段', async () => {
+    const configPath = 'G:/AnimaLoraStudio/studio_data/projects/67-yu-hydra/versions/K2_v1/config.yaml'
+    const monitorPath = 'G:/AnimaLoraStudio/studio_data/tasks/119/monitor/state.json'
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? Promise.resolve(queueItemResponse(makeTask({
+        id: 119,
+        name: 'yu-hydra_K2_v1',
+        config_name: 'k2_0823',
+        status: 'failed',
+        priority: 3,
+        scheduled_at: 1050,
+        started_at: 1100,
+        finished_at: 4700,
+        exit_code: 1,
+        pid: null,
+        project_id: 67,
+        version_id: 111,
+        config_path: configPath,
+        monitor_state_path: monitorPath,
+        error_msg: 'supervisor restart while task was running',
+      })))
+      : Promise.resolve(new Response('', { status: 404 })))
+
+    renderDetailPage()
+
+    const overview = await screen.findByTestId('queue-overview-grid')
+    expect(overview).toHaveClass('ui-queue-overview-grid')
+    expect(within(overview).getByRole('heading', { name: '任务与状态', level: 2 }))
+      .toHaveClass('type-section-label')
+    expect(within(overview).getByRole('heading', { name: '时间', level: 2 }))
+      .toHaveClass('type-section-label')
+    expect(within(overview).getByRole('heading', { name: '来源与技术信息', level: 2 }))
+      .toHaveClass('type-section-label')
+
+    const taskGroup = within(overview).getByTestId('queue-overview-group-task')
+    expect(within(taskGroup).getByText('名称')).toHaveClass('type-data-label')
+    expect(within(taskGroup).getByText('yu-hydra_K2_v1')).not.toHaveClass('font-mono')
+    expect(within(taskGroup).getByText('k2_0823.yaml')).toHaveClass('font-mono')
+
+    const configField = within(overview).getByTestId('queue-overview-field-config-path')
+    expect(configField).toHaveClass('ui-queue-overview-field--wide')
+    expect(within(configField).getByText(configPath)).toHaveClass('font-mono', 'break-all')
+    expect(within(overview).getByText(monitorPath)).toBeInTheDocument()
+    expect(within(overview).getByText('supervisor restart while task was running')).toBeInTheDocument()
+    expect(within(overview).getByRole('link', { name: '项目 #67 / v#111' })).toBeInTheDocument()
+  })
+})
+
 describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
   beforeEach(() => {
     FakeEventSource.instances = []

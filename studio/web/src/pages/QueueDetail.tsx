@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -599,6 +599,47 @@ function useEvalParentTaskId(task: Task): number | null {
   return parent
 }
 
+type OverviewField = {
+  key: string
+  label: string
+  value: ReactNode
+  mono?: boolean
+  wide?: boolean
+}
+
+function OverviewGroup({ id, title, fields, wide = false }: {
+  id: string
+  title: string
+  fields: OverviewField[]
+  wide?: boolean
+}) {
+  return (
+    <section
+      className={`ui-queue-overview-group card overflow-hidden p-0${wide ? ' ui-queue-overview-group--wide' : ''}`}
+      aria-labelledby={`${id}-title`}
+      data-testid={`queue-overview-group-${id}`}
+    >
+      <h2 id={`${id}-title`} className="type-section-label border-b border-subtle px-section py-field">
+        {title}
+      </h2>
+      <dl className="ui-queue-overview-fields m-0 grid gap-x-section gap-y-field px-section py-section">
+        {fields.map((field) => (
+          <div
+            key={field.key}
+            className={`ui-queue-overview-field flex min-w-0 flex-col gap-1${field.wide ? ' ui-queue-overview-field--wide' : ''}`}
+            data-testid={`queue-overview-field-${field.key}`}
+          >
+            <dt className="type-data-label">{field.label}</dt>
+            <dd className={`m-0 min-w-0 text-sm text-fg-primary${field.mono ? ' font-mono tnum break-all' : ''}`}>
+              {field.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
 function OverviewTab({ task }: { task: Task }) {
   const { t } = useTranslation()
   const evalParentTaskId = useEvalParentTaskId(task)
@@ -607,83 +648,91 @@ function OverviewTab({ task }: { task: Task }) {
     failed: t('status.failed'), canceled: t('status.canceled'), paused: t('status.paused'),
     scheduled: t('status.scheduled'),
   }
-  const items: Array<{ label: string; value: React.ReactNode; mono?: boolean }> = [
-    { label: 'ID',     value: <code className="font-mono">{task.id}</code> },
-    { label: t('common.name'), value: task.name },
-    { label: 'Config', value: <code className="font-mono">{task.config_name}.yaml</code> },
-    { label: t('common.status'), value: <Badge tone={STATUS_TONE[task.status]} active={task.status === 'running'}>{statusLabel[task.status]}</Badge> },
-    { label: t('queueDetail.priority'), value: task.priority, mono: true },
-    { label: t('queueDetail.enqueuedAt'), value: fmtTime(task.created_at) },
-    // 0.17 P-B — 计划任务显示计划开始时间（提升为 pending 后保留作记录）。
-    ...(task.scheduled_at
-      ? [{ label: t('queueDetail.scheduledAt'), value: fmtTime(task.scheduled_at) }]
-      : []),
-    { label: t('queueDetail.startedAt'), value: fmtTime(task.started_at) },
-    { label: t('queueDetail.finishedAt'), value: fmtTime(task.finished_at) },
-    { label: t('queueDetail.duration'), value: fmtDuration(task.started_at, task.finished_at), mono: true },
-    { label: t('queueDetail.exitCode'),   value: task.exit_code ?? '—', mono: true },
-    { label: 'PID',     value: task.pid ?? '—', mono: true },
+
+  const taskFields: OverviewField[] = [
+    { key: 'id', label: t('queueDetail.id'), value: task.id, mono: true },
+    { key: 'name', label: t('common.name'), value: task.name },
+    { key: 'config', label: t('queueDetail.config'), value: `${task.config_name}.yaml`, mono: true },
+    {
+      key: 'status',
+      label: t('common.status'),
+      value: <Badge tone={STATUS_TONE[task.status]} active={task.status === 'running'}>{statusLabel[task.status]}</Badge>,
+    },
+    { key: 'priority', label: t('queueDetail.priority'), value: task.priority, mono: true },
+    { key: 'duration', label: t('queueDetail.duration'), value: fmtDuration(task.started_at, task.finished_at), mono: true },
   ]
 
+  const timingFields: OverviewField[] = [
+    { key: 'enqueued', label: t('queueDetail.enqueuedAt'), value: fmtTime(task.created_at), mono: true },
+  ]
+  if (task.scheduled_at) {
+    timingFields.push({ key: 'scheduled', label: t('queueDetail.scheduledAt'), value: fmtTime(task.scheduled_at), mono: true })
+  }
+  timingFields.push(
+    { key: 'started', label: t('queueDetail.startedAt'), value: fmtTime(task.started_at), mono: true },
+    { key: 'finished', label: t('queueDetail.finishedAt'), value: fmtTime(task.finished_at), mono: true },
+  )
+
+  const technicalFields: OverviewField[] = [
+    { key: 'exit-code', label: t('queueDetail.exitCode'), value: task.exit_code ?? '—', mono: true },
+    { key: 'pid', label: t('queueDetail.pid'), value: task.pid ?? '—', mono: true },
+  ]
   if (task.project_id || task.version_id) {
-    items.push({
+    technicalFields.push({
+      key: 'source',
       label: t('queueDetail.source'),
       value: task.project_id && task.version_id ? (
-        <Link to={`/projects/${task.project_id}?version=${task.version_id}`}
-          className="text-accent font-mono text-sm"
-        >{t('queueDetail.sourceLink', { projectId: task.project_id, versionId: task.version_id })}</Link>
+        <Link to={`/projects/${task.project_id}?version=${task.version_id}`} className="text-accent text-sm">
+          {t('queueDetail.sourceLink', { projectId: task.project_id, versionId: task.version_id })}
+        </Link>
       ) : '—',
+      mono: true,
     })
   }
-  // 评估作业：parent_task_id 是**溯源**（哪次训练结束后自动触发的），不是归属 ——
-  // 手动发起的评估没有它，显示 n/a 而不是藏起来，免得用户以为漏了信息。
+  // 评估作业：parent_task_id 是溯源，不是归属；手动评估仍明确显示 n/a。
   if (task.task_type === 'eval_session') {
-    items.push({
-      label: '关联训练',
+    technicalFields.push({
+      key: 'related-training',
+      label: t('queueDetail.relatedTraining'),
       value: evalParentTaskId != null ? (
-        <Link to={`/queue/${evalParentTaskId}`} className="text-accent font-mono text-sm">
-          #{evalParentTaskId}
-        </Link>
-      ) : <span className="text-fg-tertiary font-mono">n/a</span>,
+        <Link to={`/queue/${evalParentTaskId}`} className="text-accent text-sm">#{evalParentTaskId}</Link>
+      ) : <span className="text-fg-tertiary">n/a</span>,
+      mono: true,
     })
   }
   if (task.config_path) {
-    items.push({ label: t('queueDetail.configPath'), value: <code className="font-mono text-xs break-all">{task.config_path}</code> })
+    technicalFields.push({ key: 'config-path', label: t('queueDetail.configPath'), value: task.config_path, mono: true, wide: true })
   }
   if (task.monitor_state_path) {
-    items.push({ label: t('queueDetail.monitorFile'), value: <code className="font-mono text-xs break-all">{task.monitor_state_path}</code> })
+    technicalFields.push({ key: 'monitor-file', label: t('queueDetail.monitorFile'), value: task.monitor_state_path, mono: true, wide: true })
   }
   if (task.error_msg) {
-    items.push({ label: t('common.error'), value: <code className="font-mono text-xs break-all text-err">{task.error_msg}</code> })
+    technicalFields.push({
+      key: 'error',
+      label: t('common.error'),
+      value: <span className="text-err">{task.error_msg}</span>,
+      mono: true,
+      wide: true,
+    })
   }
-  // R-5：数据作业类 task 的参数全字段（用户在原生页面配置的内容；映射人话标签，
-  // 未映射退回原 key）。train/reg_ai 无 params 不进此分支。
   if (task.params_decoded && typeof task.params_decoded === 'object') {
-    for (const [k, v] of Object.entries(task.params_decoded)) {
-      items.push({
-        label: paramLabel(k, t),
-        value: <span className="font-mono text-xs break-all">{fmtParamValue(v, t)}</span>,
+    for (const [key, value] of Object.entries(task.params_decoded)) {
+      technicalFields.push({
+        key: `param-${key}`,
+        label: paramLabel(key, t),
+        value: fmtParamValue(value, t),
+        mono: true,
+        wide: true,
       })
     }
   }
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-5">
-      <div className="card overflow-hidden p-0" style={{ maxWidth: 720 }}>
-        {items.map((row, i) => (
-          <div
-            key={row.label}
-            className={`grid gap-3 items-center px-[18px] py-2.5 ${i < items.length - 1 ? 'border-b border-subtle' : 'border-b-0'}`}
-            style={{ gridTemplateColumns: '140px 1fr' }}
-          >
-            <span className="text-sm text-fg-tertiary font-normal">
-              {row.label}
-            </span>
-            <span className={`text-sm text-fg-primary ${row.mono ? 'font-mono' : ''}`}>
-              {row.value}
-            </span>
-          </div>
-        ))}
+      <div className="ui-queue-overview-grid grid gap-section" data-testid="queue-overview-grid">
+        <OverviewGroup id="task" title={t('queueDetail.overviewTask')} fields={taskFields} />
+        <OverviewGroup id="timing" title={t('queueDetail.overviewTiming')} fields={timingFields} />
+        <OverviewGroup id="technical" title={t('queueDetail.overviewTechnical')} fields={technicalFields} wide />
       </div>
     </div>
   )
