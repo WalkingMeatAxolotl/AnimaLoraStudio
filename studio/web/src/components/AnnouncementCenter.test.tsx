@@ -113,7 +113,8 @@ describe('AnnouncementCenter', () => {
       expect(screen.getByRole('dialog', { name: '公告' })).toBeInTheDocument())
 
     const options = screen.getAllByRole('option')
-    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() =>
+      expect(options[0]).toHaveAttribute('aria-selected', 'true'))
     options[0].focus()
     fireEvent.keyDown(options[0], { key: 'ArrowDown' })
 
