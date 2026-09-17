@@ -434,7 +434,8 @@
       "loss_type": "Disabled while InfoNoise or Leap is enabled (schema mutex, only `mse` compatible)",
       "masked_loss": "Not supported with Leap (per-sample loss has no spatial dims) or NaViT packing (schema mutex)",
       "timestep_schedule_shift": "Disabled while InfoNoise is enabled (schema mutex, only `1.0` compatible)",
-      "infonoise_enabled": "Reset noise_enhancement / loss_weighting / loss_type / schedule_shift to defaults to enable (schema mutex)"
+      "infonoise_enabled": "Reset noise_enhancement / loss_weighting / loss_type / schedule_shift to defaults to enable (schema mutex)",
+      "lycoris_backend": "Triton supports only non-DoRA LoRA / LoHa and currently cannot be enabled with Flash Attention"
     },
     "descriptions": {
       "model_family": "Model family. Decides which model implementation training uses; other fields show/hide by family capability. Switching recalculates model paths and resets family-specific defaults",
@@ -468,6 +469,7 @@
       "lora_dropout": "Dropout on LoRA input features: larger = stronger regularization but slower convergence; 0 = disabled",
       "lora_rank_dropout": "Dropout on LoRA's rank dimensions (a subset of rank dims is randomly active each step): larger = stronger regularization; 0 = disabled",
       "lora_module_dropout": "Probability of skipping the entire LoRA module (stochastic depth): the module contributes nothing on that step; larger = stronger regularization; 0 = disabled",
+      "lycoris_backend": "LyCORIS compute backend. Torch is the stable default; Triton is an experimental CUDA bypass for LoRA / LoHa and currently cannot be enabled with Flash Attention",
       "epochs": "Training epochs",
       "max_steps": "Maximum steps (0 = unlimited)",
       "batch_size": "Batch size",
@@ -1346,7 +1348,7 @@
     "xformersHelp3": "Install failures usually mean upstream PyPI / PyTorch index has no wheel for this torch+cu combination (common for 5090 / new GPUs). The button toast shows the tail of stderr; use it to downgrade torch or wait for upstream coverage.",
     "tritonSubtitle": "LyCORIS training acceleration (experimental, LoRA / LoHa only)",
     "tritonHelp1": "Triton is an optional LyCORIS training accelerator. Each training task can choose Torch or Triton through lycoris_backend.",
-    "tritonHelp2": "The initial path supports non-DoRA LoRA / LoHa with all adapter dropout values set to 0. Other algorithms continue to use Torch.",
+    "tritonHelp2": "The initial path supports non-DoRA LoRA / LoHa with all adapter dropout values set to 0. Triton is currently incompatible with Flash Attention; select SDPA or xFormers for attention_backend before choosing Triton.",
     "tritonHelp3": "Installation automatically selects the project pin for the current platform and Torch without replacing Torch. Restart Studio afterward.",
     "confirmInstallTriton": "Install the Triton project pin matching the current platform and Torch.\nRestart Studio after installation. Continue?",
     "restartRequiredShort": "Restart required",
