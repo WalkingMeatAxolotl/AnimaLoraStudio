@@ -11,6 +11,8 @@ import {
 } from '../api/client'
 import { PauseProgressModal } from '../components/PauseProgressModal'
 import Alert from '../components/Alert'
+import ActionGroup from '../components/ActionGroup'
+import Modal from '../components/Modal'
 import Badge, { type BadgeTone } from '../components/Badge'
 import Button, { buttonClassName } from '../components/Button'
 import { useDialog } from '../components/Dialog'
@@ -1438,31 +1440,37 @@ export function SnapshotConfigTab({ task }: { task: Task | null }) {
 // ── ConfirmDialog ───────────────────────────────────────────────────────────
 
 function ConfirmDialog({
-  title, message, confirmLabel = '确认', cancelLabel = '取消', danger = false, busy = false,
+  title, message, confirmLabel, cancelLabel, danger = false, busy = false,
   onConfirm, onCancel,
 }: {
   title: string; message: React.ReactNode; confirmLabel?: string; cancelLabel?: string
   danger?: boolean; busy?: boolean; onConfirm: () => void; onCancel: () => void
 }) {
+  const { t } = useTranslation()
   return (
-    <div onClick={onCancel} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-      <div onClick={(e) => e.stopPropagation()} className="bg-elevated border border-subtle rounded-lg shadow-lg w-full max-w-[420px]">
-        <header className="px-[18px] py-3.5 border-b border-subtle">
-          <h3 className="m-0 text-md font-semibold text-fg-primary">{title}</h3>
-        </header>
-        <div className="px-[18px] py-3.5 text-sm text-fg-secondary">{message}</div>
-        <footer className="px-[18px] py-3 border-t border-subtle flex items-center gap-2 justify-end">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
-            {cancelLabel}
-          </Button>
-          <Button
-            variant={danger ? 'danger' : 'primary'}
-            size="sm"
-            onClick={onConfirm}
-            disabled={busy}
-          >{busy ? '...' : confirmLabel}</Button>
-        </footer>
-      </div>
-    </div>
+    <Modal
+      title={title}
+      description={message}
+      size="sm"
+      role="alertdialog"
+      testId="queue-detail-confirm"
+      onClose={() => { if (!busy) onCancel() }}
+      closeOnEscape={!busy}
+      closeOnBackdrop={!busy}
+      footer={(
+        <ActionGroup
+          secondary={(
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+              {cancelLabel ?? t('common.cancel')}
+            </Button>
+          )}
+          primary={(
+            <Button variant={danger ? 'danger' : 'primary'} size="sm" loading={busy}
+              onClick={() => { if (!busy) onConfirm() }}
+            >{confirmLabel ?? t('common.confirm')}</Button>
+          )}
+        />
+      )}
+    />
   )
 }

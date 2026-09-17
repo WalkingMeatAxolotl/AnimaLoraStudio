@@ -61,6 +61,33 @@
 .ui-queue-job-grid {
   grid-template-columns: 48px minmax(0, 1fr) 96px 150px 120px;
 }
+.ui-queue-row-link {
+  /* A real box is required for native keyboard focus in Chromium. Subgrid
+   * keeps the existing row tracks while the last track stays an action sibling. */
+  display: grid;
+  grid-column: 1 / -2;
+  grid-template-columns: subgrid;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+/* The link owns the row gutter too; content stays above it for native text
+ * tooltips, and sibling action buttons remain separate pointer/tab targets. */
+.ui-queue-row-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+.ui-queue-row-link > * { position: relative; z-index: 1; }
+.ui-queue-row-link:focus-visible { outline: none; }
+.ui-queue-row-link:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ui-queue-row-actions { position: relative; z-index: 2; }
+
 .ui-queue-detail-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .ui-queue-detail-title {
   min-width: 0;

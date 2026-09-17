@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type Task, type TaskType,
 } from '../../api/client'
@@ -131,14 +131,16 @@ export default function DataJobsPanel({
       paused: t('status.paused'), scheduled: t('status.scheduled'),
     }
     return (
-      <button
+      <div
         key={task.id}
-        onClick={() => navigate(`/queue/${task.id}`)}
-        title={t('queue.taskDetailTooltip')}
-        className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${task.status === 'running' ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
+        className={`card card-hover relative block overflow-hidden text-left p-0 cursor-pointer ${task.status === 'running' ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
         data-testid={`job-row-${task.id}`}
       >
         <div className="ui-queue-job-grid px-[22px] py-4 grid gap-3 items-center">
+          <Link to={`/queue/${task.id}`} className="ui-queue-row-link"
+            aria-label={t('queue.taskDetailLinkLabel', { id: task.id, name: task.name })}
+            title={t('queue.taskDetailTooltip')}
+          >
           <span className={`font-mono text-sm ${task.status === 'running' ? 'text-accent font-semibold' : 'text-fg-tertiary'}`}>
             #{task.id}
           </span>
@@ -165,8 +167,9 @@ export default function DataJobsPanel({
               </>
             ) : '—'}
           </span>
+          </Link>
           {/* action 列：取消（live）+ 跳转原生页，icon 化 hover 显文字（既有范式） */}
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="ui-queue-row-actions flex items-center justify-end gap-1.5">
             {isLive && (
               <button
                 onClick={(e) => { e.stopPropagation(); void cancelJob(task) }}
@@ -195,7 +198,7 @@ export default function DataJobsPanel({
             )}
           </div>
         </div>
-      </button>
+      </div>
     )
   }
 

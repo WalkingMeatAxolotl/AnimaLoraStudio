@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type QueueHoldState, type Task,
   type TaskStatus, type TaskType,
@@ -89,6 +89,7 @@ function PaginationBar({
           onChange={(e) => onPageSize(Number(e.target.value))}
           className="input"
           style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
+          aria-label={t('queue.pageSizeLabel')}
           data-testid="history-page-size"
         >
           {HISTORY_PAGE_SIZES.map((n) => (
@@ -125,14 +126,13 @@ function PaginationBar({
  *  且仍在评估的行有值。 */
 export function QueueTaskRow({
   task, runningTaskId, monitor, evalInfo, isWaitingForRelease,
-  onOpen, onResume, onCancelPaused, onStartNow, onCancelScheduled,
+  onResume, onCancelPaused, onStartNow, onCancelScheduled,
 }: {
   task: Task
   runningTaskId: number | null
   monitor: { step?: number | null; total_steps?: number | null } | null
   evalInfo?: EvalProgress
   isWaitingForRelease: boolean
-  onOpen: (id: number) => void
   onResume: (task: Task) => void | Promise<void>
   onCancelPaused: (task: Task) => void | Promise<void>
   onStartNow: (task: Task) => void | Promise<void>
@@ -186,15 +186,17 @@ export function QueueTaskRow({
             : null
 
   return (
-    <button
-      onClick={() => onOpen(task.id)}
-      title={t('queue.taskDetailTooltip')}
-      className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${isRunning ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
+    <div
+      className={`card card-hover relative block overflow-hidden text-left p-0 cursor-pointer ${isRunning ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
     >
       <div
         className="ui-queue-task-grid px-[22px] py-4 grid gap-3 items-center"
         data-testid={`queue-task-grid-${task.id}`}
       >
+        <Link to={`/queue/${task.id}`} className="ui-queue-row-link"
+          aria-label={t('queue.taskDetailLinkLabel', { id: task.id, name: task.name })}
+          title={t('queue.taskDetailTooltip')}
+        >
         <span className={`font-mono text-sm ${isRunning ? 'text-accent font-semibold' : 'text-fg-tertiary font-normal'}`}>
           #{task.id}
         </span>
@@ -306,9 +308,11 @@ export function QueueTaskRow({
           )}
         </span>
 
+        </Link>
+
         {/* 0.17 action 列：跳转 + scheduled 的立即开始/取消计划 + paused 的恢复/取消
             + 终态可恢复的继续训练，全 icon 化（hover title 显示文字）。 */}
-        <div className="flex items-center justify-end gap-1.5">
+        <div className="ui-queue-row-actions flex items-center justify-end gap-1.5">
           {isPaused && (
             <>
               <button
@@ -390,7 +394,7 @@ export function QueueTaskRow({
           )}
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -450,7 +454,6 @@ export default function QueuePage() {
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
-  const navigate = useNavigate()
 
   // ADR 0006：队列挂起状态，banner + holdModal 用。
   const [holdState, setHoldState] = useState<QueueHoldState | null>(null)
@@ -755,7 +758,6 @@ export default function QueuePage() {
       monitor={monitor}
       evalInfo={evalMap.get(task.id)}
       isWaitingForRelease={task.status === 'pending' && holdState?.held === true}
-      onOpen={(id) => navigate(`/queue/${id}`)}
       onResume={resumeTask}
       onCancelPaused={cancelPaused}
       onStartNow={startNow}

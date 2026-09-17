@@ -88,7 +88,7 @@ function renderQueue() {
 describe('QueueTaskRow 状态与信息', () => {
   function renderRow(task: Task, monitor: { step?: number | null; total_steps?: number | null } | null = null) {
     return render(<MemoryRouter><QueueTaskRow task={task} runningTaskId={task.id} monitor={monitor}
-      isWaitingForRelease={false} onOpen={vi.fn()} onResume={vi.fn()} onCancelPaused={vi.fn()}
+      isWaitingForRelease={false} onResume={vi.fn()} onCancelPaused={vi.fn()}
       onStartNow={vi.fn()} onCancelScheduled={vi.fn()} /></MemoryRouter>)
   }
 
@@ -110,6 +110,21 @@ describe('QueueTaskRow 状态与信息', () => {
       expect(progress).toHaveAttribute('aria-valuenow', value)
       expect(progress).toHaveAttribute('aria-valuemax', '100')
     }
+  })
+
+  it('详情入口为原生链接，与局部按钮同级且键盘可达', async () => {
+    const user = userEvent.setup()
+    renderRow(makeTask({ id: 41, status: 'paused', is_resumable: true }))
+    const link = screen.getByRole('link', { name: '任务 #41：train' })
+    expect(link).toHaveAttribute('href', '/queue/41')
+    expect(link.querySelector('button')).toBeNull()
+    expect(link.closest('button')).toBeNull()
+    const resume = screen.getByTestId('resume-btn-41')
+    expect(link.contains(resume)).toBe(false)
+    await user.tab()
+    expect(link).toHaveFocus()
+    await user.tab()
+    expect(resume).toHaveFocus()
   })
 
   it.each(['done', 'failed', 'canceled'] as const)('%s 的结束时间不再一律称为完成', (status) => {
@@ -376,6 +391,7 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument()
     expect(screen.getByTestId('history-prev')).toBeDisabled()
     expect(screen.getByTestId('history-next')).not.toBeDisabled()
+    expect(screen.getByRole('combobox', { name: '每页任务数' })).toHaveValue('20')
     const pagination = screen.getByTestId('queue-pagination')
     expect(pagination).toHaveClass('shrink-0', 'px-page', 'border-t')
     expect(pagination).not.toHaveClass('mt-section', '-mx-page', '-mb-page')

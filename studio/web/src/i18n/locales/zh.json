@@ -729,6 +729,8 @@
     "startNowSent": "#{{id}} 已转入等待队列",
     "startNowConfirm": "立即开始计划任务 #{{id}}？将跳过计划时间，进入等待队列排队。",
     "taskDetailTooltip": "任务详情",
+    "taskDetailLinkLabel": "任务 #{{id}}：{{name}}",
+    "pageSizeLabel": "每页任务数",
     "tabTasks": "GPU 任务",
     "tabJobs": "数据任务",
     "jobs": {

@@ -729,6 +729,8 @@
     "startNowSent": "#{{id}} moved to the waiting queue",
     "startNowConfirm": "Start scheduled task #{{id}} now? It skips the scheduled time and joins the waiting queue.",
     "taskDetailTooltip": "Task details",
+    "taskDetailLinkLabel": "Task #{{id}}: {{name}}",
+    "pageSizeLabel": "Tasks per page",
     "tabTasks": "GPU tasks",
     "tabJobs": "Data tasks",
     "jobs": {

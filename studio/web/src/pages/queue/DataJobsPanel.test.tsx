@@ -265,7 +265,12 @@ describe('DataJobsPanel', () => {
 
     renderPanel()
     await waitFor(() => expect(screen.getByTestId('job-row-10')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('job-row-10'))
+    const row = screen.getByTestId('job-row-10')
+    const link = within(row).getByRole('link', { name: '任务 #10：tag' })
+    expect(link).toHaveAttribute('href', '/queue/10')
+    expect(link.querySelector('button')).toBeNull()
+    expect(row.querySelector('button button')).toBeNull()
+    fireEvent.click(link)
     await waitFor(() => expect(screen.getByTestId('task-detail-route')).toBeInTheDocument())
   })
 
@@ -283,6 +288,7 @@ describe('DataJobsPanel', () => {
     fireEvent.click(screen.getByTestId('job-cancel-btn-10'))
 
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(screen.queryByTestId('task-detail-route')).not.toBeInTheDocument()
     expect(cancelSpy).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('取消任务', { selector: 'button[type="submit"]' }))
     await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith(10))
