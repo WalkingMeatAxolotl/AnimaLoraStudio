@@ -89,7 +89,7 @@ describe('QueueTaskRow 状态与信息', () => {
   function renderRow(task: Task, monitor: { step?: number | null; total_steps?: number | null } | null = null) {
     return render(<MemoryRouter><QueueTaskRow task={task} runningTaskId={task.id} monitor={monitor}
       isWaitingForRelease={false} onResume={vi.fn()} onCancelPaused={vi.fn()}
-      onStartNow={vi.fn()} onCancelScheduled={vi.fn()} /></MemoryRouter>)
+      onCancelPending={vi.fn()} onStartNow={vi.fn()} onCancelScheduled={vi.fn()} /></MemoryRouter>)
   }
 
   it.each([
@@ -494,10 +494,30 @@ describe('QueuePage 分区 + 分页', () => {
       expect(screen.getByTestId('queue-scheduled-section')).toBeInTheDocument(),
     )
     expect(screen.getByText(/计划任务/)).toBeInTheDocument()
-    // scheduled 行有专属操作；pending 行没有
+    // scheduled 行有专属操作；pending 行只提供取消
     expect(screen.getByTestId('startnow-btn-21')).toBeInTheDocument()
     expect(screen.getByTestId('cancel-scheduled-btn-21')).toBeInTheDocument()
     expect(screen.queryByTestId('startnow-btn-20')).not.toBeInTheDocument()
+    expect(screen.getByTestId('cancel-pending-btn-20')).toBeInTheDocument()
+  })
+
+  it('GPU pending 行取消先说明不会影响运行任务，确认后调 cancelTask', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 20, name: 'pend', status: 'pending', started_at: null, pid: null }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    const cancelSpy = vi.spyOn(api, 'cancelTask').mockResolvedValue({ task_id: 20, canceled: true })
+
+    renderQueue()
+    fireEvent.click(await screen.findByTestId('cancel-pending-btn-20'))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('任务尚未开始，不会影响当前运行中的任务')
+    expect(cancelSpy).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith(20))
   })
 
   it('点「立即开始」→ confirm 后调 startTaskNow', async () => {

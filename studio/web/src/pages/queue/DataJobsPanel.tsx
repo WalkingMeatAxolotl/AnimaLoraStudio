@@ -100,8 +100,8 @@ export default function DataJobsPanel({
 
   const cancelJob = async (task: Task) => {
     const ok = await confirm(
-      t('queue.jobs.cancelConfirm', { id: task.id }),
-      { okText: t('queue.jobs.cancelOk') },
+      t(task.status === 'pending' ? 'queue.cancelPendingConfirm' : 'queue.jobs.cancelConfirm', { id: task.id }),
+      { tone: 'warn', okText: t('queue.jobs.cancelOk') },
     )
     if (!ok) return
     try {

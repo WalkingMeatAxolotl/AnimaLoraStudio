@@ -128,7 +128,7 @@ function PaginationBar({
  *  且仍在评估的行有值。 */
 export function QueueTaskRow({
   task, runningTaskId, monitor, evalInfo, isWaitingForRelease,
-  onResume, onCancelPaused, onStartNow, onCancelScheduled,
+  onResume, onCancelPaused, onCancelPending, onStartNow, onCancelScheduled,
 }: {
   task: Task
   runningTaskId: number | null
@@ -137,6 +137,7 @@ export function QueueTaskRow({
   isWaitingForRelease: boolean
   onResume: (task: Task) => void | Promise<void>
   onCancelPaused: (task: Task) => void | Promise<void>
+  onCancelPending: (task: Task) => void | Promise<void>
   onStartNow: (task: Task) => void | Promise<void>
   onCancelScheduled: (task: Task) => void | Promise<void>
 }) {
@@ -155,6 +156,7 @@ export function QueueTaskRow({
     eval_samples: t('queue.jobs.kind.eval_samples'),
   }
   const isRunning = task.status === 'running'
+  const isPending = task.status === 'pending'
   const isPaused = task.status === 'paused'
   const isScheduled = task.status === 'scheduled'
   const isTerminal = ['done', 'failed', 'canceled'].includes(task.status)
@@ -312,9 +314,22 @@ export function QueueTaskRow({
 
         </Link>
 
-        {/* 0.17 action 列：跳转 + scheduled 的立即开始/取消计划 + paused 的恢复/取消
+        {/* action 列：pending 取消 + 跳转 + scheduled 的立即开始/取消计划 + paused 的恢复/取消
             + 终态可恢复的继续训练，全 icon 化（hover title 显示文字）。 */}
         <div className="ui-queue-row-actions flex items-center justify-end gap-1.5">
+          {isPending && (
+            <button
+              onClick={(e) => { e.stopPropagation(); void onCancelPending(task) }}
+              className="btn btn-ghost btn-sm px-2 text-err"
+              title={`${t('queue.cancelPending')} — ${t('queue.cancelPendingHint')}`}
+              aria-label={t('queue.cancelPending')}
+              data-testid={`cancel-pending-btn-${task.id}`}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
           {isPaused && (
             <>
               <button
@@ -746,6 +761,24 @@ export default function QueuePage() {
     }
   }
 
+  const cancelPending = async (task: Task) => {
+    const ok = await confirm(
+      t('queue.cancelPendingConfirm', { id: task.id }),
+      { tone: 'warn', okText: t('queue.cancelPending') },
+    )
+    if (!ok) return
+    setBusy(true)
+    try {
+      await api.cancelTask(task.id)
+      toast(t('queueDetail.cancelSent'), 'success')
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const isEmpty = liveLoaded && historyLoaded && !liveError && !historyError
     && !liveLoading && !historyLoading && live.length === 0 && history.total === 0
   const isFilteredEmpty = Boolean(searchDebounced || historyStatus || (typeFilter && typeFilter !== DEFAULT_TYPE_FILTER))
@@ -762,6 +795,7 @@ export default function QueuePage() {
       isWaitingForRelease={task.status === 'pending' && holdState?.held === true}
       onResume={resumeTask}
       onCancelPaused={cancelPaused}
+      onCancelPending={cancelPending}
       onStartNow={startNow}
       onCancelScheduled={cancelScheduled}
     />

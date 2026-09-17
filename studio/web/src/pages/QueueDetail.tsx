@@ -241,11 +241,13 @@ export default function QueueDetailPage() {
   const confirmLiveCancel = async () => {
     if (!task) return
     const kind = taskKind(task)
-    const messageKey = kind === 'train'
-      ? 'queue.cancelRunningTrainConfirm'
-      : DATA_VIEW_KINDS.includes(kind)
-        ? 'queue.jobs.cancelConfirm'
-        : 'queue.cancelRunningConfirm'
+    const messageKey = task.status === 'pending'
+      ? 'queue.cancelPendingConfirm'
+      : kind === 'train'
+        ? 'queue.cancelRunningTrainConfirm'
+        : DATA_VIEW_KINDS.includes(kind)
+          ? 'queue.jobs.cancelConfirm'
+          : 'queue.cancelRunningConfirm'
     const ok = await confirm(t(messageKey, { id: task.id }), {
       tone: 'warn',
       okText: t('queueDetail.cancelTask'),
@@ -298,6 +300,23 @@ export default function QueueDetailPage() {
     }
   }
 
+  const confirmPausedResume = async () => {
+    if (!task) return
+    const label = t('queue.resume')
+    const ok = await confirm(`${label} #${task.id}？${t('queue.resumeHint')}`, { okText: label })
+    if (ok) await resumePaused()
+  }
+
+  const confirmPausedCancel = async () => {
+    if (!task) return
+    const label = t('queue.cancelPaused')
+    const ok = await confirm(`${label} #${task.id}？${t('queue.cancelPausedHint')}`, {
+      tone: 'warn',
+      okText: label,
+    })
+    if (ok) await cancel()
+  }
+
   const confirmTerminalResume = async () => {
     if (!task) return
     const label = t('queue.resumeTerminal')
@@ -318,6 +337,23 @@ export default function QueueDetailPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const confirmStartNow = async () => {
+    if (!task) return
+    const ok = await confirm(t('queue.startNowConfirm', { id: task.id }), {
+      okText: t('queue.startNow'),
+    })
+    if (ok) await startNow()
+  }
+
+  const confirmScheduledCancel = async () => {
+    if (!task) return
+    const ok = await confirm(t('queue.cancelScheduledConfirm', { id: task.id }), {
+      tone: 'warn',
+      okText: t('queue.cancelScheduled'),
+    })
+    if (ok) await cancel()
   }
 
   const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -446,7 +482,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="primary"
                 size="sm"
-                onClick={startNow}
+                onClick={confirmStartNow}
                 disabled={busy}
                 data-testid="detail-startnow-btn"
                 title={t('queue.startNowHint')}
@@ -454,7 +490,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="warning"
                 size="sm"
-                onClick={cancel}
+                onClick={confirmScheduledCancel}
                 disabled={busy}
                 title={t('queue.cancelScheduledHint')}
               >{t('queue.cancelScheduled')}</Button>
@@ -465,7 +501,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="primary"
                 size="sm"
-                onClick={resumePaused}
+                onClick={confirmPausedResume}
                 disabled={busy}
                 data-testid="detail-resume-btn"
                 title={t('queue.resumeHint')}
@@ -473,7 +509,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="danger"
                 size="sm"
-                onClick={cancel}
+                onClick={confirmPausedCancel}
                 disabled={busy}
                 title={t('queue.cancelPausedHint')}
               >{t('queue.cancelPaused')}</Button>

@@ -435,6 +435,81 @@ describe('QueueDetailPage 危险操作确认', () => {
     await user.click(within(dialog).getByRole('button', { name: '继续训练' }))
     await waitFor(() => expect(actionCalls('resume')).toBe(1))
   })
+
+  it('pending 取消说明任务尚未开始，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '取消任务' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('任务尚未开始，不会影响当前运行中的任务')
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+
+  it('scheduled 立即开始说明会进入等待队列，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'scheduled', scheduled_at: 2000 })))
+      if (url === `${QUEUE_ITEM_URL}/start_now`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-startnow-btn'))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('将跳过计划时间，进入等待队列排队')
+    expect(actionCalls('start_now')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '立即开始' }))
+    await waitFor(() => expect(actionCalls('start_now')).toBe(1))
+  })
+
+  it('scheduled 取消计划先说明移入历史，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'scheduled', scheduled_at: 2000 })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '取消计划' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('任务将移入历史，可从历史重新入队')
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '取消计划' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+
+  it('paused 恢复和取消都先确认各自语义', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'paused', is_resumable: true })))
+      if (url === `${QUEUE_ITEM_URL}/resume`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-resume-btn'))
+    const resumeDialog = await screen.findByRole('dialog')
+    expect(resumeDialog).toHaveTextContent('从暂停点继续训练（沿用暂停时配置）')
+    expect(actionCalls('resume')).toBe(0)
+    await user.click(within(resumeDialog).getByRole('button', { name: '取消' }))
+
+    await user.click(screen.getByRole('button', { name: '取消任务' }))
+    const cancelDialog = await screen.findByRole('alertdialog')
+    expect(cancelDialog).toHaveTextContent('恢复点保留，之后仍可继续训练')
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(cancelDialog).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
 })
 
 describe('QueueDetailPage 删除范围提示', () => {

@@ -279,8 +279,8 @@ describe('DataJobsPanel', () => {
     await waitFor(() => expect(screen.getByTestId('task-detail-route')).toBeInTheDocument())
   })
 
-  it('取消需 confirm，确认后调 cancelTask（统一队列取消端点）', async () => {
-    vi.spyOn(api, 'listQueueLive').mockResolvedValue([makeJobTask({ id: 10 })])
+  it('pending 取消说明不会影响运行任务，确认后调 cancelTask（统一队列取消端点）', async () => {
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([makeJobTask({ id: 10, status: 'pending' })])
     vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
       items: [], total: 0, page: 1, page_size: 20,
     })
@@ -292,7 +292,8 @@ describe('DataJobsPanel', () => {
     await waitFor(() => expect(screen.getByTestId('job-cancel-btn-10')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('job-cancel-btn-10'))
 
-    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('任务尚未开始，不会影响当前运行中的任务')
     expect(screen.queryByTestId('task-detail-route')).not.toBeInTheDocument()
     expect(cancelSpy).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('取消任务', { selector: 'button[type="submit"]' }))
