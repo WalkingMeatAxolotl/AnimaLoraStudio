@@ -377,7 +377,14 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: /进行中/ })).toBeInTheDocument())
     expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
       .toHaveClass('type-section-label')
-    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }).parentElement)
+    const activeGuide = screen.getByTestId('queue-task-section-header-active')
+    expect(activeGuide).toHaveClass('ui-queue-task-grid', 'ui-queue-section-header')
+    expect(within(activeGuide).getByText('类型')).toHaveClass('ui-queue-column-label')
+    expect(within(activeGuide).getByText('状态')).toHaveClass('ui-queue-column-label')
+    expect(within(activeGuide).getByText('进度 / 结果')).toHaveClass('ui-queue-column-label')
+    expect(within(activeGuide).getByText('时间')).toHaveClass('ui-queue-task-timing')
+    expect(within(activeGuide).getByText('操作')).toHaveClass('ui-queue-column-label')
+    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }).closest('section'))
       .toHaveClass('gap-related')
     expect(screen.getByRole('heading', { level: 3, name: /等待入队/ }))
       .toHaveClass('type-section-label')
@@ -575,7 +582,7 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith(30))
   })
 
-  it('右上角「数据作业」toggle → 切换只读区，漏斗变 kind 过滤（P-G）', async () => {
+  it('GPU / 数据任务使用共享双选切换，切换后漏斗变 kind 过滤（P-G）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
       makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
@@ -588,8 +595,18 @@ describe('QueuePage 分区 + 分页', () => {
     renderQueue()
     await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
 
-    fireEvent.click(screen.getByTestId('queue-jobs-toggle'))
+    const viewSwitcher = screen.getByRole('radiogroup', { name: '队列视图' })
+    const tasksOption = within(viewSwitcher).getByRole('radio', { name: 'GPU 任务' })
+    const jobsOption = within(viewSwitcher).getByRole('radio', { name: '数据任务' })
+    expect(tasksOption).toHaveAttribute('aria-checked', 'true')
+    expect(jobsOption).toHaveAttribute('aria-checked', 'false')
+    expect(viewSwitcher.nextElementSibling).toBe(screen.getByRole('button', { name: '刷新' }))
+
+    fireEvent.click(jobsOption)
     await waitFor(() => expect(screen.getByTestId('data-jobs-panel')).toBeInTheDocument())
+    expect(tasksOption).toHaveAttribute('aria-checked', 'false')
+    expect(jobsOption).toHaveAttribute('aria-checked', 'true')
+    expect(viewSwitcher.nextElementSibling).toBe(screen.getByRole('button', { name: '刷新' }))
     // 任务分区没了；漏斗还在（数据作业视图的 kind 过滤），点开出 kind select
     expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
     expect(screen.getByTestId('queue-filter-toggle'))
@@ -604,8 +621,8 @@ describe('QueuePage 分区 + 分页', () => {
     // 任务视图专属的搜索框不在
     expect(screen.queryByTestId('queue-search')).not.toBeInTheDocument()
 
-    // 再点 toggle 切回任务视图
-    fireEvent.click(screen.getByTestId('queue-jobs-toggle'))
+    // 切回 GPU 任务视图
+    fireEvent.click(tasksOption)
     await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
   })
 

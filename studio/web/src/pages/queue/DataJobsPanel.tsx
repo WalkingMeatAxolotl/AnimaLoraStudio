@@ -22,6 +22,7 @@ import { useEventStream } from '../../lib/useEventStream'
 import {
   DATA_VIEW_KINDS, JOB_STATUS_TONE, fmtJobAgo, fmtJobDuration, jobJumpPath,
 } from './jobUtils'
+import QueueSectionHeader from './QueueSectionHeader'
 
 export default function DataJobsPanel({
   kind, q, historyPage, pageSize, onHistoryTotal, refreshToken,
@@ -235,18 +236,24 @@ export default function DataJobsPanel({
         <>
           {live.length > 0 && (
             <section className="flex flex-col gap-related">
-              <h3 className="type-section-label">
-                {t('queue.sectionActive')} ({live.length})
-              </h3>
+              <QueueSectionHeader
+                variant="job"
+                sectionKey="active"
+                title={t('queue.sectionActive')}
+                count={live.length}
+              />
               {live.map(renderRow)}
             </section>
           )}
 
           {(history.items.length > 0 || !error) && (
             <section className="flex flex-col gap-related">
-              <h3 className="type-section-label">
-                {t('queue.sectionHistory')} ({history.total})
-              </h3>
+              <QueueSectionHeader
+                variant="job"
+                sectionKey="history"
+                title={t('queue.sectionHistory')}
+                count={history.total}
+              />
               {history.items.length === 0 ? (
                 <EmptyState size="sm" description={t('queue.noMatch')} />
               ) : (

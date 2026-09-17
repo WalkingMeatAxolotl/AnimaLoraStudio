@@ -14,6 +14,7 @@ import { Input, Select } from '../components/FormControl'
 import ListToolbar from '../components/ListToolbar'
 import PageHeader from '../components/PageHeader'
 import ProgressBar from '../components/ProgressBar'
+import { SegmentedControl } from '../components/SelectionGroup'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -24,6 +25,7 @@ import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import DataJobsPanel from './queue/DataJobsPanel'
+import QueueSectionHeader from './queue/QueueSectionHeader'
 
 // GPU 视图（exclusive 档）的行类型。R-5：评估（底模级出图 + 指标）随台账合并归位
 // 本视图（用户感知锚点 §4-2）。eval_session = 一次评估一个作业（#465）；eval_samples
@@ -782,8 +784,8 @@ export default function QueuePage() {
       subtitle={queueTab === 'jobs' ? t('queue.descriptionJobs') : t('queue.description')}
       actions={
         <>
-          {queueTab === 'jobs' && <>
-            {/* 数据作业视图：漏斗（kind 过滤）+ 刷新，与任务视图同位交互。 */}
+          {queueTab === 'jobs' && (
+            /* 数据作业视图：漏斗（kind 过滤）与刷新同位交互。 */
             <button
               className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
               onClick={() => setFiltersOpen((o) => !o)}
@@ -800,91 +802,89 @@ export default function QueuePage() {
                 <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
               )}
             </button>
-            <button
-              onClick={() => setJobsRefreshToken((n) => n + 1)}
-              className="btn btn-ghost btn-sm"
-            >
-              {t('common.refresh')}
-            </button>
-          </>}
+          )}
           {queueTab === 'tasks' && <>
-          {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
-          <button
-            className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
-            onClick={() => setFiltersOpen((o) => !o)}
-            aria-expanded={filtersOpen}
-            aria-controls={QUEUE_TASKS_LIST_TOOLBAR_ID}
-            aria-label={t('queue.filters')}
-            title={t('queue.filters')}
-            data-testid="queue-filter-toggle"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
-            </svg>
-            {!filtersOpen && filtering && (
-              <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+            {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
+            <button
+              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              aria-controls={QUEUE_TASKS_LIST_TOOLBAR_ID}
+              aria-label={t('queue.filters')}
+              title={t('queue.filters')}
+              data-testid="queue-filter-toggle"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+              </svg>
+              {!filtersOpen && filtering && (
+                <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+              )}
+            </button>
+            {runningTask?.is_pausable && (
+              <button
+                onClick={() => requestPause(runningTask)}
+                disabled={busy || pausingTaskId !== null || pauseConfirmTaskId !== null}
+                className="btn btn-secondary btn-sm"
+                title={t('queue.pauseHint')}
+                data-testid="queue-pause-btn"
+              >
+                {t('queue.pause')}
+              </button>
             )}
-          </button>
-          {runningTask?.is_pausable && (
-            <button
-              onClick={() => requestPause(runningTask)}
-              disabled={busy || pausingTaskId !== null || pauseConfirmTaskId !== null}
-              className="btn btn-secondary btn-sm"
-              title={t('queue.pauseHint')}
-              data-testid="queue-pause-btn"
-            >
-              {t('queue.pause')}
-            </button>
-          )}
-          {hasRunning && (
-            <button
-              onClick={() => void cancelRunning()}
-              disabled={busy}
-              className="btn btn-secondary btn-sm text-warn border-warn"
-              title={t('queue.cancelHint')}
-            >
-              {t('queue.cancelCurrent')}
-            </button>
-          )}
-          {holdState && !holdState.held && (
-            <button
-              onClick={() => setHoldModalOpen(true)}
-              disabled={busy}
-              className="btn btn-ghost btn-sm"
-              data-testid="queue-hold-btn"
-            >
-              {t('queue.holdQueue')}
-            </button>
-          )}
-          {holdState && holdState.held && (
-            <button
-              onClick={() => void releaseQueue()}
-              disabled={busy}
-              className="btn btn-secondary btn-sm"
-              data-testid="queue-release-btn"
-            >
-              {t('queue.releaseQueue')}
-            </button>
-          )}
-          {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
-              version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
-          <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
+            {hasRunning && (
+              <button
+                onClick={() => void cancelRunning()}
+                disabled={busy}
+                className="btn btn-secondary btn-sm text-warn border-warn"
+                title={t('queue.cancelHint')}
+              >
+                {t('queue.cancelCurrent')}
+              </button>
+            )}
+            {holdState && !holdState.held && (
+              <button
+                onClick={() => setHoldModalOpen(true)}
+                disabled={busy}
+                className="btn btn-ghost btn-sm"
+                data-testid="queue-hold-btn"
+              >
+                {t('queue.holdQueue')}
+              </button>
+            )}
+            {holdState && holdState.held && (
+              <button
+                onClick={() => void releaseQueue()}
+                disabled={busy}
+                className="btn btn-secondary btn-sm"
+                data-testid="queue-release-btn"
+              >
+                {t('queue.releaseQueue')}
+              </button>
+            )}
+            {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
+                version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
           </>}
-          {/* 0.17 P-G — 视图切换（放最右）：前置切换 icon（行为）+ 目标视图名
-              （宾语），读作「切到 X」——名词+后缀箭头会歧义成「当前+动作」。 */}
+          <SegmentedControl
+            items={[
+              { value: 'tasks', label: t('queue.tabTasks') },
+              { value: 'jobs', label: t('queue.tabJobs') },
+            ]}
+            value={queueTab}
+            onChange={setQueueTab}
+            ariaLabel={t('queue.viewSwitcherLabel')}
+            idPrefix="queue-view"
+            size="sm"
+            layout="content"
+            className="ui-queue-view-switcher"
+          />
           <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
-            aria-pressed={queueTab === 'jobs'}
-            data-testid="queue-jobs-toggle"
+            onClick={queueTab === 'jobs'
+              ? () => setJobsRefreshToken((n) => n + 1)
+              : () => void reload()}
+            className="btn btn-ghost btn-sm"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 1l4 4-4 4" />
-              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-              <path d="M7 23l-4-4 4-4" />
-              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-            </svg>
-            <span>{queueTab === 'jobs' ? t('queue.tabTasks') : t('queue.tabJobs')}</span>
+            {t('common.refresh')}
           </button>
         </>
       }
@@ -1064,9 +1064,12 @@ export default function QueuePage() {
             {/* 进行中（running + paused） */}
             {activeItems.length > 0 && (
               <section className="flex flex-col gap-related">
-                <h3 className="type-section-label">
-                  {t('queue.sectionActive')} ({activeItems.length})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="active"
+                  title={t('queue.sectionActive')}
+                  count={activeItems.length}
+                />
                 {activeItems.map(renderRow)}
               </section>
             )}
@@ -1074,9 +1077,12 @@ export default function QueuePage() {
             {/* 等待入队（pending） */}
             {pendingItems.length > 0 && (
               <section className="flex flex-col gap-related">
-                <h3 className="type-section-label">
-                  {t('queue.sectionWaiting')} ({pendingItems.length})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="waiting"
+                  title={t('queue.sectionWaiting')}
+                  count={pendingItems.length}
+                />
                 {pendingItems.map(renderRow)}
               </section>
             )}
@@ -1084,9 +1090,12 @@ export default function QueuePage() {
             {/* 计划任务（scheduled，0.17 P-B）——到点自动转入等待入队 */}
             {scheduledItems.length > 0 && (
               <section className="flex flex-col gap-related" data-testid="queue-scheduled-section">
-                <h3 className="type-section-label">
-                  {t('queue.sectionScheduled')} ({scheduledItems.length})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="scheduled"
+                  title={t('queue.sectionScheduled')}
+                  count={scheduledItems.length}
+                />
                 {scheduledItems.map(renderRow)}
               </section>
             )}
@@ -1094,9 +1103,12 @@ export default function QueuePage() {
             {/* 历史（terminal，后端分页） */}
             {(history.items.length > 0 || (historyLoaded && !historyError && !historyLoading)) && (
               <section className="flex flex-col gap-related">
-                <h3 className="type-section-label">
-                  {t('queue.sectionHistory')} ({history.total})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="history"
+                  title={t('queue.sectionHistory')}
+                  count={history.total}
+                />
                 {history.items.length === 0 ? (
                   <EmptyState size="sm" description={t('queue.noMatch')} />
                 ) : (

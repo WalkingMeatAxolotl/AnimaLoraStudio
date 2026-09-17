@@ -733,6 +733,15 @@
     "pageSizeLabel": "每页任务数",
     "tabTasks": "GPU 任务",
     "tabJobs": "数据任务",
+    "viewSwitcherLabel": "队列视图",
+    "columns": {
+      "type": "类型",
+      "status": "状态",
+      "result": "进度 / 结果",
+      "time": "时间",
+      "durationTime": "耗时 / 时间",
+      "actions": "操作"
+    },
     "jobs": {
       "loadErrorTitle": "数据任务加载失败",
       "reload": "重新加载",

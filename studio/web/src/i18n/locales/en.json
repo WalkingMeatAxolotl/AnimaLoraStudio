@@ -733,6 +733,15 @@
     "pageSizeLabel": "Tasks per page",
     "tabTasks": "GPU tasks",
     "tabJobs": "Data tasks",
+    "viewSwitcherLabel": "Queue view",
+    "columns": {
+      "type": "Type",
+      "status": "Status",
+      "result": "Progress / result",
+      "time": "Time",
+      "durationTime": "Duration / time",
+      "actions": "Actions"
+    },
     "jobs": {
       "loadErrorTitle": "Failed to load data tasks",
       "reload": "Reload",

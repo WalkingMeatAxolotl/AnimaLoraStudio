@@ -61,6 +61,15 @@
 .ui-queue-job-grid {
   grid-template-columns: 48px minmax(0, 1fr) 96px 150px 120px;
 }
+.ui-queue-section-header {
+  min-width: 0;
+}
+.ui-queue-column-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ui-queue-row-link {
   /* A real box is required for native keyboard focus in Chromium. Subgrid
    * keeps the existing row tracks while the last track stays an action sibling. */
