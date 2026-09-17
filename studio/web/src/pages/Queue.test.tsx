@@ -12,7 +12,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
 import { ToastProvider } from '../components/Toast'
-import { api, type Task } from '../api/client'
+import { api, type QueueHistoryPage, type Task } from '../api/client'
 import i18n from '../i18n'
 import QueuePage, { taskKind } from './Queue'
 
@@ -133,6 +133,119 @@ describe('QueuePage 取消当前任务提示', () => {
   }
 })
 
+describe('QueuePage 加载状态隔离', () => {
+  const emptyHistory: QueueHistoryPage = { items: [], total: 0, page: 1, page_size: 20 }
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    let reject!: (reason: Error) => void
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+  beforeEach(() => {
+    // 本组显式控制读取顺序；浏览器 EventSource 创建时仍在 CONNECTING。
+    vi.stubGlobal('EventSource', class extends FakeEventSource { readyState = 0 })
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false, pending_waiting: 0 })
+  })
+
+  it.each(['live', 'history'] as const)('%s 失败不会被另一数据源的成功清除，局部重试只读失败的数据源', async (side) => {
+    const user = userEvent.setup()
+    const firstLive = deferred<Task[]>()
+    const firstHistory = deferred<QueueHistoryPage>()
+    const retry = deferred<never>()
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockReturnValueOnce(firstLive.promise).mockResolvedValue([])
+    const historySpy = vi.spyOn(api, 'listQueueHistory').mockReturnValueOnce(firstHistory.promise).mockResolvedValue(emptyHistory)
+    const failedRead = side === 'live' ? liveSpy : historySpy
+    failedRead.mockReturnValueOnce(retry.promise)
+    renderQueue()
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+    await act(async () => { (side === 'live' ? firstLive : firstHistory).reject(new Error('source offline')) })
+    const alert = await screen.findByTestId(`queue-${side}-error`)
+    await act(async () => {
+      if (side === 'live') firstHistory.resolve(emptyHistory)
+      else firstLive.resolve([])
+    })
+    expect(alert).toHaveTextContent('source offline')
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('queue-loading')).not.toBeInTheDocument()
+    const reload = within(alert).getByRole('button', { name: '重新加载' })
+    await user.click(reload)
+    expect(reload).toBeDisabled()
+    expect(reload).toHaveAttribute('aria-busy', 'true')
+    await user.click(reload)
+    expect(failedRead).toHaveBeenCalledTimes(2)
+    expect(side === 'live' ? historySpy : liveSpy).toHaveBeenCalledTimes(1)
+    await act(async () => { retry.reject(new Error('still offline')) })
+    await waitFor(() => expect(reload).toBeEnabled())
+    expect(alert).toHaveTextContent('still offline')
+    await user.click(reload)
+    await screen.findByText('暂无训练任务')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(side === 'live' ? historySpy : liveSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('两路都失败时，恢复一路不清除另一路错误', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'listQueueLive').mockRejectedValueOnce(new Error('live offline')).mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockRejectedValue(new Error('history offline'))
+    renderQueue()
+    await screen.findByTestId('queue-history-error')
+    await user.click(within(screen.getByTestId('queue-live-error')).getByRole('button', { name: '重新加载' }))
+    await waitFor(() => expect(screen.queryByTestId('queue-live-error')).not.toBeInTheDocument())
+    expect(screen.getByTestId('queue-history-error')).toHaveTextContent('history offline')
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+  })
+
+  it('历史刷新失败保留已加载的行', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    const historySpy = vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      ...emptyHistory, items: [makeTask({ id: 8, name: 'Retained history', status: 'failed' })], total: 1,
+    })
+    renderQueue()
+    await screen.findByText('Retained history')
+    historySpy.mockRejectedValueOnce(new Error('refresh failed'))
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await screen.findByTestId('queue-history-error')
+    expect(screen.getByText('Retained history')).toBeInTheDocument()
+  })
+
+  it('旧的列表响应不覆盖新结果', async () => {
+    const user = userEvent.setup()
+    const old = deferred<Task[]>()
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue(emptyHistory)
+    renderQueue()
+    await screen.findByText('暂无训练任务')
+    liveSpy.mockReturnValueOnce(old.promise).mockResolvedValue([makeTask({ id: 42, name: 'Latest row', status: 'pending' })])
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await screen.findByText('Latest row')
+    await act(async () => { old.resolve([]) })
+    expect(screen.getByText('Latest row')).toBeInTheDocument()
+  })
+
+  it.each([null, 'generate'] as const)('空结果说明当前范围（type=%s）', async (type) => {
+    localStorage.setItem('studio:queue:typeFilter', JSON.stringify(type))
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue(emptyHistory)
+    renderQueue()
+    await screen.findByText(type ? i18n.t('queue.noMatch') : 'GPU 队列为空')
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+  })
+
+  it('GPU读取错误不泄漏到数据任务视图', async () => {
+    localStorage.setItem('studio:queue:tab', JSON.stringify('jobs'))
+    vi.spyOn(api, 'listProjects').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueLive').mockImplementation((_q, _type, resource) => resource === 'data'
+      ? Promise.resolve([]) : Promise.reject(new Error('GPU offline')))
+    vi.spyOn(api, 'listQueueHistory').mockImplementation((opts) => opts.resourceClass === 'data'
+      ? Promise.resolve(emptyHistory) : Promise.reject(new Error('GPU offline')))
+    renderQueue()
+    await screen.findByText('暂无数据任务')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
 describe('QueuePage 分区 + 分页', () => {
   it('空队列使用共享的主空状态层级', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
@@ -143,9 +256,9 @@ describe('QueuePage 分区 + 分页', () => {
 
     renderQueue()
 
-    const title = await screen.findByText('队列为空')
+    const title = await screen.findByText('暂无训练任务')
     expect(title.closest('.empty-state')).toHaveClass('card', 'empty-state')
-    expect(screen.getByText('从项目训练页入队任务即可'))
+    expect(screen.getByText('当前仅显示训练任务。可展开筛选切换类型，或从项目训练页入队。'))
       .toHaveClass('empty-state-description')
   })
 

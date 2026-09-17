@@ -460,8 +460,14 @@ export default function QueuePage() {
   const [history, setHistory] = useState<QueueHistoryPage>({
     items: [], total: 0, page: 1, page_size: HISTORY_PAGE_SIZES[0],
   })
-  const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [liveLoaded, setLiveLoaded] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [liveLoading, setLiveLoading] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const liveSeq = useRef(0)
+  const historySeq = useRef(0)
   const [busy, setBusy] = useState(false)
   // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤。0.17 item4：过滤条件持久化到
   // localStorage，切走队列页再回来不丢（page 不持久，回来回第 1 页）。
@@ -521,23 +527,37 @@ export default function QueuePage() {
 
   // R-5：GPU 视图 = exclusive 档（「全部」= 档位全集，含 eval_samples）。
   const reloadLive = useCallback(async () => {
+    const seq = ++liveSeq.current
+    setLiveLoading(true)
     try {
-      setLive(await api.listQueueLive(
+      const items = await api.listQueueLive(
         searchDebounced || undefined, typeFilter ?? undefined, 'exclusive',
-      ))
-      setError(null)
-    } catch (e) { setError(String(e)) }
+      )
+      if (seq !== liveSeq.current) return
+      setLive(items); setLiveLoaded(true); setLiveError(null)
+    } catch (e) {
+      if (seq === liveSeq.current) setLiveError(String(e))
+    } finally {
+      if (seq === liveSeq.current) setLiveLoading(false)
+    }
   }, [searchDebounced, typeFilter])
 
   const reloadHistory = useCallback(async () => {
+    const seq = ++historySeq.current
+    setHistoryLoading(true)
     try {
       const r = await api.listQueueHistory({
         page: historyPage, pageSize: historyPageSize,
         q: searchDebounced || undefined, status: historyStatus ?? undefined,
         type: typeFilter ?? undefined, resourceClass: 'exclusive',
       })
-      setHistory(r); setError(null)
-    } catch (e) { setError(String(e)) }
+      if (seq !== historySeq.current) return
+      setHistory(r); setHistoryLoaded(true); setHistoryError(null)
+    } catch (e) {
+      if (seq === historySeq.current) setHistoryError(String(e))
+    } finally {
+      if (seq === historySeq.current) setHistoryLoading(false)
+    }
   }, [historyPage, historyPageSize, searchDebounced, historyStatus, typeFilter])
 
   const reload = useCallback(async () => {
@@ -557,10 +577,19 @@ export default function QueuePage() {
     return () => window.clearTimeout(id)
   }, [search])
 
-  useEffect(() => { void reloadLive() }, [reloadLive])
   useEffect(() => {
-    void (async () => { await reloadHistory(); setLoaded(true) })()
+    const sequence = liveSeq
+    void reloadLive()
+    return () => { sequence.current++ }
+  }, [reloadLive])
+  useEffect(() => {
+    const sequence = historySeq
+    void reloadHistory()
+    return () => { sequence.current++ }
   }, [reloadHistory])
+  useEffect(() => () => {
+    if (reloadTimer.current) window.clearTimeout(reloadTimer.current)
+  }, [])
 
   useEventStream(
     (evt) => {
@@ -778,9 +807,11 @@ export default function QueuePage() {
     }
   }
 
-  const isEmpty =
-    live.length === 0 && history.total === 0
-    && !searchDebounced && !historyStatus && typeFilter === DEFAULT_TYPE_FILTER
+  const isEmpty = liveLoaded && historyLoaded && !liveError && !historyError
+    && !liveLoading && !historyLoading && live.length === 0 && history.total === 0
+  const isFilteredEmpty = Boolean(searchDebounced || historyStatus || (typeFilter && typeFilter !== DEFAULT_TYPE_FILTER))
+  const initialLoading = ((!liveLoaded && !liveError) || (!historyLoaded && !historyError))
+    && live.length === 0 && history.items.length === 0
 
   const renderRow = (task: Task) => (
     <QueueTaskRow
@@ -1042,11 +1073,21 @@ export default function QueuePage() {
             {t('queue.heldBanner')}
           </Alert>
         )}
-        {error && (
-          <Alert tone="danger" size="sm" role="alert" className="font-mono">
-            {error}
+        {queueTab === 'tasks' && [
+          { key: 'live', error: liveError, loading: liveLoading, reload: reloadLive, title: t('queue.liveLoadError') },
+          { key: 'history', error: historyError, loading: historyLoading, reload: reloadHistory, title: t('queue.historyLoadError') },
+        ].map((source) => source.error && (
+          <Alert key={source.key} tone="danger" size="sm" role="alert"
+            title={source.title} data-testid={`queue-${source.key}-error`}
+            action={(
+              <Button variant="secondary" size="sm" loading={source.loading} onClick={() => void source.reload()}>
+                {t('queue.reload')}
+              </Button>
+            )}
+          >
+            <span className="font-mono">{source.error}</span>
           </Alert>
-        )}
+        ))}
 
         {queueTab === 'jobs' ? (
           /* 0.17 P-G — 数据作业只读区（project_jobs）。kind 过滤/刷新由 header 下发。 */
@@ -1058,8 +1099,8 @@ export default function QueuePage() {
             onHistoryTotal={setJobsHistoryTotal}
             refreshToken={jobsRefreshToken}
           />
-        ) : !loaded ? (
-          <Card className="overflow-hidden">
+        ) : initialLoading ? (
+          <Card className="overflow-hidden" data-testid="queue-loading" role="status" aria-label={t('common.loading')}>
             {Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
@@ -1080,8 +1121,8 @@ export default function QueuePage() {
           </Card>
         ) : isEmpty ? (
           <EmptyState
-            title={t('queue.empty')}
-            description={t('queue.emptyHint')}
+            title={t(isFilteredEmpty ? 'queue.noMatch' : typeFilter === 'train' ? 'queue.empty' : 'queue.emptyAll')}
+            description={t(isFilteredEmpty ? 'queue.filteredEmptyHint' : typeFilter === 'train' ? 'queue.emptyHint' : 'queue.emptyAllHint')}
           />
         ) : (
           <div className="flex flex-col gap-section">
@@ -1116,17 +1157,18 @@ export default function QueuePage() {
             )}
 
             {/* 历史（terminal，后端分页） */}
-            <section className="flex flex-col gap-related">
-              <h3 className="type-section-label">
-                {t('queue.sectionHistory')} ({history.total})
-              </h3>
-
-              {history.items.length === 0 ? (
-                <EmptyState size="sm" description={t('queue.noMatch')} />
-              ) : (
-                history.items.map(renderRow)
-              )}
-            </section>
+            {(history.items.length > 0 || (historyLoaded && !historyError && !historyLoading)) && (
+              <section className="flex flex-col gap-related">
+                <h3 className="type-section-label">
+                  {t('queue.sectionHistory')} ({history.total})
+                </h3>
+                {history.items.length === 0 ? (
+                  <EmptyState size="sm" description={t('queue.noMatch')} />
+                ) : (
+                  history.items.map(renderRow)
+                )}
+              </section>
+            )}
           </div>
         )}
       </div>
@@ -1135,7 +1177,7 @@ export default function QueuePage() {
       {/* 持久分页栏位于列表 scrollport 之后，始终固定在 route viewport 底部。
           item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
           20）；GPU / 数据两个视图共用同款底栏（P-G 反馈）。 */}
-      {queueTab === 'tasks' && loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
+      {queueTab === 'tasks' && historyLoaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
         <PaginationBar
           page={history.page}
           total={history.total}
