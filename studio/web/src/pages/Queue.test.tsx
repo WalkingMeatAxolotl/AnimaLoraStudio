@@ -324,6 +324,20 @@ describe('QueuePage 分区 + 分页', () => {
       .toHaveClass('empty-state-description')
   })
 
+  it('全局调度入口在 GPU 与数据视图都可见，并明确影响全部调度', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+
+    expect(await screen.findByRole('button', { name: '挂起所有调度' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: '数据任务' }))
+    expect(screen.getByRole('button', { name: '挂起所有调度' })).toBeInTheDocument()
+  })
+
   it('队列挂起使用共享 warning Alert，并保留恢复操作', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({
       held: true, pending_waiting: 2,
@@ -338,7 +352,7 @@ describe('QueuePage 分区 + 分页', () => {
     const banner = await screen.findByTestId('queue-hold-banner')
     expect(banner).toHaveClass('alert', 'alert-warning', 'alert-sm')
     expect(banner).not.toHaveClass('sticky')
-    expect(within(banner).getByRole('button', { name: '恢复调度' }))
+    expect(within(banner).getByRole('button', { name: '恢复所有调度' }))
       .toHaveClass('btn', 'btn-ghost', 'btn-xs')
   })
 

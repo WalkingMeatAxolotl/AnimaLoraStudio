@@ -362,6 +362,35 @@ describe('QueueDetailPage 重试状态恢复', () => {
   })
 })
 
+describe('QueueDetailPage 来源入口一致性', () => {
+  it.each([
+    { taskType: 'train', projectId: 67, versionId: 112, href: '/projects/67/v/112/train', label: '打开训练配置 →' },
+    { taskType: 'generate', projectId: 67, versionId: 112, href: '/tools/generate?task=119', label: '查看出图结果 →' },
+    { taskType: 'reg_ai', projectId: 67, versionId: 112, href: '/projects/67/v/112/reg', label: '查看正则集 →' },
+    { taskType: 'tag', projectId: 67, versionId: 112, href: '/projects/67/v/112/tag', label: '打开所在页面 →' },
+    { taskType: 'eval_session', projectId: 67, versionId: 112, href: '/projects/67?version=112&tab=eval', label: '打开所在页面 →' },
+  ] as const)('$taskType 指向与任务类型一致的业务页面', async ({ taskType, projectId, versionId, href, label }) => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 119,
+          task_type: taskType,
+          status: 'done',
+          project_id: projectId,
+          version_id: versionId,
+          finished_at: 1200,
+        })))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    const source = await screen.findByRole('link', { name: label })
+    expect(source).toHaveAttribute('href', href)
+    expect(source).toHaveAttribute('title', '打开创建或管理此任务的页面；不会改变任务状态')
+  })
+})
+
 describe('QueueDetailPage 危险操作确认', () => {
   function actionCalls(path: string): number {
     return fetchMock.mock.calls.filter(([url, options]) => url === `${QUEUE_ITEM_URL}/${path}` && options?.method === 'POST').length

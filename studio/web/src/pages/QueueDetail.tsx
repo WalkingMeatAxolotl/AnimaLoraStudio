@@ -40,6 +40,30 @@ function evalSessionIdOf(task: Task): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
 }
 
+type DetailSourceTarget = { path: string; labelKey: string }
+
+/** 详情页来源入口与 Queue 行内入口使用相同的业务落点。 */
+function detailSourceTarget(task: Task, evalSessionId: number | null): DetailSourceTarget | null {
+  const kind = taskKind(task)
+  if (kind === 'generate') {
+    return { path: `/tools/generate?task=${task.id}`, labelKey: 'queueDetail.viewInGenerate' }
+  }
+  if (kind === 'reg_ai' && task.project_id && task.version_id) {
+    return {
+      path: `/projects/${task.project_id}/v/${task.version_id}/reg`,
+      labelKey: 'queueDetail.viewInReg',
+    }
+  }
+  if (kind === 'train' && task.project_id && task.version_id) {
+    return {
+      path: `/projects/${task.project_id}/v/${task.version_id}/train`,
+      labelKey: 'queueDetail.viewInTrain',
+    }
+  }
+  const jobPath = jobJumpPath(task, evalSessionId)
+  return jobPath ? { path: jobPath, labelKey: 'queue.jobs.jump' } : null
+}
+
 // 0.17 P-H：QueueDetail 按 task_type 差异化。train 保留全部 tab；reg_ai/generate 是
 // 推理/出图循环，无训练 monitor/eval/snapshot，只留 overview + log，结果靠 header 的
 // 「查看结果」深链跳原生页。
@@ -371,6 +395,7 @@ export default function QueueDetailPage() {
 
   // 按 task_type 过滤可见 tab（task 未加载时先按 train 给全量，加载后收敛）。
   const kind = task ? taskKind(task) : 'train'
+  const sourceTarget = task ? detailSourceTarget(task, evalSessionId) : null
   const visibleTabs = visibleTabsFor(task, taskHasEval)
   const allTabs: TabItem<Tab>[] = [
     { value: 'overview', label: t('queueDetail.tabOverview'), controls: 'queue-detail-panel' },
@@ -424,24 +449,22 @@ export default function QueueDetailPage() {
             </Badge>
           )}
           <span className="flex-1" />
-          {/* P-H 深链：generate/reg_ai 无训练结果 tab，跳原生页看结果 */}
-          {task && kind === 'generate' && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => navigate(`/tools/generate?task=${task.id}`)}
-              data-testid="detail-view-generate"
-            >{t('queueDetail.viewInGenerate')}</Button>
+          {sourceTarget && (
+            <Link
+              to={sourceTarget.path}
+              className={buttonClassName({ variant: 'secondary', size: 'sm', className: 'no-underline' })}
+              title={t('queueDetail.openSourceHint')}
+              data-testid={kind === 'generate'
+                ? 'detail-view-generate'
+                : kind === 'reg_ai'
+                  ? 'detail-view-reg'
+                  : kind === 'train'
+                    ? 'detail-view-train'
+                    : 'detail-view-job-source'}
+            >
+              {t(sourceTarget.labelKey)} →
+            </Link>
           )}
-          {task && kind === 'reg_ai' && task.project_id && task.version_id && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => navigate(`/projects/${task.project_id}/v/${task.version_id}/reg`)}
-              data-testid="detail-view-reg"
-            >{t('queueDetail.viewInReg')}</Button>
-          )}
-          {/* R-5：数据作业类 task 跳原生步骤页（download→项目下载页、tag→打标页…） */}
           {/* 诊断包（logging-target-state §3.6）：run.log + 配置快照 + 时间窗 studio.log +
               env，报 issue 用。pending / scheduled 还没 run.log，不给入口 */}
           {task && status !== 'pending' && status !== 'scheduled' && (
@@ -452,14 +475,6 @@ export default function QueueDetailPage() {
               title={t('queueDetail.diagBundleHint')}
               data-testid="detail-diag-bundle"
             >{t('queueDetail.diagBundle')}</a>
-          )}
-          {task && jobJumpPath(task, evalSessionIdOf(task)) && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => navigate(jobJumpPath(task, evalSessionIdOf(task))!)}
-              data-testid="detail-view-job-source"
-            >{t('queue.jobs.jump')} →</Button>
           )}
           {isLive && status === 'running' && task?.is_pausable && (
             <Button

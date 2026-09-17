@@ -876,29 +876,31 @@ export default function QueuePage() {
                 {t('queue.cancelCurrent')}
               </button>
             )}
-            {holdState && !holdState.held && (
-              <button
-                onClick={() => setHoldModalOpen(true)}
-                disabled={busy}
-                className="btn btn-ghost btn-sm"
-                data-testid="queue-hold-btn"
-              >
-                {t('queue.holdQueue')}
-              </button>
-            )}
-            {holdState && holdState.held && (
-              <button
-                onClick={() => void releaseQueue()}
-                disabled={busy}
-                className="btn btn-secondary btn-sm"
-                data-testid="queue-release-btn"
-              >
-                {t('queue.releaseQueue')}
-              </button>
-            )}
             {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
                 version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
           </>}
+          {holdState && !holdState.held && (
+            <button
+              onClick={() => setHoldModalOpen(true)}
+              disabled={busy}
+              className="btn btn-ghost btn-sm"
+              title={t('queue.holdQueueHint')}
+              data-testid="queue-hold-btn"
+            >
+              {t('queue.holdQueue')}
+            </button>
+          )}
+          {holdState && holdState.held && (
+            <button
+              onClick={() => void releaseQueue()}
+              disabled={busy}
+              className="btn btn-secondary btn-sm"
+              title={t('queue.releaseQueueHint')}
+              data-testid="queue-release-btn"
+            >
+              {t('queue.releaseQueue')}
+            </button>
+          )}
           <button
             onClick={queueTab === 'jobs'
               ? () => setJobsRefreshToken((n) => n + 1)
