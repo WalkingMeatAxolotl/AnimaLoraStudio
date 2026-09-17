@@ -225,6 +225,7 @@ select option:checked {
 .type-panel-title,
 .type-section-label,
 .type-field-label,
+.type-data-label,
 .type-field-help {
   font-family: var(--font-sans);
 }
@@ -262,7 +263,7 @@ select option:checked {
 }
 .type-section-label {
   margin: 0;
-  color: var(--fg-tertiary);
+  color: var(--fg-secondary);
   font-size: var(--t-xs);
   font-weight: 600;
   line-height: 1.4;
@@ -272,6 +273,14 @@ select option:checked {
 .type-field-label {
   color: var(--fg-secondary);
   font-size: var(--t-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.type-data-label {
+  color: var(--fg-secondary);
+  font-size: var(--t-xs);
   font-weight: 500;
   line-height: 1.4;
   letter-spacing: normal;

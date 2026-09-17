@@ -6,13 +6,15 @@
  *   2) 缺字段（老 mock / 极老行）兜底 'train'；
  *   3) 不再受 config_name 影响 —— 修掉旧 inferKind 把名字含 "reg"/"tag" 的
  *      训练任务误判成别的类型的 latent bug。 */
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
 import { ToastProvider } from '../components/Toast'
-import { api, type Task } from '../api/client'
-import QueuePage, { taskKind } from './Queue'
+import { api, type QueueHistoryPage, type Task } from '../api/client'
+import i18n from '../i18n'
+import QueuePage, { QueueTaskRow, taskKind } from './Queue'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -83,6 +85,229 @@ function renderQueue() {
   )
 }
 
+describe('QueueTaskRow 状态与信息', () => {
+  function renderRow(task: Task, monitor: { step?: number | null; total_steps?: number | null } | null = null) {
+    return render(<MemoryRouter><QueueTaskRow task={task} runningTaskId={task.id} monitor={monitor}
+      isWaitingForRelease={false} onResume={vi.fn()} onCancelPaused={vi.fn()}
+      onCancelPending={vi.fn()} onStartNow={vi.fn()} onCancelScheduled={vi.fn()} /></MemoryRouter>)
+  }
+
+  it.each([
+    { monitor: null, value: undefined },
+    { monitor: { step: 0, total_steps: 100 }, value: '0' },
+    { monitor: { step: 40, total_steps: 100 }, value: '40' },
+    { monitor: { step: 4, total_steps: 0 }, value: undefined },
+    { monitor: { step: -1, total_steps: 100 }, value: undefined },
+    { monitor: { step: Number.NaN, total_steps: 100 }, value: undefined },
+  ])('仅有效步数显示定量进度：$monitor', ({ monitor, value }) => {
+    renderRow(makeTask(), monitor)
+    const progress = screen.getByRole('progressbar', { name: '任务 #1 进度' })
+    if (value == null) {
+      expect(progress).not.toHaveAttribute('aria-valuenow')
+      expect(progress).toHaveAttribute('data-state', 'indeterminate')
+      expect(progress).toHaveAttribute('aria-valuetext', '进度未知')
+    } else {
+      expect(progress).toHaveAttribute('aria-valuenow', value)
+      expect(progress).toHaveAttribute('aria-valuemax', '100')
+    }
+  })
+
+  it('详情入口为原生链接，与局部按钮同级且键盘可达', async () => {
+    const user = userEvent.setup()
+    renderRow(makeTask({ id: 41, status: 'paused', is_resumable: true }))
+    const link = screen.getByRole('link', { name: '任务 #41：train' })
+    expect(link).toHaveAttribute('href', '/queue/41')
+    expect(link.querySelector('button')).toBeNull()
+    expect(link.closest('button')).toBeNull()
+    const resume = screen.getByTestId('resume-btn-41')
+    expect(link.contains(resume)).toBe(false)
+    await user.tab()
+    expect(link).toHaveFocus()
+    await user.tab()
+    expect(resume).toHaveFocus()
+  })
+
+  it.each(['done', 'failed', 'canceled'] as const)('%s 的结束时间不再一律称为完成', (status) => {
+    renderRow(makeTask({ status, finished_at: 1200 }))
+    expect(screen.getByText('结束')).toBeInTheDocument()
+    if (status !== 'done') expect(screen.queryByText('完成')).not.toBeInTheDocument()
+  })
+
+  it('等待任务不再声称前方任务数量；长名称、配置和错误保留完整提示', () => {
+    const name = 'Long task '.repeat(25).trim()
+    const config = 'long-config-'.repeat(25)
+    const error = 'Full error '.repeat(25).trim()
+    const view = renderRow(makeTask({ status: 'pending', name, config_name: config }))
+    expect(screen.queryByText(/前面.*个/)).not.toBeInTheDocument()
+    expect(screen.getByTitle(name)).toHaveTextContent(name.trim())
+    expect(screen.getByTitle(config)).toHaveTextContent(config)
+    view.unmount()
+    renderRow(makeTask({ status: 'failed', error_msg: error }))
+    expect(screen.getByTitle(error)).toHaveTextContent(error.trim())
+  })
+})
+
+describe('QueuePage 取消当前任务提示', () => {
+  afterEach(async () => {
+    await act(async () => { await i18n.changeLanguage('zh') })
+  })
+
+  const languages = [
+    {
+      language: 'zh', open: '取消当前任务', dismiss: '取消',
+      train: '取消当前任务 #42？将发送停止请求。已有恢复点会保留；仅在存在可用恢复点时才能继续训练。',
+      generate: '取消当前任务 #42？将发送停止请求，终止本次任务。',
+    },
+    {
+      language: 'en', open: 'Cancel current task', dismiss: 'Cancel',
+      train: 'Cancel current task #42? This sends a stop request. Existing recovery checkpoints are kept; training can resume only if a usable checkpoint is available.',
+      generate: 'Cancel current task #42? This sends a stop request to end this task.',
+    },
+  ] as const
+
+  for (const copy of languages) {
+    it.each(['train', 'generate'] as const)(`${copy.language}：%s 提示准确且仅确认后发送取消请求`, async (taskType) => {
+      await i18n.changeLanguage(copy.language)
+      localStorage.setItem('studio:queue:typeFilter', JSON.stringify(taskType))
+      const user = userEvent.setup()
+      vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false, pending_waiting: 0 })
+      vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+        makeTask({ id: 42, task_type: taskType, is_resumable: false }),
+      ])
+      vi.spyOn(api, 'listQueueHistory').mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+      const cancelSpy = vi.spyOn(api, 'cancelTask').mockResolvedValue({ task_id: 42, canceled: true })
+      renderQueue()
+
+      const open = await screen.findByRole('button', { name: copy.open })
+      await user.click(open)
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent(copy[taskType])
+      expect(cancelSpy).not.toHaveBeenCalled()
+      await user.click(within(dialog).getByRole('button', { name: copy.dismiss }))
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(cancelSpy).not.toHaveBeenCalled()
+
+      await user.click(open)
+      await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: copy.open }))
+      await waitFor(() => expect(cancelSpy).toHaveBeenCalledTimes(1))
+      expect(cancelSpy).toHaveBeenCalledWith(42)
+    })
+  }
+})
+
+describe('QueuePage 加载状态隔离', () => {
+  const emptyHistory: QueueHistoryPage = { items: [], total: 0, page: 1, page_size: 20 }
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    let reject!: (reason: Error) => void
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+  beforeEach(() => {
+    // 本组显式控制读取顺序；浏览器 EventSource 创建时仍在 CONNECTING。
+    vi.stubGlobal('EventSource', class extends FakeEventSource { readyState = 0 })
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false, pending_waiting: 0 })
+  })
+
+  it.each(['live', 'history'] as const)('%s 失败不会被另一数据源的成功清除，局部重试只读失败的数据源', async (side) => {
+    const user = userEvent.setup()
+    const firstLive = deferred<Task[]>()
+    const firstHistory = deferred<QueueHistoryPage>()
+    const retry = deferred<never>()
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockReturnValueOnce(firstLive.promise).mockResolvedValue([])
+    const historySpy = vi.spyOn(api, 'listQueueHistory').mockReturnValueOnce(firstHistory.promise).mockResolvedValue(emptyHistory)
+    const failedRead = side === 'live' ? liveSpy : historySpy
+    failedRead.mockReturnValueOnce(retry.promise)
+    renderQueue()
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+    await act(async () => { (side === 'live' ? firstLive : firstHistory).reject(new Error('source offline')) })
+    const alert = await screen.findByTestId(`queue-${side}-error`)
+    await act(async () => {
+      if (side === 'live') firstHistory.resolve(emptyHistory)
+      else firstLive.resolve([])
+    })
+    expect(alert).toHaveTextContent('source offline')
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('queue-loading')).not.toBeInTheDocument()
+    const reload = within(alert).getByRole('button', { name: '重新加载' })
+    await user.click(reload)
+    expect(reload).toBeDisabled()
+    expect(reload).toHaveAttribute('aria-busy', 'true')
+    await user.click(reload)
+    expect(failedRead).toHaveBeenCalledTimes(2)
+    expect(side === 'live' ? historySpy : liveSpy).toHaveBeenCalledTimes(1)
+    await act(async () => { retry.reject(new Error('still offline')) })
+    await waitFor(() => expect(reload).toBeEnabled())
+    expect(alert).toHaveTextContent('still offline')
+    await user.click(reload)
+    await screen.findByText('暂无训练任务')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(side === 'live' ? historySpy : liveSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('两路都失败时，恢复一路不清除另一路错误', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'listQueueLive').mockRejectedValueOnce(new Error('live offline')).mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockRejectedValue(new Error('history offline'))
+    renderQueue()
+    await screen.findByTestId('queue-history-error')
+    await user.click(within(screen.getByTestId('queue-live-error')).getByRole('button', { name: '重新加载' }))
+    await waitFor(() => expect(screen.queryByTestId('queue-live-error')).not.toBeInTheDocument())
+    expect(screen.getByTestId('queue-history-error')).toHaveTextContent('history offline')
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+  })
+
+  it('历史刷新失败保留已加载的行', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    const historySpy = vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      ...emptyHistory, items: [makeTask({ id: 8, name: 'Retained history', status: 'failed' })], total: 1,
+    })
+    renderQueue()
+    await screen.findByText('Retained history')
+    historySpy.mockRejectedValueOnce(new Error('refresh failed'))
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await screen.findByTestId('queue-history-error')
+    expect(screen.getByText('Retained history')).toBeInTheDocument()
+  })
+
+  it('旧的列表响应不覆盖新结果', async () => {
+    const user = userEvent.setup()
+    const old = deferred<Task[]>()
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue(emptyHistory)
+    renderQueue()
+    await screen.findByText('暂无训练任务')
+    liveSpy.mockReturnValueOnce(old.promise).mockResolvedValue([makeTask({ id: 42, name: 'Latest row', status: 'pending' })])
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await screen.findByText('Latest row')
+    await act(async () => { old.resolve([]) })
+    expect(screen.getByText('Latest row')).toBeInTheDocument()
+  })
+
+  it.each([null, 'generate'] as const)('空结果说明当前范围（type=%s）', async (type) => {
+    localStorage.setItem('studio:queue:typeFilter', JSON.stringify(type))
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue(emptyHistory)
+    renderQueue()
+    await screen.findByText(type ? i18n.t('queue.noMatch') : 'GPU 队列为空')
+    expect(screen.queryByText('暂无训练任务')).not.toBeInTheDocument()
+  })
+
+  it('GPU读取错误不泄漏到数据任务视图', async () => {
+    localStorage.setItem('studio:queue:tab', JSON.stringify('jobs'))
+    vi.spyOn(api, 'listProjects').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueLive').mockImplementation((_q, _type, resource) => resource === 'data'
+      ? Promise.resolve([]) : Promise.reject(new Error('GPU offline')))
+    vi.spyOn(api, 'listQueueHistory').mockImplementation((opts) => opts.resourceClass === 'data'
+      ? Promise.resolve(emptyHistory) : Promise.reject(new Error('GPU offline')))
+    renderQueue()
+    await screen.findByText('暂无数据任务')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
 describe('QueuePage 分区 + 分页', () => {
   it('空队列使用共享的主空状态层级', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
@@ -93,10 +318,24 @@ describe('QueuePage 分区 + 分页', () => {
 
     renderQueue()
 
-    const title = await screen.findByText('队列为空')
+    const title = await screen.findByText('暂无训练任务')
     expect(title.closest('.empty-state')).toHaveClass('card', 'empty-state')
-    expect(screen.getByText('从项目训练页入队任务即可'))
+    expect(screen.getByText('当前仅显示训练任务。可展开筛选切换类型，或从项目训练页入队。'))
       .toHaveClass('empty-state-description')
+  })
+
+  it('全局调度入口在 GPU 与数据视图都可见，并明确影响全部调度', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+
+    expect(await screen.findByRole('button', { name: '挂起队列' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: '数据任务' }))
+    expect(screen.getByRole('button', { name: '挂起队列' })).toBeInTheDocument()
   })
 
   it('队列挂起使用共享 warning Alert，并保留恢复操作', async () => {
@@ -152,7 +391,14 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: /进行中/ })).toBeInTheDocument())
     expect(screen.getByRole('heading', { level: 3, name: /进行中/ }))
       .toHaveClass('type-section-label')
-    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }).parentElement)
+    const activeGuide = screen.getByTestId('queue-task-section-header-active')
+    expect(activeGuide).toHaveClass('ui-queue-task-grid', 'ui-queue-section-header')
+    expect(within(activeGuide).getByText('类型')).toHaveClass('ui-queue-column-label')
+    expect(within(activeGuide).getByText('状态')).toHaveClass('ui-queue-column-label')
+    expect(within(activeGuide).getByText('进度 / 结果')).toHaveClass('ui-queue-column-label')
+    expect(within(activeGuide).getByText('时间')).toHaveClass('ui-queue-task-timing')
+    expect(within(activeGuide).getByText('操作')).toHaveClass('ui-queue-column-label')
+    expect(screen.getByRole('heading', { level: 3, name: /进行中/ }).closest('section'))
       .toHaveClass('gap-related')
     expect(screen.getByRole('heading', { level: 3, name: /等待入队/ }))
       .toHaveClass('type-section-label')
@@ -166,6 +412,7 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument()
     expect(screen.getByTestId('history-prev')).toBeDisabled()
     expect(screen.getByTestId('history-next')).not.toBeDisabled()
+    expect(screen.getByRole('combobox', { name: '每页任务数' })).toHaveValue('20')
     const pagination = screen.getByTestId('queue-pagination')
     expect(pagination).toHaveClass('shrink-0', 'px-page', 'border-t')
     expect(pagination).not.toHaveClass('mt-section', '-mx-page', '-mb-page')
@@ -261,10 +508,30 @@ describe('QueuePage 分区 + 分页', () => {
       expect(screen.getByTestId('queue-scheduled-section')).toBeInTheDocument(),
     )
     expect(screen.getByText(/计划任务/)).toBeInTheDocument()
-    // scheduled 行有专属操作；pending 行没有
+    // scheduled 行有专属操作；pending 行只提供取消
     expect(screen.getByTestId('startnow-btn-21')).toBeInTheDocument()
     expect(screen.getByTestId('cancel-scheduled-btn-21')).toBeInTheDocument()
     expect(screen.queryByTestId('startnow-btn-20')).not.toBeInTheDocument()
+    expect(screen.getByTestId('cancel-pending-btn-20')).toBeInTheDocument()
+  })
+
+  it('GPU pending 行取消先说明不会影响运行任务，确认后调 cancelTask', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 20, name: 'pend', status: 'pending', started_at: null, pid: null }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    const cancelSpy = vi.spyOn(api, 'cancelTask').mockResolvedValue({ task_id: 20, canceled: true })
+
+    renderQueue()
+    fireEvent.click(await screen.findByTestId('cancel-pending-btn-20'))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('任务尚未开始，不会影响当前运行中的任务')
+    expect(cancelSpy).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith(20))
   })
 
   it('点「立即开始」→ confirm 后调 startTaskNow', async () => {
@@ -349,7 +616,7 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith(30))
   })
 
-  it('右上角「数据作业」toggle → 切换只读区，漏斗变 kind 过滤（P-G）', async () => {
+  it('GPU / 数据任务使用共享双选切换，切换后漏斗变 kind 过滤（P-G）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
       makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
@@ -362,8 +629,30 @@ describe('QueuePage 分区 + 分页', () => {
     renderQueue()
     await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
 
-    fireEvent.click(screen.getByTestId('queue-jobs-toggle'))
+    const viewSwitcher = screen.getByRole('radiogroup', { name: '队列视图' })
+    const tasksOption = within(viewSwitcher).getByRole('radio', { name: 'GPU 任务' })
+    const jobsOption = within(viewSwitcher).getByRole('radio', { name: '数据任务' })
+    expect(tasksOption).toHaveAttribute('aria-checked', 'true')
+    expect(jobsOption).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('button', { name: '刷新' }).nextElementSibling).toBe(viewSwitcher)
+    const gpuActions = Array.from(viewSwitcher.parentElement?.children ?? [])
+    expect(gpuActions.indexOf(screen.getByRole('button', { name: '取消当前任务' })))
+      .toBeLessThan(gpuActions.indexOf(screen.getByTestId('queue-hold-btn')))
+    expect(gpuActions.indexOf(screen.getByTestId('queue-hold-btn')))
+      .toBeLessThan(gpuActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+    expect(gpuActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+      .toBeLessThan(gpuActions.indexOf(screen.getByRole('button', { name: '刷新' })))
+
+    fireEvent.click(jobsOption)
     await waitFor(() => expect(screen.getByTestId('data-jobs-panel')).toBeInTheDocument())
+    expect(tasksOption).toHaveAttribute('aria-checked', 'false')
+    expect(jobsOption).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('button', { name: '刷新' }).nextElementSibling).toBe(viewSwitcher)
+    const dataActions = Array.from(viewSwitcher.parentElement?.children ?? [])
+    expect(dataActions.indexOf(screen.getByTestId('queue-hold-btn')))
+      .toBeLessThan(dataActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+    expect(dataActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+      .toBeLessThan(dataActions.indexOf(screen.getByRole('button', { name: '刷新' })))
     // 任务分区没了；漏斗还在（数据作业视图的 kind 过滤），点开出 kind select
     expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
     expect(screen.getByTestId('queue-filter-toggle'))
@@ -378,8 +667,8 @@ describe('QueuePage 分区 + 分页', () => {
     // 任务视图专属的搜索框不在
     expect(screen.queryByTestId('queue-search')).not.toBeInTheDocument()
 
-    // 再点 toggle 切回任务视图
-    fireEvent.click(screen.getByTestId('queue-jobs-toggle'))
+    // 切回 GPU 任务视图
+    fireEvent.click(tasksOption)
     await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
   })
 

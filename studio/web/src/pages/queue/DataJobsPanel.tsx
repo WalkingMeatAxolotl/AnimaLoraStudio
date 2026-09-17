@@ -8,11 +8,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type Task, type TaskType,
 } from '../../api/client'
 import Alert from '../../components/Alert'
+import Button from '../../components/Button'
 import Card from '../../components/Card'
 import EmptyState from '../../components/EmptyState'
 import { useDialog } from '../../components/Dialog'
@@ -21,6 +22,7 @@ import { useEventStream } from '../../lib/useEventStream'
 import {
   DATA_VIEW_KINDS, JOB_STATUS_TONE, fmtJobAgo, fmtJobDuration, jobJumpPath,
 } from './jobUtils'
+import QueueSectionHeader from './QueueSectionHeader'
 
 export default function DataJobsPanel({
   kind, q, historyPage, pageSize, onHistoryTotal, refreshToken,
@@ -46,11 +48,15 @@ export default function DataJobsPanel({
     items: [], total: 0, page: 1, page_size: 20,
   })
   const [loaded, setLoaded] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [projectTitles, setProjectTitles] = useState<Record<number, string>>({})
   const reloadTimer = useRef<number | null>(null)
+  const reloadSeq = useRef(0)
 
   const reload = useCallback(async () => {
+    const seq = ++reloadSeq.current
+    setLoading(true)
     try {
       const [l, h] = await Promise.all([
         api.listQueueLive(q, kind ?? undefined, 'data'),
@@ -59,11 +65,13 @@ export default function DataJobsPanel({
           type: kind ?? undefined, resourceClass: 'data',
         }),
       ])
+      if (seq !== reloadSeq.current) return
       setLive(l); setHistory(h); onHistoryTotal(h.total); setError(null)
-    } catch (e) {
-      setError(String(e))
-    } finally {
       setLoaded(true)
+    } catch (e) {
+      if (seq === reloadSeq.current) setError(String(e))
+    } finally {
+      if (seq === reloadSeq.current) setLoading(false)
     }
   }, [kind, q, historyPage, pageSize, onHistoryTotal])
   const reloadRef = useRef(reload); reloadRef.current = reload
@@ -92,8 +100,8 @@ export default function DataJobsPanel({
 
   const cancelJob = async (task: Task) => {
     const ok = await confirm(
-      t('queue.jobs.cancelConfirm', { id: task.id }),
-      { okText: t('queue.jobs.cancelOk') },
+      t(task.status === 'pending' ? 'queue.cancelPendingConfirm' : 'queue.jobs.cancelConfirm', { id: task.id }),
+      { tone: 'warn', okText: t('queue.jobs.cancelOk') },
     )
     if (!ok) return
     try {
@@ -105,7 +113,7 @@ export default function DataJobsPanel({
     }
   }
 
-  const isEmpty = loaded && live.length === 0 && history.total === 0 && !kind && !q
+  const isEmpty = loaded && !error && live.length === 0 && history.total === 0 && !kind && !q
 
   const KIND_LABEL = useMemo(() => Object.fromEntries(
     DATA_VIEW_KINDS.map((k) => [k, t(`queue.jobs.kind.${k}`)]),
@@ -124,22 +132,24 @@ export default function DataJobsPanel({
       paused: t('status.paused'), scheduled: t('status.scheduled'),
     }
     return (
-      <button
+      <div
         key={task.id}
-        onClick={() => navigate(`/queue/${task.id}`)}
-        title={t('queue.taskDetailTooltip')}
-        className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${task.status === 'running' ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
+        className={`card card-hover relative block overflow-hidden text-left p-0 cursor-pointer ${task.status === 'running' ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
         data-testid={`job-row-${task.id}`}
       >
         <div className="ui-queue-job-grid px-[22px] py-4 grid gap-3 items-center">
+          <Link to={`/queue/${task.id}`} className="ui-queue-row-link"
+            aria-label={t('queue.taskDetailLinkLabel', { id: task.id, name: task.name })}
+            title={t('queue.taskDetailTooltip')}
+          >
           <span className={`font-mono text-sm ${task.status === 'running' ? 'text-accent font-semibold' : 'text-fg-tertiary'}`}>
             #{task.id}
           </span>
           <div style={{ minWidth: 0 }}>
-            <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap">
+            <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap" title={KIND_LABEL[kindOf] ?? kindOf}>
               {KIND_LABEL[kindOf] ?? kindOf}
             </div>
-            <div className="text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
+            <div className="text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap" title={`${projectLabel}${task.version_id ? ` · v${task.version_id}` : ''}`}>
               {projectLabel}{task.version_id ? ` · v${task.version_id}` : ''}
             </div>
           </div>
@@ -158,8 +168,9 @@ export default function DataJobsPanel({
               </>
             ) : '—'}
           </span>
+          </Link>
           {/* action 列：取消（live）+ 跳转原生页，icon 化 hover 显文字（既有范式） */}
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="ui-queue-row-actions flex items-center justify-end gap-1.5">
             {isLive && (
               <button
                 onClick={(e) => { e.stopPropagation(); void cancelJob(task) }}
@@ -188,22 +199,34 @@ export default function DataJobsPanel({
             )}
           </div>
         </div>
-      </button>
+      </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-section" data-testid="data-jobs-panel">
       {error && (
-        <Alert tone="danger" size="sm" role="alert" className="font-mono">
-          {error}
+        <Alert
+          tone="danger"
+          size="sm"
+          role="alert"
+          title={t('queue.jobs.loadErrorTitle')}
+          action={(
+            <Button variant="secondary" size="sm" loading={loading} onClick={() => void reload()}>
+              {t('queue.jobs.reload')}
+            </Button>
+          )}
+        >
+          <span className="font-mono">{error}</span>
         </Alert>
       )}
 
       {!loaded ? (
-        <Card className="py-8 text-center text-sm text-fg-tertiary">
-          {t('common.loading')}
-        </Card>
+        !error && (
+          <Card className="py-8 text-center text-sm text-fg-tertiary">
+            {t('common.loading')}
+          </Card>
+        )
       ) : isEmpty ? (
         <EmptyState
           title={t('queue.jobs.empty')}
@@ -213,23 +236,31 @@ export default function DataJobsPanel({
         <>
           {live.length > 0 && (
             <section className="flex flex-col gap-related">
-              <h3 className="type-section-label">
-                {t('queue.sectionActive')} ({live.length})
-              </h3>
+              <QueueSectionHeader
+                variant="job"
+                sectionKey="active"
+                title={t('queue.sectionActive')}
+                count={live.length}
+              />
               {live.map(renderRow)}
             </section>
           )}
 
-          <section className="flex flex-col gap-related">
-            <h3 className="type-section-label">
-              {t('queue.sectionHistory')} ({history.total})
-            </h3>
-            {history.items.length === 0 ? (
-              <EmptyState size="sm" description={t('queue.noMatch')} />
-            ) : (
-              history.items.map(renderRow)
-            )}
-          </section>
+          {(history.items.length > 0 || !error) && (
+            <section className="flex flex-col gap-related">
+              <QueueSectionHeader
+                variant="job"
+                sectionKey="history"
+                title={t('queue.sectionHistory')}
+                count={history.total}
+              />
+              {history.items.length === 0 ? (
+                <EmptyState size="sm" description={t('queue.noMatch')} />
+              ) : (
+                history.items.map(renderRow)
+              )}
+            </section>
+          )}
         </>
       )}
     </div>

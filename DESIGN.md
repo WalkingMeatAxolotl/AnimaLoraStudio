@@ -87,8 +87,9 @@ loading. Use no more than `400`, `500`, and `600` for normal UI hierarchy.
 | Page description | `.type-page-description`: `text-md`, secondary, relaxed, max `68ch` | A concise explanation directly below the page title |
 | Section title | `.type-section-title`: `text-lg`, 600, primary | A major region inside a page or dialog |
 | Panel title | `.type-panel-title`: `text-sm`, 600, primary | A card, settings group, or compact panel |
-| Section label | `.type-section-label`: `text-xs`, 600, tertiary, tracked uppercase | A direct category heading such as queue status; never an eyebrow above another heading |
+| Section label | `.type-section-label`: `text-xs`, 600, secondary, tracked uppercase | A direct category heading such as queue status; never an eyebrow above another heading |
 | Field label | `.type-field-label`: `text-sm`, 500, secondary | The human-readable name of a form control |
+| Data label | `.type-data-label`: `text-xs`, 500, secondary | The label of a value in a read-only property or definition list; not a form-control label |
 | Field help | `.type-field-help`: `text-xs`, tertiary, relaxed | Optional supporting copy below a field |
 | Metadata | `text-xs` + tertiary | Timestamps, counts, and passive context |
 | Technical data | `font-mono`; add `.tnum` for comparable numbers | Code, paths, identifiers, logs, and measurements—not generic UI chrome |
