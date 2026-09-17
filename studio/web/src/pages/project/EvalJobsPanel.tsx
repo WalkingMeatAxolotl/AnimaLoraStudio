@@ -29,7 +29,7 @@ function useRunningEvalLog(sessions: EvalSessionSummary[]): LogSource | null {
     () => sessions.find((s) => s.status === 'pending' || s.status === 'running') ?? null,
     [sessions],
   )
-  const log = useTaskLog(active?.task_id ?? null, { tail: 500 })
+  const log = useTaskLog(active?.task_id ?? null)
 
   return useMemo(() => {
     if (!active) return null
@@ -41,10 +41,10 @@ function useRunningEvalLog(sessions: EvalSessionSummary[]): LogSource | null {
       lines: log.lines,
       downloadUrl: log.downloadUrl,
       hasMoreBefore: log.hasMoreBefore,
-      loadingEarlier: log.loadingEarlier,
-      onLoadEarlier: log.loadEarlier,
+      loadingAll: log.loadingAll,
+      onLoadAll: log.loadAll,
     }
-  }, [active, log.lines, log.downloadUrl, log.hasMoreBefore, log.loadingEarlier, log.loadEarlier])
+  }, [active, log.lines, log.downloadUrl, log.hasMoreBefore, log.loadingAll, log.loadAll])
 }
 
 export default function EvalJobsPanel({
