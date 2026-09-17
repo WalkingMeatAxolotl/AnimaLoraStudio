@@ -7,7 +7,7 @@ Triton 是 LyCORIS 的可选计算后端，不是 Attention 后端。安装它�
 1. 打开 **设置 → 系统 → 环境 → Triton**。
 2. 点击 **安装（自动匹配）**；已有版本可使用 **重装（自动匹配）**。
 3. 安装完成后重启 Studio。
-4. 在训练的高级 LoRA 配置中选择 `lycoris_backend: triton`。恢复默认只需改回 `torch`，不必卸载 Triton。
+4. 先把训练的 `attention_backend` 设为 `none`（SDPA）或 `xformers`，再在高级 LoRA 配置中选择 `lycoris_backend: triton`。当前 Triton 与 `flash_attn` 互斥；恢复默认只需改回 `torch`，不必卸载 Triton。
 
 安装目标是运行 Studio 的 Python 环境，不是模型目录或项目数据目录。仓库 venv 启动时，包安装到该 venv 的 `site-packages`。安装使用精确版本、预编译 wheel 和 `--no-deps`，不自动替换 Torch。
 
@@ -44,6 +44,7 @@ Invoke-RestMethod -Method Delete -Uri 'http://127.0.0.1:8765/api/triton/install'
 | 普通 LoHa | bypass；Torch 下仍为原有 rebuild |
 | LoKr、DoRA、T-LoRA、Ortho | 不开放，继续使用 Torch 和既有算法路径 |
 | 三种 adapter dropout | 必须全部为 0 |
+| Attention backend | `none`（SDPA）或 `xformers`；当前不兼容 `flash_attn` |
 
 允许的配置示例：
 
@@ -54,9 +55,10 @@ lora_dora: false
 lora_dropout: 0.0
 lora_rank_dropout: 0.0
 lora_module_dropout: 0.0
+attention_backend: none  # 或 xformers；不能使用 flash_attn
 ```
 
-表单与后端 schema 共同限制不支持的组合；不能靠手改 YAML 让非零 dropout 或 DoRA 进入实验路径。环境卡片只管理依赖，训练约束属于训练配置，不在环境列表重复展示。
+表单与后端 schema 共同限制不支持的组合；不能靠手改 YAML 让非零 dropout、DoRA，或 `attention_backend: flash_attn` 进入实验路径。环境卡片只管理依赖，训练约束属于训练配置，不在环境列表重复展示。
 
 ## 失败与诊断
 

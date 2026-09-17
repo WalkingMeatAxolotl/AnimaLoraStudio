@@ -282,14 +282,16 @@ class TrainingConfig(BaseModel):
     )
     lycoris_backend: Literal["torch", "triton"] = Field(
         "torch",
-        description="LyCORIS 计算后端。Torch 为默认稳定路径；Triton 为 LoRA / LoHa 的实验性 CUDA bypass，需先在设置 → 系统 → 环境安装，并在训练前通过能力探测",
+        description="LyCORIS 计算后端。Torch 为默认稳定路径；Triton 为 LoRA / LoHa 的实验性 CUDA bypass，需先在设置 → 系统 → 环境安装，并在训练前通过能力探测；当前不能与 Flash Attention 同时启用",
         json_schema_extra=_meta(
             "lora",
             advanced=True,
+            disable_when="attention_backend==flash_attn",
+            disable_value="torch",
             option_disable_when={
                 "triton": "lora_type==lokr||lora_type==ortho||lora_type==tlora||lora_dora==true",
             },
-            disable_hint="Triton 实验路径仅支持非 DoRA 的 LoRA / LoHa；其他算法继续使用 Torch",
+            disable_hint="Triton 实验路径仅支持非 DoRA 的 LoRA / LoHa，且当前不能与 Flash Attention 同时启用；其他组合继续使用 Torch",
         ),
     )
     lora_rank: int = Field(

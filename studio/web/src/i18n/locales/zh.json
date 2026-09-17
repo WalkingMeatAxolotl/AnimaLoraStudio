@@ -434,7 +434,8 @@
       "loss_type": "InfoNoise / Leap 启用时禁用 loss 类型切换（schema 互斥，仅 mse 兼容）",
       "masked_loss": "Leap（per-sample loss 无空间维度）/ NaViT 打包路径不支持 mask（schema 互斥）",
       "timestep_schedule_shift": "InfoNoise 启用时禁用 schedule shift（schema 互斥，仅 1.0 兼容）",
-      "infonoise_enabled": "需先把 noise_enhancement / loss_weighting / loss_type / schedule_shift 全部置默认才能启用（schema 互斥）"
+      "infonoise_enabled": "需先把 noise_enhancement / loss_weighting / loss_type / schedule_shift 全部置默认才能启用（schema 互斥）",
+      "lycoris_backend": "Triton 仅支持非 DoRA 的 LoRA / LoHa，且当前不能与 Flash Attention 同时启用"
     },
     "descriptions": {
       "model_family": "模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐。切换将重算模型路径并重置族相关默认值",
@@ -468,6 +469,7 @@
       "lora_dropout": "LoRA 输入特征的随机丢弃概率：越大正则化越强、收敛越慢；0 = 关闭",
       "lora_rank_dropout": "LoRA 内部 rank 维度的随机丢弃概率（每步随机激活部分 rank）：越大正则化越强；0 = 关闭",
       "lora_module_dropout": "整个 LoRA 模块的随机跳过概率（stochastic depth）：每步以此概率完全不应用此模块；越大正则化越强；0 = 关闭",
+      "lycoris_backend": "LyCORIS 计算后端。Torch 为默认稳定路径；Triton 为 LoRA / LoHa 的实验性 CUDA bypass，当前不能与 Flash Attention 同时启用",
       "epochs": "训练轮数",
       "max_steps": "最大步数（0=不限）",
       "batch_size": "批次大小",
@@ -1346,7 +1348,7 @@
     "xformersHelp3": "装失败多数是上游 PyPI / PyTorch index 没出对应 torch+cu 组合的 wheel（5090 / 新 GPU 常见）。失败时按钮 toast 会显示 stderr 末尾，可根据提示降 torch 版本或等上游覆盖。",
     "tritonSubtitle": "LyCORIS 训练加速（实验性，仅 LoRA / LoHa）",
     "tritonHelp1": "Triton 是 LyCORIS 的可选训练加速；每个训练任务可在 lycoris_backend 中选择 Torch 或 Triton。",
-    "tritonHelp2": "当前仅支持非 DoRA 的 LoRA / LoHa，且所有 adapter dropout 必须为 0；其他算法继续使用 Torch。",
+    "tritonHelp2": "当前仅支持非 DoRA 的 LoRA / LoHa，且所有 adapter dropout 必须为 0；Triton 与 Flash Attention 暂不兼容，选择 Triton 前请把 attention_backend 改为 SDPA 或 xFormers。",
     "tritonHelp3": "安装会自动匹配当前平台与 Torch 的项目固定版本，不会替换 Torch；装完后必须重启 Studio。",
     "confirmInstallTriton": "将安装与当前平台、Torch 匹配的 Triton 固定版本。\n装完后必须重启 Studio。继续？",
     "restartRequiredShort": "待重启",
