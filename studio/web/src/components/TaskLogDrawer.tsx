@@ -28,10 +28,10 @@ export interface LogSource {
   onRetry?: () => void
   /** 原始 run.log 下载地址（有 task/job id 的 source 传 `api.logRawUrl(id)`）。 */
   downloadUrl?: string | null
-  /** 顶部「加载更早」（useTaskLog 提供；前端合成日志没有）。 */
+  /** 顶部「加载全部」（useTaskLog 提供；前端合成日志没有）。 */
   hasMoreBefore?: boolean
-  loadingEarlier?: boolean
-  onLoadEarlier?: () => void
+  loadingAll?: boolean
+  onLoadAll?: () => void
 }
 
 const STATUS_BADGE: Record<LogSourceStatus, string> = {
@@ -192,7 +192,7 @@ export default function TaskLogDrawer({
           className="overflow-hidden bg-sunken transition-[height] duration-200 ease-out"
           style={{ height: expanded ? '40vh' : '0px' }}
         >
-          {/* 内容区 = 统一 LogView（解析着色 / 调试开关 / 复制 / 下载 / 加载更早）；
+          {/* 内容区 = 统一 LogView（解析着色 / 调试开关 / 复制 / 下载 / 加载全部）；
               抽屉只管开合与 header。收起时不渲染，省掉隐藏面板的解析与滚动 */}
           {expanded && (
             <LogView
@@ -201,9 +201,8 @@ export default function TaskLogDrawer({
               emptyText={active.lines.length === 0 && live ? t('jobProgress.waitingLogs') : undefined}
               downloadUrl={active.downloadUrl ?? null}
               hasMoreBefore={active.hasMoreBefore}
-              loadingEarlier={active.loadingEarlier}
-              onLoadEarlier={active.onLoadEarlier}
-              maxRender={1000}
+              loadingAll={active.loadingAll}
+              onLoadAll={active.onLoadAll}
               toolbar={!!toolbarEl}
               toolbarContainer={toolbarEl}
               frameless

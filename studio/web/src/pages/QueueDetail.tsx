@@ -823,10 +823,10 @@ function OverviewTab({ task }: { task: Task }) {
 
 // ── LogTab ──────────────────────────────────────────────────────────────────
 
-/** 日志 tab：统一 LogView + useTaskLog（尾部分页 / SSE 增量 / 断线补拉 / 加载更早）。
+/** 日志 tab：统一 LogView + useTaskLog（尾部分页 / SSE 增量 / 断线补拉 / 加载全部）。
  *  task 是否还在跑由上层 task.status 决定；这里只管展示。 */
 function LogTab({ taskId, live }: { taskId: number; live: boolean }) {
-  const log = useTaskLog(taskId, { tail: 500 })
+  const log = useTaskLog(taskId)
   const status =
     log.status === 'error' ? 'error'
       : log.status === 'loading' ? 'loading'
@@ -840,8 +840,8 @@ function LogTab({ taskId, live }: { taskId: number; live: boolean }) {
         status={status}
         error={log.error}
         hasMoreBefore={log.hasMoreBefore}
-        loadingEarlier={log.loadingEarlier}
-        onLoadEarlier={log.loadEarlier}
+        loadingAll={log.loadingAll}
+        onLoadAll={log.loadAll}
         onRefresh={log.refresh}
         downloadUrl={log.downloadUrl}
       />
@@ -893,7 +893,7 @@ function useEvalLogSource(
   }, [load])
 
   // 日志本体：该 Session 作业的 run.log（尾部分页 + SSE 增量 + 断线补拉）
-  const log = useTaskLog(session?.task_id ?? null, { tail: 500 })
+  const log = useTaskLog(session?.task_id ?? null)
 
   return useMemo(() => {
     if (!session) return null
@@ -926,9 +926,9 @@ function useEvalLogSource(
     return {
       key: `eval-${taskId}`, label: '评估', status, lines: log.lines, onCancel, onRetry,
       downloadUrl: log.downloadUrl,
-      hasMoreBefore: log.hasMoreBefore, loadingEarlier: log.loadingEarlier, onLoadEarlier: log.loadEarlier,
+      hasMoreBefore: log.hasMoreBefore, loadingAll: log.loadingAll, onLoadAll: log.loadAll,
     }
-  }, [session, log.lines, log.downloadUrl, log.hasMoreBefore, log.loadingEarlier, log.loadEarlier, taskId, load, retrying, pid, vid, t, toast])
+  }, [session, log.lines, log.downloadUrl, log.hasMoreBefore, log.loadingAll, log.loadAll, taskId, load, retrying, pid, vid, t, toast])
 }
 
 /** 指标 / 样图两个 tab 共用的上下文：看的是哪个 project/version、哪一次评估。

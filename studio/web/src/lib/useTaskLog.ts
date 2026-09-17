@@ -1,13 +1,13 @@
 /** 单个任务 / 作业 run.log 的数据源（docs/design/logging-target-state.md §3.3/§3.4）。
  *
- * - 冷启动只拉尾部 `tail` 行（`GET /api/logs/{id}?tail=`），顶部「加载更早」按
- *   `before=<首行 offset>` 往前翻
+ * - 冷启动只拉尾部 `tail` 行（`GET /api/logs/{id}?tail=`），有更早日志时可一次
+ *   加载全部历史
  * - 增量走 SSE `task_log_appended` / `job_log_appended`，用 `end_offset` 去重
  *   （≤ 当前游标的事件是冷启动已含的或重复的）
  * - 断线重连（`useEventStream` onOpen）与任务状态变化时用 `after=<游标>` 补拉，
  *   断线期间丢的行不会丢
  * - `event_malformed` 合成一条 WARNING 行（完整行契约：ts + 级别 + `web.logview`）
- * - 客户端最多保留 `maxLines` 行：超出从头丢，丢掉的部分可再「加载更早」拿回
+ * - 默认最多保留 `maxLines` 行；用户主动加载全部后解除该上限，后续增量也完整保留
  *
  * 返回 `lines: string[]`（原文）；解析/着色在 LogView。
  */
@@ -24,9 +24,9 @@ export interface TaskLogState {
   status: TaskLogStatus
   error: string | null
   hasMoreBefore: boolean
-  loadingEarlier: boolean
-  /** 往前再拉一页；没有更早或正在拉时 no-op */
-  loadEarlier: () => void
+  loadingAll: boolean
+  /** 一次拉取并保留全部更早日志；没有更早日志或正在加载时 no-op */
+  loadAll: () => void
   /** 重新从尾部拉（出错重试用） */
   refresh: () => void
   /** 原始文件下载地址（id 为空时 null） */
@@ -35,8 +35,9 @@ export interface TaskLogState {
 
 interface Entry { offset: number; text: string }
 
-const DEFAULT_TAIL = 500
+const DEFAULT_TAIL = 2000
 const DEFAULT_MAX = 5000
+const LOAD_ALL_PAGE_SIZE = 5000
 
 /** 合成行的行头时间戳，与后端 LOG_LINE_RE 同格式：`YYYY-MM-DD HH:MM:SS.mmm`。 */
 function logTimestamp(now: Date = new Date()): string {
@@ -69,7 +70,7 @@ export function useTaskLog(
   const [status, setStatus] = useState<TaskLogStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [hasMoreBefore, setHasMoreBefore] = useState(false)
-  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [loadingAll, setLoadingAll] = useState(false)
 
   // 游标与首行 offset 用 ref：SSE handler / 补拉闭包要拿最新值
   const cursorRef = useRef<number | null>(null)     // null = 冷启动未完成
@@ -78,6 +79,10 @@ export function useTaskLog(
   const idRef = useRef<number | null>(id)
   idRef.current = id
   const fillingRef = useRef(false)
+  // 用户主动选择“加载全部”后不再裁剪；重新加载尾部或切任务时恢复默认上限。
+  const retainAllRef = useRef(false)
+  const loadingAllRef = useRef(false)
+  const loadAllGenerationRef = useRef(0)
 
   // entries 的真相在 ref 里（SSE handler / 补拉是异步闭包），state 只是镜像；
   // 这样裁剪上限、推进首行 offset 都是普通赋值，不在 setState updater 里做副作用
@@ -87,7 +92,7 @@ export function useTaskLog(
   const appendEntries = useCallback((add: Entry[]) => {
     if (add.length === 0) return
     let next = entriesRef.current.concat(add)
-    if (next.length > maxLines) {
+    if (!retainAllRef.current && next.length > maxLines) {
       next = next.slice(next.length - maxLines)
       startRef.current = next[0].offset
       setHasMoreBefore(true)
@@ -141,8 +146,12 @@ export function useTaskLog(
   }, [appendEntries, tail])
 
   const loadTail = useCallback(async (tid: number) => {
+    loadAllGenerationRef.current += 1
     setStatus('loading')
     setError(null)
+    setLoadingAll(false)
+    loadingAllRef.current = false
+    retainAllRef.current = false
     cursorRef.current = null
     pendingRef.current = []
     try {
@@ -169,7 +178,9 @@ export function useTaskLog(
     entriesRef.current = []
     setEntries([])
     setHasMoreBefore(false)
-    setLoadingEarlier(false)
+    setLoadingAll(false)
+    loadingAllRef.current = false
+    retainAllRef.current = false
     cursorRef.current = null
     pendingRef.current = []
     startRef.current = 0
@@ -194,23 +205,50 @@ export function useTaskLog(
     { onOpen: () => { void fillAfter() } },
   )
 
-  const loadEarlier = useCallback(() => {
+  const loadAll = useCallback(() => {
     const tid = idRef.current
-    if (tid == null || !hasMoreBefore || loadingEarlier) return
-    setLoadingEarlier(true)
-    void api.getLog(tid, { before: startRef.current, limit: tail })
-      .then((page) => {
-        if (idRef.current !== tid) return
-        if (page.lines.length > 0) {
-          startRef.current = page.start_offset
-          entriesRef.current = page.lines.concat(entriesRef.current)
+    if (tid == null || !hasMoreBefore || loadingAllRef.current) return
+    loadingAllRef.current = true
+    const generation = ++loadAllGenerationRef.current
+    setLoadingAll(true)
+
+    void (async () => {
+      let before = startRef.current
+      const batches: Entry[][] = []
+      let completed = false
+      try {
+        while (idRef.current === tid && loadAllGenerationRef.current === generation) {
+          const page = await api.getLog(tid, { before, limit: LOAD_ALL_PAGE_SIZE })
+          if (idRef.current !== tid || loadAllGenerationRef.current !== generation) return
+          if (page.lines.length === 0 || page.start_offset >= before) {
+            completed = !page.has_more_before
+            break
+          }
+          batches.unshift(page.lines)
+          before = page.start_offset
+          if (!page.has_more_before) {
+            completed = true
+            break
+          }
+        }
+        if (idRef.current !== tid || loadAllGenerationRef.current !== generation) return
+        if (batches.length > 0) {
+          startRef.current = before
+          entriesRef.current = batches.flat().concat(entriesRef.current)
           commit()
         }
-        setHasMoreBefore(page.has_more_before && page.lines.length > 0)
-      })
-      .catch(() => { /* 保留按钮，用户可再点 */ })
-      .finally(() => setLoadingEarlier(false))
-  }, [hasMoreBefore, loadingEarlier, tail, commit])
+        setHasMoreBefore(!completed)
+        if (completed) retainAllRef.current = true
+      } catch {
+        // 保留按钮和当前尾部，用户可重试；不把半次加载提交到视图。
+      } finally {
+        if (idRef.current === tid && loadAllGenerationRef.current === generation) {
+          loadingAllRef.current = false
+          setLoadingAll(false)
+        }
+      }
+    })()
+  }, [hasMoreBefore, commit])
 
   const refresh = useCallback(() => {
     const tid = idRef.current
@@ -220,7 +258,7 @@ export function useTaskLog(
   const lines = useMemo(() => entries.map((e) => e.text), [entries])
 
   return {
-    lines, status, error, hasMoreBefore, loadingEarlier, loadEarlier, refresh,
+    lines, status, error, hasMoreBefore, loadingAll, loadAll, refresh,
     downloadUrl: id == null ? null : api.logRawUrl(id),
   }
 }

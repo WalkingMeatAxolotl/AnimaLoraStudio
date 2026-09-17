@@ -14,10 +14,10 @@ export interface LogViewProps {
   /** waiting = 活着但还没有行；live = 在跑；finished = 终态；error 配 `error` 文案 */
   status?: LogViewStatus
   error?: string | null
-  /** 顶部「加载更早」：由数据源提供（useTaskLog） */
+  /** 顶部「加载全部」：由数据源提供（useTaskLog） */
   hasMoreBefore?: boolean
-  loadingEarlier?: boolean
-  onLoadEarlier?: () => void
+  loadingAll?: boolean
+  onLoadAll?: () => void
   /** 出错重试 / 手动刷新 */
   onRefresh?: () => void
   /** 原始文件下载地址 */
@@ -95,8 +95,8 @@ export default function LogView({
   status = 'finished',
   error = null,
   hasMoreBefore = false,
-  loadingEarlier = false,
-  onLoadEarlier,
+  loadingAll = false,
+  onLoadAll,
   onRefresh,
   downloadUrl = null,
   toolbar = true,
@@ -134,21 +134,21 @@ export default function LogView({
     if (el) el.scrollTop = el.scrollHeight
   }, [visible.length, autoScroll, showDebug])
 
-  // 「加载更早」前插后保持视口位置不跳
+  // 「加载全部」前插后保持视口位置不跳
   const prevHeightRef = useRef<number | null>(null)
-  const handleLoadEarlier = useCallback(() => {
+  const handleLoadAll = useCallback(() => {
     const el = bodyRef.current
     prevHeightRef.current = el ? el.scrollHeight : null
-    onLoadEarlier?.()
-  }, [onLoadEarlier])
+    onLoadAll?.()
+  }, [onLoadAll])
   useLayoutEffect(() => {
     const el = bodyRef.current
     const prev = prevHeightRef.current
-    if (el && prev !== null && !loadingEarlier) {
+    if (el && prev !== null && !loadingAll) {
       el.scrollTop += el.scrollHeight - prev
       prevHeightRef.current = null
     }
-  }, [loadingEarlier, lines.length])
+  }, [loadingAll, lines.length])
 
   const handleCopy = async () => {
     try {
@@ -225,15 +225,16 @@ export default function LogView({
         }`}
         data-testid="log-view-body"
       >
-        {hasMoreBefore && onLoadEarlier && (
+        {hasMoreBefore && onLoadAll && (
           <div className="pb-1.5 text-center">
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={handleLoadEarlier}
-              disabled={loadingEarlier}
+              onClick={handleLoadAll}
+              disabled={loadingAll}
+              aria-busy={loadingAll}
             >
-              {loadingEarlier ? t('logView.loadingEarlier') : t('logView.loadEarlier')}
+              {loadingAll ? t('logView.loadingAll') : t('logView.loadAll')}
             </button>
           </div>
         )}
