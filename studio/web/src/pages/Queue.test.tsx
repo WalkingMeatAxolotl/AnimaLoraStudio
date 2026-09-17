@@ -600,13 +600,13 @@ describe('QueuePage 分区 + 分页', () => {
     const jobsOption = within(viewSwitcher).getByRole('radio', { name: '数据任务' })
     expect(tasksOption).toHaveAttribute('aria-checked', 'true')
     expect(jobsOption).toHaveAttribute('aria-checked', 'false')
-    expect(viewSwitcher.nextElementSibling).toBe(screen.getByRole('button', { name: '刷新' }))
+    expect(screen.getByRole('button', { name: '刷新' }).nextElementSibling).toBe(viewSwitcher)
 
     fireEvent.click(jobsOption)
     await waitFor(() => expect(screen.getByTestId('data-jobs-panel')).toBeInTheDocument())
     expect(tasksOption).toHaveAttribute('aria-checked', 'false')
     expect(jobsOption).toHaveAttribute('aria-checked', 'true')
-    expect(viewSwitcher.nextElementSibling).toBe(screen.getByRole('button', { name: '刷新' }))
+    expect(screen.getByRole('button', { name: '刷新' }).nextElementSibling).toBe(viewSwitcher)
     // 任务分区没了；漏斗还在（数据作业视图的 kind 过滤），点开出 kind select
     expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
     expect(screen.getByTestId('queue-filter-toggle'))

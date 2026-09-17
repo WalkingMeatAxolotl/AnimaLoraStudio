@@ -865,6 +865,14 @@ export default function QueuePage() {
             {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
                 version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
           </>}
+          <button
+            onClick={queueTab === 'jobs'
+              ? () => setJobsRefreshToken((n) => n + 1)
+              : () => void reload()}
+            className="btn btn-ghost btn-sm"
+          >
+            {t('common.refresh')}
+          </button>
           <SegmentedControl
             items={[
               { value: 'tasks', label: t('queue.tabTasks') },
@@ -878,14 +886,6 @@ export default function QueuePage() {
             layout="content"
             className="ui-queue-view-switcher"
           />
-          <button
-            onClick={queueTab === 'jobs'
-              ? () => setJobsRefreshToken((n) => n + 1)
-              : () => void reload()}
-            className="btn btn-ghost btn-sm"
-          >
-            {t('common.refresh')}
-          </button>
         </>
       }
       />
