@@ -762,7 +762,7 @@ export default function QueuePage() {
   const cancelRunning = async () => {
     if (!runningTask) return
     const ok = await confirm(
-      `取消当前任务 #${runningTask.id}？任务会在安全点停止，且无法恢复（重启训练会从 0 开始）。`,
+      t(taskKind(runningTask) === 'train' ? 'queue.cancelRunningTrainConfirm' : 'queue.cancelRunningConfirm', { id: runningTask.id }),
       { tone: 'warn', okText: t('queue.cancelCurrent') },
     )
     if (!ok) return

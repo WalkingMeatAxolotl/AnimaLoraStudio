@@ -675,6 +675,8 @@
     "clearDone": "清理已完成",
     "cancelCurrent": "取消当前任务",
     "cancelHint": "发送取消信号，让当前运行任务停止",
+    "cancelRunningTrainConfirm": "取消当前任务 #{{id}}？将发送停止请求。已有恢复点会保留；仅在存在可用恢复点时才能继续训练。",
+    "cancelRunningConfirm": "取消当前任务 #{{id}}？将发送停止请求，终止本次任务。",
     "empty": "队列为空",
     "emptyHint": "从项目训练页入队任务即可",
     "noDone": "没有已完成的任务",

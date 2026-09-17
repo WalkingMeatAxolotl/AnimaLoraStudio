@@ -6,12 +6,14 @@
  *   2) 缺字段（老 mock / 极老行）兜底 'train'；
  *   3) 不再受 config_name 影响 —— 修掉旧 inferKind 把名字含 "reg"/"tag" 的
  *      训练任务误判成别的类型的 latent bug。 */
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
 import { ToastProvider } from '../components/Toast'
 import { api, type Task } from '../api/client'
+import i18n from '../i18n'
 import QueuePage, { taskKind } from './Queue'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -82,6 +84,54 @@ function renderQueue() {
     </MemoryRouter>,
   )
 }
+
+describe('QueuePage 取消当前任务提示', () => {
+  afterEach(async () => {
+    await act(async () => { await i18n.changeLanguage('zh') })
+  })
+
+  const languages = [
+    {
+      language: 'zh', open: '取消当前任务', dismiss: '取消',
+      train: '取消当前任务 #42？将发送停止请求。已有恢复点会保留；仅在存在可用恢复点时才能继续训练。',
+      generate: '取消当前任务 #42？将发送停止请求，终止本次任务。',
+    },
+    {
+      language: 'en', open: 'Cancel current task', dismiss: 'Cancel',
+      train: 'Cancel current task #42? This sends a stop request. Existing recovery checkpoints are kept; training can resume only if a usable checkpoint is available.',
+      generate: 'Cancel current task #42? This sends a stop request to end this task.',
+    },
+  ] as const
+
+  for (const copy of languages) {
+    it.each(['train', 'generate'] as const)(`${copy.language}：%s 提示准确且仅确认后发送取消请求`, async (taskType) => {
+      await i18n.changeLanguage(copy.language)
+      localStorage.setItem('studio:queue:typeFilter', JSON.stringify(taskType))
+      const user = userEvent.setup()
+      vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false, pending_waiting: 0 })
+      vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+        makeTask({ id: 42, task_type: taskType, is_resumable: false }),
+      ])
+      vi.spyOn(api, 'listQueueHistory').mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+      const cancelSpy = vi.spyOn(api, 'cancelTask').mockResolvedValue({ task_id: 42, canceled: true })
+      renderQueue()
+
+      const open = await screen.findByRole('button', { name: copy.open })
+      await user.click(open)
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent(copy[taskType])
+      expect(cancelSpy).not.toHaveBeenCalled()
+      await user.click(within(dialog).getByRole('button', { name: copy.dismiss }))
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(cancelSpy).not.toHaveBeenCalled()
+
+      await user.click(open)
+      await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: copy.open }))
+      await waitFor(() => expect(cancelSpy).toHaveBeenCalledTimes(1))
+      expect(cancelSpy).toHaveBeenCalledWith(42)
+    })
+  }
+})
 
 describe('QueuePage 分区 + 分页', () => {
   it('空队列使用共享的主空状态层级', async () => {

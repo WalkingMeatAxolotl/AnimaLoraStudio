@@ -675,6 +675,8 @@
     "clearDone": "Clear done",
     "cancelCurrent": "Cancel current task",
     "cancelHint": "Send cancel signal to stop the running task",
+    "cancelRunningTrainConfirm": "Cancel current task #{{id}}? This sends a stop request. Existing recovery checkpoints are kept; training can resume only if a usable checkpoint is available.",
+    "cancelRunningConfirm": "Cancel current task #{{id}}? This sends a stop request to end this task.",
     "empty": "Queue is empty",
     "emptyHint": "Queue tasks from the project training page",
     "noDone": "No completed tasks",
