@@ -187,9 +187,11 @@ function renderDetailPage() {
   return render(
     <MemoryRouter initialEntries={['/queue/119']}>
       <ToastProvider>
-        <Routes>
-          <Route path="/queue/:id" element={<QueueDetailPage />} />
-        </Routes>
+        <DialogProvider>
+          <Routes>
+            <Route path="/queue/:id" element={<QueueDetailPage />} />
+          </Routes>
+        </DialogProvider>
       </ToastProvider>
     </MemoryRouter>
   )
@@ -357,6 +359,81 @@ describe('QueueDetailPage 重试状态恢复', () => {
     expect(fetchMock).toHaveBeenCalledWith(`${QUEUE_ITEM_URL}/retry`, expect.objectContaining({ method: 'POST' }))
     expect(await screen.findByRole('heading', { name: '#120 new task', level: 1 })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
+  })
+})
+
+describe('QueueDetailPage 危险操作确认', () => {
+  function actionCalls(path: string): number {
+    return fetchMock.mock.calls.filter(([url, options]) => url === `${QUEUE_ITEM_URL}/${path}` && options?.method === 'POST').length
+  }
+
+  it.each([
+    {
+      taskType: 'train',
+      description: '取消当前任务 #119？将发送停止请求。已有恢复点会保留；仅在存在可用恢复点时才能继续训练。',
+    },
+    {
+      taskType: 'generate',
+      description: '取消当前任务 #119？将发送停止请求，终止本次任务。',
+    },
+    {
+      taskType: 'tag',
+      description: '取消数据任务 #119？运行中的任务会被终止。',
+    },
+  ] as const)('$taskType 取消仅在确认后发送请求，并显示同类型后果', async ({ taskType, description }) => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: taskType, status: 'running' })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: taskType, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '取消任务' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(description)
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+    expect(actionCalls('cancel')).toBe(0)
+
+    await user.click(screen.getByRole('button', { name: '取消任务' }))
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+
+  it('暂停先说明恢复语义，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: 'train', status: 'running', is_pausable: true })))
+      if (url === `${QUEUE_ITEM_URL}/pause`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'running' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-pause-btn'))
+    const modal = await screen.findByTestId('pause-confirm-modal')
+    expect(modal).toHaveTextContent('暂停训练？')
+    expect(modal).toHaveTextContent('恢复时将从上一轮 epoch 结束位置继续')
+    expect(actionCalls('pause')).toBe(0)
+    await user.click(within(modal).getByTestId('pause-confirm-ok'))
+    await waitFor(() => expect(actionCalls('pause')).toBe(1))
+  })
+
+  it('继续训练先确认恢复点语义，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: 'train', status: 'failed', finished_at: 1200, is_resumable: true })))
+      if (url === `${QUEUE_ITEM_URL}/resume`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-resume-btn'))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('从最近一次 epoch 自动备份继续训练（沿用当时配置）')
+    expect(actionCalls('resume')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '继续训练' }))
+    await waitFor(() => expect(actionCalls('resume')).toBe(1))
   })
 })
 

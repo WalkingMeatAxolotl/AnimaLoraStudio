@@ -10,6 +10,7 @@ import {
   type TaskType,
 } from '../api/client'
 import { PauseProgressModal } from '../components/PauseProgressModal'
+import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import Alert from '../components/Alert'
 import ActionGroup from '../components/ActionGroup'
 import Modal from '../components/Modal'
@@ -28,7 +29,7 @@ import LogView from '../components/LogView'
 import { useTaskLog } from '../lib/useTaskLog'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { taskKind } from './Queue'
-import { fmtJobTime as fmtTime, fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
+import { fmtJobTime as fmtTime, fmtParamValue, jobJumpPath, paramLabel, DATA_VIEW_KINDS } from './queue/jobUtils'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'metrics' | 'samples' | 'outputs' | 'snapshot'
 
@@ -105,6 +106,7 @@ export default function QueueDetailPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { toast } = useToast()
+  const { confirm } = useDialog()
 
   const [task, setTask] = useState<Task | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -116,6 +118,7 @@ export default function QueueDetailPage() {
     return (['overview', 'log', 'monitor', 'metrics', 'samples', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [pauseConfirmOpen, setPauseConfirmOpen] = useState(false)
   const [pauseModalOpen, setPauseModalOpen] = useState(false)
 
   // tab → hash 写回（点 tab 按钮时同步 URL，replaceState 不触发 router 重渲）
@@ -235,6 +238,21 @@ export default function QueueDetailPage() {
     finally { setBusy(false) }
   }
 
+  const confirmLiveCancel = async () => {
+    if (!task) return
+    const kind = taskKind(task)
+    const messageKey = kind === 'train'
+      ? 'queue.cancelRunningTrainConfirm'
+      : DATA_VIEW_KINDS.includes(kind)
+        ? 'queue.jobs.cancelConfirm'
+        : 'queue.cancelRunningConfirm'
+    const ok = await confirm(t(messageKey, { id: task.id }), {
+      tone: 'warn',
+      okText: t('queueDetail.cancelTask'),
+    })
+    if (ok) await cancel()
+  }
+
   const retry = async () => {
     if (!task) return
     setBusy(true)
@@ -253,6 +271,7 @@ export default function QueueDetailPage() {
   // ADR 0006 PR-4: 暂停 / 恢复 / 取消 paused 三连。
   const pauseRunning = async () => {
     if (!task) return
+    setPauseConfirmOpen(false)
     setPauseModalOpen(true)
     try {
       await api.pauseTask(task.id)
@@ -277,6 +296,13 @@ export default function QueueDetailPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const confirmTerminalResume = async () => {
+    if (!task) return
+    const label = t('queue.resumeTerminal')
+    const ok = await confirm(`${label} #${task.id}？${t('queue.resumeTerminalHint')}`, { okText: label })
+    if (ok) await resumePaused()
   }
 
   // 0.17 P-B — scheduled task 手动提前：立即转 pending 参与排队。
@@ -403,14 +429,14 @@ export default function QueueDetailPage() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={pauseRunning}
-              disabled={busy || pauseModalOpen}
+              onClick={() => setPauseConfirmOpen(true)}
+              disabled={busy || pauseConfirmOpen || pauseModalOpen}
               data-testid="detail-pause-btn"
               title={t('queue.pauseHint')}
             >{t('queue.pause')}</Button>
           )}
           {isLive && (
-            <Button variant="warning" size="sm" onClick={cancel} disabled={busy}>
+            <Button variant="warning" size="sm" onClick={confirmLiveCancel} disabled={busy}>
               {t('queueDetail.cancelTask')}
             </Button>
           )}
@@ -462,7 +488,7 @@ export default function QueueDetailPage() {
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={resumePaused}
+                  onClick={confirmTerminalResume}
                   disabled={busy}
                   data-testid="detail-resume-btn"
                   title={t('queue.resumeTerminalHint')}
@@ -565,7 +591,13 @@ export default function QueueDetailPage() {
         />
       )}
 
-      {/* ADR §4.3 暂停过程 modal — 跟 Queue.tsx 同组件，UI 锁屏让用户看进度。 */}
+      {/* ADR §4.3 暂停确认与过程 modal —— 与 Queue.tsx 使用同一语义。 */}
+      {pauseConfirmOpen && (
+        <PauseConfirmModal
+          onCancel={() => setPauseConfirmOpen(false)}
+          onConfirm={() => { void pauseRunning() }}
+        />
+      )}
       {pauseModalOpen && task && (
         <PauseProgressModal
           taskId={task.id}
