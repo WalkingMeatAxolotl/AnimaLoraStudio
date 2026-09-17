@@ -833,6 +833,8 @@
     "pauseFailed": "暂停失败：{{reason}}"
   },
   "queueDetail": {
+    "loadErrorTitle": "任务详情加载失败",
+    "reloadDetails": "重新加载",
     "invalidId": "无效任务 ID",
     "backToQueue": "← 队列",
     "tabsAriaLabel": "任务详情分区",

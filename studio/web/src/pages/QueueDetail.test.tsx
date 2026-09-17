@@ -199,6 +199,88 @@ function getTaskCalls(): number {
   return fetchMock.mock.calls.filter(([u]) => u === QUEUE_ITEM_URL).length
 }
 
+describe('QueueDetailPage 加载失败恢复', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+
+  afterEach(async () => {
+    await act(async () => { await i18n.changeLanguage('zh') })
+  })
+
+  it.each([
+    { language: 'zh', title: '任务详情加载失败', reload: '重新加载', loading: '加载中...' },
+    { language: 'en', title: 'Failed to load task details', reload: 'Reload', loading: 'Loading...' },
+  ])('$language：加载失败停止显示加载中，重复失败后仍能重新加载且不重跑任务', async (copy) => {
+    await i18n.changeLanguage(copy.language)
+    const user = userEvent.setup()
+    let settle!: { resolve: (response: Response) => void; reject: (error: Error) => void }
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? new Promise<Response>((resolve, reject) => { settle = { resolve, reject } })
+      : Promise.resolve(new Response('', { status: 404 })))
+    renderDetailPage()
+    expect(screen.getByText(copy.loading)).toBeInTheDocument()
+
+    await act(async () => { settle.reject(new Error('network offline')) })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(copy.title)
+    expect(alert).toHaveTextContent('network offline')
+    expect(screen.queryByText(copy.loading)).not.toBeInTheDocument()
+    const reload = within(alert).getByRole('button', { name: copy.reload })
+    expect(reload).toBeEnabled()
+
+    await user.click(reload)
+    expect(getTaskCalls()).toBe(2)
+    expect(reload).toBeDisabled()
+    expect(reload).toHaveAttribute('aria-busy', 'true')
+    await user.click(reload)
+    expect(getTaskCalls()).toBe(2)
+    await act(async () => {
+      settle.resolve(new Response(JSON.stringify({ error: { message: 'Service unavailable' } }), {
+        status: 503, headers: { 'content-type': 'application/json' },
+      }))
+    })
+    await waitFor(() => expect(reload).toBeEnabled())
+    expect(alert).toHaveTextContent('Service unavailable')
+    expect(screen.queryByText(copy.loading)).not.toBeInTheDocument()
+
+    await user.click(reload)
+    await act(async () => { settle.resolve(queueItemResponse(makeTask({ id: 119, name: 'Recovered task', status: 'done' }))) })
+    expect(await screen.findByTitle('Recovered task')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(getTaskCalls()).toBe(3)
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)
+  })
+
+  it('已加载详情刷新失败时保留内容，重新加载成功后清除错误', async () => {
+    const user = userEvent.setup()
+    let fail = false
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? fail
+        ? Promise.reject(new Error('refresh offline'))
+        : Promise.resolve(queueItemResponse(makeTask({ id: 119, name: 'Keep this task', status: 'done' })))
+      : Promise.resolve(new Response('', { status: 404 })))
+    renderDetailPage()
+    await screen.findByTitle('Keep this task')
+
+    fail = true
+    act(() => {
+      FakeEventSource.instances[FakeEventSource.instances.length - 1].emit({ type: 'task_state_changed', task_id: 119 })
+    })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('refresh offline')
+    expect(screen.getByTitle('Keep this task')).toBeInTheDocument()
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument()
+
+    fail = false
+    await user.click(within(alert).getByRole('button', { name: '重新加载' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(screen.getByTitle('Keep this task')).toBeInTheDocument()
+    expect(getTaskCalls()).toBe(3)
+  })
+})
+
 describe('QueueDetailPage 重试状态恢复', () => {
   function mockRetry(retryResponse: () => Promise<Response>, taskType: 'train' | 'generate' = 'train') {
     fetchMock.mockImplementation((url: string) => {

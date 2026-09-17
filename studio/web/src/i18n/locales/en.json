@@ -833,6 +833,8 @@
     "pauseFailed": "Pause failed: {{reason}}"
   },
   "queueDetail": {
+    "loadErrorTitle": "Failed to load task details",
+    "reloadDetails": "Reload",
     "invalidId": "Invalid task ID",
     "backToQueue": "← Queue",
     "tabsAriaLabel": "Task detail sections",

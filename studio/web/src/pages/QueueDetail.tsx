@@ -10,6 +10,7 @@ import {
   type TaskType,
 } from '../api/client'
 import { PauseProgressModal } from '../components/PauseProgressModal'
+import Alert from '../components/Alert'
 import Badge, { type BadgeTone } from '../components/Badge'
 import Button, { buttonClassName } from '../components/Button'
 import { useDialog } from '../components/Dialog'
@@ -141,6 +142,7 @@ export default function QueueDetailPage() {
 
   const [task, setTask] = useState<Task | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<Tab>(() => {
     if (typeof window === 'undefined') return 'overview'
@@ -201,11 +203,14 @@ export default function QueueDetailPage() {
   const reload = useCallback(async () => {
     if (!Number.isFinite(taskId)) return
     const seq = ++reloadSeq.current
+    setLoading(true)
     try {
       const t = await api.getTask(taskId)
       if (seq === reloadSeq.current) { setTask(t); setError(null) }
     } catch (e) {
       if (seq === reloadSeq.current) setError(String(e))
+    } finally {
+      if (seq === reloadSeq.current) setLoading(false)
     }
   }, [taskId])
 
@@ -509,9 +514,19 @@ export default function QueueDetailPage() {
         </div>
 
         {error && (
-          <div className="px-3 py-2 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
+          <Alert
+            tone="danger"
+            size="sm"
+            role="alert"
+            title={t('queueDetail.loadErrorTitle')}
+            action={(
+              <Button variant="secondary" size="sm" loading={loading} onClick={() => void reload()}>
+                {t('queueDetail.reloadDetails')}
+              </Button>
+            )}
+          >
             {error}
-          </div>
+          </Alert>
         )}
 
         {/* Stat cards for running tasks */}
@@ -543,7 +558,7 @@ export default function QueueDetailPage() {
         className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
       >
         {tab === 'overview' && task && <OverviewTab task={task} />}
-        {tab === 'overview' && !task && (
+        {tab === 'overview' && !task && !error && (
           <div className="p-6 text-center text-fg-tertiary text-sm">
             {t('common.loading')}
           </div>
