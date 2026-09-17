@@ -333,9 +333,9 @@ describe('QueuePage 分区 + 分页', () => {
 
     renderQueue()
 
-    expect(await screen.findByRole('button', { name: '挂起所有调度' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '挂起队列' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: '数据任务' }))
-    expect(screen.getByRole('button', { name: '挂起所有调度' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '挂起队列' })).toBeInTheDocument()
   })
 
   it('队列挂起使用共享 warning Alert，并保留恢复操作', async () => {
@@ -352,7 +352,7 @@ describe('QueuePage 分区 + 分页', () => {
     const banner = await screen.findByTestId('queue-hold-banner')
     expect(banner).toHaveClass('alert', 'alert-warning', 'alert-sm')
     expect(banner).not.toHaveClass('sticky')
-    expect(within(banner).getByRole('button', { name: '恢复所有调度' }))
+    expect(within(banner).getByRole('button', { name: '恢复调度' }))
       .toHaveClass('btn', 'btn-ghost', 'btn-xs')
   })
 
@@ -635,12 +635,24 @@ describe('QueuePage 分区 + 分页', () => {
     expect(tasksOption).toHaveAttribute('aria-checked', 'true')
     expect(jobsOption).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByRole('button', { name: '刷新' }).nextElementSibling).toBe(viewSwitcher)
+    const gpuActions = Array.from(viewSwitcher.parentElement?.children ?? [])
+    expect(gpuActions.indexOf(screen.getByRole('button', { name: '取消当前任务' })))
+      .toBeLessThan(gpuActions.indexOf(screen.getByTestId('queue-hold-btn')))
+    expect(gpuActions.indexOf(screen.getByTestId('queue-hold-btn')))
+      .toBeLessThan(gpuActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+    expect(gpuActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+      .toBeLessThan(gpuActions.indexOf(screen.getByRole('button', { name: '刷新' })))
 
     fireEvent.click(jobsOption)
     await waitFor(() => expect(screen.getByTestId('data-jobs-panel')).toBeInTheDocument())
     expect(tasksOption).toHaveAttribute('aria-checked', 'false')
     expect(jobsOption).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('button', { name: '刷新' }).nextElementSibling).toBe(viewSwitcher)
+    const dataActions = Array.from(viewSwitcher.parentElement?.children ?? [])
+    expect(dataActions.indexOf(screen.getByTestId('queue-hold-btn')))
+      .toBeLessThan(dataActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+    expect(dataActions.indexOf(screen.getByTestId('queue-filter-toggle')))
+      .toBeLessThan(dataActions.indexOf(screen.getByRole('button', { name: '刷新' })))
     // 任务分区没了；漏斗还在（数据作业视图的 kind 过滤），点开出 kind select
     expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
     expect(screen.getByTestId('queue-filter-toggle'))

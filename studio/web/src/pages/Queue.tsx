@@ -818,43 +818,7 @@ export default function QueuePage() {
       subtitle={queueTab === 'jobs' ? t('queue.descriptionJobs') : t('queue.description')}
       actions={
         <>
-          {queueTab === 'jobs' && (
-            /* 数据作业视图：漏斗（kind 过滤）与刷新同位交互。 */
-            <button
-              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
-              onClick={() => setFiltersOpen((o) => !o)}
-              aria-expanded={filtersOpen}
-              aria-controls={QUEUE_JOBS_LIST_TOOLBAR_ID}
-              aria-label={t('queue.filters')}
-              title={t('queue.filters')}
-              data-testid="queue-filter-toggle"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
-              </svg>
-              {!filtersOpen && (jobsKind !== null || jobsSearch.trim() !== '') && (
-                <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
-              )}
-            </button>
-          )}
           {queueTab === 'tasks' && <>
-            {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
-            <button
-              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
-              onClick={() => setFiltersOpen((o) => !o)}
-              aria-expanded={filtersOpen}
-              aria-controls={QUEUE_TASKS_LIST_TOOLBAR_ID}
-              aria-label={t('queue.filters')}
-              title={t('queue.filters')}
-              data-testid="queue-filter-toggle"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
-              </svg>
-              {!filtersOpen && filtering && (
-                <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
-              )}
-            </button>
             {runningTask?.is_pausable && (
               <button
                 onClick={() => requestPause(runningTask)}
@@ -901,6 +865,25 @@ export default function QueuePage() {
               {t('queue.releaseQueue')}
             </button>
           )}
+          {/* 状态操作在左；筛选、刷新和视图切换在右，形成稳定的动作顺序。 */}
+          <button
+            className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+            aria-controls={queueTab === 'jobs' ? QUEUE_JOBS_LIST_TOOLBAR_ID : QUEUE_TASKS_LIST_TOOLBAR_ID}
+            aria-label={t('queue.filters')}
+            title={t('queue.filters')}
+            data-testid="queue-filter-toggle"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+            </svg>
+            {!filtersOpen && (queueTab === 'jobs'
+              ? jobsKind !== null || jobsSearch.trim() !== ''
+              : filtering) && (
+              <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+            )}
+          </button>
           <button
             onClick={queueTab === 'jobs'
               ? () => setJobsRefreshToken((n) => n + 1)
