@@ -11,7 +11,10 @@
 // cell，默认勾最近 20 个 lora 和前 3 个 prompt，其余在下拉里随手加减。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type EvalSampleGrid as GridData } from '../api/client'
+import Alert from './Alert'
+import Card from './Card'
 import CheckboxDropdown from './CheckboxDropdown'
+import EmptyState from './EmptyState'
 import PreviewXYGrid, { type XYSample } from '../pages/tools/generate/PreviewXYGrid'
 import type { XYAxisView } from '../pages/tools/generate/xy'
 
@@ -136,25 +139,25 @@ export default function EvalSampleGrid({
 
   if (error) {
     return (
-      <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-sm text-err">
+      <Alert tone="danger" size="sm" role="alert">
         样图矩阵读取失败：{error}
-      </div>
+      </Alert>
     )
   }
   if (!grid) {
     return (
-      <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
+      <div role="status" className="text-sm text-fg-secondary">
         读取样图矩阵…
       </div>
     )
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-3 flex-1 min-h-0 min-w-0 overflow-hidden">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="text-sm font-semibold">样图</div>
-        <span className="text-xs text-fg-tertiary">
-          评估出的图按 lora × prompt 排成矩阵，可直接肉眼比
+    <Card padding="md" className="flex min-h-0 min-w-0 flex-1 flex-col gap-section overflow-hidden">
+      <div className="flex flex-wrap items-center gap-related">
+        <h2 className="type-panel-title">样图</h2>
+        <span className="type-page-description">
+          评估出的图按 lora × prompt 排成矩阵，可直接肉眼比较。
         </span>
         <span className="flex-1" />
         <CheckboxDropdown
@@ -174,17 +177,19 @@ export default function EvalSampleGrid({
       </div>
 
       {samples.length === 0 ? (
-        <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
-          {rows.length === 0
+        <EmptyState
+          embedded
+          size="sm"
+          description={rows.length === 0
             ? '勾选至少一个 prompt 才能显示矩阵。'
             : columns.length === 0
               ? '勾选至少一个 lora 才能显示矩阵。'
-              : '这次评估还没有出图（出图阶段可能仍在跑，或已失败）。'}
-        </div>
+              : '这次评估还没有出图（出图阶段可能仍在运行，或已经失败）。'}
+        />
       ) : (
         /* min-w-0 是关键：flex 子项默认 min-width:auto，几十列的网格会把父容器整个
            撑宽（页面横向溢出、网格自己反而不滚），zoom 之后就左右移不动了 */
-        <div className="flex-1 min-h-0 min-w-0 flex" style={{ minHeight: 420 }}>
+        <div className="flex min-h-[min(26.25rem,60vh)] min-w-0 flex-1">
           <PreviewXYGrid
             samples={samples}
             taskId={-1 /* 图走 imageUrl，不会回退到 generate cache */}
@@ -193,6 +198,6 @@ export default function EvalSampleGrid({
           />
         </div>
       )}
-    </div>
+    </Card>
   )
 }
