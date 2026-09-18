@@ -489,36 +489,32 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
 
       <section
         aria-label={t('monitor.statusSummary')}
-        className="flex shrink-0 flex-wrap items-center gap-related border-y border-subtle py-related text-xs text-fg-tertiary"
+        className="flex shrink-0 flex-wrap items-center gap-field border-y border-subtle py-related text-xs text-fg-tertiary"
       >
-        <Badge
-          size="sm"
-          tone={evidenceState === 'live' ? 'success' : evidenceState === 'reconnecting' ? 'warning' : 'neutral'}
-          active={evidenceState === 'live'}
-        >
-          {t(`monitor.evidenceStatus.${evidenceState}`)}
-        </Badge>
-        {lastUpdatedLabel && <span>{t('monitor.lastUpdated', { time: lastUpdatedLabel })}</span>}
+        <div className="flex shrink-0 items-center gap-related">
+          <Badge
+            size="sm"
+            tone={evidenceState === 'live' ? 'success' : evidenceState === 'reconnecting' ? 'warning' : 'neutral'}
+            active={evidenceState === 'live'}
+          >
+            {t(`monitor.evidenceStatus.${evidenceState}`)}
+          </Badge>
+          {lastUpdatedLabel && <span>{t('monitor.lastUpdated', { time: lastUpdatedLabel })}</span>}
+        </div>
         {totalSteps > 0 && (
-          <div className="ml-auto flex min-w-[24rem] flex-1 basis-[36rem] items-center gap-related font-mono tabular-nums">
+          <div className="ml-auto flex min-w-[24rem] max-w-[72rem] flex-1 items-center gap-field font-mono tabular-nums">
             <span className="whitespace-nowrap">
               {t('monitor.progressSteps', { current: number(step), total: number(totalSteps) })}
             </span>
             <ProgressBar
-              className="min-w-24 flex-1"
+              className="min-w-32 flex-1"
               size="xs"
               label={t('monitor.trainingProgress')}
               value={step}
               max={totalSteps}
               valueText={`${progress.toFixed(1)}%`}
             />
-            <span className="whitespace-nowrap">{progress.toFixed(1)}%</span>
-            <span className="whitespace-nowrap text-fg-secondary">
-              {t('monitor.metric.elapsed')} {elapsed}
-            </span>
-            <span className="whitespace-nowrap text-fg-secondary">
-              {t('monitor.metric.eta')} {eta}
-            </span>
+            <span className="whitespace-nowrap text-fg-secondary">{progress.toFixed(1)}%</span>
           </div>
         )}
       </section>
@@ -570,7 +566,10 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
         <StatCard
           label={t('monitor.metric.eta')}
           value={eta}
-          sub={speed == null ? t('monitor.notReported') : `${speed.toFixed(2)} it/s · ${t('monitor.iterationSpeed')}`}
+          sub={[
+            `${t('monitor.metric.elapsed')} ${elapsed}`,
+            speed == null ? null : `${speed.toFixed(2)} it/s`,
+          ].filter(Boolean).join(' · ')}
         />
       </dl>
 
