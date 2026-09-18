@@ -39,16 +39,14 @@ export default function MonitorPage() {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* 顶部状态栏 */}
-      <section className="rounded-md border border-subtle bg-surface text-xs flex items-center gap-3 shrink-0 flex-wrap"
-        style={{ padding: '10px 16px', margin: '0 0 12px 0' }}>
+      <section className="card card-compact card-pad-sm mb-field flex shrink-0 flex-wrap items-center gap-field text-xs">
         {/* 健康指示 */}
-        <span className={`inline-block w-2 h-2 rounded-full ${ok ? 'bg-ok' : 'bg-err'}`}
-          style={{ boxShadow: ok ? '0 0 6px var(--ok)' : '0 0 6px var(--err)' }} />
+        <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${ok ? 'bg-ok' : 'bg-err'}`} />
         <span className={`font-semibold font-mono ${ok ? 'text-ok' : 'text-err'}`}>
           {error ? 'offline' : health?.status ?? '...'}
         </span>
         {health && (
-          <span className="text-fg-tertiary font-mono">
+          <span className="font-mono text-fg-secondary">
             v{health.version}
           </span>
         )}
@@ -56,12 +54,11 @@ export default function MonitorPage() {
         <span className="text-fg-tertiary">|</span>
 
         {/* 任务选择 */}
-        <span className="text-fg-tertiary">任务</span>
+        <span className="text-fg-secondary">任务</span>
         <select
           value={taskId ?? ''}
           onChange={(e) => setTaskId(e.target.value === '' ? null : Number(e.target.value))}
-          className="rounded-sm bg-sunken border border-subtle text-xs text-fg-primary"
-          style={{ padding: '4px 10px', outline: 'none' }}
+          className="form-control form-control-sm form-control-sunken w-auto text-xs"
         >
           <option value="">（最新 running，没有则显示空）</option>
           {tasks.map((t) => (
@@ -80,7 +77,7 @@ export default function MonitorPage() {
           </>
         )}
 
-        <span style={{ flex: 1 }} />
+        <span className="flex-1" />
       </section>
 
       {/* 监控主体 */}
@@ -88,7 +85,7 @@ export default function MonitorPage() {
         {taskId !== null ? (
           <MonitorDashboard taskId={taskId} />
         ) : (
-          <div className="flex items-center justify-center h-full text-fg-tertiary text-sm flex-col gap-2">
+          <div className="flex h-full flex-col items-center justify-center gap-related text-sm text-fg-secondary">
             <span className="text-xl">📊</span>
             <span>暂无训练任务</span>
             <span className="text-xs">启动训练后将自动显示监控数据</span>
