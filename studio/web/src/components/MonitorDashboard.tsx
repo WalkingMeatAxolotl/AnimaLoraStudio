@@ -6,6 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { getMonitorElapsedSeconds, type MonitorTaskTiming } from '../lib/monitorElapsed'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import ImagePreviewModal from './ImagePreviewModal'
 import { SeriesChart } from './SeriesChart'
@@ -244,7 +245,10 @@ function SampleViewer({ samples, taskId }: {
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
-export default function MonitorDashboard({ taskId }: { taskId: number }) {
+export default function MonitorDashboard({ taskId, task }: {
+  taskId: number
+  task?: MonitorTaskTiming
+}) {
   const { state, connected } = useMonitorProgress(taskId)
   const [emaAlpha, setEmaAlpha] = useState(0.02)
   // LR / d 默认不做 EMA（数据本身已是 EMA 派生量），slider 拉到 < 1 才平滑
@@ -264,7 +268,8 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const speed = state?.speed ?? 0
   const eta = speed > 0 && totalSteps > step ? fmtSec((totalSteps - step) / speed) : '--'
   const progress = totalSteps > 0 ? Math.min(100, (step / totalSteps) * 100) : 0
-  const elapsed = state?.start_time ? fmtSec(Date.now() / 1000 - state.start_time) : '--'
+  const elapsedSeconds = getMonitorElapsedSeconds(state?.start_time, task)
+  const elapsed = elapsedSeconds === null ? '--' : fmtSec(elapsedSeconds)
 
   // Recent loss vs previous (windowed comparison)
   const lossInfo = useMemo(() => {

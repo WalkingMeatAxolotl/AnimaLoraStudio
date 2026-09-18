@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type HealthResponse, type Task } from '../../api/client'
 import MonitorDashboard from '../../components/MonitorDashboard'
+import { useEventStream } from '../../lib/useEventStream'
 
 export default function MonitorPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
+  const [selectedTaskDetail, setSelectedTaskDetail] = useState<Task | null>(null)
   // `?task=N` 深链：直接把监控页锁定到指定 task（书签 / 外部链接用）。
   const initialTaskId = useMemo<number | null>(() => {
     if (typeof window === 'undefined') return null
@@ -19,6 +21,23 @@ export default function MonitorPage() {
     api.health().then(setHealth).catch((e) => setError(String(e)))
     api.listQueue().then(setTasks).catch(() => setTasks([]))
   }, [])
+
+  useEffect(() => {
+    if (taskId === null || tasks.some((task) => task.id === taskId)) return
+    let active = true
+    void api.getTask(taskId)
+      .then((task) => { if (active) setSelectedTaskDetail(task) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [taskId, tasks])
+
+  useEventStream((evt) => {
+    if (evt.type !== 'task_state_changed' || evt.task_id !== taskId || taskId === null) return
+    void api.getTask(taskId).then((updated) => {
+      setSelectedTaskDetail(updated)
+      setTasks((current) => current.map((task) => task.id === updated.id ? updated : task))
+    }).catch(() => {})
+  })
 
   const defaultTaskId = useMemo<number | null>(() => {
     const running = tasks.find((t) => t.status === 'running')
@@ -35,6 +54,7 @@ export default function MonitorPage() {
 
   const ok = !error && health?.status === 'ok'
   const selectedTask = tasks.find((t) => t.id === taskId)
+    ?? (selectedTaskDetail?.id === taskId ? selectedTaskDetail : undefined)
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
@@ -83,7 +103,7 @@ export default function MonitorPage() {
       {/* 监控主体 */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {taskId !== null ? (
-          <MonitorDashboard taskId={taskId} />
+          <MonitorDashboard taskId={taskId} task={selectedTask} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-related text-sm text-fg-secondary">
             <span className="text-xl">📊</span>
