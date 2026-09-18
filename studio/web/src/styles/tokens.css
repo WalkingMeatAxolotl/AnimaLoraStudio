@@ -382,6 +382,11 @@ select option:checked {
     transform 120ms ease;
 }
 .card-hover:hover { box-shadow: var(--sh-md); border-color: var(--border-default); transform: translateY(-1px); }
+.card[data-selected="true"] {
+  background: var(--row-selected-bg);
+  border-color: var(--row-selected-border);
+}
+.card[data-selected="true"]:hover { border-color: var(--row-selected-border); }
 
 .empty-state {
   display: flex;
