@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import i18n from '../i18n'
 
 import type { MonitorProgress } from '../lib/useMonitorProgress'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
@@ -25,8 +27,20 @@ function progress(overrides: Partial<MonitorProgress> = {}): MonitorProgress {
 }
 
 describe('MonitorDashboard evidence states', () => {
+  let scrollIntoView: ReturnType<typeof vi.fn>
+
   beforeEach(() => {
     vi.mocked(useMonitorProgress).mockReturnValue(progress())
+    scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+    })
+  })
+
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    await act(async () => { await i18n.changeLanguage('zh') })
   })
 
   it('shows an actionable initial snapshot error', () => {
@@ -65,6 +79,9 @@ describe('MonitorDashboard evidence states', () => {
     const bar = screen.getByRole('progressbar', { name: '训练进度' })
     expect(bar).toHaveAttribute('aria-valuenow', '50')
     expect(bar).toHaveAttribute('aria-valuemax', '100')
+    expect(screen.getByRole('slider', { name: '损失趋势 · 平滑' })).toBeEnabled()
+    expect(screen.getByRole('slider', { name: '学习率趋势 · 平滑' })).toBeDisabled()
+    expect(screen.getByRole('slider', { name: '优化器 d 趋势 · 平滑' })).toBeDisabled()
   })
 
   it('keeps a stale snapshot visible while reconnecting', () => {
@@ -90,5 +107,91 @@ describe('MonitorDashboard evidence states', () => {
     expect(screen.getByText('12')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '重新读取' }))
     expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('supports roving sample selection and opens the preview from a real button', () => {
+    vi.mocked(useMonitorProgress).mockReturnValue(progress({
+      state: {
+        step: 30,
+        total_steps: 100,
+        losses: [],
+        lr_history: [],
+        samples: [
+          { path: 'step_10.png', step: 10 },
+          { path: 'step_20.png', step: 20 },
+          { path: 'step_30.png', step: 30 },
+        ],
+      },
+      status: 'ready',
+      streamStatus: 'live',
+    }))
+
+    render(<MonitorDashboard taskId={7} taskStatus="running" />)
+
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(3)
+    expect(options[2]).toHaveAttribute('aria-selected', 'true')
+    expect(options[2]).toHaveAttribute('tabindex', '0')
+    expect(options[0]).toHaveAttribute('tabindex', '-1')
+
+    options[2].focus()
+    fireEvent.keyDown(options[2], { key: 'ArrowLeft' })
+    expect(options[1]).toHaveFocus()
+    expect(options[1]).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(options[1], { key: 'Home' })
+    expect(options[0]).toHaveFocus()
+    fireEvent.keyDown(options[0], { key: 'End' })
+    expect(options[2]).toHaveFocus()
+
+    const previewButton = screen.getByRole('button', { name: /放大查看训练样图 3 \/ 3/ })
+    previewButton.focus()
+    fireEvent.click(previewButton)
+    expect(screen.getByRole('dialog', { name: '图片预览' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    expect(previewButton).toHaveFocus()
+  })
+
+  it('uses non-animated sample scrolling when reduced motion is requested', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+    vi.mocked(useMonitorProgress).mockReturnValue(progress({
+      state: {
+        step: 10,
+        total_steps: 100,
+        losses: [],
+        lr_history: [],
+        samples: [{ path: 'step_10.png', step: 10 }],
+      },
+      status: 'ready',
+      streamStatus: 'live',
+    }))
+
+    render(<MonitorDashboard taskId={7} taskStatus="running" />)
+
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }))
+  })
+
+  it('localizes the dense monitor groups and chart controls in English', async () => {
+    await i18n.changeLanguage('en')
+    vi.mocked(useMonitorProgress).mockReturnValue(progress({
+      state: {
+        step: 5,
+        total_steps: 20,
+        losses: [{ step: 5, loss: 0.5 }],
+        lr_history: [{ step: 5, lr: 0.0001 }],
+        optimizer_metrics_history: [{ step: 5, d: 1.2 }],
+        samples: [],
+      },
+      status: 'ready',
+      streamStatus: 'live',
+    }))
+
+    render(<MonitorDashboard taskId={7} taskStatus="running" />)
+
+    expect(screen.getByText('Progress and time')).toBeInTheDocument()
+    expect(screen.getByText('Optimization signals')).toBeInTheDocument()
+    expect(screen.getByText('Runtime resources')).toBeInTheDocument()
+    expect(screen.getByText('Training samples')).toBeInTheDocument()
+    expect(screen.getByText('Loss trend')).toBeInTheDocument()
+    expect(screen.getByRole('slider', { name: 'Loss trend · Smoothing' })).toBeInTheDocument()
   })
 })
