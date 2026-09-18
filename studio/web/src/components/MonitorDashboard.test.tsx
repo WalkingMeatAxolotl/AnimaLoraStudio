@@ -79,7 +79,8 @@ describe('MonitorDashboard evidence states', () => {
 
     expect(screen.getByText('历史快照')).toBeInTheDocument()
     expect(screen.getAllByText('预计剩余')).toHaveLength(1)
-    expect(screen.getByText(/已用时间 1时 00分 · 2\.00 it\/s/)).toBeInTheDocument()
+    expect(screen.getByText(/已用时间 1时 00分/)).toBeInTheDocument()
+    expect(screen.getByText(/2\.00 it\/s · 每秒迭代次数/)).toBeInTheDocument()
     const bar = screen.getByRole('progressbar', { name: '训练进度' })
     expect(bar).toHaveAttribute('aria-valuenow', '50')
     expect(bar).toHaveAttribute('aria-valuemax', '100')
