@@ -22,21 +22,7 @@ function downsample<T>(arr: T[], n: number): T[] {
 // loss / lr / d 都复用：传 rawColor/smoothColor 自定义配色，传 yFormat 控制
 // y 轴数字格式（科学计数法 vs 定点）。
 
-export function SeriesChart({
-  data,
-  rawColor,
-  smoothColor,
-  fillColor,
-  emaAlpha,
-  yFormat,
-  height,
-  minHeight,
-  axes = true,
-  refLine,
-  ariaLabel,
-  summary,
-  emptyLabel = '等待数据…',
-}: {
+export function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true, refLine }: {
   data: Array<{ step: number; value: number }>
   rawColor: string
   smoothColor: string
@@ -51,12 +37,6 @@ export function SeriesChart({
   axes?: boolean
   /** 可选的水平参考线（eval：纯底模 baseline 值）；y 范围会纳入它。 */
   refLine?: number
-  /** 图表的可访问名称。传入后 SVG 作为装饰，读屏读取名称与 summary。 */
-  ariaLabel?: string
-  /** 当前序列的文本摘要（点数、步数范围、当前值和值域等）。 */
-  summary?: string
-  /** 无数据时的本地化说明。 */
-  emptyLabel?: string
 }) {
   // ResizeObserver 测真实像素尺寸，viewBox 用真实尺寸 → SVG 1:1 渲染，
   // 文本/线宽不会被 preserveAspectRatio 非等比缩放扭曲。
@@ -87,15 +67,10 @@ export function SeriesChart({
     : { flex: 1, minHeight: minHeight ?? 0, width: '100%' }
 
   return (
-    <div
-      ref={wrapperRef}
-      style={wrapperStyle}
-      role={ariaLabel && data.length ? 'img' : undefined}
-      aria-label={ariaLabel && data.length ? [ariaLabel, summary].filter(Boolean).join('. ') : undefined}
-    >
+    <div ref={wrapperRef} style={wrapperStyle}>
       {!data.length ? (
-        <div className="grid h-full place-items-center text-sm text-fg-tertiary" role="status">
-          {emptyLabel}
+        <div className="grid place-items-center text-fg-tertiary text-sm h-full">
+          等待数据…
         </div>
       ) : size ? (
         <ChartSvg
@@ -109,26 +84,13 @@ export function SeriesChart({
           yFormat={yFormat}
           axes={axes}
           refLine={refLine}
-          decorative={Boolean(ariaLabel)}
         />
       ) : null}
     </div>
   )
 }
 
-function ChartSvg({
-  data,
-  W,
-  H,
-  rawColor,
-  smoothColor,
-  fillColor,
-  emaAlpha,
-  yFormat,
-  axes,
-  refLine,
-  decorative,
-}: {
+function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes, refLine }: {
   data: Array<{ step: number; value: number }>
   W: number
   H: number
@@ -139,7 +101,6 @@ function ChartSvg({
   yFormat: (v: number) => string
   axes: boolean
   refLine?: number
-  decorative: boolean
 }) {
   const pts = downsample(data, 600)
   const raw = pts.map((p) => p.value)
@@ -185,12 +146,7 @@ function ChartSvg({
   // viewBox 与真实尺寸 1:1，省掉 preserveAspectRatio="none" 的非等比缩放——
   // 文字/线宽在真实像素下渲染，不再被父容器宽高比扭曲。
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      style={{ width: '100%', height: '100%', display: 'block' }}
-      aria-hidden={decorative || undefined}
-      focusable="false"
-    >
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '100%', display: 'block' }}>
       {axes && (
         <>
           {/* axis lines */}
@@ -229,27 +185,25 @@ function ChartSvg({
             stroke="var(--fg-tertiary)" strokeWidth="1" strokeDasharray="4 3" opacity="0.75"
           />
           <text
-            x={W - RX - 1} y={y(refLine as number) - 3}
+            x={W - RX - 1} y={y(refLine as number) - 3} fontSize="10"
             fill="var(--fg-tertiary)" fontFamily="var(--font-mono)" textAnchor="end"
-            className="text-xs"
           >base</text>
         </>
       )}
       {axes && (
         <>
-          {/* y axis labels use the density-aware xs token and native middle baseline. */}
+          {/* y axis labels —— y offset +4.5 = fontSize/2 + 准基线微调，把字垂直居中到 tick */}
           {yTicks.map(({ v, y: yt, label }) => (
-            <text key={v} x={PX - 4} y={yt} fill="var(--fg-tertiary)"
-              fontFamily="var(--font-mono)" textAnchor="end" dominantBaseline="middle"
-              className="text-xs">{label}</text>
+            <text key={v} x={PX - 4} y={yt + 4.5} fontSize="13" fill="var(--fg-tertiary)"
+              fontFamily="var(--font-mono)" textAnchor="end">{label}</text>
           ))}
           {/* x axis labels —— 首/末两 tick 在 SVG 边缘上，middle 锚点会让一半字宽溢出被裁，
               改 start/end 锚点把字往内推；中间 tick 维持 middle 居中。 */}
           {xTicks.map(({ i: idx, x: xt, label }, i, arr) => {
             const anchor = i === 0 ? 'start' : i === arr.length - 1 ? 'end' : 'middle'
             return (
-              <text key={idx} x={xt} y={H - 3} fill="var(--fg-tertiary)"
-                fontFamily="var(--font-mono)" textAnchor={anchor} className="text-xs">{label}</text>
+              <text key={idx} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
+                fontFamily="var(--font-mono)" textAnchor={anchor}>{label}</text>
             )
           })}
         </>

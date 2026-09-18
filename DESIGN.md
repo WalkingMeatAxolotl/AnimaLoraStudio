@@ -842,29 +842,6 @@ selection recipe and its local horizontal overflow/focus treatment, not tablist
 semantics. Only the Overview's local dataset views use Tabs and a stable shared
 panel with `aria-labelledby` pointing to the selected tab.
 
-Monitor is the cross-project, read-only live-training cockpit. Queue owns scheduling
-and queue-wide controls; QueueDetail owns one task's durable record and mutations;
-Train owns the editable next-run draft. The standalone Monitor defaults to the
-current running train and may switch among train tasks with monitor history; an
-explicit deep link may resolve a train task outside the loaded list, but unsupported
-or missing tasks must not masquerade as an empty monitor. Its `StepShell` header
-provides task-detail navigation, never duplicate pause/cancel/retry controls, while
-the shared `TaskLogDrawer` keeps the selected task's log available in context.
-
-Monitor status describes monitor evidence, not general server health. Initial load,
-live data, reconnecting with a retained stale snapshot, terminal history, unavailable
-monitor output, and load failure are distinct states with local recovery. “Live” may
-only be shown while the shared SSE connection is open; a successful HTTP snapshot
-alone means synchronized, not live. Existing data remains visible during refresh
-failure and names its last update time. The specialist desktop layout remains dense:
-all step/time, loss, learning-rate, optimizer and resource metrics stay directly
-visible, grouped by meaning rather than hidden behind progressive disclosure. Wide
-desktop preserves simultaneous sample and chart context; at the shared compact
-desktop breakpoint the same content reflows without removing metrics, changing task
-actions, or introducing a mobile information architecture. QueueDetail's embedded
-MonitorDashboard keeps the same data semantics without duplicating the standalone
-page header, selector, detail link, or log drawer.
-
 
 A split workspace preserves simultaneous context for a task; it is not an ordinary
 responsive grid and there is no universal split-shell component. `PaneResizer` is

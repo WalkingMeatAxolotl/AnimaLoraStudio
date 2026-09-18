@@ -12,14 +12,10 @@ interface Options {
    * 这里给消费者一个口子重新 cold-fetch 补齐。第一次 onopen 也会触发；
    * 想区分「初次 vs 重连」消费者自己用 ref 计数。 */
   onOpen?: () => void
-  /** 底层连接进入自动重连时回调。不会主动 close；消费者可据此把当前
-   * 快照标成 stale，而不是把 HTTP 成功误报成实时连接。 */
-  onError?: () => void
 }
 
 type Listener = (evt: StudioEvent) => void
 type OpenListener = () => void
-type ErrorListener = () => void
 
 // ── 共享 EventSource ──────────────────────────────────────────────────────────
 // 全 app 只开一条 /api/events 长连接，所有 useEventStream 调用方共享。
@@ -28,7 +24,6 @@ type ErrorListener = () => void
 // （表现为 outputs 一直挂起、刷页面也加载不出）。
 const _listeners = new Set<Listener>()
 const _openListeners = new Set<OpenListener>()
-const _errorListeners = new Set<ErrorListener>()
 let _es: EventSource | null = null
 
 function _ensureOpen(): void {
@@ -47,21 +42,13 @@ function _ensureOpen(): void {
     }
   }
   es.onerror = () => {
-    // EventSource 会自动重连；只广播 transport 状态，不主动关闭。
-    for (const cb of _errorListeners) {
-      try { cb() } catch { /* 单个订阅者回调炸不影响其他 */ }
-    }
+    // EventSource 自动重连；这里只是个钩子，不主动关闭
   }
   _es = es
 }
 
-export function isEventStreamOpen(): boolean {
-  return typeof EventSource !== 'undefined'
-    && _es?.readyState === EventSource.OPEN
-}
-
 function _maybeClose(): void {
-  if (_es && _listeners.size === 0 && _openListeners.size === 0 && _errorListeners.size === 0) {
+  if (_es && _listeners.size === 0 && _openListeners.size === 0) {
     _es.close()
     _es = null
   }
@@ -82,18 +69,14 @@ export function useEventStream(
   onEventRef.current = onEvent
   const onOpenRef = useRef(options?.onOpen)
   onOpenRef.current = options?.onOpen
-  const onErrorRef = useRef(options?.onError)
-  onErrorRef.current = options?.onError
 
   useEffect(() => {
     // jsdom / SSR / 老浏览器没有 EventSource — 不连 SSE 让组件在测试环境也能挂载
     if (typeof EventSource === 'undefined') return
     const handler: Listener = (evt) => onEventRef.current(evt)
     const openHandler: OpenListener = () => onOpenRef.current?.()
-    const errorHandler: ErrorListener = () => onErrorRef.current?.()
     _listeners.add(handler)
     _openListeners.add(openHandler)
-    _errorListeners.add(errorHandler)
     _ensureOpen()
     // 共享连接已经 open 时，新订阅者也要触发一次 onOpen 让它去 cold-fetch
     if (_es && _es.readyState === EventSource.OPEN) {
@@ -102,7 +85,6 @@ export function useEventStream(
     return () => {
       _listeners.delete(handler)
       _openListeners.delete(openHandler)
-      _errorListeners.delete(errorHandler)
       _maybeClose()
     }
   }, [])
