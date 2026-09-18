@@ -6,6 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { getMonitorElapsedSeconds, type MonitorTaskTiming } from '../lib/monitorElapsed'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import ImagePreviewModal from './ImagePreviewModal'
 import { SeriesChart } from './SeriesChart'
@@ -31,15 +32,15 @@ function StatCard({ label, value, sub, tone }: {
 }) {
   const colorCls = tone === 'accent' ? 'text-accent' : tone === 'ok' ? 'text-ok' : tone === 'warn' ? 'text-warn' : 'text-fg-primary'
   return (
-    <div className="bg-surface border border-subtle rounded-md px-[18px] py-[14px]">
-      <div className="text-xs text-fg-tertiary font-mono uppercase tracking-[0.04em] mb-1.5">
+    <div className="card card-compact card-pad-md min-w-0">
+      <div className="type-data-label mb-related truncate" title={label}>
         {label}
       </div>
-      <div className={`text-3xl font-semibold font-mono tabular-nums tracking-[-0.02em] leading-[1.1] ${colorCls}`}>
+      <div className={`truncate font-mono text-3xl font-semibold leading-[1.1] tracking-[-0.02em] tabular-nums ${colorCls}`}>
         {value}
       </div>
       {sub && (
-        <div className="text-xs text-fg-tertiary font-mono mt-1">
+        <div className="type-field-help mt-related truncate font-mono text-fg-secondary" title={sub}>
           {sub}
         </div>
       )}
@@ -58,12 +59,12 @@ function SmoothControl({ alpha, setAlpha, min, max, step }: {
   step: number
 }) {
   return (
-    <label className="flex items-center gap-1 cursor-pointer text-xs text-fg-tertiary">
+    <label className="flex cursor-pointer items-center gap-related text-xs text-fg-secondary">
       smooth
       <input
         type="range" min={min} max={max} step={step} value={alpha}
         onChange={(e) => setAlpha(parseFloat(e.target.value))}
-        style={{ width: 60, accentColor: 'var(--accent)' }}
+        className="w-16 accent-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
       <span className="font-mono w-[4ch] text-right">
         {alpha >= 0.999 ? 'off' : alpha.toFixed(alpha < 0.1 ? 3 : 2)}
@@ -121,7 +122,9 @@ function SampleViewer({ samples, taskId }: {
     if (!strip) return
     const target = strip.children[active] as HTMLElement | undefined
     if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+      const reduceMotion = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' })
     }
   }, [active])
 
@@ -141,11 +144,11 @@ function SampleViewer({ samples, taskId }: {
   ].filter(Boolean).join(' · ')
 
   return (
-    <div className="flex flex-col gap-2.5 w-full flex-1">
+    <div className="flex w-full flex-1 flex-col gap-field">
       {/* 顶部缩略图条 —— 横向滚动，按数组原顺序铺 */}
       <div
         ref={stripRef}
-        className="flex gap-1.5 overflow-x-auto pb-1 shrink-0"
+        className="flex shrink-0 gap-related overflow-x-auto pb-related"
         style={{ scrollbarWidth: 'thin' }}
       >
         {list.map((s, i) => {
@@ -166,12 +169,12 @@ function SampleViewer({ samples, taskId }: {
             <button
               key={`${fn}-${i}`}
               onClick={() => setActive(i)}
-              className="shrink-0 flex flex-col items-center gap-0.5 p-0 bg-transparent border-none cursor-pointer"
+              className="flex shrink-0 cursor-pointer flex-col items-center gap-1 rounded-md border-none bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               title={thumbTitle}
             >
               <div
                 className={[
-                  'rounded-sm overflow-hidden border transition-colors bg-sunken',
+                  'overflow-hidden rounded-md border bg-sunken transition-colors motion-reduce:transition-none',
                   isActive ? 'border-accent ring-2 ring-accent-soft' : 'border-subtle hover:border-bold',
                 ].join(' ')}
                 style={{ width: 64, height: 64 }}
@@ -184,7 +187,7 @@ function SampleViewer({ samples, taskId }: {
                 />
               </div>
               {thumbCaption && (
-                <span className={`text-[10px] font-mono leading-tight text-center ${isActive ? 'text-fg-primary' : 'text-fg-tertiary'}`}>
+                <span className={`text-center font-mono text-xs leading-tight ${isActive ? 'text-fg-primary' : 'text-fg-secondary'}`}>
                   {thumbCaption}
                 </span>
               )}
@@ -198,7 +201,7 @@ function SampleViewer({ samples, taskId }: {
           顶起父容器 min-content；letterbox 由 object-contain 处理。
           minHeight 220 是底线（letterbox 视觉勉强够），父 row 高度够时由 flex-1 撑满。 */}
       <div
-        className="bg-sunken rounded-sm overflow-hidden relative flex-1 min-h-0"
+        className="relative min-h-0 flex-1 overflow-hidden rounded-md bg-sunken"
         style={{ minHeight: 220 }}
       >
         <img
@@ -210,14 +213,14 @@ function SampleViewer({ samples, taskId }: {
           className="absolute inset-0 w-full h-full object-contain cursor-zoom-in"
         />
         {(curM.epoch != null || curM.step != null) && (
-          <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 border border-subtle rounded-sm px-2.5 py-0.5 text-xs font-mono text-fg-secondary bg-surface/85">
+          <div className="absolute bottom-field left-1/2 -translate-x-1/2 rounded-md border border-subtle bg-surface/85 px-field py-1 font-mono text-xs text-fg-secondary">
             {curM.epoch != null && (
               <>ep <strong className="text-accent">{curM.epoch.toLocaleString()}</strong>{curM.step != null && ' · '}</>
             )}
             {curM.step != null && (
               <>step <strong className="text-accent">{curM.step.toLocaleString()}</strong></>
             )}
-            <span className="text-fg-tertiary ml-2">{active + 1} / {list.length}</span>
+            <span className="ml-related text-fg-secondary">{active + 1} / {list.length}</span>
           </div>
         )}
       </div>
@@ -242,7 +245,10 @@ function SampleViewer({ samples, taskId }: {
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
-export default function MonitorDashboard({ taskId }: { taskId: number }) {
+export default function MonitorDashboard({ taskId, task }: {
+  taskId: number
+  task?: MonitorTaskTiming
+}) {
   const { state, connected } = useMonitorProgress(taskId)
   const [emaAlpha, setEmaAlpha] = useState(0.02)
   // LR / d 默认不做 EMA（数据本身已是 EMA 派生量），slider 拉到 < 1 才平滑
@@ -262,7 +268,8 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const speed = state?.speed ?? 0
   const eta = speed > 0 && totalSteps > step ? fmtSec((totalSteps - step) / speed) : '--'
   const progress = totalSteps > 0 ? Math.min(100, (step / totalSteps) * 100) : 0
-  const elapsed = state?.start_time ? fmtSec(Date.now() / 1000 - state.start_time) : '--'
+  const elapsedSeconds = getMonitorElapsedSeconds(state?.start_time, task)
+  const elapsed = elapsedSeconds === null ? '--' : fmtSec(elapsedSeconds)
 
   // Recent loss vs previous (windowed comparison)
   const lossInfo = useMemo(() => {
@@ -321,28 +328,28 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
     .map((m) => ({ step: m.step, value: m.d }))
 
   return (
-    <div className="flex flex-col gap-3.5 p-4 h-full overflow-y-auto">
+    <div className="flex h-full flex-col gap-section overflow-y-auto p-section">
       {/* Connection status + progress */}
-      <div className="flex items-center gap-2.5 text-xs text-fg-tertiary font-mono shrink-0">
-        <span className={`w-[7px] h-[7px] rounded-full inline-block shrink-0 ${connected ? 'bg-ok animate-pulse' : 'bg-err'}`} />
+      <div className="flex shrink-0 items-center gap-field text-xs text-fg-secondary">
+        <span className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${connected ? 'bg-ok animate-pulse motion-reduce:animate-none' : 'bg-err'}`} />
         {connected ? '实时' : '已断开'}
         {totalSteps > 0 && (
           <>
             <span className="text-dim">·</span>
-            <span>{step.toLocaleString()} / {totalSteps.toLocaleString()} steps</span>
+            <span className="font-mono tabular-nums">{step.toLocaleString()} / {totalSteps.toLocaleString()} steps</span>
             <span className="text-dim">·</span>
-            <span>{progress.toFixed(1)}%</span>
+            <span className="font-mono tabular-nums">{progress.toFixed(1)}%</span>
             <div className="flex-1 h-1 bg-overlay rounded overflow-hidden">
               <div
-                className="h-full bg-accent rounded transition-[width] duration-[1s] ease-out"
+                className="h-full rounded bg-accent transition-[width] duration-[1s] ease-out motion-reduce:transition-none"
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <span>已用 {elapsed}</span>
+            <span>已用 <span className="font-mono tabular-nums">{elapsed}</span></span>
             {eta !== '--' && (
               <>
                 <span className="text-dim">·</span>
-                <span>剩余 {eta}</span>
+                <span>剩余 <span className="font-mono tabular-nums">{eta}</span></span>
               </>
             )}
           </>
@@ -350,7 +357,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
       </div>
 
       {/* 6 stat cards */}
-      <div className="grid grid-cols-6 gap-2.5">
+      <div className="grid grid-cols-6 gap-field">
         <StatCard label="step" value={step ? step.toLocaleString() : '--'}
           sub={totalSteps ? `of ${totalSteps.toLocaleString()}` : undefined} tone="accent" />
         <StatCard
@@ -379,16 +386,16 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
           右卡 minHeight 形成下界，flex-1 在 row 高度 > 3*min+gap 时均分扩展；
           总 min 超视口时由外层 overflow-y-auto 滚 */}
           <div
-            className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
+            className="grid flex-1 grid-cols-[1fr_1.5fr] gap-section"
             style={{ gridTemplateRows: '1fr' }}
           >
             {/* 左：采样图 */}
-            <div className="card p-0 overflow-hidden flex flex-col min-h-0">
-              <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
-                <span className="text-sm font-semibold">采样</span>
-                <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
+            <div className="card card-compact flex min-h-0 flex-col overflow-hidden p-0">
+              <div className="flex shrink-0 items-center justify-between border-b border-subtle px-section py-field">
+                <span className="type-panel-title">采样</span>
+                <span className="font-mono text-xs text-fg-secondary">{samples.length} 张</span>
               </div>
-              <div className="flex-1 p-3 flex flex-col min-h-0">
+              <div className="flex min-h-0 flex-1 flex-col p-field">
                 <SampleViewer samples={samples} taskId={taskId} />
               </div>
             </div>
@@ -398,15 +405,15 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
             （avoid 之前 d-block 作为 LR 内 shrink-0 死成本顶起 LR card min 的问题）。
             minHeight 140 = 可读下界（再小 chart 不易读，触发外层滚动条而非继续压缩）；
             maxHeight 300 = 防止 4K / 大屏上卡片被拉到失衡的高度（剩余空间留给左列采样图）。 */}
-            <div className="flex flex-col gap-3.5 min-h-0">
-              <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-                <div className="flex items-center justify-between mb-2 shrink-0">
-                  <span className="text-sm font-semibold">loss</span>
+            <div className="flex min-h-0 flex-col gap-section">
+              <div className="card card-compact card-pad-md flex flex-1 flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                <div className="mb-related flex shrink-0 items-center justify-between">
+                  <span className="type-panel-title">loss</span>
                   <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
                 </div>
                 <SeriesChart
                   data={losses.map((l) => ({ step: l.step, value: l.loss }))}
-                  rawColor="rgba(74,71,64,0.35)"
+                  rawColor="color-mix(in srgb, var(--fg-secondary) 35%, transparent)"
                   smoothColor="var(--accent)"
                   fillColor="var(--accent-soft)"
                   emaAlpha={emaAlpha}
@@ -415,14 +422,14 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
                 />
               </div>
 
-              <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-                <div className="flex items-center justify-between mb-2 shrink-0">
-                  <span className="text-sm font-semibold">learning rate</span>
+              <div className="card card-compact card-pad-md flex flex-1 flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                <div className="mb-related flex shrink-0 items-center justify-between">
+                  <span className="type-panel-title">learning rate</span>
                   <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
                 </div>
                 <SeriesChart
                   data={lrSeries}
-                  rawColor="rgba(224,162,58,0.35)"
+                  rawColor="color-mix(in srgb, var(--warn) 35%, transparent)"
                   smoothColor="var(--warn)"
                   emaAlpha={lrAlpha}
                   yFormat={fmtLr}
@@ -431,11 +438,11 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
               </div>
 
               {dSeries.length >= 2 && (
-                <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-                  <div className="flex items-center justify-between mb-2 shrink-0">
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-sm font-semibold">d</span>
-                      <span className="text-xs font-mono text-fg-tertiary tabular-nums">
+                <div className="card card-compact card-pad-md flex flex-1 flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                  <div className="mb-related flex shrink-0 items-center justify-between">
+                    <div className="flex items-baseline gap-related">
+                      <span className="type-panel-title">d</span>
+                      <span className="font-mono text-xs text-fg-secondary tabular-nums">
                         {fmtMetric(lastD)}
                       </span>
                     </div>
@@ -443,7 +450,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
                   </div>
                   <SeriesChart
                     data={dSeries}
-                    rawColor="rgba(237,107,58,0.30)"
+                    rawColor="color-mix(in srgb, var(--accent) 30%, transparent)"
                     smoothColor="var(--accent)"
                     emaAlpha={dAlpha}
                     yFormat={fmtMetric}
