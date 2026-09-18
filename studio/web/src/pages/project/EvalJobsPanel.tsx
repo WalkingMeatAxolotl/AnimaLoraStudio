@@ -4,15 +4,21 @@
 // 铺开，点进作业详情看（那里有指标 / 样图两个 tab）。发起动作在表格上方 ——
 // 「创建新评估」弹 modal 填参数。
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { api, type EvalSessionSummary } from '../../api/client'
+import { Link, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
+import { api, type EvalSessionInfo, type EvalSessionSummary } from '../../api/client'
+import Alert from '../../components/Alert'
+import Badge, { type BadgeTone } from '../../components/Badge'
+import Button, { buttonClassName } from '../../components/Button'
+import Card from '../../components/Card'
 import CreateEvalModal from '../../components/CreateEvalModal'
+import EmptyState from '../../components/EmptyState'
 import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../../components/TaskLogDrawer'
 import { useTaskLog } from '../../lib/useTaskLog'
 
-const STATUS_BADGE: Record<string, string> = {
-  pending: 'neutral', running: 'accent', done: 'ok',
-  partial: 'warn', failed: 'err', canceled: 'neutral',
+const STATUS_TONE: Record<string, BadgeTone> = {
+  pending: 'neutral', running: 'accent', done: 'success',
+  partial: 'warning', failed: 'danger', canceled: 'neutral',
 }
 
 const TRIGGER_LABEL: Record<string, string> = {
@@ -53,10 +59,12 @@ export default function EvalJobsPanel({
   pid: number
   vid: number | null
 }) {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<EvalSessionSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [createdSession, setCreatedSession] = useState<EvalSessionInfo | null>(null)
 
   const load = useCallback(async () => {
     if (!vid) return
@@ -86,81 +94,105 @@ export default function EvalJobsPanel({
 
   if (!vid) {
     return (
-      <div className="p-6 text-fg-tertiary text-sm italic">
-        先选一个版本。评估的对象是该版本 output/ 下的 LoRA 文件。
-      </div>
+      <EmptyState
+        embedded
+        size="sm"
+        className="m-page"
+        description="先选一个版本。评估的对象是该版本 output/ 下的 LoRA 文件。"
+      />
     )
   }
 
   return (
-    <div className="relative flex flex-col flex-1 min-h-0">
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold">评估</span>
-          <span className="text-xs text-fg-tertiary">
-            一次评估一个作业；点进去看指标和样图
-          </span>
-          <span className="flex-1" />
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => setCreating(true)}
-          >
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-section overflow-y-auto p-page">
+        <div className="flex items-center gap-related">
+          <div className="min-w-0 flex-1">
+            <h2 className="type-panel-title">评估</h2>
+            <p className="type-page-description mt-1">一次评估一个作业；进入任务详情查看指标和样图。</p>
+          </div>
+          <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
             创建新评估
-          </button>
+          </Button>
         </div>
 
+        {createdSession && (
+          <Alert
+            tone="success"
+            size="sm"
+            role="status"
+            title={t('eval.createdTitle')}
+            action={createdSession.task_id ? (
+              <Link
+                to={`/queue/${createdSession.task_id}`}
+                className={buttonClassName({ variant: 'ghost', size: 'sm' })}
+              >
+                {t('eval.viewTask')}
+              </Link>
+            ) : undefined}
+          >
+            {t('eval.createdDescription', { id: createdSession.id })}
+          </Alert>
+        )}
+
         {error && (
-          <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-sm text-err">
+          <Alert tone="danger" size="sm" role="alert">
             评估列表读取失败：{error}
-          </div>
+          </Alert>
         )}
 
         {sessions == null ? (
-          <div className="text-fg-tertiary text-sm">读取中…</div>
+          <div role="status" className="text-sm text-fg-secondary">读取中…</div>
         ) : sessions.length === 0 ? (
-          <div className="text-fg-tertiary text-sm italic">
-            还没有评估。点「创建新评估」选 LoRA 文件。
-          </div>
+          <EmptyState
+            embedded
+            size="sm"
+            description="还没有评估。选择 LoRA 文件创建第一项评估。"
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-fg-tertiary text-xs">
-              <tr className="border-b border-subtle">
-                <th className="text-left py-2 px-3 font-normal">评估</th>
-                <th className="text-left py-2 px-3 font-normal">状态</th>
-                <th className="text-left py-2 px-3 font-normal">被测对象</th>
-                <th className="text-left py-2 px-3 font-normal">触发</th>
-                <th className="text-left py-2 px-3 font-normal">创建</th>
-                <th className="text-left py-2 px-3 font-normal">结束</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((s) => (
-                <tr
-                  key={s.id}
-                  className="border-b border-subtle cursor-pointer hover:bg-overlay"
-                  onClick={() => s.task_id && navigate(`/queue/${s.task_id}`)}
-                  title={s.task_id ? `作业 #${s.task_id}` : '该评估没有关联作业'}
-                >
-                  <td className="py-2 px-3 font-mono">#{s.id}</td>
-                  <td className="py-2 px-3">
-                    <span className={`badge badge-${STATUS_BADGE[s.status] ?? 'neutral'}`}>
-                      {s.status === 'running' && <span className="dot dot-running" />}
-                      {s.status}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 text-fg-secondary text-xs font-mono">
-                    {s.candidate_count} 个 · {s.validation_images} 张验证图
-                  </td>
-                  <td className="py-2 px-3 text-fg-tertiary text-xs">
-                    {TRIGGER_LABEL[s.trigger] ?? s.trigger}
-                  </td>
-                  <td className="py-2 px-3 text-fg-tertiary text-xs">{fmtTime(s.created_at)}</td>
-                  <td className="py-2 px-3 text-fg-tertiary text-xs">{fmtTime(s.finished_at)}</td>
+          <Card padding="none" className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="type-data-label text-fg-secondary">
+                <tr className="border-b border-subtle">
+                  <th className="px-field py-related text-left font-normal">评估</th>
+                  <th className="px-field py-related text-left font-normal">状态</th>
+                  <th className="px-field py-related text-left font-normal">被测对象</th>
+                  <th className="px-field py-related text-left font-normal">触发</th>
+                  <th className="px-field py-related text-left font-normal">创建</th>
+                  <th className="px-field py-related text-left font-normal">结束</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sessions.map((s) => (
+                  <tr
+                    key={s.id}
+                    className={`border-b border-subtle last:border-0 hover:bg-overlay ${s.task_id ? 'cursor-pointer' : 'cursor-default'} ${createdSession?.id === s.id ? 'bg-accent-soft' : ''}`}
+                    onClick={() => s.task_id && navigate(`/queue/${s.task_id}`)}
+                    title={s.task_id ? `作业 #${s.task_id}` : '该评估没有关联作业'}
+                  >
+                    <td className="px-field py-related font-mono">#{s.id}</td>
+                    <td className="px-field py-related">
+                      <Badge
+                        tone={STATUS_TONE[s.status] ?? 'neutral'}
+                        size="sm"
+                        active={s.status === 'running'}
+                      >
+                        {s.status}
+                      </Badge>
+                    </td>
+                    <td className="px-field py-related font-mono text-xs text-fg-secondary">
+                      {s.candidate_count} 个 · {s.validation_images} 张验证图
+                    </td>
+                    <td className="px-field py-related text-xs text-fg-secondary">
+                      {TRIGGER_LABEL[s.trigger] ?? s.trigger}
+                    </td>
+                    <td className="px-field py-related text-xs text-fg-secondary">{fmtTime(s.created_at)}</td>
+                    <td className="px-field py-related text-xs text-fg-secondary">{fmtTime(s.finished_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
         )}
       </div>
 
@@ -172,10 +204,10 @@ export default function EvalJobsPanel({
           pid={pid}
           vid={vid}
           onClose={() => setCreating(false)}
-          onCreated={(sid) => {
+          onCreated={(session) => {
             setCreating(false)
+            setCreatedSession(session)
             void load()
-            void sid
           }}
         />
       )}
