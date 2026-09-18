@@ -5,9 +5,15 @@
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { useTranslation } from 'react-i18next'
+import { api, type TaskStatus } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import Alert from './Alert'
+import Badge from './Badge'
+import Button from './Button'
+import EmptyState from './EmptyState'
 import ImagePreviewModal from './ImagePreviewModal'
+import ProgressBar from './ProgressBar'
 import { SeriesChart } from './SeriesChart'
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -242,8 +248,20 @@ function SampleViewer({ samples, taskId }: {
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
-export default function MonitorDashboard({ taskId }: { taskId: number }) {
-  const { state, connected } = useMonitorProgress(taskId)
+export default function MonitorDashboard({ taskId, taskStatus }: {
+  taskId: number
+  taskStatus?: TaskStatus
+}) {
+  const { t, i18n } = useTranslation()
+  const {
+    state,
+    status,
+    streamStatus,
+    lastUpdatedAt,
+    refreshing,
+    error,
+    refetch,
+  } = useMonitorProgress(taskId)
   const [emaAlpha, setEmaAlpha] = useState(0.02)
   // LR / d 默认不做 EMA（数据本身已是 EMA 派生量），slider 拉到 < 1 才平滑
   const [lrAlpha, setLrAlpha] = useState(1)
@@ -305,13 +323,60 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const vramTotal = state?.vram_total_gb
   const vramTone = vram && vramTotal ? (vram / vramTotal > 0.85 ? 'warn' : 'ok') as 'ok' | 'warn' : undefined
 
-  if (!state && !connected) {
+  if (!state) {
+    if (status === 'error') {
+      return (
+        <div className="p-4">
+          <Alert
+            tone="danger"
+            title={t('monitor.dataErrorTitle')}
+            action={(
+              <Button size="sm" onClick={() => void refetch()} loading={refreshing}>
+                {t('common.retry')}
+              </Button>
+            )}
+          >
+            <span title={error ?? undefined}>{t('monitor.dataError')}</span>
+          </Alert>
+        </div>
+      )
+    }
+    if (status === 'unavailable') {
+      const activeTask = taskStatus === 'running' || taskStatus === 'pending' || taskStatus === 'scheduled'
+      return (
+        <EmptyState
+          embedded
+          className="h-full"
+          title={t(activeTask ? 'monitor.waitingForDataTitle' : 'monitor.noDataTitle')}
+          description={t(activeTask ? 'monitor.waitingForDataDescription' : 'monitor.noDataDescription')}
+          action={(
+            <Button size="sm" onClick={() => void refetch()} loading={refreshing}>
+              {t('monitor.readAgain')}
+            </Button>
+          )}
+        />
+      )
+    }
     return (
-      <div className="grid place-items-center h-[200px] text-fg-tertiary text-sm">
-        等待训练数据…
+      <div className="grid h-[200px] place-items-center text-sm text-fg-tertiary" role="status">
+        {t('monitor.loadingData')}
       </div>
     )
   }
+
+  const terminal = taskStatus === 'done' || taskStatus === 'failed' || taskStatus === 'canceled'
+  const evidenceState = terminal
+    ? 'historical'
+    : streamStatus === 'live'
+      ? 'live'
+      : streamStatus === 'reconnecting'
+        ? 'reconnecting'
+        : 'synced'
+  const lastUpdatedLabel = lastUpdatedAt == null
+    ? null
+    : new Intl.DateTimeFormat(i18n.language, {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      }).format(lastUpdatedAt)
 
   // 全量 raw series（不再 slice(-60)）— SeriesChart 内部会均匀降采样到 600 渲染
   const lrSeries = lrHistory.map((l) => ({ step: l.step, value: l.lr }))
@@ -322,22 +387,49 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
 
   return (
     <div className="flex flex-col gap-3.5 p-4 h-full overflow-y-auto">
-      {/* Connection status + progress */}
+      {(error || streamStatus === 'reconnecting') && (
+        <Alert
+          tone="warning"
+          size="sm"
+          title={t(error ? 'monitor.snapshotStaleTitle' : 'monitor.reconnectingTitle')}
+          action={(
+            <Button size="xs" onClick={() => void refetch()} loading={refreshing}>
+              {t('monitor.readAgain')}
+            </Button>
+          )}
+        >
+          <span title={error ?? undefined}>
+            {t(error ? 'monitor.snapshotStaleDescription' : 'monitor.reconnectingDescription')}
+          </span>
+        </Alert>
+      )}
+
+      {/* Evidence status + progress */}
       <div className="flex items-center gap-2.5 text-xs text-fg-tertiary font-mono shrink-0">
-        <span className={`w-[7px] h-[7px] rounded-full inline-block shrink-0 ${connected ? 'bg-ok animate-pulse' : 'bg-err'}`} />
-        {connected ? '实时' : '已断开'}
+        <Badge
+          size="sm"
+          tone={evidenceState === 'live' ? 'success' : evidenceState === 'reconnecting' ? 'warning' : 'neutral'}
+          active={evidenceState === 'live'}
+        >
+          {t(`monitor.evidenceStatus.${evidenceState}`)}
+        </Badge>
+        {lastUpdatedLabel && (
+          <span>{t('monitor.lastUpdated', { time: lastUpdatedLabel })}</span>
+        )}
         {totalSteps > 0 && (
           <>
             <span className="text-dim">·</span>
             <span>{step.toLocaleString()} / {totalSteps.toLocaleString()} steps</span>
             <span className="text-dim">·</span>
             <span>{progress.toFixed(1)}%</span>
-            <div className="flex-1 h-1 bg-overlay rounded overflow-hidden">
-              <div
-                className="h-full bg-accent rounded transition-[width] duration-[1s] ease-out"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
+            <ProgressBar
+              className="min-w-16 flex-1"
+              size="xs"
+              label={t('monitor.trainingProgress')}
+              value={step}
+              max={totalSteps}
+              valueText={`${progress.toFixed(1)}%`}
+            />
             <span>已用 {elapsed}</span>
             {eta !== '--' && (
               <>

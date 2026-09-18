@@ -606,7 +606,7 @@ export default function QueueDetailPage() {
           </div>
         )}
         {tab === 'log' && <LogTab taskId={taskId} live={isLive} />}
-        {tab === 'monitor' && <MonitorTab taskId={taskId} />}
+        {tab === 'monitor' && <MonitorTab taskId={taskId} taskStatus={task?.status} />}
         {tab === 'metrics' && task && (
           <EvalMetricsTab task={task} sessionId={evalSessionId} />
         )}
@@ -851,10 +851,10 @@ function LogTab({ taskId, live }: { taskId: number; live: boolean }) {
 
 // ── MonitorTab ──────────────────────────────────────────────────────────────
 
-function MonitorTab({ taskId }: { taskId: number }) {
+function MonitorTab({ taskId, taskStatus }: { taskId: number; taskStatus?: TaskStatus }) {
   return (
     <div className="flex-1 min-h-0 overflow-hidden">
-      <MonitorDashboard taskId={taskId} />
+      <MonitorDashboard taskId={taskId} taskStatus={taskStatus} />
     </div>
   )
 }

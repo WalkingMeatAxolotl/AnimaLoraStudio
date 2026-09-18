@@ -1,124 +1,324 @@
-import { useEffect, useMemo, useState } from 'react'
-import { api, type HealthResponse, type Task } from '../../api/client'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Link, useSearchParams } from 'react-router-dom'
+
+import { api, type Task, type TaskStatus } from '../../api/client'
+import Alert from '../../components/Alert'
+import Badge, { type BadgeTone } from '../../components/Badge'
+import Button, { buttonClassName } from '../../components/Button'
+import EmptyState from '../../components/EmptyState'
+import { Select } from '../../components/FormControl'
 import MonitorDashboard from '../../components/MonitorDashboard'
+import StepShell from '../../components/StepShell'
+import type { LogSourceStatus } from '../../components/TaskLogDrawer'
+import { useEventStream } from '../../lib/useEventStream'
+import { useTaskLog } from '../../lib/useTaskLog'
+
+const HISTORY_PAGE_SIZE = 100
+
+function parseTaskId(raw: string | null): number | null {
+  if (raw === null) return null
+  const value = Number(raw)
+  return Number.isInteger(value) && value > 0 ? value : null
+}
+
+function isTrainTask(task: Task): boolean {
+  // task_type was added after the first queue schema; missing legacy values are train.
+  return task.task_type == null || task.task_type === 'train'
+}
+
+function hasMonitorEvidence(task: Task): boolean {
+  return task.status === 'running' || Boolean(task.monitor_state_path)
+}
+
+function taskTimestamp(task: Task): number {
+  return task.started_at ?? task.finished_at ?? task.created_at
+}
+
+function sortMonitorTasks(tasks: Task[]): Task[] {
+  const statusRank: Record<TaskStatus, number> = {
+    running: 0,
+    paused: 1,
+    pending: 2,
+    scheduled: 3,
+    done: 4,
+    failed: 5,
+    canceled: 6,
+  }
+  return [...tasks].sort((a, b) => {
+    const rank = statusRank[a.status] - statusRank[b.status]
+    return rank === 0 ? taskTimestamp(b) - taskTimestamp(a) : rank
+  })
+}
+
+function statusTone(status: TaskStatus): BadgeTone {
+  switch (status) {
+    case 'running': return 'accent'
+    case 'done': return 'success'
+    case 'failed': return 'danger'
+    case 'paused': return 'warning'
+    default: return 'neutral'
+  }
+}
 
 export default function MonitorPage() {
-  const [health, setHealth] = useState<HealthResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [tasks, setTasks] = useState<Task[]>([])
-  // `?task=N` 深链：直接把监控页锁定到指定 task（书签 / 外部链接用）。
-  const initialTaskId = useMemo<number | null>(() => {
-    if (typeof window === 'undefined') return null
-    const raw = new URLSearchParams(window.location.search).get('task')
-    const n = raw === null ? NaN : Number(raw)
-    return Number.isFinite(n) && n > 0 ? n : null
+  const { t } = useTranslation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTaskId = parseTaskId(searchParams.get('task'))
+
+  const [taskSegments, setTaskSegments] = useState<{ live: Task[]; history: Task[] }>({
+    live: [], history: [],
+  })
+  const [deepLinkedTask, setDeepLinkedTask] = useState<Task | null>(null)
+  const [taskId, setTaskId] = useState<number | null>(requestedTaskId)
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState<string | null>(null)
+  const [deepLinkLoading, setDeepLinkLoading] = useState(false)
+  const [deepLinkError, setDeepLinkError] = useState<'missing' | 'wrongType' | null>(null)
+
+  const tasks = useMemo(() => {
+    const byId = new Map<number, Task>()
+    for (const task of [...taskSegments.live, ...taskSegments.history]) {
+      if (isTrainTask(task) && hasMonitorEvidence(task)) byId.set(task.id, task)
+    }
+    return sortMonitorTasks([...byId.values()])
+  }, [taskSegments])
+
+  const loadTasks = useCallback(async () => {
+    setListLoading(true)
+    setListError(null)
+    const [liveResult, historyResult] = await Promise.allSettled([
+      api.listQueueLive(undefined, 'train'),
+      api.listQueueHistory({ page: 1, pageSize: HISTORY_PAGE_SIZE, type: 'train' }),
+    ])
+    setTaskSegments((previous) => ({
+      live: liveResult.status === 'fulfilled' ? liveResult.value : previous.live,
+      history: historyResult.status === 'fulfilled' ? historyResult.value.items : previous.history,
+    }))
+    const failures = [liveResult, historyResult]
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    setListError(failures.length > 0 ? failures.map((result) => String(result.reason)).join('\n') : null)
+    setListLoading(false)
   }, [])
-  const [taskId, setTaskId] = useState<number | null>(initialTaskId)
 
+  useEffect(() => { void loadTasks() }, [loadTasks])
+
+  // Keep task identity/status current when Queue publishes a transition. The monitor
+  // payload itself is handled by useMonitorProgress; this refresh is only page context.
+  useEventStream(
+    useCallback((evt) => {
+      if (evt.type === 'task_state_changed') void loadTasks()
+    }, [loadTasks]),
+  )
+
+  const listedTask = useMemo(
+    () => tasks.find((task) => task.id === requestedTaskId) ?? null,
+    [requestedTaskId, tasks],
+  )
+
+  // A bookmarked train task may be older than the bounded history page. Resolve it
+  // directly instead of replacing it with the current running task.
   useEffect(() => {
-    api.health().then(setHealth).catch((e) => setError(String(e)))
-    api.listQueue().then(setTasks).catch(() => setTasks([]))
-  }, [])
+    if (requestedTaskId == null) {
+      setDeepLinkedTask(null)
+      setDeepLinkError(null)
+      return
+    }
+    if (listedTask) {
+      setDeepLinkedTask(null)
+      setDeepLinkError(null)
+      setTaskId(requestedTaskId)
+      return
+    }
+    if (listLoading) return
 
-  const defaultTaskId = useMemo<number | null>(() => {
-    const running = tasks.find((t) => t.status === 'running')
-    if (running) return running.id
-    const ended = [...tasks]
-      .filter((t) => t.finished_at)
-      .sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
-    return ended?.id ?? null
-  }, [tasks])
+    let active = true
+    setDeepLinkLoading(true)
+    setDeepLinkError(null)
+    void api.getTask(requestedTaskId)
+      .then((task) => {
+        if (!active) return
+        if (!isTrainTask(task)) {
+          setDeepLinkedTask(null)
+          setDeepLinkError('wrongType')
+          setTaskId(null)
+          return
+        }
+        setDeepLinkedTask(task)
+        setTaskId(task.id)
+      })
+      .catch(() => {
+        if (!active) return
+        setDeepLinkedTask(null)
+        setDeepLinkError('missing')
+        setTaskId(null)
+      })
+      .finally(() => {
+        if (active) setDeepLinkLoading(false)
+      })
+    return () => { active = false }
+  }, [listLoading, listedTask, requestedTaskId])
 
+  const visibleTasks = useMemo(() => {
+    if (!deepLinkedTask || tasks.some((task) => task.id === deepLinkedTask.id)) return tasks
+    return sortMonitorTasks([deepLinkedTask, ...tasks])
+  }, [deepLinkedTask, tasks])
+
+  // No explicit deep link: prefer the active train, then the newest task that has
+  // monitor evidence. Once selected, later list refreshes do not steal the selection.
   useEffect(() => {
-    if (taskId === null && defaultTaskId !== null) setTaskId(defaultTaskId)
-  }, [defaultTaskId, taskId])
+    if (requestedTaskId != null || taskId != null || listLoading) return
+    const next = visibleTasks.find((task) => task.status === 'running') ?? visibleTasks[0]
+    if (!next) return
+    setTaskId(next.id)
+    const params = new URLSearchParams(searchParams)
+    params.set('task', String(next.id))
+    setSearchParams(params, { replace: true })
+  }, [listLoading, requestedTaskId, searchParams, setSearchParams, taskId, visibleTasks])
 
-  const ok = !error && health?.status === 'ok'
-  const selectedTask = tasks.find((t) => t.id === taskId)
+  const selectTask = (nextId: number) => {
+    setDeepLinkedTask(null)
+    setDeepLinkError(null)
+    setTaskId(nextId)
+    const params = new URLSearchParams(searchParams)
+    params.set('task', String(nextId))
+    setSearchParams(params, { replace: true })
+  }
 
-  return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      {/* 顶部状态栏 */}
-      <section className="rounded-md border border-subtle bg-surface text-xs flex items-center gap-3 shrink-0 flex-wrap"
-        style={{ padding: '10px 16px', margin: '0 0 12px 0' }}>
-        {/* 健康指示 */}
-        <span className={`inline-block w-2 h-2 rounded-full ${ok ? 'bg-ok' : 'bg-err'}`}
-          style={{ boxShadow: ok ? '0 0 6px var(--ok)' : '0 0 6px var(--err)' }} />
-        <span className={`font-semibold font-mono ${ok ? 'text-ok' : 'text-err'}`}>
-          {error ? 'offline' : health?.status ?? '...'}
-        </span>
-        {health && (
-          <span className="text-fg-tertiary font-mono">
-            v{health.version}
-          </span>
-        )}
+  const selectedTask = visibleTasks.find((task) => task.id === taskId) ?? null
+  const log = useTaskLog(selectedTask?.id ?? null)
+  const logSource = selectedTask
+    ? {
+        key: `monitor-task-${selectedTask.id}`,
+        label: t('monitor.logLabel', { id: selectedTask.id }),
+        status: selectedTask.status as LogSourceStatus,
+        lines: log.lines,
+        startedAt: selectedTask.started_at,
+        finishedAt: selectedTask.finished_at,
+        downloadUrl: log.downloadUrl,
+        hasMoreBefore: log.hasMoreBefore,
+        loadingAll: log.loadingAll,
+        onLoadAll: log.loadAll,
+      }
+    : null
 
-        <span className="text-fg-tertiary">|</span>
-
-        {/* 任务选择 */}
-        <span className="text-fg-tertiary">任务</span>
-        <select
-          value={taskId ?? ''}
-          onChange={(e) => setTaskId(e.target.value === '' ? null : Number(e.target.value))}
-          className="rounded-sm bg-sunken border border-subtle text-xs text-fg-primary"
-          style={{ padding: '4px 10px', outline: 'none' }}
+  const selectedStatus = selectedTask?.status
+  const contextBar = (
+    <div className="border-b border-subtle bg-canvas px-page py-related">
+      <div className="flex min-w-0 flex-wrap items-center gap-related">
+        <label htmlFor="monitor-task-select" className="text-sm font-medium text-fg-secondary">
+          {t('monitor.taskLabel')}
+        </label>
+        <Select
+          id="monitor-task-select"
+          controlSize="sm"
+          surface="surface"
+          value={selectedTask?.id ?? ''}
+          onChange={(event) => selectTask(Number(event.target.value))}
+          disabled={visibleTasks.length === 0 || deepLinkLoading}
+          aria-label={t('monitor.taskSelectAria')}
+          className="min-w-0 max-w-full sm:min-w-[20rem]"
         >
-          <option value="">（最新 running，没有则显示空）</option>
-          {tasks.map((t) => (
-            <option key={t.id} value={t.id}>
-              #{t.id} · {t.name} · {t.status}
+          {visibleTasks.length === 0 && <option value="">{t('monitor.noTaskOption')}</option>}
+          {visibleTasks.map((task) => (
+            <option key={task.id} value={task.id}>
+              #{task.id} · {task.name} · {t(`monitor.taskStatus.${task.status}`)}
             </option>
           ))}
-        </select>
-
-        {selectedTask && (
-          <>
-            <span className="text-fg-tertiary">|</span>
-            <span className={statusBadge(selectedTask.status)}>
-              {statusLabel(selectedTask.status)}
-            </span>
-          </>
+        </Select>
+        {selectedStatus && (
+          <Badge tone={statusTone(selectedStatus)} active={selectedStatus === 'running'}>
+            {t(`monitor.taskStatus.${selectedStatus}`)}
+          </Badge>
         )}
-
-        <span style={{ flex: 1 }} />
-      </section>
-
-      {/* 监控主体 */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {taskId !== null ? (
-          <MonitorDashboard taskId={taskId} />
-        ) : (
-          <div className="flex items-center justify-center h-full text-fg-tertiary text-sm flex-col gap-2">
-            <span className="text-xl">📊</span>
-            <span>暂无训练任务</span>
-            <span className="text-xs">启动训练后将自动显示监控数据</span>
-          </div>
+        {listLoading && tasks.length > 0 && (
+          <span className="text-xs text-fg-tertiary" role="status">{t('common.loading')}</span>
         )}
       </div>
     </div>
   )
+
+  return (
+    <StepShell
+      title={t('monitor.title')}
+      subtitle={t('monitor.subtitle')}
+      belowHeader={contextBar}
+      actions={selectedTask && (
+        <Link
+          to={`/queue/${selectedTask.id}`}
+          className={buttonClassName({ variant: 'secondary', size: 'sm', className: 'no-underline' })}
+        >
+          {t('monitor.viewTaskDetails')}
+        </Link>
+      )}
+      logSources={[logSource]}
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-related">
+        {listError && (
+          <Alert
+            tone={tasks.length > 0 ? 'warning' : 'danger'}
+            size="sm"
+            title={t('monitor.taskListErrorTitle')}
+            action={(
+              <Button size="sm" onClick={() => void loadTasks()}>
+                {t('common.retry')}
+              </Button>
+            )}
+          >
+            <span title={listError}>
+              {t(tasks.length > 0 ? 'monitor.taskListStale' : 'monitor.taskListError')}
+            </span>
+          </Alert>
+        )}
+
+        {deepLinkError && (
+          <Alert tone="danger" size="sm" title={t('monitor.deepLinkErrorTitle')}>
+            {t(deepLinkError === 'wrongType' ? 'monitor.deepLinkWrongType' : 'monitor.deepLinkMissing', {
+              id: requestedTaskId,
+            })}
+          </Alert>
+        )}
+
+        {deepLinkLoading && !selectedTask && (
+          <div className="grid flex-1 place-items-center text-sm text-fg-tertiary" role="status">
+            {t('monitor.loadingTask')}
+          </div>
+        )}
+
+        {!deepLinkLoading && !selectedTask && listLoading && (
+          <div className="grid flex-1 place-items-center text-sm text-fg-tertiary" role="status">
+            {t('monitor.loadingTasks')}
+          </div>
+        )}
+
+        {!deepLinkLoading && !selectedTask && !listLoading && !deepLinkError && !listError && (
+          <EmptyState
+            className="m-auto max-w-xl"
+            title={t('monitor.noTasksTitle')}
+            description={t('monitor.noTasksDescription')}
+            action={(
+              <Link
+                to="/queue"
+                className={buttonClassName({ variant: 'secondary', size: 'sm', className: 'no-underline' })}
+              >
+                {t('monitor.openQueue')}
+              </Link>
+            )}
+          />
+        )}
+
+        {selectedTask && (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <MonitorDashboard taskId={selectedTask.id} taskStatus={selectedTask.status} />
+          </div>
+        )}
+      </div>
+    </StepShell>
+  )
 }
 
-function statusBadge(status: string): string {
-  switch (status) {
-    case 'running': return 'badge badge-accent'
-    case 'pending': return 'badge badge-neutral'
-    case 'scheduled': return 'badge badge-neutral'
-    case 'done': return 'badge badge-ok'
-    case 'failed': return 'badge badge-err'
-    case 'canceled': return 'badge badge-neutral'
-    default: return 'badge badge-neutral'
-  }
-}
-
-function statusLabel(status: string): string {
-  switch (status) {
-    case 'running': return '运行中'
-    case 'pending': return '排队中'
-    case 'scheduled': return '等待入队'
-    case 'done': return '已完成'
-    case 'failed': return '失败'
-    case 'canceled': return '已取消'
-    default: return status
-  }
+export {
+  hasMonitorEvidence as _hasMonitorEvidenceForTest,
+  isTrainTask as _isTrainTaskForTest,
+  sortMonitorTasks as _sortMonitorTasksForTest,
 }
