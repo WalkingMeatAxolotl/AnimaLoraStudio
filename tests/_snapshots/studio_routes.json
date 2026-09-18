@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 243,
+  "count": 246,
   "routes": [
     {
       "path": "/",
@@ -658,6 +658,22 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/archive-batch",
+      "methods": [
+        "POST"
+      ],
+      "name": "archive_projects_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/delete-batch",
+      "methods": [
+        "POST"
+      ],
+      "name": "delete_projects_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/import-bundle",
       "methods": [
         "POST"
@@ -679,6 +695,14 @@
         "POST"
       ],
       "name": "import_train_zip",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/unarchive-batch",
+      "methods": [
+        "POST"
+      ],
+      "name": "unarchive_projects_endpoint",
       "type": "APIRoute"
     },
     {

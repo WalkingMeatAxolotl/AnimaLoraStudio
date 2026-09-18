@@ -2618,8 +2618,26 @@ export const api = {
   /** 归档（软隐藏，可逆）：目录 / versions / 任务全部原样。 */
   archiveProject: (pid: number) =>
     req<ProjectDetail>(`/api/projects/${pid}/archive`, { method: 'POST' }),
+  archiveProjects: (projectIds: number[]) =>
+    req<{ updated: number[] }>('/api/projects/archive-batch', {
+      method: 'POST',
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
   unarchiveProject: (pid: number) =>
     req<ProjectDetail>(`/api/projects/${pid}/unarchive`, { method: 'POST' }),
+  unarchiveProjects: (projectIds: number[]) =>
+    req<{ updated: number[] }>('/api/projects/unarchive-batch', {
+      method: 'POST',
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
+  deleteProjects: (projectIds: number[]) =>
+    req<{
+      deleted: number[]
+      failed: Array<{ id: number; code: string; message: string }>
+    }>('/api/projects/delete-batch', {
+      method: 'POST',
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
 
   listVersions: (pid: number) =>
     req<{ items: Version[] }>(`/api/projects/${pid}/versions`).then(
