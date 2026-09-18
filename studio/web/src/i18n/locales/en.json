@@ -1634,11 +1634,6 @@
     "trainingProgress": "Training progress",
     "statusSummary": "Monitor status and training progress",
     "progressSteps": "{{current}} / {{total}} steps",
-    "metricGroup": {
-      "progress": "Progress and time",
-      "optimization": "Optimization signals",
-      "resources": "Runtime resources"
-    },
     "metric": {
       "step": "Current step",
       "epoch": "Current epoch",

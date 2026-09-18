@@ -54,31 +54,17 @@ function StatCard({ label, value, sub, tone }: {
   tone?: 'accent'
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-subtle bg-sunken px-related py-related">
-      <dt className="type-data-label">{label}</dt>
-      <dd className={`m-0 mt-1 font-mono text-lg font-semibold leading-tight tabular-nums ${tone === 'accent' ? 'text-accent' : 'text-fg-primary'}`}>
+    <div className="card min-w-0 px-field py-related">
+      <dt className="type-data-label truncate" title={label}>{label}</dt>
+      <dd className={`m-0 mt-1 font-mono text-3xl font-semibold leading-none tabular-nums ${tone === 'accent' ? 'text-accent' : 'text-fg-primary'}`}>
         {value}
       </dd>
       {sub && (
-        <dd className="m-0 mt-1 text-xs leading-snug text-fg-tertiary" title={sub}>
+        <dd className="m-0 mt-related truncate text-xs leading-snug text-fg-tertiary" title={sub}>
           {sub}
         </dd>
       )}
     </div>
-  )
-}
-
-function MetricGroup({ title, className = '', children }: {
-  title: string
-  className?: string
-  children: ReactNode
-}) {
-  const headingId = useId()
-  return (
-    <Card as="section" padding="sm" className={`min-w-0 ${className}`} aria-labelledby={headingId}>
-      <h2 id={headingId} className="type-section-label mb-related">{title}</h2>
-      <dl className="m-0 grid grid-cols-2 gap-related">{children}</dl>
-    </Card>
   )
 }
 
@@ -302,8 +288,8 @@ function ChartPanel({ title, control, children }: {
 }) {
   const titleId = useId()
   return (
-    <Card as="section" padding="md" className="flex min-h-[180px] min-w-0 flex-col" aria-labelledby={titleId}>
-      <div className="mb-related flex shrink-0 flex-wrap items-center justify-between gap-related">
+    <Card as="section" padding="sm" className="flex min-h-[140px] max-h-[300px] min-w-0 flex-1 flex-col" aria-labelledby={titleId}>
+      <div className="mb-related flex shrink-0 flex-wrap items-center justify-between gap-related border-b border-subtle pb-related">
         <h2 id={titleId} className="type-panel-title">{title}</h2>
         {control}
       </div>
@@ -483,7 +469,7 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
   const smoothingOffLabel = t('monitor.smoothingOff')
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-section overflow-y-auto p-page">
+    <div className="flex h-full min-h-0 flex-col gap-field overflow-y-auto p-section">
       {(error || streamStatus === 'reconnecting') && (
         <Alert
           tone="warning"
@@ -501,105 +487,94 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
         </Alert>
       )}
 
-      <Card as="section" padding="sm" className="shrink-0" aria-label={t('monitor.statusSummary')}>
-        <div className="flex flex-wrap items-center gap-related text-xs text-fg-tertiary">
-          <Badge
-            size="sm"
-            tone={evidenceState === 'live' ? 'success' : evidenceState === 'reconnecting' ? 'warning' : 'neutral'}
-            active={evidenceState === 'live'}
-          >
-            {t(`monitor.evidenceStatus.${evidenceState}`)}
-          </Badge>
-          {lastUpdatedLabel && <span>{t('monitor.lastUpdated', { time: lastUpdatedLabel })}</span>}
-          {totalSteps > 0 && (
-            <div className="ml-auto flex min-w-[16rem] flex-1 basis-[28rem] items-center gap-related font-mono tabular-nums">
-              <span className="whitespace-nowrap">
-                {t('monitor.progressSteps', { current: number(step), total: number(totalSteps) })}
-              </span>
-              <ProgressBar
-                className="min-w-20 flex-1"
-                size="xs"
-                label={t('monitor.trainingProgress')}
-                value={step}
-                max={totalSteps}
-                valueText={`${progress.toFixed(1)}%`}
-              />
-              <span className="whitespace-nowrap">{progress.toFixed(1)}%</span>
-            </div>
-          )}
-        </div>
-      </Card>
-
-      <div className="grid shrink-0 grid-cols-1 gap-related min-[900px]:grid-cols-2 min-[1281px]:grid-cols-[4fr_4fr_2fr]">
-        <MetricGroup title={t('monitor.metricGroup.progress')}>
-          <StatCard
-            label={t('monitor.metric.step')}
-            value={number(step)}
-            sub={totalSteps > 0 ? t('monitor.ofTotal', { total: number(totalSteps) }) : t('monitor.totalUnknown')}
-            tone="accent"
-          />
-          <StatCard
-            label={t('monitor.metric.epoch')}
-            value={epoch == null ? '--' : number(epoch)}
-            sub={totalEpochs != null ? t('monitor.ofTotal', { total: number(totalEpochs) }) : t('monitor.totalUnknown')}
-          />
-          <StatCard label={t('monitor.metric.elapsed')} value={elapsed} />
-          <StatCard label={t('monitor.metric.eta')} value={eta} />
-        </MetricGroup>
-
-        <MetricGroup title={t('monitor.metricGroup.optimization')}>
-          <StatCard
-            label={t('monitor.metric.recentLoss')}
-            value={lossInfo ? lossInfo.value.toFixed(4) : '--'}
-            sub={lossInfo
-              ? t(lossInfo.delta == null ? 'monitor.recentAverage' : 'monitor.recentDelta', {
-                  count: lossInfo.windowSize,
-                  delta: lossInfo.delta == null ? '' : `${lossInfo.delta >= 0 ? '+' : ''}${lossInfo.delta.toFixed(4)}`,
-                })
-              : t('monitor.awaitingMetric')}
-          />
-          <StatCard
-            label={t('monitor.metric.averageLoss')}
-            value={averageLoss == null ? '--' : averageLoss.toFixed(4)}
-            sub={losses.length ? t('monitor.rawMeanPoints', { count: number(losses.length) }) : t('monitor.awaitingMetric')}
-          />
-          <StatCard
-            label={t('monitor.metric.learningRate')}
-            value={formatLearningRate(lastLearningRate)}
-            sub={lrHistory.length ? t('monitor.actualLearningRate') : t('monitor.awaitingMetric')}
-          />
-          <StatCard
-            label={t('monitor.metric.optimizerD')}
-            value={formatMetric(lastD)}
-            sub={lastD == null
-              ? `${t('monitor.notReported')} · ${t('monitor.optimizerDHelp')}`
-              : t('monitor.optimizerDHelp')}
-          />
-        </MetricGroup>
-
-        <MetricGroup
-          title={t('monitor.metricGroup.resources')}
-          className="min-[900px]:col-span-2 min-[1281px]:col-span-1"
+      <section
+        aria-label={t('monitor.statusSummary')}
+        className="flex shrink-0 flex-wrap items-center gap-related border-y border-subtle py-related text-xs text-fg-tertiary"
+      >
+        <Badge
+          size="sm"
+          tone={evidenceState === 'live' ? 'success' : evidenceState === 'reconnecting' ? 'warning' : 'neutral'}
+          active={evidenceState === 'live'}
         >
-          <StatCard
-            label={t('monitor.metric.speed')}
-            value={speed == null ? '--' : `${speed.toFixed(2)} it/s`}
-            sub={speed == null ? t('monitor.notReported') : t('monitor.iterationSpeed')}
-          />
-          <StatCard
-            label={t('monitor.metric.vram')}
-            value={vramUsed == null ? '--' : `${vramUsed.toFixed(1)} GB`}
-            sub={vramUsed != null && vramTotal != null
-              ? t('monitor.vramOfTotal', {
-                  total: vramTotal.toFixed(1),
-                  percent: ((vramUsed / vramTotal) * 100).toFixed(0),
-                })
-              : t('monitor.notReported')}
-          />
-        </MetricGroup>
-      </div>
+          {t(`monitor.evidenceStatus.${evidenceState}`)}
+        </Badge>
+        {lastUpdatedLabel && <span>{t('monitor.lastUpdated', { time: lastUpdatedLabel })}</span>}
+        {totalSteps > 0 && (
+          <div className="ml-auto flex min-w-[24rem] flex-1 basis-[36rem] items-center gap-related font-mono tabular-nums">
+            <span className="whitespace-nowrap">
+              {t('monitor.progressSteps', { current: number(step), total: number(totalSteps) })}
+            </span>
+            <ProgressBar
+              className="min-w-24 flex-1"
+              size="xs"
+              label={t('monitor.trainingProgress')}
+              value={step}
+              max={totalSteps}
+              valueText={`${progress.toFixed(1)}%`}
+            />
+            <span className="whitespace-nowrap">{progress.toFixed(1)}%</span>
+            <span className="whitespace-nowrap text-fg-secondary">
+              {t('monitor.metric.elapsed')} {elapsed}
+            </span>
+            <span className="whitespace-nowrap text-fg-secondary">
+              {t('monitor.metric.eta')} {eta}
+            </span>
+          </div>
+        )}
+      </section>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-related min-[1281px]:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.5fr)]">
+      <dl className="m-0 grid shrink-0 grid-cols-6 gap-related">
+        <StatCard
+          label={t('monitor.metric.step')}
+          value={number(step)}
+          sub={[
+            totalSteps > 0 ? t('monitor.ofTotal', { total: number(totalSteps) }) : t('monitor.totalUnknown'),
+            epoch == null
+              ? null
+              : `${t('monitor.metric.epoch')} ${number(epoch)}${totalEpochs == null ? '' : ` / ${number(totalEpochs)}`}`,
+          ].filter(Boolean).join(' · ')}
+          tone="accent"
+        />
+        <StatCard
+          label={t('monitor.metric.recentLoss')}
+          value={lossInfo ? lossInfo.value.toFixed(4) : '--'}
+          sub={lossInfo
+            ? t(lossInfo.delta == null ? 'monitor.recentAverage' : 'monitor.recentDelta', {
+                count: lossInfo.windowSize,
+                delta: lossInfo.delta == null ? '' : `${lossInfo.delta >= 0 ? '+' : ''}${lossInfo.delta.toFixed(4)}`,
+              })
+            : t('monitor.awaitingMetric')}
+        />
+        <StatCard
+          label={t('monitor.metric.averageLoss')}
+          value={averageLoss == null ? '--' : averageLoss.toFixed(4)}
+          sub={losses.length ? t('monitor.rawMeanPoints', { count: number(losses.length) }) : t('monitor.awaitingMetric')}
+        />
+        <StatCard
+          label={t('monitor.metric.learningRate')}
+          value={formatLearningRate(lastLearningRate)}
+          sub={lastD == null
+            ? t(lrHistory.length ? 'monitor.actualLearningRate' : 'monitor.awaitingMetric')
+            : `d ${formatMetric(lastD)} · ${t('monitor.actualLearningRate')}`}
+        />
+        <StatCard
+          label={t('monitor.metric.vram')}
+          value={vramUsed == null ? '--' : `${vramUsed.toFixed(1)} GB`}
+          sub={vramUsed != null && vramTotal != null
+            ? t('monitor.vramOfTotal', {
+                total: vramTotal.toFixed(1),
+                percent: ((vramUsed / vramTotal) * 100).toFixed(0),
+              })
+            : t('monitor.notReported')}
+        />
+        <StatCard
+          label={t('monitor.metric.eta')}
+          value={eta}
+          sub={speed == null ? t('monitor.notReported') : `${speed.toFixed(2)} it/s · ${t('monitor.iterationSpeed')}`}
+        />
+      </dl>
+
+      <div className="grid min-h-[440px] flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-related">
         <Card as="section" padding="none" className="flex min-h-[420px] min-w-0 flex-col overflow-hidden">
           <div className="flex shrink-0 items-center justify-between border-b border-subtle px-related py-related">
             <h2 className="type-panel-title">{t('monitor.samplesTitle')}</h2>
@@ -612,7 +587,7 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
           </div>
         </Card>
 
-        <div className="grid min-h-0 min-w-0 grid-cols-1 gap-related min-[1080px]:grid-cols-2 min-[1281px]:grid-cols-1">
+        <div className="flex min-h-0 min-w-0 flex-col gap-related">
           <ChartPanel
             title={t('monitor.chart.loss')}
             control={(

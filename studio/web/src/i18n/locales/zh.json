@@ -1634,11 +1634,6 @@
     "trainingProgress": "训练进度",
     "statusSummary": "监控状态与训练进度",
     "progressSteps": "{{current}} / {{total}} 步",
-    "metricGroup": {
-      "progress": "进度与时间",
-      "optimization": "优化信号",
-      "resources": "运行资源"
-    },
     "metric": {
       "step": "当前步数",
       "epoch": "当前轮次",

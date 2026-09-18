@@ -170,7 +170,7 @@ describe('MonitorDashboard evidence states', () => {
     expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }))
   })
 
-  it('localizes the dense monitor groups and chart controls in English', async () => {
+  it('localizes the flat expert metrics and chart controls in English', async () => {
     await i18n.changeLanguage('en')
     vi.mocked(useMonitorProgress).mockReturnValue(progress({
       state: {
@@ -187,9 +187,11 @@ describe('MonitorDashboard evidence states', () => {
 
     render(<MonitorDashboard taskId={7} taskStatus="running" />)
 
-    expect(screen.getByText('Progress and time')).toBeInTheDocument()
-    expect(screen.getByText('Optimization signals')).toBeInTheDocument()
-    expect(screen.getByText('Runtime resources')).toBeInTheDocument()
+    expect(screen.getByText('Current step')).toBeInTheDocument()
+    expect(screen.getByText('Recent loss')).toBeInTheDocument()
+    expect(screen.getByText('Overall average loss')).toBeInTheDocument()
+    expect(screen.getByText('Learning rate')).toBeInTheDocument()
+    expect(screen.getByText('VRAM')).toBeInTheDocument()
     expect(screen.getByText('Training samples')).toBeInTheDocument()
     expect(screen.getByText('Loss trend')).toBeInTheDocument()
     expect(screen.getByRole('slider', { name: 'Loss trend · Smoothing' })).toBeInTheDocument()
