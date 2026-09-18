@@ -489,7 +489,7 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
 
       <section
         aria-label={t('monitor.statusSummary')}
-        className="flex shrink-0 flex-wrap items-center gap-field border-y border-subtle py-related text-xs text-fg-tertiary"
+        className="flex shrink-0 flex-wrap items-center gap-related border-y border-subtle py-related text-xs text-fg-tertiary"
       >
         <Badge
           size="sm"
@@ -500,12 +500,12 @@ export default function MonitorDashboard({ taskId, taskStatus }: {
         </Badge>
         {lastUpdatedLabel && <span>{t('monitor.lastUpdated', { time: lastUpdatedLabel })}</span>}
         {totalSteps > 0 && (
-          <div className="ml-auto flex items-center gap-section font-mono tabular-nums">
+          <div className="ml-auto flex min-w-[24rem] flex-1 basis-[36rem] items-center gap-related font-mono tabular-nums">
             <span className="whitespace-nowrap">
               {t('monitor.progressSteps', { current: number(step), total: number(totalSteps) })}
             </span>
             <ProgressBar
-              className="w-[clamp(16rem,36vw,42rem)] shrink-0"
+              className="min-w-24 flex-1"
               size="xs"
               label={t('monitor.trainingProgress')}
               value={step}
