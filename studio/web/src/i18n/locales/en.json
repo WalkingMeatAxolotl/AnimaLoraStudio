@@ -693,7 +693,10 @@
   },
   "eval": {
     "evaluatingProgress": "Evaluating {{done}}/{{total}}",
-    "evaluatingHint": "Training finished; metrics are being computed against the validation set for each checkpoint (sampling + CLIP / DINO). This disappears when done. See the Eval tab in task detail for details."
+    "evaluatingHint": "Training finished; metrics are being computed against the validation set for each checkpoint (sampling + CLIP / DINO). This disappears when done. See the Eval tab in task detail for details.",
+    "createdTitle": "Evaluation queued",
+    "createdDescription": "Evaluation #{{id}} was added to the list. You can stay here to track its status.",
+    "viewTask": "View task"
   },
   "queue": {
     "title": "GPU task queue",

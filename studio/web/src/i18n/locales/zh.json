@@ -693,7 +693,10 @@
   },
   "eval": {
     "evaluatingProgress": "评估中 {{done}}/{{total}}",
-    "evaluatingHint": "训练已结束，正在用验证集对各 checkpoint 算指标（出图 + CLIP / DINO），完成后这里消失。明细看任务详情的「评估」tab。"
+    "evaluatingHint": "训练已结束，正在用验证集对各 checkpoint 算指标（出图 + CLIP / DINO），完成后这里消失。明细看任务详情的「评估」tab。",
+    "createdTitle": "评估已排队",
+    "createdDescription": "评估 #{{id}} 已添加到列表，可留在这里查看状态。",
+    "viewTask": "查看任务"
   },
   "queue": {
     "title": "GPU 任务队列",

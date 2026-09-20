@@ -4,7 +4,12 @@
 // 页），发起动作就该在列表上方，参数在 modal 里填完再提交 —— 和「新建版本」同款。
 // 目前参数只有 checkpoint 选择；样本数 / 指标模型仍走 Settings 默认。
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type EvalScale, type LoraCkpt } from '../api/client'
+import { api, type EvalScale, type EvalSessionInfo, type LoraCkpt } from '../api/client'
+import ActionGroup from './ActionGroup'
+import Alert from './Alert'
+import Button from './Button'
+import EmptyState from './EmptyState'
+import Modal from './Modal'
 
 export default function CreateEvalModal({
   pid, vid, taskId, onClose, onCreated,
@@ -14,7 +19,7 @@ export default function CreateEvalModal({
   /** 溯源：从训练详情发起时带上；从概览发起时留空。 */
   taskId?: number
   onClose: () => void
-  onCreated: (sessionId: number) => void
+  onCreated: (session: EvalSessionInfo) => void
 }) {
   const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
   const [loading, setLoading] = useState(true)
@@ -39,13 +44,6 @@ export default function CreateEvalModal({
     void api.getEvalScale(pid, vid).then((s) => { if (alive) setScale(s) }).catch(() => {})
     return () => { alive = false }
   }, [pid, vid])
-
-  // Esc 关闭（与其它 modal 一致）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const toggle = useCallback((path: string) => {
     setSelected((prev) => {
@@ -75,7 +73,7 @@ export default function CreateEvalModal({
     setError(null)
     try {
       const r = await api.runTaskEval(pid, vid, { task_id: taskId, checkpoints: [...selected] })
-      onCreated(r.session.id)
+      onCreated(r.session)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setBusy(false)
@@ -83,32 +81,51 @@ export default function CreateEvalModal({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="create-eval-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md"
-      data-testid="create-eval-modal"
+    <Modal
+      title="创建新评估"
+      description="选择 LoRA 文件；样本数与指标模型使用 Settings 默认值。"
+      onClose={onClose}
+      closeOnBackdrop={!busy}
+      closeOnEscape={!busy}
+      as="form"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void submit()
+      }}
+      size="lg"
+      testId="create-eval-modal"
+      footer={(
+        <ActionGroup
+          secondary={(
+            <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+              取消
+            </Button>
+          )}
+          primary={(
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              loading={busy}
+              disabled={selected.size === 0}
+            >
+              {`创建评估${selected.size ? ` (${selected.size})` : ''}`}
+            </Button>
+          )}
+        />
+      )}
     >
-      <div className="w-[90%] max-w-[680px] flex flex-col gap-4 p-6 bg-elevated border border-dim rounded-lg shadow-xl">
-        <div className="flex items-baseline gap-3">
-          <h2 id="create-eval-title" className="m-0 text-lg font-semibold text-fg-primary">
-            创建新评估
-          </h2>
-          <span className="text-xs text-fg-tertiary">
-            选 LoRA 文件；样本数 / 指标模型用 Settings 默认
-          </span>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold">LoRA 文件</span>
-            <span className="text-[11px] text-fg-tertiary">选多个可横向对比</span>
-            <span className="flex-1" />
+      <div className="flex flex-col gap-section">
+        <section className="flex flex-col gap-related" aria-labelledby="eval-checkpoint-title">
+          <div className="flex items-center gap-related">
+            <div className="min-w-0 flex-1">
+              <h3 id="eval-checkpoint-title" className="type-panel-title">LoRA 文件</h3>
+              <p className="type-page-description mt-1">可选择多个 checkpoint 横向比较。</p>
+            </div>
             {ckpts.length > 0 && (
-              <button
-                type="button"
-                className="text-[11px] text-fg-tertiary hover:text-fg underline bg-transparent border-none cursor-pointer p-0"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() =>
                   setSelected((prev) =>
                     prev.size === ckpts.length ? new Set() : new Set(ckpts.map((c) => c.path)),
@@ -116,83 +133,66 @@ export default function CreateEvalModal({
                 }
               >
                 {selected.size === ckpts.length ? '清空' : '全选'}
-              </button>
+              </Button>
             )}
           </div>
+
           {loading ? (
-            <div className="text-xs text-fg-tertiary py-1">读取 LoRA 文件…</div>
+            <div role="status" className="py-related text-sm text-fg-secondary">
+              读取 LoRA 文件…
+            </div>
           ) : ckpts.length === 0 ? (
-            <div className="text-xs text-fg-tertiary py-1">output/ 下没有 LoRA 文件。</div>
+            <EmptyState
+              embedded
+              size="sm"
+              description="output/ 下没有 LoRA 文件。"
+            />
           ) : (
             <div
-              className="grid gap-1.5 overflow-y-auto"
-              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', maxHeight: 260, padding: 2 }}
+              className="grid max-h-[16.25rem] grid-cols-[repeat(auto-fill,minmax(8.125rem,1fr))] gap-related overflow-y-auto p-related"
+              aria-label="选择要评估的 LoRA 文件"
             >
               {ckpts.map((c) => {
                 const isPicked = selected.has(c.path)
                 return (
-                  <button
+                  <Button
                     key={c.path}
-                    type="button"
+                    variant="secondary"
+                    size="sm"
                     onClick={() => toggle(c.path)}
-                    className="font-mono flex items-center gap-1 min-w-0"
-                    style={{
-                      fontSize: 11,
-                      padding: '4px 8px',
-                      borderRadius: 'var(--r-md)',
-                      border: isPicked ? '1px solid transparent' : '1px solid var(--border-subtle)',
-                      background: isPicked ? 'var(--accent-soft)' : 'var(--bg-sunken)',
-                      color: isPicked ? 'var(--accent)' : 'var(--fg-secondary)',
-                      cursor: 'pointer',
-                    }}
+                    aria-pressed={isPicked}
+                    className="min-w-0 justify-start font-mono"
                     title={c.path}
                   >
-                    <span className="shrink-0">{isPicked ? '✓' : '+'}</span>
-                    <span className="truncate flex-1 text-left">{c.label}</span>
-                  </button>
+                    <span className="truncate text-left">{c.label}</span>
+                  </Button>
                 )
               })}
             </div>
           )}
-        </div>
+        </section>
 
         {picked && (
-          <div className="text-[11px] text-fg-tertiary">
-            {picked.validationImages === 0 ? (
-              <span className="text-warn">
-                验证集为空 —— 先划分或手动放入验证图，否则评估算不出指标。
-              </span>
-            ) : (
-              <>
-                将生成 <span className="font-mono text-fg-secondary">{picked.images}</span> 张图
-                （{picked.candidates} 个被测对象 × {picked.validationImages} 张
-                {scale?.baseline_enabled ? '，含一组纯底模 baseline 对照' : ''}）、
-                1 个评估任务（<span className="font-mono text-fg-secondary">{picked.stages}</span> 个阶段）
-              </>
-            )}
-          </div>
+          picked.validationImages === 0 ? (
+            <Alert tone="warning" size="sm">
+              验证集为空——先划分或手动放入验证图，否则评估算不出指标。
+            </Alert>
+          ) : (
+            <div className="text-sm text-fg-secondary">
+              将生成 <span className="font-mono tabular-nums text-fg-primary">{picked.images}</span> 张图
+              （{picked.candidates} 个被测对象 × {picked.validationImages} 张
+              {scale?.baseline_enabled ? '，含一组纯底模 baseline 对照' : ''}）、
+              1 个评估任务（<span className="font-mono tabular-nums text-fg-primary">{picked.stages}</span> 个阶段）
+            </div>
+          )
         )}
 
         {error && (
-          <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-xs text-err">
+          <Alert tone="danger" size="sm" role="alert">
             {error}
-          </div>
+          </Alert>
         )}
-
-        <div className="flex items-center justify-end gap-2">
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy || selected.size === 0}
-            className="btn btn-primary btn-sm"
-          >
-            {busy ? '排队中…' : `创建评估${selected.size ? ` (${selected.size})` : ''}`}
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   )
 }
