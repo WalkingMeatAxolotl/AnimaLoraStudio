@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -10,10 +10,6 @@ import {
   type TaskType,
 } from '../api/client'
 import { PauseProgressModal } from '../components/PauseProgressModal'
-import { PauseConfirmModal } from '../components/PauseConfirmModal'
-import Alert from '../components/Alert'
-import ActionGroup from '../components/ActionGroup'
-import Modal from '../components/Modal'
 import Badge, { type BadgeTone } from '../components/Badge'
 import Button, { buttonClassName } from '../components/Button'
 import { useDialog } from '../components/Dialog'
@@ -29,7 +25,7 @@ import LogView from '../components/LogView'
 import { useTaskLog } from '../lib/useTaskLog'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { taskKind } from './Queue'
-import { fmtJobTime as fmtTime, fmtParamValue, jobJumpPath, paramLabel, DATA_VIEW_KINDS } from './queue/jobUtils'
+import { fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'metrics' | 'samples' | 'outputs' | 'snapshot'
 
@@ -38,30 +34,6 @@ type Tab = 'overview' | 'log' | 'monitor' | 'metrics' | 'samples' | 'outputs' | 
 function evalSessionIdOf(task: Task): number | null {
   const raw = task.params_decoded?.session_id
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
-}
-
-type DetailSourceTarget = { path: string; labelKey: string }
-
-/** 详情页来源入口与 Queue 行内入口使用相同的业务落点。 */
-function detailSourceTarget(task: Task, evalSessionId: number | null): DetailSourceTarget | null {
-  const kind = taskKind(task)
-  if (kind === 'generate') {
-    return { path: `/tools/generate?task=${task.id}`, labelKey: 'queueDetail.viewInGenerate' }
-  }
-  if (kind === 'reg_ai' && task.project_id && task.version_id) {
-    return {
-      path: `/projects/${task.project_id}/v/${task.version_id}/reg`,
-      labelKey: 'queueDetail.viewInReg',
-    }
-  }
-  if (kind === 'train' && task.project_id && task.version_id) {
-    return {
-      path: `/projects/${task.project_id}/v/${task.version_id}/train`,
-      labelKey: 'queueDetail.viewInTrain',
-    }
-  }
-  const jobPath = jobJumpPath(task, evalSessionId)
-  return jobPath ? { path: jobPath, labelKey: 'queue.jobs.jump' } : null
 }
 
 // 0.17 P-H：QueueDetail 按 task_type 差异化。train 保留全部 tab；reg_ai/generate 是
@@ -105,6 +77,11 @@ const STATUS_TONE: Record<TaskStatus, BadgeTone> = {
 
 const TERMINAL: ReadonlyArray<TaskStatus> = ['done', 'failed', 'canceled']
 
+function fmtTime(ts: number | null | undefined): string {
+  if (!ts) return '—'
+  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
+}
+
 function fmtDuration(start?: number | null, end?: number | null): string {
   if (!start) return '—'
   const e = end ?? Date.now() / 1000
@@ -122,6 +99,37 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
+// ── StatCard ────────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, mono, large, tone }: {
+  label: string
+  value: string
+  sub?: string
+  mono?: boolean
+  large?: boolean
+  tone?: 'accent' | 'ok' | 'warn' | 'err' | 'neutral'
+}) {
+  const toneClass = tone ? `text-${tone}` : 'text-fg-primary'
+  return (
+    <div className="flex min-w-0 flex-col gap-1 px-[18px] py-3.5 bg-surface rounded-md border border-subtle">
+      <span className="text-xs text-fg-tertiary font-mono tracking-widest uppercase">
+        {label}
+      </span>
+      <span
+        className={`${large ? 'text-3xl' : 'text-xl'} overflow-hidden text-ellipsis whitespace-nowrap font-semibold ${mono ? 'font-mono' : 'font-sans'} tabular-nums ${toneClass}`}
+        title={value}
+        style={{ letterSpacing: '-0.02em', lineHeight: 1.1 }}
+      >
+        {value}
+      </span>
+      {sub && (
+        <span className="text-xs text-fg-tertiary font-mono">
+          {sub}
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function QueueDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -130,11 +138,9 @@ export default function QueueDetailPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { toast } = useToast()
-  const { confirm } = useDialog()
 
   const [task, setTask] = useState<Task | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<Tab>(() => {
     if (typeof window === 'undefined') return 'overview'
@@ -142,7 +148,6 @@ export default function QueueDetailPage() {
     return (['overview', 'log', 'monitor', 'metrics', 'samples', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [pauseConfirmOpen, setPauseConfirmOpen] = useState(false)
   const [pauseModalOpen, setPauseModalOpen] = useState(false)
 
   // tab → hash 写回（点 tab 按钮时同步 URL，replaceState 不触发 router 重渲）
@@ -196,14 +201,11 @@ export default function QueueDetailPage() {
   const reload = useCallback(async () => {
     if (!Number.isFinite(taskId)) return
     const seq = ++reloadSeq.current
-    setLoading(true)
     try {
       const t = await api.getTask(taskId)
       if (seq === reloadSeq.current) { setTask(t); setError(null) }
     } catch (e) {
       if (seq === reloadSeq.current) setError(String(e))
-    } finally {
-      if (seq === reloadSeq.current) setLoading(false)
     }
   }, [taskId])
 
@@ -262,29 +264,12 @@ export default function QueueDetailPage() {
     finally { setBusy(false) }
   }
 
-  const confirmLiveCancel = async () => {
-    if (!task) return
-    const kind = taskKind(task)
-    const messageKey = task.status === 'pending'
-      ? 'queue.cancelPendingConfirm'
-      : kind === 'train'
-        ? 'queue.cancelRunningTrainConfirm'
-        : DATA_VIEW_KINDS.includes(kind)
-          ? 'queue.jobs.cancelConfirm'
-          : 'queue.cancelRunningConfirm'
-    const ok = await confirm(t(messageKey, { id: task.id }), {
-      tone: 'warn',
-      okText: t('queueDetail.cancelTask'),
-    })
-    if (ok) await cancel()
-  }
-
   const retry = async () => {
     if (!task) return
     setBusy(true)
     try { const newTask = await api.retryTask(task.id); toast(t('queueDetail.retryQueued', { id: newTask.id }), 'success'); navigate(`/queue/${newTask.id}`) }
     catch (e) { toast(String(e), 'error'); setBusy(false) }
-    finally { setBusy(false) }
+    finally { setBusy(true) }
   }
 
   const remove = async () => {
@@ -297,7 +282,6 @@ export default function QueueDetailPage() {
   // ADR 0006 PR-4: 暂停 / 恢复 / 取消 paused 三连。
   const pauseRunning = async () => {
     if (!task) return
-    setPauseConfirmOpen(false)
     setPauseModalOpen(true)
     try {
       await api.pauseTask(task.id)
@@ -324,30 +308,6 @@ export default function QueueDetailPage() {
     }
   }
 
-  const confirmPausedResume = async () => {
-    if (!task) return
-    const label = t('queue.resume')
-    const ok = await confirm(`${label} #${task.id}？${t('queue.resumeHint')}`, { okText: label })
-    if (ok) await resumePaused()
-  }
-
-  const confirmPausedCancel = async () => {
-    if (!task) return
-    const label = t('queue.cancelPaused')
-    const ok = await confirm(`${label} #${task.id}？${t('queue.cancelPausedHint')}`, {
-      tone: 'warn',
-      okText: label,
-    })
-    if (ok) await cancel()
-  }
-
-  const confirmTerminalResume = async () => {
-    if (!task) return
-    const label = t('queue.resumeTerminal')
-    const ok = await confirm(`${label} #${task.id}？${t('queue.resumeTerminalHint')}`, { okText: label })
-    if (ok) await resumePaused()
-  }
-
   // 0.17 P-B — scheduled task 手动提前：立即转 pending 参与排队。
   const startNow = async () => {
     if (!task) return
@@ -361,23 +321,6 @@ export default function QueueDetailPage() {
     } finally {
       setBusy(false)
     }
-  }
-
-  const confirmStartNow = async () => {
-    if (!task) return
-    const ok = await confirm(t('queue.startNowConfirm', { id: task.id }), {
-      okText: t('queue.startNow'),
-    })
-    if (ok) await startNow()
-  }
-
-  const confirmScheduledCancel = async () => {
-    if (!task) return
-    const ok = await confirm(t('queue.cancelScheduledConfirm', { id: task.id }), {
-      tone: 'warn',
-      okText: t('queue.cancelScheduled'),
-    })
-    if (ok) await cancel()
   }
 
   const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -395,7 +338,6 @@ export default function QueueDetailPage() {
 
   // 按 task_type 过滤可见 tab（task 未加载时先按 train 给全量，加载后收敛）。
   const kind = task ? taskKind(task) : 'train'
-  const sourceTarget = task ? detailSourceTarget(task, evalSessionId) : null
   const visibleTabs = visibleTabsFor(task, taskHasEval)
   const allTabs: TabItem<Tab>[] = [
     { value: 'overview', label: t('queueDetail.tabOverview'), controls: 'queue-detail-panel' },
@@ -411,37 +353,28 @@ export default function QueueDetailPage() {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
-      <header
-        className="ui-queue-detail-header px-page py-3 border-b border-subtle flex flex-col gap-1.5 shrink-0 bg-canvas"
-        data-testid="queue-detail-header"
-      >
-        <div className="ui-queue-detail-header-row flex items-center gap-2.5 flex-wrap min-w-0">
-          <h1 className="ui-queue-detail-heading m-0 min-w-0 flex items-baseline gap-2 text-xl font-semibold">
-            <span className="font-mono shrink-0">#{taskId}</span>
-            {task && (
-              <span className="ui-queue-detail-task-name font-sans" title={task.name}>
-                {task.name}
-              </span>
-            )}
+      <header className="px-6 py-4 border-b border-subtle flex flex-col gap-2 shrink-0 bg-canvas">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <Link
+            to="/queue"
+            className={buttonClassName({ variant: 'ghost', size: 'sm', className: 'no-underline' })}
+          >
+            {t('queueDetail.backToQueue')}
+          </Link>
+          <span className="text-fg-tertiary">/</span>
+          <h1 className="m-0 text-xl font-semibold font-mono">
+            #{taskId}
           </h1>
           {task && (
-            <code className="ui-queue-detail-config text-xs text-fg-tertiary font-mono" title={`${task.config_name}.yaml`}>
-              {task.config_name}.yaml
-            </code>
+            <>
+              <span className="ui-queue-detail-title text-fg-secondary text-md" title={task.name}>{task.name}</span>
+              <code className="ui-queue-detail-title text-xs text-fg-tertiary font-mono" title={`${task.config_name}.yaml`}>{task.config_name}.yaml</code>
+            </>
           )}
           {status && (
             <Badge tone={STATUS_TONE[status]} active={status === 'running'}>
               {STATUS_LABEL[status]}
             </Badge>
-          )}
-          {task?.status === 'running' && (
-            <span
-              className="text-sm text-fg-secondary font-mono tabular-nums"
-              title={t('queueDetail.duration')}
-              data-testid="queue-detail-running-duration"
-            >
-              · {fmtDuration(task.started_at, null)}
-            </span>
           )}
           {evalProgress?.active && (
             <Badge tone="accent" active title={t('eval.evaluatingHint')}>
@@ -449,22 +382,24 @@ export default function QueueDetailPage() {
             </Badge>
           )}
           <span className="flex-1" />
-          {sourceTarget && (
-            <Link
-              to={sourceTarget.path}
-              className={buttonClassName({ variant: 'secondary', size: 'sm', className: 'no-underline' })}
-              title={t('queueDetail.openSourceHint')}
-              data-testid={kind === 'generate'
-                ? 'detail-view-generate'
-                : kind === 'reg_ai'
-                  ? 'detail-view-reg'
-                  : kind === 'train'
-                    ? 'detail-view-train'
-                    : 'detail-view-job-source'}
-            >
-              {t(sourceTarget.labelKey)} →
-            </Link>
+          {/* P-H 深链：generate/reg_ai 无训练结果 tab，跳原生页看结果 */}
+          {task && kind === 'generate' && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate(`/tools/generate?task=${task.id}`)}
+              data-testid="detail-view-generate"
+            >{t('queueDetail.viewInGenerate')}</Button>
           )}
+          {task && kind === 'reg_ai' && task.project_id && task.version_id && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate(`/projects/${task.project_id}/v/${task.version_id}/reg`)}
+              data-testid="detail-view-reg"
+            >{t('queueDetail.viewInReg')}</Button>
+          )}
+          {/* R-5：数据作业类 task 跳原生步骤页（download→项目下载页、tag→打标页…） */}
           {/* 诊断包（logging-target-state §3.6）：run.log + 配置快照 + 时间窗 studio.log +
               env，报 issue 用。pending / scheduled 还没 run.log，不给入口 */}
           {task && status !== 'pending' && status !== 'scheduled' && (
@@ -476,18 +411,26 @@ export default function QueueDetailPage() {
               data-testid="detail-diag-bundle"
             >{t('queueDetail.diagBundle')}</a>
           )}
+          {task && jobJumpPath(task, evalSessionIdOf(task)) && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate(jobJumpPath(task, evalSessionIdOf(task))!)}
+              data-testid="detail-view-job-source"
+            >{t('queue.jobs.jump')} →</Button>
+          )}
           {isLive && status === 'running' && task?.is_pausable && (
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setPauseConfirmOpen(true)}
-              disabled={busy || pauseConfirmOpen || pauseModalOpen}
+              onClick={pauseRunning}
+              disabled={busy || pauseModalOpen}
               data-testid="detail-pause-btn"
               title={t('queue.pauseHint')}
             >{t('queue.pause')}</Button>
           )}
           {isLive && (
-            <Button variant="warning" size="sm" onClick={confirmLiveCancel} disabled={busy}>
+            <Button variant="warning" size="sm" onClick={cancel} disabled={busy}>
               {t('queueDetail.cancelTask')}
             </Button>
           )}
@@ -497,7 +440,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="primary"
                 size="sm"
-                onClick={confirmStartNow}
+                onClick={startNow}
                 disabled={busy}
                 data-testid="detail-startnow-btn"
                 title={t('queue.startNowHint')}
@@ -505,7 +448,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="warning"
                 size="sm"
-                onClick={confirmScheduledCancel}
+                onClick={cancel}
                 disabled={busy}
                 title={t('queue.cancelScheduledHint')}
               >{t('queue.cancelScheduled')}</Button>
@@ -516,7 +459,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="primary"
                 size="sm"
-                onClick={confirmPausedResume}
+                onClick={resumePaused}
                 disabled={busy}
                 data-testid="detail-resume-btn"
                 title={t('queue.resumeHint')}
@@ -524,7 +467,7 @@ export default function QueueDetailPage() {
               <Button
                 variant="danger"
                 size="sm"
-                onClick={confirmPausedCancel}
+                onClick={cancel}
                 disabled={busy}
                 title={t('queue.cancelPausedHint')}
               >{t('queue.cancelPaused')}</Button>
@@ -539,7 +482,7 @@ export default function QueueDetailPage() {
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={confirmTerminalResume}
+                  onClick={resumePaused}
                   disabled={busy}
                   data-testid="detail-resume-btn"
                   title={t('queue.resumeTerminalHint')}
@@ -566,19 +509,19 @@ export default function QueueDetailPage() {
         </div>
 
         {error && (
-          <Alert
-            tone="danger"
-            size="sm"
-            role="alert"
-            title={t('queueDetail.loadErrorTitle')}
-            action={(
-              <Button variant="secondary" size="sm" loading={loading} onClick={() => void reload()}>
-                {t('queueDetail.reloadDetails')}
-              </Button>
-            )}
-          >
+          <div className="px-3 py-2 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
             {error}
-          </Alert>
+          </div>
+        )}
+
+        {/* Stat cards for running tasks */}
+        {task && task.status === 'running' && (
+          <div className="ui-queue-detail-stats grid gap-2.5 mt-1" data-testid="queue-detail-stats">
+            <StatCard label={t('queueDetail.duration')} value={fmtDuration(task.started_at, null)} mono large tone="accent" />
+            <StatCard label={t('queueDetail.startTime')} value={fmtTime(task.started_at)} mono />
+            <StatCard label="Config" value={task.config_name} mono />
+            <StatCard label="PID" value={task.pid ? String(task.pid) : '—'} mono />
+          </div>
         )}
       </header>
 
@@ -600,7 +543,7 @@ export default function QueueDetailPage() {
         className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
       >
         {tab === 'overview' && task && <OverviewTab task={task} />}
-        {tab === 'overview' && !task && !error && (
+        {tab === 'overview' && !task && (
           <div className="p-6 text-center text-fg-tertiary text-sm">
             {t('common.loading')}
           </div>
@@ -628,13 +571,10 @@ export default function QueueDetailPage() {
               <br />
               <span className="text-fg-tertiary text-xs">
                 {t('queueDetail.deleteNote')}
-                {kind === 'train' && <> {t('queueDetail.deleteTrainNote')}</>}
-                {kind === 'generate' && <> {t('queueDetail.deleteGenerateNote')}</>}
               </span>
             </>
           }
           confirmLabel={t('common.delete')}
-          cancelLabel={t('common.cancel')}
           danger
           onConfirm={remove}
           onCancel={() => setConfirmDelete(false)}
@@ -642,13 +582,7 @@ export default function QueueDetailPage() {
         />
       )}
 
-      {/* ADR §4.3 暂停确认与过程 modal —— 与 Queue.tsx 使用同一语义。 */}
-      {pauseConfirmOpen && (
-        <PauseConfirmModal
-          onCancel={() => setPauseConfirmOpen(false)}
-          onConfirm={() => { void pauseRunning() }}
-        />
-      )}
+      {/* ADR §4.3 暂停过程 modal — 跟 Queue.tsx 同组件，UI 锁屏让用户看进度。 */}
       {pauseModalOpen && task && (
         <PauseProgressModal
           taskId={task.id}
@@ -682,47 +616,6 @@ function useEvalParentTaskId(task: Task): number | null {
   return parent
 }
 
-type OverviewField = {
-  key: string
-  label: string
-  value: ReactNode
-  mono?: boolean
-  wide?: boolean
-}
-
-function OverviewGroup({ id, title, fields, wide = false }: {
-  id: string
-  title: string
-  fields: OverviewField[]
-  wide?: boolean
-}) {
-  return (
-    <section
-      className={`ui-queue-overview-group card overflow-hidden p-0${wide ? ' ui-queue-overview-group--wide' : ''}`}
-      aria-labelledby={`${id}-title`}
-      data-testid={`queue-overview-group-${id}`}
-    >
-      <h2 id={`${id}-title`} className="type-section-label border-b border-subtle px-section py-field">
-        {title}
-      </h2>
-      <dl className="ui-queue-overview-fields m-0 grid gap-x-section gap-y-field px-section py-section">
-        {fields.map((field) => (
-          <div
-            key={field.key}
-            className={`ui-queue-overview-field flex min-w-0 flex-col gap-1${field.wide ? ' ui-queue-overview-field--wide' : ''}`}
-            data-testid={`queue-overview-field-${field.key}`}
-          >
-            <dt className="type-data-label">{field.label}</dt>
-            <dd className={`m-0 min-w-0 text-sm text-fg-primary${field.mono ? ' font-mono tnum break-all' : ''}`}>
-              {field.value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  )
-}
-
 function OverviewTab({ task }: { task: Task }) {
   const { t } = useTranslation()
   const evalParentTaskId = useEvalParentTaskId(task)
@@ -731,91 +624,83 @@ function OverviewTab({ task }: { task: Task }) {
     failed: t('status.failed'), canceled: t('status.canceled'), paused: t('status.paused'),
     scheduled: t('status.scheduled'),
   }
-
-  const taskFields: OverviewField[] = [
-    { key: 'id', label: t('queueDetail.id'), value: task.id, mono: true },
-    { key: 'name', label: t('common.name'), value: task.name },
-    { key: 'config', label: t('queueDetail.config'), value: `${task.config_name}.yaml`, mono: true },
-    {
-      key: 'status',
-      label: t('common.status'),
-      value: <Badge tone={STATUS_TONE[task.status]} active={task.status === 'running'}>{statusLabel[task.status]}</Badge>,
-    },
-    { key: 'priority', label: t('queueDetail.priority'), value: task.priority, mono: true },
-    { key: 'duration', label: t('queueDetail.duration'), value: fmtDuration(task.started_at, task.finished_at), mono: true },
+  const items: Array<{ label: string; value: React.ReactNode; mono?: boolean }> = [
+    { label: 'ID',     value: <code className="font-mono">{task.id}</code> },
+    { label: t('common.name'), value: task.name },
+    { label: 'Config', value: <code className="font-mono">{task.config_name}.yaml</code> },
+    { label: t('common.status'), value: <Badge tone={STATUS_TONE[task.status]} active={task.status === 'running'}>{statusLabel[task.status]}</Badge> },
+    { label: t('queueDetail.priority'), value: task.priority, mono: true },
+    { label: t('queueDetail.enqueuedAt'), value: fmtTime(task.created_at) },
+    // 0.17 P-B — 计划任务显示计划开始时间（提升为 pending 后保留作记录）。
+    ...(task.scheduled_at
+      ? [{ label: t('queueDetail.scheduledAt'), value: fmtTime(task.scheduled_at) }]
+      : []),
+    { label: t('queueDetail.startedAt'), value: fmtTime(task.started_at) },
+    { label: t('queueDetail.finishedAt'), value: fmtTime(task.finished_at) },
+    { label: t('queueDetail.duration'), value: fmtDuration(task.started_at, task.finished_at), mono: true },
+    { label: t('queueDetail.exitCode'),   value: task.exit_code ?? '—', mono: true },
+    { label: 'PID',     value: task.pid ?? '—', mono: true },
   ]
 
-  const timingFields: OverviewField[] = [
-    { key: 'enqueued', label: t('queueDetail.enqueuedAt'), value: fmtTime(task.created_at), mono: true },
-  ]
-  if (task.scheduled_at) {
-    timingFields.push({ key: 'scheduled', label: t('queueDetail.scheduledAt'), value: fmtTime(task.scheduled_at), mono: true })
-  }
-  timingFields.push(
-    { key: 'started', label: t('queueDetail.startedAt'), value: fmtTime(task.started_at), mono: true },
-    { key: 'finished', label: t('queueDetail.finishedAt'), value: fmtTime(task.finished_at), mono: true },
-  )
-
-  const technicalFields: OverviewField[] = [
-    { key: 'exit-code', label: t('queueDetail.exitCode'), value: task.exit_code ?? '—', mono: true },
-    { key: 'pid', label: t('queueDetail.pid'), value: task.pid ?? '—', mono: true },
-  ]
   if (task.project_id || task.version_id) {
-    technicalFields.push({
-      key: 'source',
+    items.push({
       label: t('queueDetail.source'),
       value: task.project_id && task.version_id ? (
-        <Link to={`/projects/${task.project_id}?version=${task.version_id}`} className="text-accent text-sm">
-          {t('queueDetail.sourceLink', { projectId: task.project_id, versionId: task.version_id })}
-        </Link>
+        <Link to={`/projects/${task.project_id}?version=${task.version_id}`}
+          className="text-accent font-mono text-sm"
+        >{t('queueDetail.sourceLink', { projectId: task.project_id, versionId: task.version_id })}</Link>
       ) : '—',
-      mono: true,
     })
   }
-  // 评估作业：parent_task_id 是溯源，不是归属；手动评估仍明确显示 n/a。
+  // 评估作业：parent_task_id 是**溯源**（哪次训练结束后自动触发的），不是归属 ——
+  // 手动发起的评估没有它，显示 n/a 而不是藏起来，免得用户以为漏了信息。
   if (task.task_type === 'eval_session') {
-    technicalFields.push({
-      key: 'related-training',
-      label: t('queueDetail.relatedTraining'),
+    items.push({
+      label: '关联训练',
       value: evalParentTaskId != null ? (
-        <Link to={`/queue/${evalParentTaskId}`} className="text-accent text-sm">#{evalParentTaskId}</Link>
-      ) : <span className="text-fg-tertiary">n/a</span>,
-      mono: true,
+        <Link to={`/queue/${evalParentTaskId}`} className="text-accent font-mono text-sm">
+          #{evalParentTaskId}
+        </Link>
+      ) : <span className="text-fg-tertiary font-mono">n/a</span>,
     })
   }
   if (task.config_path) {
-    technicalFields.push({ key: 'config-path', label: t('queueDetail.configPath'), value: task.config_path, mono: true, wide: true })
+    items.push({ label: t('queueDetail.configPath'), value: <code className="font-mono text-xs break-all">{task.config_path}</code> })
   }
   if (task.monitor_state_path) {
-    technicalFields.push({ key: 'monitor-file', label: t('queueDetail.monitorFile'), value: task.monitor_state_path, mono: true, wide: true })
+    items.push({ label: t('queueDetail.monitorFile'), value: <code className="font-mono text-xs break-all">{task.monitor_state_path}</code> })
   }
   if (task.error_msg) {
-    technicalFields.push({
-      key: 'error',
-      label: t('common.error'),
-      value: <span className="text-err">{task.error_msg}</span>,
-      mono: true,
-      wide: true,
-    })
+    items.push({ label: t('common.error'), value: <code className="font-mono text-xs break-all text-err">{task.error_msg}</code> })
   }
+  // R-5：数据作业类 task 的参数全字段（用户在原生页面配置的内容；映射人话标签，
+  // 未映射退回原 key）。train/reg_ai 无 params 不进此分支。
   if (task.params_decoded && typeof task.params_decoded === 'object') {
-    for (const [key, value] of Object.entries(task.params_decoded)) {
-      technicalFields.push({
-        key: `param-${key}`,
-        label: paramLabel(key, t),
-        value: fmtParamValue(value, t),
-        mono: true,
-        wide: true,
+    for (const [k, v] of Object.entries(task.params_decoded)) {
+      items.push({
+        label: paramLabel(k, t),
+        value: <span className="font-mono text-xs break-all">{fmtParamValue(v, t)}</span>,
       })
     }
   }
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-5">
-      <div className="ui-queue-overview-grid grid gap-section" data-testid="queue-overview-grid">
-        <OverviewGroup id="task" title={t('queueDetail.overviewTask')} fields={taskFields} />
-        <OverviewGroup id="timing" title={t('queueDetail.overviewTiming')} fields={timingFields} />
-        <OverviewGroup id="technical" title={t('queueDetail.overviewTechnical')} fields={technicalFields} wide />
+      <div className="card overflow-hidden p-0" style={{ maxWidth: 720 }}>
+        {items.map((row, i) => (
+          <div
+            key={row.label}
+            className={`grid gap-3 items-center px-[18px] py-2.5 ${i < items.length - 1 ? 'border-b border-subtle' : 'border-b-0'}`}
+            style={{ gridTemplateColumns: '140px 1fr' }}
+          >
+            <span className="text-sm text-fg-tertiary font-normal">
+              {row.label}
+            </span>
+            <span className={`text-sm text-fg-primary ${row.mono ? 'font-mono' : ''}`}>
+              {row.value}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -1540,37 +1425,31 @@ export function SnapshotConfigTab({ task }: { task: Task | null }) {
 // ── ConfirmDialog ───────────────────────────────────────────────────────────
 
 function ConfirmDialog({
-  title, message, confirmLabel, cancelLabel, danger = false, busy = false,
+  title, message, confirmLabel = '确认', cancelLabel = '取消', danger = false, busy = false,
   onConfirm, onCancel,
 }: {
   title: string; message: React.ReactNode; confirmLabel?: string; cancelLabel?: string
   danger?: boolean; busy?: boolean; onConfirm: () => void; onCancel: () => void
 }) {
-  const { t } = useTranslation()
   return (
-    <Modal
-      title={title}
-      description={message}
-      size="sm"
-      role="alertdialog"
-      testId="queue-detail-confirm"
-      onClose={() => { if (!busy) onCancel() }}
-      closeOnEscape={!busy}
-      closeOnBackdrop={!busy}
-      footer={(
-        <ActionGroup
-          secondary={(
-            <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
-              {cancelLabel ?? t('common.cancel')}
-            </Button>
-          )}
-          primary={(
-            <Button variant={danger ? 'danger' : 'primary'} size="sm" loading={busy}
-              onClick={() => { if (!busy) onConfirm() }}
-            >{confirmLabel ?? t('common.confirm')}</Button>
-          )}
-        />
-      )}
-    />
+    <div onClick={onCancel} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+      <div onClick={(e) => e.stopPropagation()} className="bg-elevated border border-subtle rounded-lg shadow-lg w-full max-w-[420px]">
+        <header className="px-[18px] py-3.5 border-b border-subtle">
+          <h3 className="m-0 text-md font-semibold text-fg-primary">{title}</h3>
+        </header>
+        <div className="px-[18px] py-3.5 text-sm text-fg-secondary">{message}</div>
+        <footer className="px-[18px] py-3 border-t border-subtle flex items-center gap-2 justify-end">
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+            {cancelLabel}
+          </Button>
+          <Button
+            variant={danger ? 'danger' : 'primary'}
+            size="sm"
+            onClick={onConfirm}
+            disabled={busy}
+          >{busy ? '...' : confirmLabel}</Button>
+        </footer>
+      </div>
+    </div>
   )
 }
