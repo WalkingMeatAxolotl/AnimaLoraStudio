@@ -3091,6 +3091,7 @@
     "updateAvailable": "New version {{tag}}",
     "tags": {
       "all": "All",
+      "guide": "Guides",
       "release": "Release notes",
       "notice": "Notice",
       "migration": "Migration"

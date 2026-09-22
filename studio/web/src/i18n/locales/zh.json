@@ -3091,6 +3091,7 @@
     "updateAvailable": "新版本 {{tag}}",
     "tags": {
       "all": "全部",
+      "guide": "指南",
       "release": "更新日志",
       "notice": "公告",
       "migration": "迁移"

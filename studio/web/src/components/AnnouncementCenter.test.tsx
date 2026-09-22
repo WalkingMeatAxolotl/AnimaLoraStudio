@@ -20,6 +20,8 @@ const POSTS: AnnouncementPost[] = [
     title: { zh: '迁移标题', en: 'Migration title' }, body: { zh: '迁移正文', en: 'Migration body' } },
   { id: 'p-notice', date: '2026-06-20', tag: 'notice', pin: false, version: null,
     title: { zh: '公告标题', en: 'Notice title' }, body: { zh: '公告正文', en: 'Notice body' } },
+  { id: 'p-guide', date: '2026-06-18', tag: 'guide', pin: false, version: null,
+    title: { zh: '指南标题', en: 'Guide title' }, body: { zh: '指南正文', en: 'Guide body' } },
 ]
 
 function renderCenter() {
@@ -45,7 +47,7 @@ describe('AnnouncementCenter', () => {
       expect(localStorage.getItem('studio.announcements.lastVersion')).toBe('0.16.0'))
     expect(screen.queryByTestId('announcement-center')).toBeNull()
     const read = JSON.parse(localStorage.getItem('studio.announcements.read') ?? '[]')
-    expect(new Set(read)).toEqual(new Set(['p-migration', 'p-notice']))
+    expect(new Set(read)).toEqual(new Set(['p-migration', 'p-notice', 'p-guide']))
   })
 
   it('版本变化 + 有未读 → 自动弹；pin 篇选中已读、其余有红点', async () => {
@@ -84,12 +86,13 @@ describe('AnnouncementCenter', () => {
     renderCenter()
     await waitFor(() =>
       expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
-    const noticeFilter = screen.getByRole('radio', { name: '公告' })
-    expect(noticeFilter).toHaveClass('ui-selection-item')
-    fireEvent.click(noticeFilter)
-    expect(noticeFilter).toHaveAttribute('aria-checked', 'true')
+    const guideFilter = screen.getByRole('radio', { name: '指南' })
+    expect(guideFilter).toHaveClass('ui-selection-item')
+    fireEvent.click(guideFilter)
+    expect(guideFilter).toHaveAttribute('aria-checked', 'true')
     expect(screen.queryByTestId('announcement-item-p-migration')).toBeNull()
-    expect(screen.getByTestId('announcement-item-p-notice')).toBeInTheDocument()
+    expect(screen.queryByTestId('announcement-item-p-notice')).toBeNull()
+    expect(screen.getByTestId('announcement-item-p-guide')).toBeInTheDocument()
   })
 
   it('点蒙版退出；点面板内部不退出', async () => {

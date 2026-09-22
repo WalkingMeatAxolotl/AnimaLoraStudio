@@ -50,6 +50,15 @@ def test_en_fallback_to_zh_when_missing(tmp_path: Path) -> None:
     assert p.body["en"] == p.body["zh"] == "只有中文"
 
 
+def test_accepts_guide_tag(tmp_path: Path) -> None:
+    _write(tmp_path, "guide.md",
+           frontmatter="date: 2026-06-28\ntag: guide\ntitle: 入门指南",
+           body="指南正文")
+    posts = svc.list_posts(tmp_path)
+    assert len(posts) == 1
+    assert posts[0].tag == "guide"
+
+
 def test_skips_invalid_tag_and_missing_fields(tmp_path: Path) -> None:
     _write(tmp_path, "bad-tag.md",
            frontmatter="date: 2026-06-28\ntag: bogus\ntitle: x", body="b")
@@ -77,9 +86,10 @@ def test_missing_directory_returns_empty(tmp_path: Path) -> None:
     assert svc.list_posts(tmp_path / "nope") == []
 
 
-def test_ignores_readme(tmp_path: Path) -> None:
-    # 目录说明文件不该被当 post（也不该刷 warning）
+def test_ignores_authoring_guides(tmp_path: Path) -> None:
+    # 目录说明 / 内容规范不该被当 post（也不该刷 warning）
     (tmp_path / "README.md").write_text("# 公告编写指南\n不是 post", encoding="utf-8")
+    (tmp_path / "CONTENT-GUIDE.md").write_text("# 公告内容规范\n也不是 post", encoding="utf-8")
     _write(tmp_path, "ok.md",
            frontmatter="date: 2026-06-28\ntag: notice\ntitle: ok", body="b")
     assert [p.id for p in svc.list_posts(tmp_path)] == ["ok"]

@@ -17,7 +17,7 @@
 ## 目标
 
 1. **统一公告栏弹窗**（modal，非独立页面）：左 list（tag 过滤 + 每篇红点）/ 右正文，仿游戏公告。
-2. **一篇一文件**：所有 post（更新日志 + 公告 + 迁移）迁入 `docs/announcements/`，一个 post 一个文件，便于翻历史、git diff 友好。
+2. **一篇一文件**：所有 post（更新日志 + 指南 + 公告 + 迁移）迁入 `docs/announcements/`，一个 post 一个文件，便于翻历史、git diff 友好。
 3. **双语**：post 双语（zh/en）；现有 changelog **回填全部历史到英文**。
 4. **主动 + 常驻双入口**：更新后有未读自动弹一次；Topbar 常驻入口 + 未读红点随时点开。
 5. **复用既有模式**：触发/持久化仿 `FirstRunOnboardingModal`；文案走 i18n；markdown 渲染复用现有 release notes detail 的渲染器。
@@ -62,12 +62,13 @@ version: 0.16.0                # 可选：关联版本；更新日志类必填
 （正文 markdown，该语言）
 ```
 
-### D4 — tag 分类（初始集，可扩）
+### D4 — tag 分类（可扩）
 - `release`（更新日志）— 由历史 changelog 迁移而来，每版一篇。
+- `guide`（指南）— 面向新用户或高频查阅的常驻内容，稳定 id、原地维护；当前置于公告栏，未来可迁入独立指南功能。
 - `notice`（公告）— 一般通知。
 - `migration`（迁移）— 行为变化 / 需要用户注意或操作（如 `/studio→/`）。
 
-公告栏顶部按 tag 过滤。颜色/图标各 tag 区分。**首篇 migration post = `/studio→/`**。
+公告栏顶部按 tag 过滤；`guide` 排在“全部”后，常驻指南默认不置顶。颜色/图标各 tag 区分。**首篇 migration post = `/studio→/`**。
 
 ### D5 — 双语 changelog + 回填
 - 现有 `release_notes.yaml` 每个**版本**迁成一篇 `release` post（一版一文件）。
@@ -128,7 +129,7 @@ Topbar 现有的「有新版本」pill（`Topbar.tsx`：`checkSystemUpdate('mast
 ## 待定（open questions）
 
 - ~~Q1 — changelog 迁移后是否保留结构化 kind 分组~~ **已定：用自由 markdown 正文**（见 D5），放弃 kind 分组 + schema 校验，换 GitHub 可读 + 一篇一文件。
-- **Q2 — tag 最终集**：`release`/`notice`/`migration` 够不够？要不要 `event`(活动) / `fix`(重要修复) 等。
+- ~~Q2 — tag 最终集~~ **已定：加入 `guide`**，当前为 `release` / `guide` / `notice` / `migration`；指南使用稳定 id 原地维护，未来可迁入独立指南功能。
 - **Q3 — CHANGELOG.md / GitHub Release 是否也双语**：本草案先保持中文。
 - **Q4 — 自动弹的「上次版本」记录**：用 localStorage 版本号 vs 已读集合是否为空——两者交互细节实现时定。
 - **Q5 — 是否给本特性单独 ADR**（见 PR1）：发版流程 + 单一权威源变更达到 ADR 触发条件。

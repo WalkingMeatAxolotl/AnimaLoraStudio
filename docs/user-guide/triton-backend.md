@@ -77,8 +77,10 @@ LoHa bypass 测试中，checkpoint 恢复的权重和 optimizer 状态本身逐�
 但不能据此保证长期训练轨迹或 optimizer 状态的逐位确定性。
 需要严格重复性的任务应保留 Torch 对照，不将 Triton 实验通道当作确定性保证。
 
-## 验收边界
+## 性能结论与验收边界
 
-启用界面和安装成功不是性能结论。发布前还需记录实际硬件上的 LoRA/LoHa 数值与梯度对照、保存/加载/resume、真实形状及短训练结果，区分冷启动编译与稳态吞吐。现有 [R1 eager 基准](lycoris-benchmark.md) 仍严格固定 Torch，不能直接用它声称 Triton 加速。
+RTX 5090 / Windows / Torch 2.11.0+cu128 / Triton Windows 3.8.0.post28 的配对短训练验证已完成：LoRA 与 LoHa 都没有达到预先规定的稳定收益门槛，因此 **Torch 继续作为默认后端**。这份结果只覆盖 Anima 512px bf16 SDPA 合成短训练，不能外推到其他硬件、Linux、Krea 2、真实数据或长训练，也不构成 Triton 一定更快的承诺。
+
+[LyCORIS 基准工具](lycoris-benchmark.md)可生成独立 reference、重放数值结果，并用 schema-v2 配置比较 Torch / Triton。probe 与短基准只验证代表性调用和受控训练窗口，不能保证真实模型的每一种形状或长期训练轨迹。
 
 上游 stable artifact 升级仍由 [R3 #570](https://github.com/WalkingMeatAxolotl/AnimaLoraStudio/issues/570) 独立跟踪；该实验通道不解除 LoKr fused bypass 的稳定版门槛。

@@ -25,6 +25,8 @@
 | [tagging-guide.md](user-guide/tagging-guide.md) | Anima 标签格式、最佳实践、tag 顺序（booru tag 生态；Krea 2 用自然语言 caption） |
 | [training-tips.md](user-guide/training-tips.md) | 训练参数、按族显存配置、Krea 2 专章、过拟合/欠拟合排查、ComfyUI 用法 |
 | [random-seeds.md](user-guide/random-seeds.md) | 训练、测试、XY 与评估中的 `0=随机` 作用域和复现规则 |
+| [triton-backend.md](user-guide/triton-backend.md) | 普通 LoRA / LoHa 的受限 Triton 实验后端：安装、准入、回滚与限制 |
+| [lycoris-benchmark.md](user-guide/lycoris-benchmark.md) | 可复现的 LyCORIS layer / replay / train 基准工具与结果口径 |
 | [optimizers.md](user-guide/optimizers.md) | 各优化器（Lion / Prodigy / PPSF / SOAP 等）起步参数与换算 |
 | [regularization.md](user-guide/regularization.md) | 正则化方案分析报告（weight decay / 梯度裁剪 / dropout 等，2025-02，历史参考） |
 | [caption-format.md](user-guide/caption-format.md) | JSON caption 格式 + 分类 shuffle（Anima tag 生态） |
