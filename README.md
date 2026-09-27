@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.27.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.28.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。支持两个模型族的 LoRA 训练：[Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调，轻量入门）与 [Krea 2](https://huggingface.co/krea/Krea-2-Raw)（12.9B 单流 MMDiT，Raw 训练 / Turbo 快速出图）。
 
@@ -42,7 +42,7 @@ studio.bat          # Windows
 
 → 完整步骤（启动选项 / 模型下载 / 国内镜像 / 流水线 walkthrough）见 **[上手教程](docs/user-guide/getting-started.md)**。
 
-→ 从旧版更新请先阅读 **[v0.27 升级说明](docs/user-guide/upgrading-v0.27.md)**（配置迁移、备份与 LyCORIS 依赖）。
+→ 从 v0.26 及更早版本更新请先阅读 **[v0.27 升级说明](docs/user-guide/upgrading-v0.27.md)**（配置迁移、备份与 LyCORIS 依赖）；从 v0.27 更新到当前版本没有额外数据迁移。
 
 ## 硬件要求
 
