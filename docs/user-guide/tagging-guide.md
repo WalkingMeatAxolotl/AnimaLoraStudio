@@ -1,6 +1,6 @@
 # Anima LoRA 打标指南
 
-> 基于 Anima Model Card 和 ComfyUI 官方实现总结的打标最佳实践
+> 参考 Anima Model Card 和 ComfyUI 实现整理的格式约定与起步建议；格式一致不等于训练效果已获验证。
 >
 > **适用范围**：本文的 booru tag 体系（tag 顺序 / 质量标签 / `@画师` 前缀等）是 **Anima 专属**。
 > Krea 2 走 Qwen3-VL 自然语言 caption——打标推荐用 LLM 打标器写长描述，tag
@@ -18,9 +18,11 @@
 ❌ 错误: oomuro_sakurako, yuru_yuri, brown_hair, long_hair
 ```
 
-**原因**：ComfyUI 的 tokenizer 直接把文本传给 Qwen2Tokenizer/T5Tokenizer，不做下划线转换。Anima 训练数据使用空格分隔。
+**建议**：采用空格形式并保持训练/推理一致，不依赖 tokenizer 自动把下划线变成空格。示例说明推荐写法，不意味着使用下划线就必然无法学习。
 
-### 2. 标签顺序（官方推荐）
+### 2. 标签组织顺序
+
+以下为分类 caption 的组织方式；有 `meta.trigger` 时，触发词会在最前。普通 TXT 或标签编辑后的扁平列表，以最终实际文本顺序为准。
 
 ```
 质量/安全 → 人数 → 角色 → 作品 → 画师 → 外观 → 标签 → 环境. 自然语言描述
@@ -38,24 +40,24 @@
 | 8 | environment | `concert stage, spotlight, crowd` |
 | 9 | nl | `.` 句号后接自然语言描述 |
 
-### 3. 画师标签必须带 `@` 前缀
+### 3. 画师标签使用 `@` 前缀
 
 ```
 ✅ 正确: @wlop, @sakimichan, @torino aqua
 ❌ 错误: wlop, sakimichan, torino aqua
 ```
 
-**重要**：没有 `@` 前缀的画师标签几乎不起作用！
+使用 `@` 是这里采用的画师标签约定；具体响应仍取决于底模是否学过该标签，不能保证任意画师名有效，也不应宣称无前缀一定无效。
 
 ### 4. 质量标签建议
 
-训练 LoRA 时，**不建议**使用复杂质量标签，只保留：
+质量标签按素材实际情况填写，避免堆叠互相矛盾的评分。对符合条件的较新、安全内容，可用以下简洁示例起步；**不要把所有图片都标成 `safe` 或 `newest`**：
 
 ```
 newest, safe
 ```
 
-让 LoRA 专注学习画风和角色，质量标签在推理时由用户自己添加。
+是否保留更多质量信息应做对照，不能由固定两个标签保证更专注或更高质量。推理时也需与训练约定相符。
 
 **完整质量标签体系**（推理时使用）：
 - 人工评分：`masterpiece` > `best quality` > `good quality` > `normal quality`
@@ -130,7 +132,9 @@ Example:
 {"count": "1girl", "appearance": ["long hair", "blue eyes", "school uniform"], "tags": ["smile", "standing", "looking at viewer"], "environment": ["classroom", "window", "sunlight"], "nl": "A cheerful girl stands by the window in a sunny classroom."}
 ```
 
-### API 调用参数（Gemini 推荐）
+### API 调用参数示例（按具体 Gemini 模型核对）
+
+这是调用结构示例，不是通用最佳参数。不同模型版本可能不支持相同的 thinking 参数或取值；先小范围检查输出完整性，再调整预算与温度。
 
 ```python
 {
@@ -145,9 +149,7 @@ Example:
 }
 ```
 
-**关键参数**：
-- `thinkingBudget: 128` - 限制思考 token，让输出更干净
-- **不要**在 Prompt 中加 `SPECIAL INSTRUCTION` 或 `Danbooru` 等词，可能触发安全过滤
+**注意**：输出预算过低可能截断JSON；thinking预算不保证标签更准确。遵守服务的内容政策，如遇拒绝或参数不支持，应查看错误与所用模型文档，而不是依靠特定词语规避过滤。
 
 ---
 
@@ -223,6 +225,8 @@ newest, safe, 1girl, character a, my project, @my artist, long hair, black hair,
 
 ### TXT 模式
 
+下例没有额外前置触发词，前六个逗号分隔tag恰好是所列六项。`keep_tokens` 按最终文本位置保护前缀，不按语义字段识别；若prepend了trigger或某字段含多个tag，重新数实际项数，不要一律照抄6或改成7。
+
 ```yaml
 shuffle_caption: true   # 打乱标签
 keep_tokens: 6          # 保护前 6 个 tag 不被打乱
@@ -243,15 +247,15 @@ keep_tokens: 0          # JSON 模式下固定字段自动在前
 
 ### Q: 为什么画师标签不起作用？
 
-A: 检查是否加了 `@` 前缀。`@wlop` 有效，`wlop` 无效。
+A: 先核对是否使用 `@` 约定，以及底模是否能识别该画师。固定seed比较有无标签，不能仅凭前缀断定效果；自定义触发词还需在训练caption中一致使用。
 
 ### Q: 角色名用下划线还是空格？
 
-A: **空格**。Anima 训练数据使用空格，下划线会被当作普通字符。
+A: 本指南建议用**空格**，并保持训练/推理一致；不要依赖自动下划线转换。
 
 ### Q: 需要加很多质量标签吗？
 
-A: 训练时只用 `newest, safe`。推理时再加 `masterpiece, best quality` 等。
+A: 不必堆叠；按实际素材填写。`newest, safe` 只是适用内容的示例，不是所有图片的强制值。
 
 ### Q: 自然语言描述放哪里？
 

@@ -2307,7 +2307,7 @@ export interface GallerySearchParams {
 export interface AnnouncementPost {
   id: string
   date: string
-  tag: 'release' | 'notice' | 'migration'
+  tag: 'release' | 'guide' | 'notice' | 'migration'
   title: { zh: string; en: string }
   body: { zh: string; en: string }
   pin: boolean

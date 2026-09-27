@@ -16,12 +16,12 @@
 - **LLM 配置独立管理**：预设、普通设置与凭证分开存储，支持内置模板覆盖、原子写入与备份保护；已排队的 LLM 打标任务冻结预设配方。
 - **Booru 抓图集成**：原生 Gelbooru / Danbooru（Cloudflare 兼容 UA、速率限制、账号认证）。
 - **正则集自动生成**：训练集 tag 分布反向搜 + 长宽比聚类，或底模 AI 先验出图（无需 LoRA）。
-- **Project / Version 双层管理**：单项目多 version 共享数据、独立配置 / 输出；预设池双向 fork。
+- **Project / Version 双层管理**：单项目多 version 共享数据、独立配置 / 输出；预设池双向 fork；项目列表支持批量归档、恢复与永久删除。
 - **多任务队列**：训练 / 出图 / 数据作业统一台账；排队、定时开始、暂停（从最近 epoch 末续）、恢复、队列调度挂起。
 - **内置出图测试**：单图 / XY 矩阵评测 + 常驻推理 daemon；分层目录统一浏览项目 checkpoint 与外部 LoRA，XY 轴抽屉支持 checkpoint / LoRA 强度轴和拖拽排序，Booru 画廊可选图打标并回填提示词；fp8 底模推理与 LoRA merge 对齐 ComfyUI 逐位一致；civitai 生态（PEFT / comfy 键格式）LoRA 可直接加载；输出 `lora_unet_*` 直接拖进 ComfyUI、无需转换。
 - **LoRA 评估**：对训练产出的各 checkpoint 按验证集批量出图并算指标（CLIP / DINO / CCIP / WD14 标签召回，含纯底模对照），样图矩阵肉眼对比；一次评估 = 一个队列任务，中断可重试续跑。
-- **fp8 与显存编排**：官方 fp8 权重可直接做训练底模（fp8_base，Krea 2 训练下探到 24 GB 级显卡）与推理底模（权重显存约减半）；Block 交换把靠后的层放在内存、算到才换入显存，Krea 2 训练与出图门槛进一步下探到 16 GB、Anima 训练下探到 6 GB 级显卡；文本编码器任务级预编码后释放、显存策略三档、大权重加载 RAM 护栏。
-- **丰富训练算法**：多种 loss / timestep 采样 / 优化器（AdamW · Lion · Prodigy · SOAP 等）/ LoRA · LyCORIS adapter，详见 [训练算法选项](docs/user-guide/training-tips.md#训练算法选项)。
+- **fp8 与显存编排**：官方 fp8 权重可用于 Krea 2 训练与推理，降低权重占用；Block 交换把部分层放在内存、计算时换入显存，进一步降低驻留量。最低卡容量需按完整配置实测，不以大卡读数外推保证；支持文本预编码后释放、显存策略三档及加载期 RAM 护栏。
+- **丰富训练算法**：多种 loss / timestep 采样 / 优化器（AdamW · Lion · Prodigy · SOAP 等）/ LoRA · LyCORIS adapter；普通 LoRA / LoHa 可选择受限的[实验性 Triton 后端](docs/user-guide/triton-backend.md)，默认仍使用 Torch。详见 [训练算法选项](docs/user-guide/training-tips.md#训练算法选项)。
 - **环境自愈 + Web 内自更新**：首装自动选 GPU 兼容 torch、依赖哈希比对、git pull / 重启 / 回滚。
 - **中英双语**：首次启动选语言，Settings 内可切换。
 
@@ -47,9 +47,9 @@ studio.bat          # Windows
 ## 硬件要求
 
 - **GPU**：NVIDIA（A 卡 / Apple Silicon 不支持），按模型族分档：
-  - **Anima**：**16 GB+ 显存推荐**（RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090 等）；不开 Block 交换 8 GB 极限可跑（需关 sample 输出 + 减小 batch / 分辨率）。开 **Block 交换**（换出全部 28 层）：**训练**下探到 **6 GB 级显卡**（1024²、sample 照开，训练步分配峰值约 1.9 GB + 常驻文本编码器，速度约慢 11%），**出图**的 DiT 常驻降到约 0.6 GB。
-  - **Krea 2**（12.9B）：**训练**用官方 fp8 底模 24 GB 级可跑，bf16 底模需 32 GB；**出图**用 fp8 底模 16 GB 起（「省显存」档），bf16 底模建议 32 GB。开 **Block 交换**（fp8 底模换出全部层）：**训练**下探到 **12 GB**（整卡约 10 GB，16 GB 更从容），**出图**下探到 **8 GB**（1024² 整卡约 6.3 GB），代价是速度约慢 4% 与相应的内存占用。
-- **RAM**：16 GB+；Krea 2 建议 32 GB+（加载 26.3 GB 单文件权重时内存峰值约等于文件大小）；开 Block 交换按换出层数额外常驻（Krea 2 fp8 底模全换出约 11 GB，Anima 全换出约 3.6 GB）
+  - **Anima**：**16 GB+ 显存推荐**；更小显存可降低 batch / 分辨率、调整采样或启用 Block 交换，但没有通用最低容量保证。大卡上的低分配量不等于 **6 GB 实卡完整训练通过**，需覆盖加载、训练与采样峰值。
+  - **Krea 2**（12.9B）：24 GB 级训练优先官方 fp8，32 GB 级尝试 bf16 仍需峰值余量；16 GB 级可从 fp8、低 batch / gradient checkpointing 与 Block 交换试起，出图优先「省显存」。**12 GB 训练、8 GB 出图为待目标实卡全流程验证的试用方案**，不是容量保证。旧“约慢4%”只比较特定采样任务14→28层，不能当作关闭交换→28层的训练成本。配置与测量边界见[训练技巧](docs/user-guide/training-tips.md#显存参考)。
+- **RAM**：16 GB+；Krea 2 建议从32 GB+考虑，但当前可用量还需覆盖权重加载、缓存、操作系统和其他程序。Block 交换会锁定换出权重（Krea 2 fp8全换出约11 GB，Anima约3.6 GB）；护栏不能保证避免后续OOM或换页。
 - **存储**：SSD 强烈推荐（latent cache + sample 输出 IO 频繁）；Krea 2 权重体积大（Raw / Turbo bf16 各 26.3 GB、官方 fp8 各 13.1 GB、文本编码器 5.2–8.9 GB），预留磁盘空间
 
 ## 文档
@@ -57,7 +57,7 @@ studio.bat          # Windows
 总入口 [docs/README.md](docs/README.md)。
 
 - **上手** → [getting-started.md](docs/user-guide/getting-started.md)
-- **用户向** → [标签格式](docs/user-guide/tagging-guide.md) · [训练技巧 / 算法](docs/user-guide/training-tips.md) · [优化器](docs/user-guide/optimizers.md) · [caption 格式](docs/user-guide/caption-format.md)
+- **用户向** → [标签格式](docs/user-guide/tagging-guide.md) · [训练技巧 / 算法](docs/user-guide/training-tips.md) · [随机种子](docs/user-guide/random-seeds.md) · [Triton 实验后端](docs/user-guide/triton-backend.md) · [优化器](docs/user-guide/optimizers.md) · [caption 格式](docs/user-guide/caption-format.md)
 - **架构** → [跨步骤总览](docs/architecture/studio-pipeline.md) · [项目结构](docs/architecture/project-structure.md) · [studio 内部](studio/README.md)
 - **CLI 工具** → [tools/README.md](tools/README.md)
 - **协作** → [CONTRIBUTING.md](CONTRIBUTING.md) · [docs/AGENTS.md](docs/AGENTS.md)

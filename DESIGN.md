@@ -386,8 +386,10 @@ Dismissal and focus are part of the Pattern rather than caller-owned behavior:
 - Announcement Center is the representative `wide` master-detail modal. Its tag filter
   uses `SegmentedControl`; its announcement list is a labelled single-select listbox with
   wrapping vertical arrows plus Home/End; and the article region owns its own scroll.
-  Announcement data, read-state persistence, update checks, and settings deep links remain
-  feature-owned.
+  `Guide` is the first category after All: it contains stable-ID, continuously maintained
+  reference content and is not pinned merely for being evergreen. Release, notice, and
+  migration retain their event-oriented roles. Announcement data, read-state persistence,
+  update checks, and settings deep links remain feature-owned.
 
 Footer actions use `ActionGroup`: status first, secondary or destructive actions next,
 and the single primary action last. Keep validation near the relevant control; an error

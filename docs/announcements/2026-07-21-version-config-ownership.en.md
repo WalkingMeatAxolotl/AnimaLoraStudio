@@ -2,7 +2,6 @@
 date: 2026-07-21
 tag: migration
 title: Version configs no longer follow global settings
-pin: true
 version: "0.21.0"
 ---
 As of v0.21.0, a saved training version config is never rewritten behind your back — not even when you hit "start training". **Most people don't have to do anything**: if you have never changed a model in global settings and never used the trigger word field in the training config, you can skip this.
