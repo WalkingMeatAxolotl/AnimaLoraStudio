@@ -46,7 +46,12 @@ from studio.infrastructure.paths import (
     eval_session_report_path,
     eval_session_samples_dir,
 )
-from studio.services import eval_registry, eval_samples, eval_validation
+from studio.services import (
+    eval_registry,
+    eval_samples,
+    eval_validation,
+    task_snapshot,
+)
 from studio.services.projects import jobs as project_jobs, versions
 
 logger = logging.getLogger(__name__)
@@ -151,6 +156,7 @@ def build_plan(
     baseline: bool,
     metric_keys: Iterable[str],
     skip_count: int | None = None,
+    training_config: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """构造不可变 EvalPlan。
@@ -159,7 +165,11 @@ def build_plan(
     `eval_auto.select_checkpoints`）—— plan 只负责把结果连同来龙去脉一起冻住。
     """
     ts = time.time() if now is None else float(now)
-    cfg = eval_samples._read_config(project, version)
+    cfg = (
+        dict(training_config)
+        if training_config is not None
+        else eval_samples._read_config(project, version)
+    )
     generation = eval_samples._generation_from_cfg(cfg)
     runners = eval_registry.enabled_runners(metric_keys)
     active_metrics = sorted(eval_registry.normalize_enabled(metric_keys))
@@ -232,6 +242,12 @@ def create_session(
     use_baseline = bool(cfg.eval_baseline_enabled) if baseline is None else bool(baseline)
     keys = cfg.enabled_metrics if metric_keys is None else list(metric_keys)
 
+    plan_training_config: dict[str, Any] | None = None
+    if parent_task_id is not None:
+        frozen = task_snapshot.read_snapshot_config(parent_task_id)
+        if frozen is not None:
+            plan_training_config = dict(frozen["config"])
+
     plan = build_plan(
         project, version, version_dir,
         checkpoints=checkpoints,
@@ -239,6 +255,7 @@ def create_session(
         baseline=use_baseline,
         metric_keys=keys,
         skip_count=skip_count,
+        training_config=plan_training_config,
     )
 
     ts = float(plan["created_at"])

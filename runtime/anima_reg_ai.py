@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import shutil
 import sys
 import time
@@ -348,6 +349,24 @@ def _already_has_reg(reg_sub: Path, train_stem: str) -> bool:
     return False
 
 
+def _plan_generation_entries(
+    entries: list[dict], reg_dir: Path, *, incremental: bool,
+) -> list[dict]:
+    """Keep each pending image's seed offset tied to the full sorted scan.
+
+    Incremental retries remove completed images from the work list.  Recording the
+    original scan index prevents the remaining images from being renumbered back
+    to ``base_seed`` and accidentally sharing noise with earlier outputs.
+    """
+    planned: list[dict] = []
+    for seed_offset, entry in enumerate(entries):
+        reg_sub = reg_dir / entry["subfolder"] if entry["subfolder"] else reg_dir
+        if incremental and _already_has_reg(reg_sub, entry["stem"]):
+            continue
+        planned.append({**entry, "_seed_offset": seed_offset})
+    return planned
+
+
 def _write_meta_final(
     reg_dir: Path,
     entries: list[dict],
@@ -447,19 +466,13 @@ def main() -> None:
 
     logger.info(msg("regai.train_scanned", n=len(entries)))
 
+    to_generate = _plan_generation_entries(
+        entries, reg_dir, incremental=incremental,
+    )
     if incremental:
-        to_generate = [
-            e for e in entries
-            if not _already_has_reg(
-                reg_dir / e["subfolder"] if e["subfolder"] else reg_dir,
-                e["stem"],
-            )
-        ]
         logger.info(msg(
             "regai.incremental_plan", todo=len(to_generate), total=len(entries),
         ))
-    else:
-        to_generate = entries
 
     if not to_generate:
         logger.info(msg("regai.nothing_to_do"))
@@ -586,6 +599,10 @@ def main() -> None:
 
     # 生成循环
     total = len(to_generate)
+    if base_seed == 0:
+        base_seed = secrets.randbelow(2**31 - 1) + 1
+        logger.info("reg AI random base seed: %d", base_seed)
+
     actual_count = 0
     skipped_count = 0
     failed_count = 0
@@ -597,7 +614,7 @@ def main() -> None:
             _precache_batch(
                 to_generate[idx:idx + _PRECACHE_BATCH], first=False,
             )
-        seed = (base_seed + idx) if base_seed != 0 else random.randint(0, 2**31 - 1)
+        seed = base_seed + int(entry["_seed_offset"])
         torch.manual_seed(seed)
         random.seed(seed)
 

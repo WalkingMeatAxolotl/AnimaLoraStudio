@@ -13,6 +13,7 @@ project_jobs）。无回收站、不可恢复 —— UI 层 confirm 提示用户
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -23,6 +24,7 @@ from typing import Any, Iterable, Optional
 from ...paths import STUDIO_DATA
 
 PROJECTS_DIR = STUDIO_DATA / "projects"
+logger = logging.getLogger(__name__)
 
 from studio.domain.errors import DomainError
 
@@ -187,6 +189,96 @@ def set_archived(
     p = _must_get(conn, project_id)
     _write_project_json(p)
     return p
+
+
+def _unique_project_ids(project_ids: Iterable[int]) -> list[int]:
+    """De-duplicate IDs while preserving the caller's visible selection order."""
+    return list(dict.fromkeys(int(project_id) for project_id in project_ids))
+
+
+def _must_get_projects(
+    conn: sqlite3.Connection, project_ids: Iterable[int],
+) -> list[dict[str, Any]]:
+    return [_must_get(conn, project_id) for project_id in _unique_project_ids(project_ids)]
+
+
+def set_archived_many(
+    conn: sqlite3.Connection, project_ids: Iterable[int], archived: bool,
+) -> list[dict[str, Any]]:
+    """Archive or restore a validated project selection in one DB transaction."""
+    selected = _must_get_projects(conn, project_ids)
+    expected_archived = not archived
+    for project in selected:
+        if bool(project.get("archived_at")) != expected_archived:
+            action = "archive" if archived else "restore"
+            raise ProjectError(
+                f"Project cannot be included in batch {action}",
+                code="project.batch_state_invalid",
+                details={"id": project["id"], "archived": bool(project.get("archived_at"))},
+            )
+
+    archived_at = time.time() if archived else None
+    conn.executemany(
+        "UPDATE projects SET archived_at = ? WHERE id = ?",
+        [(archived_at, project["id"]) for project in selected],
+    )
+    conn.commit()
+
+    updated = [_must_get(conn, project["id"]) for project in selected]
+    for project in updated:
+        _write_project_json(project)
+    return updated
+
+
+def delete_projects(
+    conn: sqlite3.Connection,
+    project_ids: Iterable[int],
+    *,
+    require_archived: bool = False,
+) -> dict[str, Any]:
+    """Delete validated projects and report any physical-directory failures.
+
+    Task rows and ``studio_data/tasks/<id>`` live outside the project tree and are
+    deliberately untouched. Lifecycle validation is all-or-nothing, while physical
+    deletion is reported per project because filesystem work cannot be rolled back.
+    """
+    selected = _must_get_projects(conn, project_ids)
+    if require_archived:
+        for project in selected:
+            if project.get("archived_at") is None:
+                raise ProjectError(
+                    "Only archived projects can be batch deleted",
+                    code="project.batch_delete_requires_archived",
+                    details={"id": project["id"]},
+                )
+
+    deleted_projects: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for project in selected:
+        src = project_dir(project["id"], project["slug"])
+        try:
+            if src.exists():
+                shutil.rmtree(src)
+        except OSError:
+            logger.exception("Failed to remove project directory for project %s", project["id"])
+            failed.append({
+                "id": int(project["id"]),
+                "code": "project.delete_failed",
+                "message": "Could not remove project directory",
+            })
+        else:
+            deleted_projects.append(project)
+
+    if deleted_projects:
+        conn.executemany(
+            "DELETE FROM projects WHERE id = ?",
+            [(project["id"],) for project in deleted_projects],
+        )
+        conn.commit()
+    return {
+        "deleted": [int(project["id"]) for project in deleted_projects],
+        "failed": failed,
+    }
 
 
 def delete_project(conn: sqlite3.Connection, project_id: int) -> None:

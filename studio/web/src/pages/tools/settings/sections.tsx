@@ -8,6 +8,7 @@ import {
   type Secrets,
   type TorchCuTag,
   type TorchStatus,
+  type TritonStatus,
   type WD14Runtime,
   type XformersStatus,
 } from '../../../api/client'
@@ -1274,6 +1275,111 @@ export function XformersSection() {
           : status.installed ? t('settings.reinstallAutoMatchPlain') : t('settings.installAutoMatchPlain'),
         onClick: () => void install(),
         disabled: busy,
+        emphasized: !status.installed,
+      } : undefined}
+      onRefresh={() => void refresh()}
+      busy={busy}
+    />
+  )
+}
+
+export function TritonSection() {
+  const { t } = useTranslation()
+  const dialog = useDialog()
+  const [status, setStatus] = useState<TritonStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const { toast } = useToast()
+
+  const refresh = useCallback(async () => {
+    try {
+      const s = await api.getTritonStatus()
+      setStatus(s)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const install = async () => {
+    if (
+      !(await dialog.confirm(
+        t('settings.confirmInstallTriton'),
+        { tone: 'warn', okText: t('settings.startInstall') },
+      ))
+    ) return
+    setBusy(true)
+    try {
+      const result = await api.installTriton()
+      setStatus(result)
+      toast(t('settings.packageInstalledRestart', {
+        pkg: result.package ?? 'Triton',
+        version: result.version ?? '?',
+      }), 'success')
+    } catch (e) {
+      toast(t('settings.installFailed', { error: String(e) }), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const level: DepLevel = error
+    ? 'err'
+    : !status
+      ? 'loading'
+      : status.restart_required
+        ? 'warn'
+        : status.available
+          ? 'ok'
+          : status.installed
+            ? 'err'
+            : 'warn'
+  const statusText = error
+    ? t('settings.loadFailedShort')
+    : !status
+      ? t('settings.loadingStatus')
+      : status.restart_required
+        ? t('settings.restartRequiredShort')
+        : status.available
+          ? `v${status.version ?? '?'}`
+          : status.installed
+            ? t('settings.incompatibleShort')
+            : t('settings.notInstalledShort')
+
+  return (
+    <DepSection
+      id="triton"
+      title="Triton"
+      subtitle={t('settings.tritonSubtitle')}
+      helpTooltip={(<>
+        <p>{t('settings.tritonHelp1')}</p>
+        <p>{t('settings.tritonHelp2')}</p>
+        <p>{t('settings.tritonHelp3')}</p>
+      </>)}
+      level={level}
+      statusText={statusText}
+      forceOpen={!!error}
+      loadError={error}
+      loading={!error && !status}
+      infoCard={status && (
+        <DepVersionRow
+          name="Triton"
+          value={status.installed ? status.version ?? '?' : t('settings.notInstalledParen')}
+        />
+      )}
+      primary={status ? {
+        label: busy
+          ? t('settings.installing')
+          : status.installed ? t('settings.reinstallAutoMatchPlain') : t('settings.installAutoMatchPlain'),
+        onClick: () => void install(),
+        disabled: busy || !status.environment.supported,
+        title: !status.environment.supported
+          ? t(`settings.tritonReason.${status.environment.reason}`, {
+              defaultValue: status.environment.reason,
+            })
+          : undefined,
         emphasized: !status.installed,
       } : undefined}
       onRefresh={() => void refresh()}

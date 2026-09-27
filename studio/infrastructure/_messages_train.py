@@ -157,6 +157,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "已套用暂停时保存的训练参数: {path}",
         "en": "Applied the training settings saved at pause time: {path}",
     },
+    "train.seed_random": {
+        "zh": "训练种子设为 0，本次改用随机种子: {seed}",
+        "en": "Training seed is 0, using a random seed for this run: {seed}",
+    },
     "train.sample_seed_random": {
         "zh": "采样种子设为 0，本次改用随机种子: {seed}",
         "en": "Sample seed is 0, using a random seed for this run: {seed}",

@@ -52,6 +52,8 @@ def _source(
     path: Path,
     *,
     project_archived: bool = False,
+    created_at: float | None = None,
+    updated_at: float | None = None,
 ) -> dict[str, Any]:
     return {
         "source_type": source_type,
@@ -61,6 +63,8 @@ def _source(
         "item_count": 0,
         "error": None,
         "project_archived": project_archived,
+        "created_at": created_at,
+        "updated_at": updated_at,
     }
 
 
@@ -201,6 +205,8 @@ def _build_snapshot() -> dict[str, Any]:
                     str(project["title"]),
                     projects.project_dir(pid, str(project["slug"])),
                     project_archived=bool(project.get("archived_at")),
+                    created_at=float(project["created_at"]),
+                    updated_at=float(project["updated_at"]),
                 )
                 sources.append(source)
                 try:

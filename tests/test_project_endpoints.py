@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from studio import db, server
+from studio.infrastructure import paths as studio_paths
 from studio.services.projects import projects, versions
 
 
@@ -16,6 +17,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db.init_db(dbfile)
     pdir = tmp_path / "projects"
     monkeypatch.setattr(projects, "PROJECTS_DIR", pdir)
+    monkeypatch.setattr(studio_paths, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     return {"db": dbfile}
@@ -127,6 +129,123 @@ def test_archive_keeps_updated_at(client: TestClient) -> None:
     client.post(f"/api/projects/{p['id']}/archive")
     after = client.post(f"/api/projects/{p['id']}/unarchive").json()
     assert after["updated_at"] == p["updated_at"]
+
+
+def test_batch_archive_and_restore_deduplicates_ids(client: TestClient) -> None:
+    a = client.post("/api/projects", json={"title": "Batch A"}).json()
+    b = client.post("/api/projects", json={"title": "Batch B"}).json()
+
+    archived = client.post(
+        "/api/projects/archive-batch",
+        json={"project_ids": [a["id"], b["id"], a["id"]]},
+    )
+    assert archived.status_code == 200, archived.text
+    assert archived.json() == {"updated": [a["id"], b["id"]]}
+    rows = {row["id"]: row for row in client.get("/api/projects").json()["items"]}
+    assert rows[a["id"]]["archived_at"] is not None
+    assert rows[b["id"]]["archived_at"] is not None
+
+    restored = client.post(
+        "/api/projects/unarchive-batch",
+        json={"project_ids": [b["id"], a["id"]]},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json() == {"updated": [b["id"], a["id"]]}
+    rows = {row["id"]: row for row in client.get("/api/projects").json()["items"]}
+    assert rows[a["id"]]["archived_at"] is None
+    assert rows[b["id"]]["archived_at"] is None
+
+
+def test_batch_archive_rejects_mixed_state_without_changes(client: TestClient) -> None:
+    active = client.post("/api/projects", json={"title": "Active"}).json()
+    archived = client.post("/api/projects", json={"title": "Archived"}).json()
+    client.post(f"/api/projects/{archived['id']}/archive")
+
+    response = client.post(
+        "/api/projects/archive-batch",
+        json={"project_ids": [active["id"], archived["id"]]},
+    )
+    assert response.status_code == 400
+    rows = {row["id"]: row for row in client.get("/api/projects").json()["items"]}
+    assert rows[active["id"]]["archived_at"] is None
+    assert rows[archived["id"]]["archived_at"] is not None
+
+
+def test_batch_delete_requires_archived_and_keeps_task_archive(client: TestClient) -> None:
+    active = client.post("/api/projects", json={"title": "Active"}).json()
+    archived = client.post("/api/projects", json={"title": "Archived"}).json()
+    client.post(f"/api/projects/{archived['id']}/archive")
+
+    with db.connection_for() as conn:
+        task_id = db.create_task(
+            conn,
+            name="Archived task",
+            config_name="archived.yaml",
+            project_id=archived["id"],
+        )
+    task_archive = studio_paths.task_dir(task_id)
+    task_archive.mkdir(parents=True)
+    (task_archive / "run.log").write_text("kept", encoding="utf-8")
+
+    rejected = client.post(
+        "/api/projects/delete-batch",
+        json={"project_ids": [archived["id"], active["id"]]},
+    )
+    assert rejected.status_code == 400
+    assert client.get(f"/api/projects/{archived['id']}").status_code == 200
+    assert client.get(f"/api/projects/{active['id']}").status_code == 200
+
+    deleted = client.post(
+        "/api/projects/delete-batch",
+        json={"project_ids": [archived["id"], archived["id"]]},
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"deleted": [archived["id"]], "failed": []}
+    assert client.get(f"/api/projects/{archived['id']}").status_code == 404
+    with db.connection_for() as conn:
+        assert db.get_task(conn, task_id) is not None
+    assert (task_archive / "run.log").read_text(encoding="utf-8") == "kept"
+
+
+def test_batch_delete_reports_partial_filesystem_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted_project = client.post("/api/projects", json={"title": "Delete me"}).json()
+    failed_project = client.post("/api/projects", json={"title": "Keep me"}).json()
+    for project in (deleted_project, failed_project):
+        client.post(f"/api/projects/{project['id']}/archive")
+
+    real_rmtree = projects.shutil.rmtree
+
+    def selective_rmtree(path: Path) -> None:
+        if path.name.startswith(f"{failed_project['id']}-"):
+            raise PermissionError("in use")
+        real_rmtree(path)
+
+    monkeypatch.setattr(projects.shutil, "rmtree", selective_rmtree)
+    response = client.post(
+        "/api/projects/delete-batch",
+        json={"project_ids": [deleted_project["id"], failed_project["id"]]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "deleted": [deleted_project["id"]],
+        "failed": [{
+            "id": failed_project["id"],
+            "code": "project.delete_failed",
+            "message": "Could not remove project directory",
+        }],
+    }
+    assert client.get(f"/api/projects/{deleted_project['id']}").status_code == 404
+    assert client.get(f"/api/projects/{failed_project['id']}").status_code == 200
+
+
+def test_batch_project_actions_reject_empty_selection(client: TestClient) -> None:
+    for route in ("archive-batch", "unarchive-batch", "delete-batch"):
+        assert client.post(
+            f"/api/projects/{route}", json={"project_ids": []},
+        ).status_code == 422
 
 
 def test_list_enriches_active_version_phase(client: TestClient) -> None:

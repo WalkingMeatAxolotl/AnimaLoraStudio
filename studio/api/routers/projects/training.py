@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets as stdlib_secrets
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -498,7 +499,11 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
         cfg_scale=body.cfg_scale,
         sampler_name=body.sampler_name or sampling["samplers"][0],
         scheduler=body.scheduler or sampling["schedulers"][0],
-        seed=body.seed,
+        seed=(
+            int(body.seed)
+            if int(body.seed) != 0
+            else stdlib_secrets.randbelow(2**31 - 1) + 1
+        ),
         incremental=body.incremental,
         mixed_precision=body.mixed_precision,
         attention_backend=detect_attention_backend(),
@@ -907,7 +912,7 @@ def enqueue_version_training(
             tid = int(cur.lastrowid)
             # ADR-0007 §11.7：提交响应前冻结。task 行尚未 commit，supervisor
             # 看不到半成品；文件失败则 rollback，不留下可调度的 active task。
-            task_snapshot.freeze_config(tid, cfg_path)
+            task_snapshot.freeze_training_config(tid, cfg_path)
             conn.commit()
         except Exception:
             conn.rollback()

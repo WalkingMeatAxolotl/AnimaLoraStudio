@@ -355,6 +355,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
 
       <div
         ref={panelRef}
+        data-command-palette-root="true"
         role="dialog"
         aria-modal="true"
         aria-label={t('commandPalette.dialogLabel')}

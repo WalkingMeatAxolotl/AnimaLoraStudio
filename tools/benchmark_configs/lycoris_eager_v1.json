@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "profile": "anima-2048",
+  "dtype": "bfloat16",
+  "algorithms": [
+    "lora",
+    "lokr",
+    "loha"
+  ],
+  "rank": 8,
+  "alpha": 4,
+  "factor": 8,
+  "seed": 567,
+  "repeats": 3,
+  "warmup": 2,
+  "measured": 5,
+  "resolution": 512,
+  "text_tokens": 512,
+  "train": {
+    "resolution": 512,
+    "batch_size": 1,
+    "grad_accum": 1,
+    "mixed_precision": "bf16",
+    "attention_backend": "none",
+    "grad_checkpoint": true,
+    "cache_latents": true,
+    "images": 8,
+    "epochs": 2,
+    "learning_rate": 0.0001,
+    "optimizer_type": "adamw",
+    "lr_scheduler": "none",
+    "blocks_to_swap": 0,
+    "sample_steps": 0,
+    "sample_every": 0,
+    "save_every_epochs": 0,
+    "save_every_steps": 0,
+    "save_state_every_epochs": 0,
+    "save_state_every_steps": 0
+  }
+}

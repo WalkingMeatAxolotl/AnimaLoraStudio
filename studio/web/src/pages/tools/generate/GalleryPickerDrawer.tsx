@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type GalleryItem, type GalleryRating, type GallerySource, type GalleryTagger } from '../../../api/client'
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
@@ -14,7 +14,7 @@ const RATING_KEY = 'studio:generate:gallery:rating'
 const DATE_FROM_KEY = 'studio:generate:gallery:dateFrom'
 const DATE_TO_KEY = 'studio:generate:gallery:dateTo'
 const PAGE_KEY = 'studio:generate:gallery:page'
-const AUTO_GENERATE_KEY = 'studio:generate:gallery:autoGenerate'
+const AUTO_TAG_KEY = 'studio:generate:gallery:autoTag'
 const MAX_PAGE = 10_000
 const SEARCH_SUGGESTIONS_ID = 'gallery-search-tag-suggestions'
 const ALL_RATINGS: GalleryRating[] = ['general', 'sensitive', 'questionable', 'explicit']
@@ -40,15 +40,22 @@ type SearchState = {
 
 const EMPTY_RESULT: SearchState = { items: [], page: 1, hasMore: false }
 
-function GalleryPickerDrawer({
+export interface GalleryPickerDrawerHandle {
+  isAutoTagEnabled: () => boolean
+  tagForGenerate: () => Promise<string | null>
+}
+
+interface GalleryPickerDrawerProps {
+  open?: boolean
+  onApplyPrompt: (prompt: string) => void | Promise<void>
+  onClose: () => void
+}
+
+const GalleryPickerDrawer = forwardRef<GalleryPickerDrawerHandle, GalleryPickerDrawerProps>(function GalleryPickerDrawer({
   open = true,
   onApplyPrompt,
   onClose,
-}: {
-  open?: boolean
-  onApplyPrompt: (prompt: string, autoGenerate: boolean) => void | Promise<void>
-  onClose: () => void
-}) {
+}, ref) {
   const { t } = useTranslation()
   const { toast } = useOptionalToast()
   const [source, setSource] = useLocalStorageState<GallerySource>(SOURCE_KEY, 'danbooru')
@@ -59,7 +66,7 @@ function GalleryPickerDrawer({
   const [dateFrom, setDateFrom] = useLocalStorageState(DATE_FROM_KEY, '')
   const [dateTo, setDateTo] = useLocalStorageState(DATE_TO_KEY, '')
   const [page, setPage] = useLocalStorageState(PAGE_KEY, 1)
-  const [autoGenerate, setAutoGenerate] = useLocalStorageState(AUTO_GENERATE_KEY, false)
+  const [autoTag, setAutoTag] = useLocalStorageState(AUTO_TAG_KEY, false)
   const [submittedQuery, setSubmittedQuery] = useState(() => query.trim())
   const [pageInput, setPageInput] = useState(() => String(page))
   const [ratingDraft, setRatingDraft] = useState<GalleryRating[]>(() => [...ratings])
@@ -245,8 +252,8 @@ function GalleryPickerDrawer({
     setPage(parsed)
   }
 
-  const tagSelected = async () => {
-    if (!selected || tagging) return
+  const tagSelected = useCallback(async (): Promise<string | null> => {
+    if (!selected || tagging) return null
     setTagging(true)
     setError(null)
     try {
@@ -256,14 +263,29 @@ function GalleryPickerDrawer({
         image_url: selected.image_url,
         tagger,
       })
-      await onApplyPrompt(response.prompt, autoGenerate)
+      await onApplyPrompt(response.prompt)
       toast(t('generate.galleryTagSuccess'), 'success')
+      return response.prompt
     } catch (reason) {
       setError(String(reason))
+      return null
     } finally {
       setTagging(false)
     }
-  }
+  }, [onApplyPrompt, selected, tagger, tagging, t, toast])
+
+  useImperativeHandle(ref, () => ({
+    isAutoTagEnabled: () => autoTag,
+    tagForGenerate: async () => {
+      if (!selected) {
+        const message = t('generate.galleryAutoTagImageRequired')
+        setError(message)
+        toast(message, 'error')
+        return null
+      }
+      return tagSelected()
+    },
+  }), [autoTag, selected, t, tagSelected, toast])
 
   const ratingOptions: Array<{ value: GalleryRating; label: string }> = [
     { value: 'general', label: t('generate.galleryRatingGeneral') },
@@ -309,24 +331,24 @@ function GalleryPickerDrawer({
           <button
             type="button"
             role="switch"
-            aria-checked={autoGenerate}
-            aria-label={t('generate.galleryAutoGenerate')}
-            title={t('generate.galleryAutoGenerateHint')}
+            aria-checked={autoTag}
+            aria-label={t('generate.galleryAutoTag')}
+            title={t('generate.galleryAutoTagHint')}
             className="btn btn-ghost btn-sm shrink-0 gap-1 px-1.5 text-2xs"
             disabled={tagging}
-            onClick={() => setAutoGenerate((value) => !value)}
+            onClick={() => setAutoTag((value) => !value)}
           >
             <span
               className="relative inline-flex h-4 w-7 shrink-0 rounded-full border border-subtle transition-colors"
-              style={{ background: autoGenerate ? 'var(--accent)' : 'var(--bg-overlay)' }}
+              style={{ background: autoTag ? 'var(--accent)' : 'var(--bg-overlay)' }}
               aria-hidden="true"
             >
               <span
                 className="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform"
-                style={{ transform: `translateX(${autoGenerate ? 13 : 2}px)` }}
+                style={{ transform: `translateX(${autoTag ? 13 : 2}px)` }}
               />
             </span>
-            {t('generate.galleryAutoGenerate')}
+            {t('generate.galleryAutoTag')}
           </button>
           <button
             type="button"
@@ -622,7 +644,7 @@ function GalleryPickerDrawer({
       </div>
     </GenerateAttachedDrawer>
   )
-}
+})
 
 export default memo(
   GalleryPickerDrawer,

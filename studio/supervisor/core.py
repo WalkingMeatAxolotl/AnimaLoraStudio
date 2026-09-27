@@ -697,7 +697,7 @@ class Supervisor:
         try:
             cfg_path = self._resolve_task_config_path(task)
             try:
-                snapshot_path = self._freeze_task_snapshot(int(task["id"]), cfg_path)
+                snapshot_path = self._freeze_task_snapshot(task, cfg_path)
             except FileNotFoundError:
                 self._fail_task_config_missing(task, cfg_path)
                 return
@@ -862,17 +862,23 @@ class Supervisor:
             "status": "failed",
         })
 
-    def _freeze_task_snapshot(self, task_id: int, cfg_path: Path) -> Path:
+    def _freeze_task_snapshot(
+        self, task: dict[str, Any], cfg_path: Path,
+    ) -> Path:
         """返回 task 的执行权威配置；仅为历史 task 补建 snapshot。
 
         新 task 已在 enqueue/retry 创建事务内冻结。已有 snapshot 永不覆盖，保证
         scheduled/pending/resume 始终消费提交时的参数。补冻失败由调用方 fail closed。
         """
+        task_id = int(task["id"])
         from ..services import task_snapshot
 
         existing = task_snapshot.snapshot_config_path(task_id)
         if existing.is_file():
             return existing
+        task_type = str(task.get("task_type") or "train")
+        if task_type == "train":
+            return task_snapshot.freeze_training_config(task_id, cfg_path)
         return task_snapshot.freeze_config(task_id, cfg_path)
 
     def _make_task_log_callback(

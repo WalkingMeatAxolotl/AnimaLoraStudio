@@ -42,6 +42,7 @@ import {
   FlashAttentionSection,
   ONNXRuntimeSection,
   PyTorchSection,
+  TritonSection,
   XformersSection,
 } from './sections'
 
@@ -232,6 +233,7 @@ export function GpuSection() {
         <PyTorchSection />
         <FlashAttentionSection />
         <XformersSection />
+        <TritonSection />
         <ONNXRuntimeSection />
       </div>
     </SettingsSection>

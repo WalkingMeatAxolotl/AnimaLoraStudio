@@ -12,7 +12,7 @@ import pytest
 
 from studio import db, secrets
 from studio.infrastructure import paths as infra_paths
-from studio.services import eval_session
+from studio.services import eval_samples, eval_session, task_snapshot
 from studio.services.projects import jobs as project_jobs, projects, versions
 
 
@@ -108,6 +108,49 @@ def test_plan_freezes_validation_and_checkpoints(isolated) -> None:
     assert plan["checkpoint_sampling"] == {"skip_count": 0}
     # plan.json 落盘（DB plan_json 的人类可读副本）
     assert infra_paths.eval_session_plan_path(int(session["id"])).exists()
+
+
+def test_plan_uses_parent_training_task_frozen_sample_seed(
+    isolated, tmp_path: Path,
+) -> None:
+    project, version, vdir = _setup(isolated)
+    source = tmp_path / "task.yaml"
+    source.write_text("sample_seed: 8675309\n", encoding="utf-8")
+    with db.connection_for(isolated["db"]) as conn:
+        parent_task_id = db.create_task(
+            conn, name="train", config_name="train", task_type="train",
+        )
+    task_snapshot.freeze_config(parent_task_id, source)
+
+    with db.connection_for(isolated["db"]) as conn:
+        session = eval_session.create_session(
+            conn, project, version, vdir,
+            checkpoints=_all_ckpts(vdir), trigger="after_training",
+            parent_task_id=parent_task_id,
+        )
+
+    assert session["plan"]["generation"]["seed"] == 8675309
+
+
+def test_new_manual_sessions_resolve_zero_seed_independently(
+    isolated, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, version, vdir = _setup(isolated)
+    draws = iter((101, 202))
+    monkeypatch.setattr(eval_samples.secrets, "randbelow", lambda _limit: next(draws) - 1)
+
+    with db.connection_for(isolated["db"]) as conn:
+        first = eval_session.create_session(
+            conn, project, version, vdir,
+            checkpoints=_all_ckpts(vdir), trigger="manual",
+        )
+        second = eval_session.create_session(
+            conn, project, version, vdir,
+            checkpoints=_all_ckpts(vdir), trigger="manual",
+        )
+
+    assert first["plan"]["generation"]["seed"] == 101
+    assert second["plan"]["generation"]["seed"] == 202
 
 
 def test_plan_is_immutable_against_later_validation_changes(isolated) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProjectCreate(BaseModel):
@@ -11,6 +11,12 @@ class ProjectCreate(BaseModel):
     slug: Optional[str] = None
     note: Optional[str] = None
     initial_version_label: Optional[str] = "v1"
+
+
+class ProjectBatchRequest(BaseModel):
+    """Project IDs for one explicit bulk action."""
+
+    project_ids: list[int] = Field(min_length=1)
 
 
 class ProjectUpdate(BaseModel):

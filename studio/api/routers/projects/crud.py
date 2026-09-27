@@ -1,6 +1,6 @@
 """Projects + Versions CRUD + phase 推进 + ckpts（PR-6.5 commit 1 从 server.py 抽出）。
 
-18 routes：
+21 routes：
     GET    /api/projects                                       list（含 active version enrich；含已归档行）
     POST   /api/projects                                       create（可选 initial version）
     GET    /api/projects/{pid}                                 get（含 versions 列表）
@@ -8,6 +8,9 @@
     DELETE /api/projects/{pid}                                 delete
     POST   /api/projects/{pid}/archive                         归档（软隐藏，可逆）
     POST   /api/projects/{pid}/unarchive                       取消归档
+    POST   /api/projects/archive-batch                         批量归档
+    POST   /api/projects/unarchive-batch                       批量恢复
+    POST   /api/projects/delete-batch                          批量永久删除已归档项目
     GET    /api/projects/{pid}/versions                        list versions
     POST   /api/projects/{pid}/versions                        create version
     GET    /api/projects/{pid}/versions/{vid}                  get version
@@ -28,6 +31,7 @@ from fastapi import APIRouter
 
 from ....domain.errors import NotFoundError
 from ...schemas.projects import (
+    ProjectBatchRequest,
     ProjectCreate,
     ProjectUpdate,
     VersionCreate,
@@ -124,6 +128,33 @@ def unarchive_project_endpoint(pid: int) -> dict[str, Any]:
         p = projects.set_archived(conn, pid, False)
     _publish_project_state(p)
     return _project_payload(p)
+
+
+@router.post("/api/projects/archive-batch")
+def archive_projects_endpoint(body: ProjectBatchRequest) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        updated = projects.set_archived_many(conn, body.project_ids, True)
+    for project in updated:
+        _publish_project_state(project)
+    return {"updated": [int(project["id"]) for project in updated]}
+
+
+@router.post("/api/projects/unarchive-batch")
+def unarchive_projects_endpoint(body: ProjectBatchRequest) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        updated = projects.set_archived_many(conn, body.project_ids, False)
+    for project in updated:
+        _publish_project_state(project)
+    return {"updated": [int(project["id"]) for project in updated]}
+
+
+@router.post("/api/projects/delete-batch")
+def delete_projects_endpoint(body: ProjectBatchRequest) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        result = projects.delete_projects(
+            conn, body.project_ids, require_archived=True,
+        )
+    return result
 
 
 @router.delete("/api/projects/{pid}")

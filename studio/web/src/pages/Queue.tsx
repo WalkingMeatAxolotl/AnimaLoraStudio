@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type QueueHoldState, type Task,
   type TaskStatus, type TaskType,
 } from '../api/client'
-import { DATA_VIEW_KINDS } from './queue/jobUtils'
+import { DATA_VIEW_KINDS, fmtJobAgo as fmtAgo, fmtJobDuration as fmtDuration, fmtJobTime, fmtJobUntil as fmtUntil } from './queue/jobUtils'
 import Alert from '../components/Alert'
 import Button from '../components/Button'
 import Card from '../components/Card'
@@ -13,6 +13,8 @@ import EmptyState from '../components/EmptyState'
 import { Input, Select } from '../components/FormControl'
 import ListToolbar from '../components/ListToolbar'
 import PageHeader from '../components/PageHeader'
+import ProgressBar from '../components/ProgressBar'
+import { SegmentedControl } from '../components/SelectionGroup'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -23,6 +25,7 @@ import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import DataJobsPanel from './queue/DataJobsPanel'
+import QueueSectionHeader from './queue/QueueSectionHeader'
 
 // GPU 视图（exclusive 档）的行类型。R-5：评估（底模级出图 + 指标）随台账合并归位
 // 本视图（用户感知锚点 §4-2）。eval_session = 一次评估一个作业（#465）；eval_samples
@@ -52,54 +55,15 @@ const DEFAULT_TYPE_FILTER: TaskKind = 'train'
 const QUEUE_TASKS_LIST_TOOLBAR_ID = 'queue-tasks-list-toolbar'
 const QUEUE_JOBS_LIST_TOOLBAR_ID = 'queue-jobs-list-toolbar'
 
-function fmtAgo(ts: number): string {
-  const sec = Math.max(0, Date.now() / 1000 - ts)
-  if (sec < 60) return '刚刚'
-  if (sec < 3600) return `${Math.floor(sec / 60)}m 前`
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h 前`
-  return `${Math.floor(sec / 86400)}d 前`
-}
-
-/** scheduled task 的计划时间：绝对（本地时区）+「约 X 后」相对提示。 */
+/** scheduled task 的计划时间（本地时区、当前界面语言）。 */
 function fmtScheduledAbs(ts: number): string {
-  return new Date(ts * 1000).toLocaleString('zh-CN', {
-    hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
-}
-
-function fmtUntil(ts: number): string {
-  const sec = ts - Date.now() / 1000
-  if (sec <= 0) return '即将开始'
-  if (sec < 60) return '1m 内'
-  if (sec < 3600) return `${Math.ceil(sec / 60)}m 后`
-  if (sec < 86400) {
-    const h = Math.floor(sec / 3600); const m = Math.round((sec % 3600) / 60)
-    return m ? `${h}h ${m}m 后` : `${h}h 后`
-  }
-  return `${Math.ceil(sec / 86400)}d 后`
-}
-
-function fmtDuration(start: number | null, end: number | null): string {
-  if (!start) return '—'
-  const e = end ?? Date.now() / 1000
-  const sec = Math.max(0, e - start)
-  if (sec < 60) return `${sec.toFixed(0)}s`
-  const m = Math.floor(sec / 60); const s = Math.floor(sec % 60)
-  if (m < 60) return `${m}m ${s}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
+  return fmtJobTime(ts, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function fmtDurationShort(ms: number): string {
   if (ms < 60e3) return `${Math.round(ms / 1e3)}s`
   if (ms < 3600e3) return `${Math.round(ms / 60e3)}m`
   return `${(ms / 3600e3).toFixed(1)}h`
-}
-
-/** running task 的「已运行 Xm」标签；非 running 返 null。 */
-function estimateEta(task: Task): string | null {
-  if (task.status !== 'running' || !task.started_at) return null
-  const elapsed = (Date.now() / 1000 - task.started_at) * 1000
-  return `已运行 ${fmtDurationShort(elapsed)}`
 }
 
 /** 历史分页持久底栏（GPU / 数据两个视图共用同款，P-G 反馈统一）。
@@ -127,6 +91,7 @@ function PaginationBar({
           onChange={(e) => onPageSize(Number(e.target.value))}
           className="input"
           style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
+          aria-label={t('queue.pageSizeLabel')}
           data-testid="history-page-size"
         >
           {HISTORY_PAGE_SIZES.map((n) => (
@@ -161,19 +126,18 @@ function PaginationBar({
 /** 队列行卡片。0.17 P-A 从 QueuePage 内联 map 抽出，供三个分区复用同一行渲染。
  *  monitor 只对 running 且 id===runningTaskId 的那行有意义；evalInfo 只对 terminal
  *  且仍在评估的行有值。 */
-function QueueTaskRow({
-  task, runningTaskId, monitor, evalInfo, isWaitingForRelease, prevAhead,
-  onOpen, onResume, onCancelPaused, onStartNow, onCancelScheduled,
+export function QueueTaskRow({
+  task, runningTaskId, monitor, evalInfo, isWaitingForRelease,
+  onResume, onCancelPaused, onCancelPending, onStartNow, onCancelScheduled,
 }: {
   task: Task
   runningTaskId: number | null
   monitor: { step?: number | null; total_steps?: number | null } | null
   evalInfo?: EvalProgress
   isWaitingForRelease: boolean
-  prevAhead: number
-  onOpen: (id: number) => void
   onResume: (task: Task) => void | Promise<void>
   onCancelPaused: (task: Task) => void | Promise<void>
+  onCancelPending: (task: Task) => void | Promise<void>
   onStartNow: (task: Task) => void | Promise<void>
   onCancelScheduled: (task: Task) => void | Promise<void>
 }) {
@@ -192,12 +156,19 @@ function QueueTaskRow({
     eval_samples: t('queue.jobs.kind.eval_samples'),
   }
   const isRunning = task.status === 'running'
+  const isPending = task.status === 'pending'
   const isPaused = task.status === 'paused'
   const isScheduled = task.status === 'scheduled'
   const isTerminal = ['done', 'failed', 'canceled'].includes(task.status)
   const hasProject = !!(task.project_id && task.version_id)
   const kind = taskKind(task)
-  const eta = estimateEta(task)
+  const eta = isRunning && task.started_at
+    ? t('queue.elapsed', { time: fmtDurationShort(Math.max(0, Date.now() - task.started_at * 1000)) })
+    : null
+  const step = task.id === runningTaskId ? monitor?.step : null
+  const totalSteps = task.id === runningTaskId ? monitor?.total_steps : null
+  const hasSteps = step != null && totalSteps != null && Number.isFinite(step)
+    && Number.isFinite(totalSteps) && step >= 0 && totalSteps > 0
   const tone = STATUS_TONE[task.status]
 
   // 0.17 P-H 跳转列：按类型跳原生页看结果/配置。train→训练配置页、reg_ai→正则集、
@@ -219,24 +190,26 @@ function QueueTaskRow({
             : null
 
   return (
-    <button
-      onClick={() => onOpen(task.id)}
-      title={t('queue.taskDetailTooltip')}
-      className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${isRunning ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
+    <div
+      className={`card card-hover relative block overflow-hidden text-left p-0 cursor-pointer ${isRunning ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
     >
       <div
         className="ui-queue-task-grid px-[22px] py-4 grid gap-3 items-center"
         data-testid={`queue-task-grid-${task.id}`}
       >
+        <Link to={`/queue/${task.id}`} className="ui-queue-row-link"
+          aria-label={t('queue.taskDetailLinkLabel', { id: task.id, name: task.name })}
+          title={t('queue.taskDetailTooltip')}
+        >
         <span className={`font-mono text-sm ${isRunning ? 'text-accent font-semibold' : 'text-fg-tertiary font-normal'}`}>
           #{task.id}
         </span>
 
         <div style={{ minWidth: 0 }}>
-          <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap">
+          <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap" title={task.name}>
             {task.name}
           </div>
-          <div className="font-mono text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
+          <div className="font-mono text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap" title={task.config_name}>
             {task.config_name}
           </div>
         </div>
@@ -258,38 +231,18 @@ function QueueTaskRow({
           {isRunning ? (
             <div className="flex flex-col gap-0.5">
               <span className="font-mono text-fg-tertiary text-xs">
-                {(() => {
-                  if (
-                    task.id === runningTaskId &&
-                    monitor?.step != null &&
-                    monitor.total_steps != null &&
-                    monitor.total_steps > 0
-                  ) {
-                    return `step ${monitor.step.toLocaleString()} / ${monitor.total_steps.toLocaleString()}`
-                  }
-                  return fmtDuration(task.started_at, null)
-                })()}
+                {hasSteps ? `step ${step.toLocaleString()} / ${totalSteps.toLocaleString()}` : fmtDuration(task.started_at, null)}
               </span>
-              <div className="h-1 bg-overlay rounded-sm overflow-hidden">
-                {(() => {
-                  const haveSteps =
-                    task.id === runningTaskId &&
-                    monitor?.step != null &&
-                    monitor.total_steps != null &&
-                    monitor.total_steps > 0
-                  if (haveSteps) {
-                    const pct = Math.max(
-                      0,
-                      Math.min(100, (monitor!.step! / monitor!.total_steps!) * 100),
-                    )
-                    return <div className="h-full bg-accent rounded-sm" style={{ width: `${pct}%` }} />
-                  }
-                  return <div className="h-full bg-accent/40 rounded-sm animate-pulse" style={{ width: '20%' }} />
-                })()}
-              </div>
+              <ProgressBar
+                label={t('queue.progressLabel', { id: task.id })}
+                value={hasSteps ? step : null}
+                max={hasSteps ? totalSteps : undefined}
+                valueText={hasSteps ? undefined : t('queue.progressUnknown')}
+                size="xs"
+              />
             </div>
           ) : task.error_msg ? (
-            <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap block text-xs">
+            <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap block text-xs" title={task.error_msg}>
               {task.error_msg}
             </span>
           ) : isPaused ? (
@@ -323,7 +276,7 @@ function QueueTaskRow({
             <>
               {eta && <span className="text-accent">{eta}</span>}
               {eta && <br />}
-              <span className="text-xs">{fmtAgo(task.started_at!)} 开始</span>
+              <span className="text-xs">{task.started_at ? t('queue.startedAgo', { time: fmtAgo(task.started_at) }) : '—'}</span>
             </>
           ) : isPaused ? (
             /* 暂停时间在左侧 duration 列（pausedAtStep），操作在右侧 action 列 */
@@ -350,23 +303,33 @@ function QueueTaskRow({
             <span>
               <span>{fmtAgo(task.finished_at)}</span>
               <br />
-              <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
+              <span className="text-xs text-fg-tertiary">{t('queue.ended')}</span>
             </span>
           ) : (
-            <span className="flex flex-col items-end gap-0.5">
-              <span>{t('queue.ahead', { n: prevAhead })}</span>
-              {isWaitingForRelease && (
-                <span className="text-xs text-warn">
-                  {t('queue.waitingForRelease')}
-                </span>
-              )}
-            </span>
+            isWaitingForRelease ? (
+              <span className="text-xs text-warn">{t('queue.waitingForRelease')}</span>
+            ) : <span>—</span>
           )}
         </span>
 
-        {/* 0.17 action 列：跳转 + scheduled 的立即开始/取消计划 + paused 的恢复/取消
+        </Link>
+
+        {/* action 列：pending 取消 + 跳转 + scheduled 的立即开始/取消计划 + paused 的恢复/取消
             + 终态可恢复的继续训练，全 icon 化（hover title 显示文字）。 */}
-        <div className="flex items-center justify-end gap-1.5">
+        <div className="ui-queue-row-actions flex items-center justify-end gap-1.5">
+          {isPending && (
+            <button
+              onClick={(e) => { e.stopPropagation(); void onCancelPending(task) }}
+              className="btn btn-ghost btn-sm px-2 text-err"
+              title={`${t('queue.cancelPending')} — ${t('queue.cancelPendingHint')}`}
+              aria-label={t('queue.cancelPending')}
+              data-testid={`cancel-pending-btn-${task.id}`}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
           {isPaused && (
             <>
               <button
@@ -448,7 +411,7 @@ function QueueTaskRow({
           )}
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -460,8 +423,14 @@ export default function QueuePage() {
   const [history, setHistory] = useState<QueueHistoryPage>({
     items: [], total: 0, page: 1, page_size: HISTORY_PAGE_SIZES[0],
   })
-  const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [liveLoaded, setLiveLoaded] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [liveLoading, setLiveLoading] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const liveSeq = useRef(0)
+  const historySeq = useRef(0)
   const [busy, setBusy] = useState(false)
   // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤。0.17 item4：过滤条件持久化到
   // localStorage，切走队列页再回来不丢（page 不持久，回来回第 1 页）。
@@ -502,7 +471,6 @@ export default function QueuePage() {
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
-  const navigate = useNavigate()
 
   // ADR 0006：队列挂起状态，banner + holdModal 用。
   const [holdState, setHoldState] = useState<QueueHoldState | null>(null)
@@ -521,23 +489,37 @@ export default function QueuePage() {
 
   // R-5：GPU 视图 = exclusive 档（「全部」= 档位全集，含 eval_samples）。
   const reloadLive = useCallback(async () => {
+    const seq = ++liveSeq.current
+    setLiveLoading(true)
     try {
-      setLive(await api.listQueueLive(
+      const items = await api.listQueueLive(
         searchDebounced || undefined, typeFilter ?? undefined, 'exclusive',
-      ))
-      setError(null)
-    } catch (e) { setError(String(e)) }
+      )
+      if (seq !== liveSeq.current) return
+      setLive(items); setLiveLoaded(true); setLiveError(null)
+    } catch (e) {
+      if (seq === liveSeq.current) setLiveError(String(e))
+    } finally {
+      if (seq === liveSeq.current) setLiveLoading(false)
+    }
   }, [searchDebounced, typeFilter])
 
   const reloadHistory = useCallback(async () => {
+    const seq = ++historySeq.current
+    setHistoryLoading(true)
     try {
       const r = await api.listQueueHistory({
         page: historyPage, pageSize: historyPageSize,
         q: searchDebounced || undefined, status: historyStatus ?? undefined,
         type: typeFilter ?? undefined, resourceClass: 'exclusive',
       })
-      setHistory(r); setError(null)
-    } catch (e) { setError(String(e)) }
+      if (seq !== historySeq.current) return
+      setHistory(r); setHistoryLoaded(true); setHistoryError(null)
+    } catch (e) {
+      if (seq === historySeq.current) setHistoryError(String(e))
+    } finally {
+      if (seq === historySeq.current) setHistoryLoading(false)
+    }
   }, [historyPage, historyPageSize, searchDebounced, historyStatus, typeFilter])
 
   const reload = useCallback(async () => {
@@ -557,10 +539,19 @@ export default function QueuePage() {
     return () => window.clearTimeout(id)
   }, [search])
 
-  useEffect(() => { void reloadLive() }, [reloadLive])
   useEffect(() => {
-    void (async () => { await reloadHistory(); setLoaded(true) })()
+    const sequence = liveSeq
+    void reloadLive()
+    return () => { sequence.current++ }
+  }, [reloadLive])
+  useEffect(() => {
+    const sequence = historySeq
+    void reloadHistory()
+    return () => { sequence.current++ }
   }, [reloadHistory])
+  useEffect(() => () => {
+    if (reloadTimer.current) window.clearTimeout(reloadTimer.current)
+  }, [])
 
   useEventStream(
     (evt) => {
@@ -628,14 +619,6 @@ export default function QueuePage() {
     [liveSorted],
   )
 
-  const prevCount = useCallback((taskId: number): number => {
-    let count = 0
-    for (const t of liveSorted) {
-      if (t.id === taskId) break
-      if (t.status === 'running' || t.status === 'pending') count++
-    }
-    return count
-  }, [liveSorted])
 
 
   const requestPause = (task: Task) => {
@@ -762,7 +745,7 @@ export default function QueuePage() {
   const cancelRunning = async () => {
     if (!runningTask) return
     const ok = await confirm(
-      `取消当前任务 #${runningTask.id}？任务会在安全点停止，且无法恢复（重启训练会从 0 开始）。`,
+      t(taskKind(runningTask) === 'train' ? 'queue.cancelRunningTrainConfirm' : 'queue.cancelRunningConfirm', { id: runningTask.id }),
       { tone: 'warn', okText: t('queue.cancelCurrent') },
     )
     if (!ok) return
@@ -778,9 +761,29 @@ export default function QueuePage() {
     }
   }
 
-  const isEmpty =
-    live.length === 0 && history.total === 0
-    && !searchDebounced && !historyStatus && typeFilter === DEFAULT_TYPE_FILTER
+  const cancelPending = async (task: Task) => {
+    const ok = await confirm(
+      t('queue.cancelPendingConfirm', { id: task.id }),
+      { tone: 'warn', okText: t('queue.cancelPending') },
+    )
+    if (!ok) return
+    setBusy(true)
+    try {
+      await api.cancelTask(task.id)
+      toast(t('queueDetail.cancelSent'), 'success')
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const isEmpty = liveLoaded && historyLoaded && !liveError && !historyError
+    && !liveLoading && !historyLoading && live.length === 0 && history.total === 0
+  const isFilteredEmpty = Boolean(searchDebounced || historyStatus || (typeFilter && typeFilter !== DEFAULT_TYPE_FILTER))
+  const initialLoading = ((!liveLoaded && !liveError) || (!historyLoaded && !historyError))
+    && live.length === 0 && history.items.length === 0
 
   const renderRow = (task: Task) => (
     <QueueTaskRow
@@ -790,10 +793,9 @@ export default function QueuePage() {
       monitor={monitor}
       evalInfo={evalMap.get(task.id)}
       isWaitingForRelease={task.status === 'pending' && holdState?.held === true}
-      prevAhead={prevCount(task.id)}
-      onOpen={(id) => navigate(`/queue/${id}`)}
       onResume={resumeTask}
       onCancelPaused={cancelPaused}
+      onCancelPending={cancelPending}
       onStartNow={startNow}
       onCancelScheduled={cancelScheduled}
     />
@@ -816,75 +818,37 @@ export default function QueuePage() {
       subtitle={queueTab === 'jobs' ? t('queue.descriptionJobs') : t('queue.description')}
       actions={
         <>
-          {queueTab === 'jobs' && <>
-            {/* 数据作业视图：漏斗（kind 过滤）+ 刷新，与任务视图同位交互。 */}
-            <button
-              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
-              onClick={() => setFiltersOpen((o) => !o)}
-              aria-expanded={filtersOpen}
-              aria-controls={QUEUE_JOBS_LIST_TOOLBAR_ID}
-              aria-label={t('queue.filters')}
-              title={t('queue.filters')}
-              data-testid="queue-filter-toggle"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
-              </svg>
-              {!filtersOpen && (jobsKind !== null || jobsSearch.trim() !== '') && (
-                <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
-              )}
-            </button>
-            <button
-              onClick={() => setJobsRefreshToken((n) => n + 1)}
-              className="btn btn-ghost btn-sm"
-            >
-              {t('common.refresh')}
-            </button>
-          </>}
           {queueTab === 'tasks' && <>
-          {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
-          <button
-            className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
-            onClick={() => setFiltersOpen((o) => !o)}
-            aria-expanded={filtersOpen}
-            aria-controls={QUEUE_TASKS_LIST_TOOLBAR_ID}
-            aria-label={t('queue.filters')}
-            title={t('queue.filters')}
-            data-testid="queue-filter-toggle"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
-            </svg>
-            {!filtersOpen && filtering && (
-              <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+            {runningTask?.is_pausable && (
+              <button
+                onClick={() => requestPause(runningTask)}
+                disabled={busy || pausingTaskId !== null || pauseConfirmTaskId !== null}
+                className="btn btn-secondary btn-sm"
+                title={t('queue.pauseHint')}
+                data-testid="queue-pause-btn"
+              >
+                {t('queue.pause')}
+              </button>
             )}
-          </button>
-          {runningTask?.is_pausable && (
-            <button
-              onClick={() => requestPause(runningTask)}
-              disabled={busy || pausingTaskId !== null || pauseConfirmTaskId !== null}
-              className="btn btn-secondary btn-sm"
-              title={t('queue.pauseHint')}
-              data-testid="queue-pause-btn"
-            >
-              {t('queue.pause')}
-            </button>
-          )}
-          {hasRunning && (
-            <button
-              onClick={() => void cancelRunning()}
-              disabled={busy}
-              className="btn btn-secondary btn-sm text-warn border-warn"
-              title={t('queue.cancelHint')}
-            >
-              {t('queue.cancelCurrent')}
-            </button>
-          )}
+            {hasRunning && (
+              <button
+                onClick={() => void cancelRunning()}
+                disabled={busy}
+                className="btn btn-secondary btn-sm text-warn border-warn"
+                title={t('queue.cancelHint')}
+              >
+                {t('queue.cancelCurrent')}
+              </button>
+            )}
+            {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
+                version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
+          </>}
           {holdState && !holdState.held && (
             <button
               onClick={() => setHoldModalOpen(true)}
               disabled={busy}
               className="btn btn-ghost btn-sm"
+              title={t('queue.holdQueueHint')}
               data-testid="queue-hold-btn"
             >
               {t('queue.holdQueue')}
@@ -895,31 +859,52 @@ export default function QueuePage() {
               onClick={() => void releaseQueue()}
               disabled={busy}
               className="btn btn-secondary btn-sm"
+              title={t('queue.releaseQueueHint')}
               data-testid="queue-release-btn"
             >
               {t('queue.releaseQueue')}
             </button>
           )}
-          {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
-              version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
-          <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
-          </>}
-          {/* 0.17 P-G — 视图切换（放最右）：前置切换 icon（行为）+ 目标视图名
-              （宾语），读作「切到 X」——名词+后缀箭头会歧义成「当前+动作」。 */}
+          {/* 状态操作在左；筛选、刷新和视图切换在右，形成稳定的动作顺序。 */}
           <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
-            aria-pressed={queueTab === 'jobs'}
-            data-testid="queue-jobs-toggle"
+            className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+            aria-controls={queueTab === 'jobs' ? QUEUE_JOBS_LIST_TOOLBAR_ID : QUEUE_TASKS_LIST_TOOLBAR_ID}
+            aria-label={t('queue.filters')}
+            title={t('queue.filters')}
+            data-testid="queue-filter-toggle"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 1l4 4-4 4" />
-              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-              <path d="M7 23l-4-4 4-4" />
-              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+              <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
             </svg>
-            <span>{queueTab === 'jobs' ? t('queue.tabTasks') : t('queue.tabJobs')}</span>
+            {!filtersOpen && (queueTab === 'jobs'
+              ? jobsKind !== null || jobsSearch.trim() !== ''
+              : filtering) && (
+              <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+            )}
           </button>
+          <button
+            onClick={queueTab === 'jobs'
+              ? () => setJobsRefreshToken((n) => n + 1)
+              : () => void reload()}
+            className="btn btn-ghost btn-sm"
+          >
+            {t('common.refresh')}
+          </button>
+          <SegmentedControl
+            items={[
+              { value: 'tasks', label: t('queue.tabTasks') },
+              { value: 'jobs', label: t('queue.tabJobs') },
+            ]}
+            value={queueTab}
+            onChange={setQueueTab}
+            ariaLabel={t('queue.viewSwitcherLabel')}
+            idPrefix="queue-view"
+            size="sm"
+            layout="content"
+            className="ui-queue-view-switcher"
+          />
         </>
       }
       />
@@ -1042,11 +1027,21 @@ export default function QueuePage() {
             {t('queue.heldBanner')}
           </Alert>
         )}
-        {error && (
-          <Alert tone="danger" size="sm" role="alert" className="font-mono">
-            {error}
+        {queueTab === 'tasks' && [
+          { key: 'live', error: liveError, loading: liveLoading, reload: reloadLive, title: t('queue.liveLoadError') },
+          { key: 'history', error: historyError, loading: historyLoading, reload: reloadHistory, title: t('queue.historyLoadError') },
+        ].map((source) => source.error && (
+          <Alert key={source.key} tone="danger" size="sm" role="alert"
+            title={source.title} data-testid={`queue-${source.key}-error`}
+            action={(
+              <Button variant="secondary" size="sm" loading={source.loading} onClick={() => void source.reload()}>
+                {t('queue.reload')}
+              </Button>
+            )}
+          >
+            <span className="font-mono">{source.error}</span>
           </Alert>
-        )}
+        ))}
 
         {queueTab === 'jobs' ? (
           /* 0.17 P-G — 数据作业只读区（project_jobs）。kind 过滤/刷新由 header 下发。 */
@@ -1058,8 +1053,8 @@ export default function QueuePage() {
             onHistoryTotal={setJobsHistoryTotal}
             refreshToken={jobsRefreshToken}
           />
-        ) : !loaded ? (
-          <Card className="overflow-hidden">
+        ) : initialLoading ? (
+          <Card className="overflow-hidden" data-testid="queue-loading" role="status" aria-label={t('common.loading')}>
             {Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
@@ -1080,17 +1075,20 @@ export default function QueuePage() {
           </Card>
         ) : isEmpty ? (
           <EmptyState
-            title={t('queue.empty')}
-            description={t('queue.emptyHint')}
+            title={t(isFilteredEmpty ? 'queue.noMatch' : typeFilter === 'train' ? 'queue.empty' : 'queue.emptyAll')}
+            description={t(isFilteredEmpty ? 'queue.filteredEmptyHint' : typeFilter === 'train' ? 'queue.emptyHint' : 'queue.emptyAllHint')}
           />
         ) : (
           <div className="flex flex-col gap-section">
             {/* 进行中（running + paused） */}
             {activeItems.length > 0 && (
               <section className="flex flex-col gap-related">
-                <h3 className="type-section-label">
-                  {t('queue.sectionActive')} ({activeItems.length})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="active"
+                  title={t('queue.sectionActive')}
+                  count={activeItems.length}
+                />
                 {activeItems.map(renderRow)}
               </section>
             )}
@@ -1098,9 +1096,12 @@ export default function QueuePage() {
             {/* 等待入队（pending） */}
             {pendingItems.length > 0 && (
               <section className="flex flex-col gap-related">
-                <h3 className="type-section-label">
-                  {t('queue.sectionWaiting')} ({pendingItems.length})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="waiting"
+                  title={t('queue.sectionWaiting')}
+                  count={pendingItems.length}
+                />
                 {pendingItems.map(renderRow)}
               </section>
             )}
@@ -1108,25 +1109,32 @@ export default function QueuePage() {
             {/* 计划任务（scheduled，0.17 P-B）——到点自动转入等待入队 */}
             {scheduledItems.length > 0 && (
               <section className="flex flex-col gap-related" data-testid="queue-scheduled-section">
-                <h3 className="type-section-label">
-                  {t('queue.sectionScheduled')} ({scheduledItems.length})
-                </h3>
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="scheduled"
+                  title={t('queue.sectionScheduled')}
+                  count={scheduledItems.length}
+                />
                 {scheduledItems.map(renderRow)}
               </section>
             )}
 
             {/* 历史（terminal，后端分页） */}
-            <section className="flex flex-col gap-related">
-              <h3 className="type-section-label">
-                {t('queue.sectionHistory')} ({history.total})
-              </h3>
-
-              {history.items.length === 0 ? (
-                <EmptyState size="sm" description={t('queue.noMatch')} />
-              ) : (
-                history.items.map(renderRow)
-              )}
-            </section>
+            {(history.items.length > 0 || (historyLoaded && !historyError && !historyLoading)) && (
+              <section className="flex flex-col gap-related">
+                <QueueSectionHeader
+                  variant="task"
+                  sectionKey="history"
+                  title={t('queue.sectionHistory')}
+                  count={history.total}
+                />
+                {history.items.length === 0 ? (
+                  <EmptyState size="sm" description={t('queue.noMatch')} />
+                ) : (
+                  history.items.map(renderRow)
+                )}
+              </section>
+            )}
           </div>
         )}
       </div>
@@ -1135,7 +1143,7 @@ export default function QueuePage() {
       {/* 持久分页栏位于列表 scrollport 之后，始终固定在 route viewport 底部。
           item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
           20）；GPU / 数据两个视图共用同款底栏（P-G 反馈）。 */}
-      {queueTab === 'tasks' && loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
+      {queueTab === 'tasks' && historyLoaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
         <PaginationBar
           page={history.page}
           total={history.total}

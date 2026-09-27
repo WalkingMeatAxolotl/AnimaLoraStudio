@@ -8,6 +8,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type EvalMetricResult, type EvalMetricState, type EvalSessionSummary } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
+import Alert from './Alert'
+import Badge from './Badge'
+import Button from './Button'
+import Card from './Card'
+import EmptyState from './EmptyState'
+import { Select } from './FormControl'
 import { InfoButton } from './InfoButton'
 import { SeriesChart } from './SeriesChart'
 
@@ -26,13 +32,13 @@ const EVAL_LABELS: Record<EvalMetricKey, string> = {
   tag_recall: 'Tag-Recall',
 }
 
-// 每个指标一种线色（并排区分）。深色背景上高对比、可辨。
+// 指标线使用主题 token，确保浅色和深色表面都保持对比。
 const EVAL_COLORS: Record<EvalMetricKey, string> = {
-  clip_t: '#3fb950',
-  clip_i: '#58a6ff',
-  dino_i: '#bc8cff',
-  ccip_i: '#f778ba',
-  tag_recall: '#e3b341',
+  clip_t: 'var(--ok)',
+  clip_i: 'var(--info)',
+  dino_i: 'var(--accent)',
+  ccip_i: 'var(--err)',
+  tag_recall: 'var(--warn)',
 }
 
 const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
@@ -292,30 +298,27 @@ export function EvalMetricsPanel({
 
   if (!pid || !vid) {
     return (
-      <div className="card px-4 py-3 text-sm text-fg-tertiary">
-        当前任务未绑定项目版本，暂不能读取指标。
-      </div>
+      <EmptyState
+        embedded
+        size="sm"
+        description="当前任务未绑定项目版本，暂不能读取指标。"
+      />
     )
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <div className="text-sm font-semibold">指标</div>
+    <Card padding="md" className="flex flex-col gap-section">
+      <div className="flex items-center gap-related">
+        <h2 className="type-panel-title">指标</h2>
         <span className="flex-1" />
         {/* 历史评估切换：一次评估一个 Session，全部留档（#465）。钉死看某一次时
             （评估作业详情页）没有「切一次」的语义，不显示。 */}
         {sessionId == null && sessions.length > 1 && (
-          <select
-            className="font-mono cursor-pointer max-w-[260px] truncate"
-            style={{
-              fontSize: 11,
-              padding: '4px 8px',
-              borderRadius: 'var(--r-md)',
-              border: '1px solid var(--border-subtle)',
-              background: 'var(--bg-sunken)',
-              color: 'var(--fg-secondary)',
-            }}
+          <Select
+            controlSize="sm"
+            surface="sunken"
+            mono
+            className="max-w-[16.25rem] truncate"
             value={pickedSession ?? sessions[0].id}
             onChange={(e) => setPickedSession(Number(e.target.value))}
             title="查看历史评估"
@@ -329,81 +332,80 @@ export function EvalMetricsPanel({
                 {s.status !== 'done' ? ` · ${s.status}` : ''}
               </option>
             ))}
-          </select>
+          </Select>
         )}
         {evalAgg.active && (
-          <span
-            className="badge badge-accent text-xs"
+          <Badge
+            tone="accent"
+            size="sm"
+            active
             title="正在用验证集对各 checkpoint 出图并算指标，完成后消失"
           >
-            <span className="dot dot-running" />
             评估中 {evalAgg.done}/{evalAgg.total}
-          </span>
+          </Badge>
         )}
-        {loading && <span className="text-xs text-fg-tertiary">读取中…</span>}
+        {loading && <span role="status" className="text-xs text-fg-secondary">读取中…</span>}
         {/* 一次评估就是一个作业，中断 / 重试直接挂在结果面板上——用户看结果的地方
             就是他想操作的地方，不必先去队列里翻出那条 task。 */}
         {activeSession && (activeSession.status === 'pending' || activeSession.status === 'running') && (
-          <button
-            type="button"
+          <Button
+            variant="warning"
+            size="sm"
             onClick={() => void sessionAction('cancel')}
-            disabled={sessionBusy}
-            className="btn btn-ghost btn-sm"
+            loading={sessionBusy}
             title="中断这次评估，已算出的结果保留"
           >
             中断
-          </button>
+          </Button>
         )}
         {activeSession
           && ['failed', 'canceled', 'partial'].includes(activeSession.status) && (
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => void sessionAction('retry')}
-            disabled={sessionBusy}
-            className="btn btn-secondary btn-sm"
+            loading={sessionBusy}
             title="重跑没跑完的候选和指标（已完成的跳过）"
           >
             重试
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="btn btn-secondary btn-sm"
-        >
+        <Button variant="secondary" size="sm" onClick={() => void load()} loading={loading}>
           刷新
-        </button>
+        </Button>
       </div>
 
       {/* Session 终止原因 —— 之前只写在 DB 和作业日志里，面板上看不到，用户只知道
           「一直在转」。 */}
       {activeSession?.error
         && ['failed', 'canceled'].includes(activeSession.status) && (
-        <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-xs text-err">
+        <Alert tone="danger" size="sm" role="alert">
           评估{activeSession.status === 'canceled' ? '已中断' : '失败'}：{activeSession.error}
-        </div>
+        </Alert>
       )}
-      {runMsg && <div className="text-[11px] text-fg-tertiary">{runMsg}</div>}
+      {runMsg && <div role="status" className="text-xs text-fg-secondary">{runMsg}</div>}
 
       {error ? (
-        <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-sm text-err">
+        <Alert tone="danger" size="sm" role="alert">
           评估指标读取失败：{error}
-        </div>
+        </Alert>
       ) : results.length === 0 ? (
-        <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
-          暂无评估结果。在概览的「评估」里点「创建新评估」选 LoRA 文件，或在训练配置开启「训练后指标评估」，训练结束后自动用验证集算 CLIP-T、CLIP-I、DINO-I。
-        </div>
+        <EmptyState
+          embedded
+          size="sm"
+          description="暂无评估结果。在概览的「评估」里创建新评估，或在训练配置中开启训练后指标评估。"
+        />
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 gap-section md:grid-cols-3">
             {displayKeys.map((key) => {
               const latest = latestByKey[key]
               const tone = stateTone(latest?.state, latest?.value)
               const series = seriesByKey[key].map((p) => ({ step: p.x, value: p.value }))
               return (
-                <div key={key} className="card p-4 flex flex-col min-w-0">
-                  <div className="flex items-center justify-between gap-2 mb-1 shrink-0">
-                    <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+                <section key={key} className="flex min-w-0 flex-col border-t border-subtle pt-section">
+                  <div className="mb-1 flex shrink-0 items-center justify-between gap-related">
+                    <span className="inline-flex items-center gap-related text-sm font-semibold">
                       {EVAL_LABELS[key]}
                       <InfoButton ariaLabel={`${EVAL_LABELS[key]} 指标说明`}>
                         <p>{EVAL_DESCRIPTIONS[key]}</p>
@@ -413,7 +415,7 @@ export function EvalMetricsPanel({
                       {latest?.state?.status ?? 'not_run'}
                     </span>
                   </div>
-                  <div className="flex items-baseline gap-2 shrink-0 mb-1.5">
+                  <div className="mb-related flex shrink-0 items-baseline gap-related">
                     <span className={`text-2xl font-semibold font-mono tabular-nums ${toneClass(tone)}`}>
                       {formatEvalValue(latest?.value ?? null, latest?.state)}
                     </span>
@@ -428,7 +430,7 @@ export function EvalMetricsPanel({
                         </span>
                       ) : null
                     })()}
-                    <span className="text-[11px] text-fg-tertiary truncate">
+                    <span className="truncate text-xs text-fg-secondary">
                       {latest ? checkpointLabel(latest.result) : '等待指标'}
                     </span>
                   </div>
@@ -441,22 +443,22 @@ export function EvalMetricsPanel({
                     height={132}
                     refLine={baselineByKey[key]}
                   />
-                </div>
+                </section>
               )
             })}
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto border-t border-subtle pt-section">
             <table className="w-full text-xs">
-              <thead className="text-fg-tertiary">
+              <thead className="type-data-label text-fg-secondary">
                 <tr className="border-b border-subtle">
-                  <th className="text-left font-medium py-1.5 pr-3">checkpoint</th>
+                  <th className="py-related pr-field text-left font-medium">checkpoint</th>
                   {displayKeys.map((key) => (
-                    <th key={key} className="text-right font-medium py-1.5 px-2">
+                    <th key={key} className="px-related py-related text-right font-medium">
                       {EVAL_LABELS[key]}
                     </th>
                   ))}
-                  <th className="text-right font-medium py-1.5 pl-3">状态</th>
+                  <th className="py-related pl-field text-right font-medium">状态</th>
                 </tr>
               </thead>
               <tbody>
@@ -464,7 +466,7 @@ export function EvalMetricsPanel({
                   const rowStatus = evalRowStatus(result)
                   return (
                     <tr key={result.run_id} className="border-b border-subtle last:border-0">
-                      <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
+                      <td className="max-w-[13.75rem] truncate py-related pr-field font-mono" title={checkpointLabel(result)}>
                         {checkpointLabel(result)}
                       </td>
                       {displayKeys.map((key) => {
@@ -473,11 +475,11 @@ export function EvalMetricsPanel({
                         const tone = stateTone(state, value)
                         const d = result.delta?.[key]
                         return (
-                          <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
+                          <td key={key} className={`px-related py-related text-right font-mono tabular-nums ${toneClass(tone)}`}>
                             {formatEvalValue(value, state)}
                             {d != null && value != null && (
                               <span
-                                className={`ml-1 text-[10px] ${d >= 0 ? 'text-ok' : 'text-err'}`}
+                                className={`ml-1 text-xs ${d >= 0 ? 'text-ok' : 'text-err'}`}
                                 title="相对纯底模 baseline 的 Δ"
                               >
                                 {d >= 0 ? '+' : ''}{d.toFixed(4)}
@@ -486,7 +488,7 @@ export function EvalMetricsPanel({
                           </td>
                         )
                       })}
-                      <td className="py-1.5 pl-3 text-right font-mono">
+                      <td className="py-related pl-field text-right font-mono">
                         <span className={toneClass(rowStatus.tone)}>{rowStatus.text}</span>
                       </td>
                     </tr>
@@ -498,6 +500,6 @@ export function EvalMetricsPanel({
         </>
       )}
 
-    </div>
+    </Card>
   )
 }

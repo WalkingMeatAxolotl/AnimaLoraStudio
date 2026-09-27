@@ -130,10 +130,13 @@ describe('Sidebar (PP0)', () => {
     toggle.focus()
     fireEvent.click(toggle)
 
+    expect(navigation).toHaveClass('ui-app-shell-sidebar-nav-collapsed')
     expect(sidebar).toHaveAttribute('data-collapsed', 'true')
     expect(window.sessionStorage.getItem('studio.sidebar.expanded')).toBe('0')
     const expand = screen.getByRole('button', { name: '展开' })
     expect(expand).toBe(toggle)
+    expect(expand).toHaveClass('mx-auto')
+    expect(expand).not.toHaveClass('w-full')
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).toHaveFocus()
   })

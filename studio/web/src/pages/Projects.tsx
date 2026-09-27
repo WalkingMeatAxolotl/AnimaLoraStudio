@@ -1,12 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api, type BundleImportResult, type ProjectSummary, type VersionStatus } from '../api/client'
+import ActionGroup from '../components/ActionGroup'
 import Alert from '../components/Alert'
 import Button from '../components/Button'
 import Card from '../components/Card'
 import EmptyState from '../components/EmptyState'
-import { Input, Select } from '../components/FormControl'
+import { Checkbox, Input, Select } from '../components/FormControl'
 import ListToolbar from '../components/ListToolbar'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
@@ -21,6 +22,7 @@ import { useUploadProgress } from '../lib/useUploadProgress'
 
 export type ProjectSortKey = 'updated' | 'created' | 'title'
 export type ProjectStatusFilter = VersionStatus | 'all'
+type ProjectBatchAction = 'archive' | 'restore' | 'delete'
 
 const STATUS_OPTIONS: ProjectStatusFilter[] = [
   'all', 'preparing', 'training', 'completed', 'failed', 'canceled',
@@ -64,6 +66,11 @@ export default function ProjectsPage() {
   const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>('all')
   const [sortKey, setSortKey] = useLocalStorageState<ProjectSortKey>('studio:projects:sort', 'updated')
   const [showArchived, setShowArchived] = useState(false)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [batchAction, setBatchAction] = useState<ProjectBatchAction | null>(null)
+  const batchModeButtonRef = useRef<HTMLButtonElement>(null)
+  const archivedToggleRef = useRef<HTMLButtonElement>(null)
   const navigate = useNavigate()
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -93,6 +100,19 @@ export default function ProjectsPage() {
       setSelectedProject?.(null)
     }
   }, [items, loading, selectedProject, setSelectedProject])
+
+  useEffect(() => {
+    setSelectedIds((previous) => {
+      if (previous.size === 0) return previous
+      const existing = new Set(
+        items
+          .filter((project) => (project.archived_at != null) === showArchived)
+          .map((project) => project.id),
+      )
+      const next = new Set([...previous].filter((id) => existing.has(id)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [items, showArchived])
 
   useEventStream((evt) => {
     if (evt.type === 'project_state_changed') void refresh()
@@ -237,11 +257,109 @@ export default function ProjectsPage() {
   const archivedItems = items.filter((p) => p.archived_at != null)
   const filterOpts = { query, status: statusFilter, sort: sortKey }
   // 归档开关是视图切换（radio 语义）：开 = 只看已归档，关 = 只看活跃
-  const visible = filterProjects(
-    showArchived ? archivedItems : items.filter((p) => p.archived_at == null),
-    filterOpts,
-  )
+  const projectsInView = showArchived
+    ? archivedItems
+    : items.filter((project) => project.archived_at == null)
+  const visible = filterProjects(projectsInView, filterOpts)
   const filtering = query.trim() !== '' || statusFilter !== 'all'
+  const selectedProjects = visible.filter((project) => selectedIds.has(project.id))
+  const allVisibleSelected = visible.length > 0 && selectedProjects.length === visible.length
+
+  const pruneSelectionTo = (nextQuery: string, nextStatus: ProjectStatusFilter) => {
+    const nextVisibleIds = new Set(filterProjects(projectsInView, {
+      query: nextQuery,
+      status: nextStatus,
+      sort: sortKey,
+    }).map((project) => project.id))
+    setSelectedIds((previous) => new Set(
+      [...previous].filter((id) => nextVisibleIds.has(id)),
+    ))
+  }
+
+  const leaveBatchMode = (restoreFocus = true) => {
+    setBatchMode(false)
+    setSelectedIds(new Set())
+    if (restoreFocus) {
+      requestAnimationFrame(() => (
+        batchModeButtonRef.current ?? archivedToggleRef.current
+      )?.focus())
+    }
+  }
+
+  const switchArchivedView = () => {
+    setShowArchived((value) => !value)
+    leaveBatchMode(false)
+  }
+
+  const toggleProjectSelection = (projectId: number) => {
+    if (batchAction) return
+    setSelectedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(projectId)) next.delete(projectId)
+      else next.add(projectId)
+      return next
+    })
+  }
+
+  const selectCurrentResults = () => {
+    if (batchAction) return
+    setSelectedIds(new Set(visible.map((project) => project.id)))
+  }
+
+  const selectionPreview = () => {
+    const names = selectedProjects.slice(0, 3).map((project) => project.title).join(', ')
+    const remaining = selectedProjects.length - 3
+    return t('projects.batchPreview', {
+      names,
+      more: remaining > 0 ? t('projects.batchPreviewMore', { n: remaining }) : '',
+    })
+  }
+
+  const handleBatchAction = async (action: ProjectBatchAction) => {
+    if (batchAction || selectedProjects.length === 0) return
+    const ids = selectedProjects.map((project) => project.id)
+    const count = ids.length
+    const key = action === 'archive'
+      ? 'batchArchive'
+      : action === 'restore'
+        ? 'batchRestore'
+        : 'batchDelete'
+    if (!(await confirm(
+      t(`projects.${key}Confirm`, { n: count, preview: selectionPreview() }),
+      {
+        tone: action === 'delete' ? 'danger' : 'default',
+        title: t(`projects.${key}Title`, { n: count }),
+        okText: t(`projects.${key}Action`, { n: count }),
+      },
+    ))) return
+
+    setBatchAction(action)
+    try {
+      if (action === 'archive') await api.archiveProjects(ids)
+      else if (action === 'restore') await api.unarchiveProjects(ids)
+      else {
+        const result = await api.deleteProjects(ids)
+        if (result.failed.length > 0) {
+          await refresh()
+          setSelectedIds(new Set(result.failed.map((failure) => failure.id)))
+          toast(t(
+            result.deleted.length > 0
+              ? 'projects.batchDeletePartial'
+              : 'projects.batchDeleteFailed',
+            { deleted: result.deleted.length, failed: result.failed.length },
+          ), 'error')
+          return
+        }
+      }
+      toast(t(`projects.${key}Success`, { n: count }), 'success')
+      await refresh()
+      leaveBatchMode()
+    } catch (err) {
+      toast(String(err), 'error')
+    } finally {
+      setBatchAction(null)
+    }
+  }
 
   return (
     <div className="fade-in">
@@ -257,6 +375,7 @@ export default function ProjectsPage() {
               size="sm"
               iconOnly
               onClick={() => setFiltersOpen((o) => !o)}
+              disabled={batchAction !== null}
               aria-expanded={filtersOpen}
               aria-controls={PROJECTS_LIST_TOOLBAR_ID}
               aria-label={`${t('projects.filters')}${!filtersOpen && filtering ? `, ${t('projects.filtersActive')}` : ''}`}
@@ -271,39 +390,70 @@ export default function ProjectsPage() {
             </Button>
             {/* 已归档视图开关（radio 语义：开 = 列表只显示已归档项目） */}
             <Button
+              ref={archivedToggleRef}
               variant={showArchived ? 'secondary' : 'ghost'}
               size="sm"
-              onClick={() => setShowArchived((v) => !v)}
+              onClick={switchArchivedView}
+              disabled={batchAction !== null}
               aria-pressed={showArchived}
               title={t('projects.archivedToggleHint')}
             >
               {t('projects.archivedToggle', { n: archivedItems.length })}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowImportDialog(true)}
-              disabled={importing}
-              title={importing ? t('projects.importing') : t('projects.importZipHint')}
-            >
-              {importing ? t('projects.importing') : t('projects.importZip')}
-            </Button>
-            <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              <span>{t('projects.newProject')}</span>
-            </Button>
+            {(batchMode || visible.length > 0) && (
+              <Button
+                ref={batchModeButtonRef}
+                variant={batchMode ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  if (batchMode) leaveBatchMode()
+                  else {
+                    setSelectedIds(new Set())
+                    setBatchMode(true)
+                  }
+                }}
+                disabled={batchAction !== null}
+                aria-pressed={batchMode}
+              >
+                {batchMode ? t('common.done') : t('projects.batchManage')}
+              </Button>
+            )}
+            {!batchMode && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowImportDialog(true)}
+                  disabled={importing}
+                  title={importing ? t('projects.importing') : t('projects.importZipHint')}
+                >
+                  {importing ? t('projects.importing') : t('projects.importZip')}
+                </Button>
+                <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  <span>{t('projects.newProject')}</span>
+                </Button>
+              </>
+            )}
           </>
         }
       />
 
       <ProjectFilterBar
         hidden={!filtersOpen}
+        disabled={batchAction !== null}
         query={query}
-        onQuery={setQuery}
+        onQuery={(value) => {
+          pruneSelectionTo(value, statusFilter)
+          setQuery(value)
+        }}
         status={statusFilter}
-        onStatus={setStatusFilter}
+        onStatus={(value) => {
+          pruneSelectionTo(query, value)
+          setStatusFilter(value)
+        }}
         sort={sortKey}
         onSort={setSortKey}
       />
@@ -314,12 +464,29 @@ export default function ProjectsPage() {
         itemCount={items.length}
         visibleCount={visible.length}
       >
-        <div className="ui-project-grid grid gap-section auto-rows-fr">
+        {batchMode && (
+          <ProjectBatchBar
+            archived={showArchived}
+            selectedCount={selectedProjects.length}
+            allCurrentSelected={allVisibleSelected}
+            busyAction={batchAction}
+            onSelectCurrent={selectCurrentResults}
+            onClear={() => setSelectedIds(new Set())}
+            onArchive={() => void handleBatchAction('archive')}
+            onRestore={() => void handleBatchAction('restore')}
+            onDelete={() => void handleBatchAction('delete')}
+          />
+        )}
+        <div className={`ui-project-grid grid gap-section auto-rows-fr ${batchMode ? 'mt-section' : ''}`}>
           {visible.map((p) => (
             <ProjectCard
               key={p.id}
               project={p}
               archived={showArchived}
+              selectable={batchMode}
+              selected={selectedIds.has(p.id)}
+              selectionDisabled={batchAction !== null}
+              onToggleSelected={() => toggleProjectSelection(p.id)}
               onClick={() => openProject(p)}
               onEdit={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(p) }}
               onArchive={(e) => handleArchive(p, e)}
@@ -378,6 +545,7 @@ export default function ProjectsPage() {
  * 搜索 / 状态 / 排序的业务状态仍由 Projects 页面持有。 */
 export function ProjectFilterBar({
   hidden,
+  disabled = false,
   query,
   onQuery,
   status,
@@ -386,6 +554,7 @@ export function ProjectFilterBar({
   onSort,
 }: {
   hidden?: boolean
+  disabled?: boolean
   query: string
   onQuery: (v: string) => void
   status: ProjectStatusFilter
@@ -404,6 +573,7 @@ export function ProjectFilterBar({
         <Input
           controlSize="sm"
           value={query}
+          disabled={disabled}
           onChange={(e) => onQuery(e.target.value)}
           placeholder={t('projects.searchPlaceholder')}
           aria-label={t('common.search')}
@@ -413,6 +583,7 @@ export function ProjectFilterBar({
         <Select
           controlSize="sm"
           value={status}
+          disabled={disabled}
           onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
           aria-label={t('common.status')}
         >
@@ -427,6 +598,7 @@ export function ProjectFilterBar({
         <Select
           controlSize="sm"
           value={sort}
+          disabled={disabled}
           onChange={(e) => onSort(e.target.value as ProjectSortKey)}
           aria-label={t('projects.sortLabel')}
         >
@@ -436,6 +608,100 @@ export function ProjectFilterBar({
         </Select>
       )}
     />
+  )
+}
+
+export function ProjectBatchBar({
+  archived,
+  selectedCount,
+  allCurrentSelected,
+  busyAction,
+  onSelectCurrent,
+  onClear,
+  onArchive,
+  onRestore,
+  onDelete,
+}: {
+  archived: boolean
+  selectedCount: number
+  allCurrentSelected: boolean
+  busyAction: ProjectBatchAction | null
+  onSelectCurrent: () => void
+  onClear: () => void
+  onArchive: () => void
+  onRestore: () => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const busy = busyAction !== null
+
+  return (
+    <Card as="section" padding="sm" radius="compact" aria-label={t('projects.batchActions')}>
+      <div className="flex flex-wrap items-center justify-between gap-section">
+        <div
+          className="flex min-w-0 flex-wrap items-center gap-related"
+          role="group"
+          aria-label={t('projects.batchSelectionActions')}
+        >
+          <span className="mr-field text-sm font-medium text-fg-primary" role="status" aria-live="polite">
+            {t('projects.batchSelectedCount', { n: selectedCount })}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onSelectCurrent}
+            disabled={busy || allCurrentSelected}
+          >
+            {t('projects.selectCurrentResults')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClear}
+            disabled={busy || selectedCount === 0}
+          >
+            {t('common.deselect')}
+          </Button>
+        </div>
+
+        <ActionGroup
+          className="ml-auto border-l border-subtle pl-section"
+          aria-label={t('projects.batchActions')}
+          secondary={archived ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={onRestore}
+              disabled={busy || selectedCount === 0}
+              loading={busyAction === 'restore'}
+            >
+              {t('projects.restoreSelected', { n: selectedCount })}
+            </Button>
+          ) : undefined}
+          primary={archived ? (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={onDelete}
+              disabled={busy || selectedCount === 0}
+              loading={busyAction === 'delete'}
+            >
+              {t('projects.deleteSelected', { n: selectedCount })}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={onArchive}
+              disabled={busy || selectedCount === 0}
+              loading={busyAction === 'archive'}
+            >
+              {t('projects.archiveSelected', { n: selectedCount })}
+            </Button>
+          )}
+        />
+      </div>
+    </Card>
   )
 }
 
@@ -573,6 +839,10 @@ export function ProjectsCollectionSurface({
 export function ProjectCard({
   project: p,
   archived = false,
+  selectable = false,
+  selected = false,
+  selectionDisabled = false,
+  onToggleSelected,
   onClick,
   onEdit,
   onArchive,
@@ -582,6 +852,10 @@ export function ProjectCard({
   project: ProjectSummary
   /** 已归档卡片：半透明 + ↺ 恢复（在 × 左边）+ × 真删；普通卡片 × = 归档。 */
   archived?: boolean
+  selectable?: boolean
+  selected?: boolean
+  selectionDisabled?: boolean
+  onToggleSelected?: () => void
   onClick: () => void
   onEdit?: (e: React.MouseEvent) => void
   onArchive?: (e: React.MouseEvent) => void
@@ -597,18 +871,36 @@ export function ProjectCard({
       interactive
       padding="md"
       aria-labelledby={titleId}
-      className={`group relative flex w-full flex-col gap-field text-left ${archived ? 'opacity-70' : ''}`}
+      aria-disabled={selectable && selectionDisabled ? true : undefined}
+      data-selected={selectable ? selected : undefined}
+      onClick={selectable && !selectionDisabled ? onToggleSelected : undefined}
+      className={`group relative flex w-full flex-col gap-field text-left ${
+        selectable ? 'cursor-pointer' : archived ? 'opacity-70' : ''
+      } ${selectionDisabled ? 'cursor-wait opacity-60' : ''}`}
     >
-      <button
-        type="button"
-        onClick={onClick}
-        aria-label={t('projects.openProject', { title: p.title })}
-        className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] border-0 bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-      />
+      {!selectable && (
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={t('projects.openProject', { title: p.title })}
+          className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] border-0 bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+        />
+      )}
 
       <div className="pointer-events-none relative z-[1] flex flex-1 flex-col gap-field">
         {/* ADR-0007 §11.8-E: 右上角 = active version status；去 stage badge / 时间 / 产物 */}
         <div className="flex items-start justify-between gap-related">
+          {selectable && (
+            <Checkbox
+              controlSize="sm"
+              className="pointer-events-auto mt-0.5 shrink-0"
+              checked={selected}
+              disabled={selectionDisabled}
+              onClick={(event) => event.stopPropagation()}
+              onChange={onToggleSelected}
+              aria-label={t('projects.selectProject', { title: p.title })}
+            />
+          )}
           <div className="flex min-w-0 flex-1 flex-col gap-related">
             <h2
               id={titleId}
@@ -638,8 +930,9 @@ export function ProjectCard({
             <span className="text-fg-tertiary italic text-xs">{t('projects.noActiveVersion')}</span>
           )}
           <span className="flex-1" />
-          {/* 操作图标默认隐藏，hover / 键盘聚焦卡片时淡入，减少常驻视觉噪声 */}
-          <div className="pointer-events-none flex gap-related items-center opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+          {!selectable && (
+            /* 操作图标默认隐藏，hover / 键盘聚焦卡片时淡入，减少常驻视觉噪声 */
+            <div className="pointer-events-none flex gap-related items-center opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
             <Button
               variant="ghost"
               size="xs"
@@ -688,7 +981,8 @@ export function ProjectCard({
                 ×
               </Button>
             )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </Card>

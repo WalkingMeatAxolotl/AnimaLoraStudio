@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import sys
 from pathlib import Path
 
@@ -268,7 +269,11 @@ def main() -> None:
     failed_count = 0
     for pi, prompt in enumerate(prompts):
         for ci in range(count):
-            seed = (base_seed + img_idx) if base_seed != 0 else random.randint(0, 2**31 - 1)
+            seed = (
+                (base_seed + img_idx)
+                if base_seed != 0
+                else secrets.randbelow(2**31 - 1) + 1
+            )
             torch.manual_seed(seed)
             random.seed(seed)
 
@@ -433,7 +438,7 @@ def _run_xy_matrix(
             )
 
     if base_seed == 0:
-        base_seed = random.randint(0, 2**31 - 1)
+        base_seed = secrets.randbelow(2**31 - 1) + 1
         logger.info(msg("generate.xy_shared_seed", seed=base_seed))
 
     base_scales = [float(s.scale) for s in base_specs]

@@ -1,7 +1,7 @@
 # JSON Caption 格式规范
 
 > **适用范围**：分类 JSON caption（fixed / character / series / artist + 分类 shuffle）服务
-> Anima 的 booru tag 生态。Krea 2 用自然语言长 caption（LLM 打标器输出，长度不设上限），
+> Anima 的 booru tag 生态。Krea 2 用自然语言 caption（程序不按512 token截断，仍受上下文与资源限制），
 > 一般直接用 TXT / 扁平文本即可，不需要本格式的分类结构。
 
 AnimaLoraStudio 支持结构化的 JSON 标签文件，相比传统 TXT 文件有以下优势：
@@ -53,7 +53,8 @@ dataset/
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `fixed.quality` | string | 质量标签，固定在最前 |
+| `meta.trigger` | string | 可选触发词，渲染时放在最前 |
+| `fixed.quality` | string | 质量标签，位于可选触发词之后 |
 | `fixed.series` | string | 作品/项目名 |
 | `fixed.artist` | string | 画师标签（必须带 @） |
 | `character.name` | string | 角色名 |
@@ -91,13 +92,15 @@ dataset/
 
 ## 渲染顺序
 
-JSON 会按以下顺序渲染为最终 caption：
+未被顶层扁平列表覆盖的分类 JSON，按以下顺序渲染为最终 caption：
 
 ```
-quality → count → character → series → artist → appearance → tags → environment. nl
+可选 meta.trigger → quality → count → character → series → artist → appearance → tags → environment. nl
 ```
 
-**示例输出**：
+触发词缺省时直接从quality开始。标签编辑后的完整格式若含顶层扁平`tags`，遵循上面的编辑优先级，不再恢复旧分类顺序。
+
+**示例输出（未设置 `meta.trigger`）**：
 ```
 newest, safe, 1girl, hatsune miku, vocaloid, @wlop, long hair, blue hair, twintails, blue eyes, singing, microphone, concert, dynamic pose, stage, spotlight, crowd, night. Miku performs energetically on stage.
 ```
@@ -108,6 +111,7 @@ newest, safe, 1girl, hatsune miku, vocaloid, @wlop, long hair, blue hair, twinta
 
 | 字段 | 是否打乱 |
 |------|----------|
+| meta.trigger（若有） | ❌ 固定在最前 |
 | quality | ❌ 固定 |
 | count | ❌ 固定 |
 | character | ❌ 固定 |
@@ -135,7 +139,9 @@ tags: ["looking at viewer", "smile", "standing"]
 
 - **LLM 打标器 + JSON 输出预设**（如 `general_json` / `style_json`）→ 生成符合此格式的 `.json` 文件
 - **本地打标器**（wd14 / CLTagger）与 **LLM 文本预设** → 生成 `.txt` 文件（触发词 prepend 在第一位）
-- 图片已有 `.json` 时，重新打标会更新其中的 `tags` 数组并保留其余字段（含 `meta.trigger`），不改变文件格式
+- 图片已有 `.json` 且选择了实际重打标时，会更新其中的 `tags` 数组并保留其余字段（含 `meta.trigger`），不改变文件格式
+
+页面默认跳过已有caption，因此跳过的文件也不会补写或替换触发词。导入人工caption后，先在标签编辑检查trigger；不要为补trigger无意覆盖整份描述。
 
 生成的 JSON 包含：
 - 从目录结构提取的 character/variant
@@ -172,14 +178,14 @@ tag_dropout: 0.05        # 可选：5% 标签随机丢弃
 回退同名 `.txt`。
 
 TXT 模式下 `tag_dropout` 同样生效：`keep_tokens` 前缀不参与打乱与 dropout，
-其余 tag 逐个独立丢弃（与 kohya 语义一致）。
+其余 tag 逐个独立丢弃（与 kohya 语义一致）。`keep_tokens` 计数按最终文本的逗号分隔项，前置触发词也占位置；不要把“前N项”理解成固定保护某N个语义字段。
 
 ## 迁移指南
 
 ### 从 TXT 迁移到 JSON
 
 1. 在 Studio 打标页用 LLM 打标器、选 JSON 输出预设重新打标
-2. 或手动转换：
+2. 或手动转换（下例仅演示**无额外前置trigger、字段位置固定**的TXT；先备份并抽样检查。若字段缺失、顺序不同或有trigger，需要改映射，不能直接批量套用）：
 
 ```python
 # txt_to_json.py

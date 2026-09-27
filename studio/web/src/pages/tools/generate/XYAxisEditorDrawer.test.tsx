@@ -16,6 +16,8 @@ const source: LoraCatalogSource = {
   item_count: 3,
   error: null,
   project_archived: false,
+  created_at: 100,
+  updated_at: 200,
 }
 
 function item(name: string, kind: LoraCatalogItem['kind']): LoraCatalogItem {

@@ -192,6 +192,21 @@ def test_full_run_produces_done_session_and_report(
     assert all(c["status"] == eval_session.STATUS_DONE for c in candidates)
     assert all(c["samples_done"] == 2 for c in candidates)
     assert all(c["run_id"] for c in candidates)
+    planned_seed = int(session["plan"]["generation"]["seed"])
+    candidate_runs = [
+        eval_samples.load_run(
+            vdir, str(c["run_id"]), eval_session.samples_root(sid),
+        )
+        for c in candidates
+    ]
+    assert all(run is not None for run in candidate_runs)
+    assert {int(run["generation"]["seed"]) for run in candidate_runs if run} == {
+        planned_seed,
+    }
+    assert {
+        tuple(int(item["seed"]) for item in run["items"])
+        for run in candidate_runs if run
+    } == {(planned_seed, planned_seed + 1)}
     # 每个候选 3 个指标都有值
     for cand in candidates:
         rows = {r["metric_key"]: r for r in results[int(cand["id"])]}

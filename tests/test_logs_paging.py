@@ -36,7 +36,14 @@ def test_missing_returns_empty_page() -> None:
     assert page["lines"] == [] and page["size"] == 0 and page["has_more_before"] is False
 
 
-def test_tail_default_and_offsets(log_file: Path) -> None:
+def test_default_tail_returns_latest_2000_lines(log_file: Path) -> None:
+    lines = _write_lines(log_file, 2001)
+    page = logs_mod.read_task_log_page(7)
+    assert [l["text"].encode() for l in page["lines"]] == lines[-2000:]
+    assert page["has_more_before"] is True
+
+
+def test_tail_and_offsets(log_file: Path) -> None:
     lines = _write_lines(log_file, 10)
     page = logs_mod.read_task_log_page(7, tail=3, limit=3)
     assert [l["text"] for l in page["lines"]] == ["line-00007", "line-00008", "line-00009"]

@@ -139,9 +139,12 @@ def test_write_single_names_injects_and_records(env) -> None:
     params = json.loads(text["anima_params"])
     assert params["task_id"] == task_id
     assert params["mode"] == "single"
+    assert params["seed"] == 7
+    assert "Seed: 7" in text["parameters"]
     assert "parameters" in text  # a1111 块
     imgs = _images(task_id)
     assert [i["src"] for i in imgs] == ["img_p0_0.png", "img_p0_1.png"]
+    assert imgs[0]["seed"] == 7
     assert imgs[0]["file"].endswith("/single/single image 1.png")
     assert "\\" not in imgs[0]["file"]  # DB 统一正斜杠
 
@@ -187,8 +190,26 @@ def test_handle_image_done_temp_records_cache_item(env) -> None:
         save_to_disk=False,
     )
     imgs = _images(task_id)
-    assert imgs[0] == {"cache": "img_p0_0.png"}
-    assert imgs[1] == {"cache": "c0.png", "xi": 2, "yi": 1}
+    assert imgs[0] == {"cache": "img_p0_0.png", "seed": 7}
+    assert imgs[1] == {"cache": "c0.png", "seed": 7, "xi": 2, "yi": 1}
+
+
+def test_handle_image_done_replaces_random_sentinel_in_task_history(env) -> None:
+    task_id, _ = env
+    with db.connection_for() as conn:
+        db.update_task(
+            conn, task_id,
+            generate_params=json.dumps(_snapshot(seed=0), ensure_ascii=False),
+        )
+
+    storage.handle_image_done(
+        task_id, "img.png", _png_bytes(), _snapshot(seed=654321),
+        mode="single", xy_info=None, save_to_disk=False,
+    )
+
+    with db.connection_for() as conn:
+        params = json.loads(db.get_task(conn, task_id)["generate_params"])
+    assert params["seed"] == 654321
 
 
 # ---------------------------------------------------------------------------

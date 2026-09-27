@@ -240,7 +240,7 @@ def _defer_dit_for_text_cache(ctx: TrainingContext) -> bool:
     )
 
 
-def _validate_fp8_base(ctx: TrainingContext) -> None:
+def _validate_fp8_base(ctx: TrainingContext) -> bool:
     """fp8 底模（fp8_base 训练）的组合校验——fail-fast 于任何大加载之前。
 
     探测只读 safetensors header（毫秒级），非 fp8 底模零开销直通。目前只有
@@ -256,7 +256,7 @@ def _validate_fp8_base(ctx: TrainingContext) -> None:
 
     args = ctx.args
     if not checkpoint_contains_fp8(getattr(args, "transformer_path", "") or ""):
-        return
+        return False
     problems = []
     if not bool(getattr(args, "grad_checkpoint", True)):
         problems.append(
@@ -273,6 +273,7 @@ def _validate_fp8_base(ctx: TrainingContext) -> None:
             "fp8 底模与当前配置不兼容：\n- " + "\n- ".join(problems)
         )
     logger.info(msg("train.fp8_base_detected"))
+    return True
 
 
 def run(ctx: TrainingContext) -> None:
@@ -282,7 +283,20 @@ def run(ctx: TrainingContext) -> None:
     if ctx.family is None:
         ctx.family = resolve_family(ctx.args)
     _resolve_paths(ctx)
-    _validate_fp8_base(ctx)
+    fp8_base = _validate_fp8_base(ctx)
+
+    # Adapter-specific startup work stays behind the plugin registry.  For
+    # LyCORIS optional kernels this runs an isolated CUDA F/B probe before the
+    # large DiT is loaded or the parent process imports LyCORIS; failure changes
+    # this process to the safe torch backend.  Other adapters are a no-op.
+    from training.adapters import prepare_adapter
+
+    prepare_adapter(
+        ctx.args,
+        device=ctx.device,
+        dtype=ctx.dtype,
+        fp8_base=fp8_base,
+    )
 
     if _defer_dit_for_text_cache(ctx):
         logger.info(msg("train.text_cache_order"))

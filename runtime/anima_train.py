@@ -115,26 +115,36 @@ from training.loss_weighting import compute_loss_weight  # noqa: E402
 # ============================================================================
 
 def main():
-    """ADR 0003 PR-B：main() 现在只编排 phase。
+    """Keep the CLI entry point and argument parsing contract unchanged."""
+    run_training(parse_args())
 
-    每个 phase 是个 `run(ctx)` 函数，按顺序 in-place mutate TrainingContext。
-    具体实现在 runtime/training/phases/。
-    """
+
+def run_training(args, *, observer=None):
+    """Run the single production pipeline with optional boundary observation."""
     from training import phases
     from training.context import TrainingContext
     from training import loop
 
-    args = parse_args()
     ctx = TrainingContext(args=args)
-    phases.bootstrap.run(ctx)
-    phases.models.run(ctx)
-    phases.dataset.run(ctx)
-    phases.text_cache.run(ctx)
-    phases.models.finish(ctx)
-    phases.optimizer.run(ctx)
-    phases.resume.run(ctx)
-    loop.run(ctx)
-    phases.finalize.run(ctx)
+    for name, phase in (
+        ("bootstrap", phases.bootstrap.run),
+        ("models", phases.models.run),
+        ("dataset", phases.dataset.run),
+        ("text_cache", phases.text_cache.run),
+        ("models_finish", phases.models.finish),
+        ("optimizer", phases.optimizer.run),
+        ("resume", phases.resume.run),
+        ("loop", loop.run),
+        ("finalize", phases.finalize.run),
+    ):
+        if observer is not None:
+            observer.phase_started(name, ctx)
+        if name == "loop" and observer is not None:
+            phase(ctx, observer=observer)
+        else:
+            phase(ctx)
+        if observer is not None:
+            observer.phase_finished(name, ctx)
 
 
 if __name__ == "__main__":

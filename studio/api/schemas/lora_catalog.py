@@ -31,6 +31,8 @@ class LoraCatalogSource(BaseModel):
     item_count: int
     error: str | None = None
     project_archived: bool = False
+    created_at: float | None = None
+    updated_at: float | None = None
 
 
 class LoraCatalogResponse(BaseModel):

@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, renderHook, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useRef, useState } from 'react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { __setTagPrefsForTest } from '../../tagDict/prefs'
 import { __setStateForTest } from '../../tagDict/store'
@@ -108,5 +108,65 @@ describe('useTagSuggest 弹出规则', () => {
     await user.click(option)
     expect(screen.getByRole('textbox')).toHaveValue('solo')
     expect(screen.queryByRole('listbox')).toBeNull()
+  })
+})
+
+describe('useTagSuggest blur timer lifecycle', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    __setTagPrefsForTest({ loaded: true, autocomplete: true })
+    seedDict()
+  })
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
+  function renderSuggest() {
+    const onPick = vi.fn()
+    const view = renderHook(() => useTagSuggest({
+      value: 'sol', inputRef: { current: null }, onPick, wholeAsToken: true,
+    }))
+    return { ...view, onPick }
+  }
+
+  it('retains the full 120 ms blur grace while mounted', () => {
+    const { result, onPick } = renderSuggest()
+    act(() => { result.current.notifyChange() })
+    act(() => { result.current.notifyBlur() })
+    act(() => { vi.advanceTimersByTime(119) })
+    expect(result.current.open).toBe(true)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(result.current.open).toBe(false)
+    expect(onPick).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cancels every pending blur callback on unmount without coalescing their deadlines', () => {
+    const { result, unmount } = renderSuggest()
+    act(() => { result.current.notifyBlur() })
+    act(() => { vi.advanceTimersByTime(20) })
+    act(() => { result.current.notifyBlur() })
+    expect(vi.getTimerCount()).toBe(2)
+
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => { vi.runOnlyPendingTimers() })
+  })
+
+  it('still accepts a suggestion during the blur grace and cleans the remaining callback on unmount', () => {
+    const { result, onPick, unmount } = renderSuggest()
+    act(() => { result.current.notifyChange() })
+    act(() => { result.current.notifyBlur() })
+    act(() => { vi.advanceTimersByTime(100) })
+    act(() => { result.current.pickAt(0) })
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({
+      suggestion: expect.objectContaining({ tag: 'solo' }),
+      range: { start: 0, end: 3 },
+    }))
+    expect(result.current.open).toBe(false)
+
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

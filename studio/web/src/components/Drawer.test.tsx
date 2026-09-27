@@ -11,6 +11,25 @@ function endAnimation(element: Element, animationName: string) {
   fireEvent(element, event)
 }
 
+function controlFocusFrames() {
+  let nextId = 0
+  const frames = new Map<number, FrameRequestCallback>()
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    const id = ++nextId
+    frames.set(id, callback)
+    return id
+  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id) })
+  return {
+    pending: () => frames.size,
+    flush: () => act(() => {
+      const pending = [...frames.values()]
+      frames.clear()
+      for (const callback of pending) callback(0)
+    }),
+  }
+}
+
 function DrawerHarness({ onEntered = () => {} }: { onEntered?: () => void }) {
   const [open, setOpen] = useState(false)
   return (
@@ -153,6 +172,69 @@ describe('Drawer', () => {
       </Drawer>,
     )
     await waitFor(() => expect(root).toHaveAttribute('data-state', 'closed'))
+  })
+
+  it.each([false, true])('enters focus only in a visible phase when a frame arrives early (reduced motion: %s)', (reducedMotion) => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: reducedMotion }))
+    // Model a focus frame overtaking the phase update. JSDOM does not enforce
+    // visibility:hidden, so refuse focus in the CSS-hidden closed phase explicitly.
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const phases: string[] = []
+    const nativeFocus = HTMLElement.prototype.focus
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      const phase = this.closest('[data-testid="drawer-root"]')?.getAttribute('data-state')
+      if (phase) phases.push(phase)
+      if (phase !== 'closed') nativeFocus.call(this, options)
+    })
+    const { unmount } = render(<DrawerHarness />)
+    try {
+      const opener = screen.getByRole('button', { name: 'Open settings' })
+      opener.focus()
+      fireEvent.click(opener)
+      const dialog = screen.getByRole('dialog', { name: 'Settings' })
+      expect(dialog).toHaveFocus()
+      expect(phases).toEqual([reducedMotion ? 'open' : 'opening'])
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+      if (!reducedMotion) endAnimation(dialog, 'drawer-panel-out')
+      expect(opener).toHaveFocus()
+    } finally {
+      unmount()
+      focusSpy.mockRestore()
+    }
+  })
+
+  it('keeps an already focused child when the entry frame and opening completion arrive', () => {
+    const frames = controlFocusFrames()
+    render(<DrawerHarness />)
+    const opener = screen.getByRole('button', { name: 'Open settings' })
+    opener.focus()
+    fireEvent.click(opener)
+    const child = screen.getByRole('button', { name: 'First action' })
+    child.focus()
+    frames.flush()
+    expect(child).toHaveFocus()
+    endAnimation(screen.getByRole('dialog', { name: 'Settings' }), 'drawer-panel-in')
+    frames.flush()
+    expect(child).toHaveFocus()
+  })
+
+  it('cancels entry focus when closed before its frame, including a warm reopen', () => {
+    const frames = controlFocusFrames()
+    render(<DrawerHarness />)
+    const opener = screen.getByRole('button', { name: 'Open settings' })
+    opener.focus()
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      fireEvent.click(opener)
+      const dialog = screen.getByRole('dialog', { name: 'Settings' })
+      expect(frames.pending()).toBe(1)
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(frames.pending()).toBe(0)
+      endAnimation(dialog, 'drawer-panel-out')
+      frames.flush()
+      expect(opener).toHaveFocus()
+    }
   })
 
   it('traps focus, closes from Escape or backdrop, and restores the opener', async () => {

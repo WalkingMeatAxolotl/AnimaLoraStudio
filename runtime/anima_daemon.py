@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import sys
 import threading
 from pathlib import Path
@@ -1568,7 +1569,7 @@ def _run_generate(
             _raise_if_canceled(cancel_event)
             seed = (
                 (base_seed + img_idx) if base_seed != 0
-                else random.randint(0, 2**31 - 1)
+                else secrets.randbelow(2**31 - 1) + 1
             )
             torch.manual_seed(seed)
             random.seed(seed)
@@ -1617,7 +1618,7 @@ def _run_generate(
                     update_monitor(sample_path=vpath, step=img_idx + 1)
                 _emit_for(
                     req_id, "image_done",
-                    filename=fname, path=vpath,
+                    filename=fname, path=vpath, seed=seed,
                     step=img_idx + 1, total=total,
                     image_b64=b64, byte_size=byte_size,
                 )
@@ -1677,7 +1678,7 @@ def _run_xy(
         fp8_model = model_has_fp8_layers(CACHE.model)
 
     if base_seed == 0:
-        base_seed = random.randint(0, 2**31 - 1)
+        base_seed = secrets.randbelow(2**31 - 1) + 1
         logger.info(msg("generate.xy_shared_seed", seed=base_seed))
 
     base_scales = [float(s.scale) for s in CACHE.last_lora_specs]
@@ -1778,7 +1779,7 @@ def _run_xy(
                 )
             _emit_for(
                 req_id, "image_done",
-                filename=fname, path=vpath,
+                filename=fname, path=vpath, seed=cur_seed,
                 step=img_idx + 1, total=total,
                 xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                 image_b64=b64, byte_size=byte_size,

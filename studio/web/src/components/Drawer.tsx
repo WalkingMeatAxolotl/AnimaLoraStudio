@@ -135,7 +135,9 @@ export default function Drawer({
   }, [onEntered, open, phase])
 
   useEffect(() => {
-    if (!open) return
+    // The open prop can change before the shell's visible phase is committed.
+    // A frame scheduled while still closed cannot focus a visibility:hidden panel.
+    if (!open || !layerActive) return
 
     if (!previousFocusRef.current) {
       previousFocusRef.current = document.activeElement instanceof HTMLElement
@@ -151,7 +153,7 @@ export default function Drawer({
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [initialFocusRef, open])
+  }, [initialFocusRef, layerActive, open])
 
   useEffect(() => {
     if (!layerActive) {

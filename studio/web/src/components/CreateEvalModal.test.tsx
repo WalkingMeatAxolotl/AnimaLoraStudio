@@ -40,7 +40,7 @@ describe('CreateEvalModal', () => {
     fireEvent.click(await screen.findByTitle('output/e2.safetensors'))
     fireEvent.click(screen.getByRole('button', { name: /创建评估/ }))
 
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(99))
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 99 })))
     expect(api.runTaskEval).toHaveBeenCalledWith(1, 2, {
       task_id: undefined, checkpoints: ['output/e2.safetensors'],
     })

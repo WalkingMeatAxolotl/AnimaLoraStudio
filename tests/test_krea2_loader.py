@@ -434,7 +434,7 @@ def _fp8_ctx(tmp_path: Path, **arg_overrides):
 def test_validate_fp8_base_passes_with_checkpointing(tmp_path: Path) -> None:
     from training.phases.models import _validate_fp8_base
 
-    _validate_fp8_base(_fp8_ctx(tmp_path))  # 不抛
+    assert _validate_fp8_base(_fp8_ctx(tmp_path)) is True
 
 
 def test_validate_fp8_base_rejects_no_grad_checkpoint(tmp_path: Path) -> None:
@@ -459,7 +459,7 @@ def test_validate_fp8_base_noop_for_bf16(tmp_path: Path) -> None:
     bf16 = tmp_path / "bf16.safetensors"
     _write_checkpoint(bf16, _state_dict(_tiny_config()))
     ctx = _fp8_ctx(tmp_path, transformer_path=str(bf16), grad_checkpoint=False)
-    _validate_fp8_base(ctx)  # bf16 底模不受 fp8 约束
+    assert _validate_fp8_base(ctx) is False  # bf16 底模不受 fp8 约束
 
 
 # ---------------------------------------------------------------- block swap 打包落 pinned

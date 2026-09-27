@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useId, useLayoutEffect, useRef, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import ZoomableImage from './ZoomableImage'
+import '../styles/image-preview.css'
 
 /** 全屏图片 lightbox —— 全站唯一的放大查看容器（原 FullscreenViewer 已并入）。
  *
@@ -72,47 +74,86 @@ export default function ImagePreviewModal({
   shortcutHint,
 }: Props) {
   const { t } = useTranslation()
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      // 方向键 / Delete 在 input / textarea / contenteditable 内不抢焦点（防御性）
-      const el = e.target as HTMLElement | null
-      if (el) {
-        const tag = el.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-      } else if (e.key === 'ArrowLeft' && hasPrev && onPrev) {
-        e.preventDefault()
-        onPrev()
-      } else if (e.key === 'ArrowRight' && hasNext && onNext) {
-        e.preventDefault()
-        onNext()
-      } else if (e.key === 'ArrowUp' && hasUp && onUp) {
-        e.preventDefault()
-        onUp()
-      } else if (e.key === 'ArrowDown' && hasDown && onDown) {
-        e.preventDefault()
-        onDown()
-      } else if ((e.key === 'Enter' || e.key === ' ') && onAccept) {
-        e.preventDefault()
-        onAccept()
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && onDelete) {
-        e.preventDefault()
-        onDelete()
+  const panelRef = useRef<HTMLDivElement>(null)
+  const captionId = useId()
+
+  useLayoutEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const panel = panelRef.current
+    panel?.focus({ preventScroll: true })
+    return () => {
+      // Do not steal focus from a later confirmation, or try to revive an unmounted grid cell.
+      if (opener?.isConnected && panel?.contains(document.activeElement)) {
+        opener.focus({ preventScroll: true })
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [hasPrev, hasNext, hasUp, hasDown, onPrev, onNext, onUp, onDown, onClose, onAccept, onDelete])
+  }, [])
+
+  // A navigation button can disappear on the last image. Recover only browser fallback
+  // focus, never focus already owned by another control or a later confirmation.
+  useLayoutEffect(() => {
+    const active = document.activeElement
+    if (active === document.body || active === document.documentElement) {
+      panelRef.current?.focus({ preventScroll: true })
+    }
+  })
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // The preview owns its keys, not the background page. Native control defaults still run.
+    event.stopPropagation()
+    if (event.defaultPrevented || event.nativeEvent.isComposing) return
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key === 'Tab') {
+      const panel = event.currentTarget
+      // This specialized surface has only button controls, including both compare readouts.
+      const controls = Array.from(panel.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+        .filter((button) => button.tabIndex >= 0 && !button.closest('[hidden], [aria-hidden="true"], [inert]'))
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      const active = document.activeElement
+      if (!first || !last || (event.shiftKey && active === first) || (!event.shiftKey && active === last)) {
+        event.preventDefault()
+        panel.focus({ preventScroll: true })
+      } else if (active === panel) {
+        event.preventDefault()
+        const nextControl = event.shiftKey ? last : first
+        nextControl.focus()
+      }
+      return
+    }
+
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const target = event.target instanceof Element ? event.target : null
+    if (target?.closest('button, a[href], input, textarea, select, summary, [contenteditable]:not([contenteditable="false"])')) return
+
+    let action: (() => void) | undefined
+    if (event.key === 'ArrowLeft' && hasPrev) action = onPrev
+    else if (event.key === 'ArrowRight' && hasNext) action = onNext
+    else if (event.key === 'ArrowUp' && hasUp) action = onUp
+    else if (event.key === 'ArrowDown' && hasDown) action = onDown
+    else if (!event.repeat && (event.key === 'Enter' || event.key === ' ')) action = onAccept
+    else if (!event.repeat && (event.key === 'Delete' || event.key === 'Backspace')) action = onDelete
+    if (action) {
+      event.preventDefault()
+      action()
+    }
+  }
 
   const counter = index != null && total != null ? `${index + 1} / ${total}` : null
   // 底 bar 的信息段：单图模式注入 ZoomableImage readout 条右段，
   // 分屏模式由本组件渲染同款独立 bar。caption 恒渲染占位，让计数 / 提示靠右。
   const barInfo = (
     <>
-      <span className="flex-1 min-w-0 truncate text-center text-slate-300" title={caption}>
+      <span id={captionId} className="flex-1 min-w-0 truncate text-center text-slate-300" title={caption}>
         {caption}
       </span>
       {counter && <span className="text-slate-300">{counter}</span>}
@@ -120,8 +161,17 @@ export default function ImagePreviewModal({
     </>
   )
 
-  return (
-    <div className="fixed inset-0 z-[100] bg-black flex flex-col">
+  return createPortal(
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('common.imagePreview')}
+      aria-describedby={caption ? captionId : undefined}
+      tabIndex={-1}
+      className="ui-image-preview fixed inset-0 z-50 bg-black flex flex-col"
+      onKeyDown={handleKeyDown}
+    >
       <div className="relative flex-1 min-h-0 flex flex-col">
         <button
           type="button"
@@ -195,7 +245,8 @@ export default function ImagePreviewModal({
       {compareSrc && (counter || caption || shortcutHint) && (
         <div className={BAR}>{barInfo}</div>
       )}
-    </div>
+    </div>,
+    document.body,
   )
 }
 

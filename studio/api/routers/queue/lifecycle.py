@@ -221,7 +221,7 @@ def enqueue(body: EnqueueRequest) -> dict[str, Any]:
                 conn, name=name, config_name=body.config_name, priority=body.priority,
                 scheduled_at=body.scheduled_at, commit=False,
             )
-            task_snapshot.freeze_config(task_id, cfg_path)
+            task_snapshot.freeze_training_config(task_id, cfg_path)
             conn.commit()
         except Exception:
             conn.rollback()

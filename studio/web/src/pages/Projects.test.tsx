@@ -1,9 +1,13 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
-import type { ProjectSummary } from '../api/client'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { api, type ProjectSummary } from '../api/client'
+import { DialogProvider } from '../components/Dialog'
+import { ToastProvider } from '../components/Toast'
 import i18n from '../i18n'
-import {
+import ProjectsPage, {
   filterProjects,
+  ProjectBatchBar,
   ProjectCard,
   ProjectFilterBar,
   ProjectsCollectionSurface,
@@ -30,6 +34,37 @@ const ITEMS: ProjectSummary[] = [
   mk({ id: 2, title: 'Miku', slug: 'miku', active_version_status: 'training' }),
   mk({ id: 3, title: 'Asuka', slug: 'asuka-style', active_version_status: 'preparing' }),
 ]
+
+class FakeEventSource {
+  static readonly OPEN = 1
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  readyState = FakeEventSource.OPEN
+  close() { this.readyState = 2 }
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  vi.stubGlobal('EventSource', FakeEventSource)
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+function renderProjectsPage() {
+  return render(
+    <MemoryRouter>
+      <ToastProvider>
+        <DialogProvider>
+          <ProjectsPage />
+        </DialogProvider>
+      </ToastProvider>
+    </MemoryRouter>,
+  )
+}
 
 describe('filterProjects', () => {
   it('default: no filter, sorted by updated_at desc', () => {
@@ -120,6 +155,34 @@ describe('ProjectCard', () => {
     expect(onArchive).toHaveBeenCalledTimes(1)
   })
 
+  it('turns the card into one checkbox-backed selection target in batch mode', () => {
+    const onOpen = vi.fn()
+    const onToggleSelected = vi.fn()
+    render(
+      <ProjectCard
+        project={ITEMS[0]}
+        selectable
+        selected
+        onToggleSelected={onToggleSelected}
+        onClick={onOpen}
+      />,
+    )
+
+    const card = screen.getByRole('article', { name: 'Kaguya' })
+    const checkbox = within(card).getByRole('checkbox', {
+      name: i18n.t('projects.selectProject', { title: 'Kaguya' }),
+    })
+    expect(card).toHaveAttribute('data-selected', 'true')
+    expect(checkbox).toBeChecked()
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument()
+
+    fireEvent.click(card)
+    fireEvent.click(checkbox)
+
+    expect(onToggleSelected).toHaveBeenCalledTimes(2)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
   it('keeps archived restore and delete actions outside the primary card action', () => {
     const onOpen = vi.fn()
     const onUnarchive = vi.fn()
@@ -142,6 +205,191 @@ describe('ProjectCard', () => {
     expect(onOpen).not.toHaveBeenCalled()
     expect(onUnarchive).toHaveBeenCalledTimes(1)
     expect(onDelete).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ProjectBatchBar', () => {
+  const handlers = {
+    onSelectCurrent: vi.fn(),
+    onClear: vi.fn(),
+    onArchive: vi.fn(),
+    onRestore: vi.fn(),
+    onDelete: vi.fn(),
+  }
+
+  it('uses archive as the active-view batch action', () => {
+    render(
+      <ProjectBatchBar
+        archived={false}
+        selectedCount={2}
+        allCurrentSelected={false}
+        busyAction={null}
+        {...handlers}
+      />,
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      i18n.t('projects.batchSelectedCount', { n: 2 }),
+    )
+    fireEvent.click(screen.getByRole('button', {
+      name: i18n.t('projects.selectCurrentResults'),
+    }))
+    fireEvent.click(screen.getByRole('button', {
+      name: i18n.t('projects.archiveSelected', { n: 2 }),
+    }))
+    expect(handlers.onSelectCurrent).toHaveBeenCalledTimes(1)
+    expect(handlers.onArchive).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(i18n.t('projects.deleteSelected', { n: 2 }))).not.toBeInTheDocument()
+  })
+
+  it('offers restore before permanent delete in the archived view', () => {
+    render(
+      <ProjectBatchBar
+        archived
+        selectedCount={3}
+        allCurrentSelected
+        busyAction="delete"
+        {...handlers}
+      />,
+    )
+
+    const selectionGroup = screen.getByRole('group', {
+      name: i18n.t('projects.batchSelectionActions'),
+    })
+    const mutationGroup = screen.getByRole('group', {
+      name: i18n.t('projects.batchActions'),
+    })
+    const restore = within(mutationGroup).getByRole('button', {
+      name: i18n.t('projects.restoreSelected', { n: 3 }),
+    })
+    const remove = within(mutationGroup).getByRole('button', {
+      name: i18n.t('projects.deleteSelected', { n: 3 }),
+    })
+    expect(within(selectionGroup).getByRole('button', {
+      name: i18n.t('projects.selectCurrentResults'),
+    })).toBeDisabled()
+    expect(within(selectionGroup).getByRole('button', {
+      name: i18n.t('common.deselect'),
+    })).toBeDisabled()
+    expect(within(selectionGroup).queryByRole('button', {
+      name: i18n.t('projects.restoreSelected', { n: 3 }),
+    })).not.toBeInTheDocument()
+    expect(restore).toBeDisabled()
+    expect(remove).toBeDisabled()
+    expect(remove).toHaveAttribute('aria-busy', 'true')
+    expect(restore.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('ProjectsPage batch workflow', () => {
+  it('archives the current active result selection through one confirmation', async () => {
+    vi.spyOn(api, 'listProjects').mockResolvedValue(ITEMS)
+    const archiveProjects = vi.spyOn(api, 'archiveProjects').mockResolvedValue({
+      updated: [3, 2, 1],
+    })
+    renderProjectsPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: i18n.t('projects.batchManage') }))
+    expect(i18n.t('common.done')).toBe('完成')
+    expect(screen.getByRole('button', { name: '完成' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('projects.selectCurrentResults') }))
+    fireEvent.click(screen.getByRole('button', {
+      name: i18n.t('projects.archiveSelected', { n: 3 }),
+    }))
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.batchArchiveAction', { n: 3 }),
+    }))
+
+    await waitFor(() => expect(archiveProjects).toHaveBeenCalledWith([3, 2, 1]))
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: i18n.t('projects.batchManage'),
+    })).toHaveFocus())
+  })
+
+  it('restores selected archived projects from the same batch mode', async () => {
+    const archived = mk({ id: 4, title: 'Archived', archived_at: 123 })
+    vi.spyOn(api, 'listProjects').mockResolvedValue([...ITEMS, archived])
+    const unarchiveProjects = vi.spyOn(api, 'unarchiveProjects').mockResolvedValue({ updated: [4] })
+    renderProjectsPage()
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.archivedToggle', { n: 1 }),
+    }))
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('projects.batchManage') }))
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: i18n.t('projects.selectProject', { title: 'Archived' }),
+    }))
+    fireEvent.click(screen.getByRole('button', {
+      name: i18n.t('projects.restoreSelected', { n: 1 }),
+    }))
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.batchRestoreAction', { n: 1 }),
+    }))
+
+    await waitFor(() => expect(unarchiveProjects).toHaveBeenCalledWith([4]))
+  })
+
+  it('permanently deletes selected archived projects through the batch endpoint', async () => {
+    const archived = mk({ id: 4, title: 'Archived', archived_at: 123 })
+    vi.spyOn(api, 'listProjects').mockResolvedValue([...ITEMS, archived])
+    const deleteProjects = vi.spyOn(api, 'deleteProjects').mockResolvedValue({
+      deleted: [4],
+      failed: [],
+    })
+    renderProjectsPage()
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.archivedToggle', { n: 1 }),
+    }))
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('projects.batchManage') }))
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: i18n.t('projects.selectProject', { title: 'Archived' }),
+    }))
+    fireEvent.click(screen.getByRole('button', {
+      name: i18n.t('projects.deleteSelected', { n: 1 }),
+    }))
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.batchDeleteAction', { n: 1 }),
+    }))
+
+    await waitFor(() => expect(deleteProjects).toHaveBeenCalledWith([4]))
+  })
+
+  it('keeps only filesystem failures selected after a partial delete', async () => {
+    const deleted = mk({ id: 4, title: 'Deleted', archived_at: 123 })
+    const failed = mk({ id: 5, title: 'Failed', archived_at: 124 })
+    vi.spyOn(api, 'listProjects')
+      .mockResolvedValueOnce([...ITEMS, deleted, failed])
+      .mockResolvedValue([...ITEMS, failed])
+    vi.spyOn(api, 'deleteProjects').mockResolvedValue({
+      deleted: [4],
+      failed: [{ id: 5, code: 'project.delete_failed', message: 'failed' }],
+    })
+    renderProjectsPage()
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.archivedToggle', { n: 2 }),
+    }))
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('projects.batchManage') }))
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('projects.selectCurrentResults') }))
+    fireEvent.click(screen.getByRole('button', {
+      name: i18n.t('projects.deleteSelected', { n: 2 }),
+    }))
+    fireEvent.click(await screen.findByRole('button', {
+      name: i18n.t('projects.batchDeleteAction', { n: 2 }),
+    }))
+
+    expect(await screen.findByText(i18n.t('projects.batchDeletePartial', {
+      deleted: 1,
+      failed: 1,
+    }))).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(
+      i18n.t('projects.batchSelectedCount', { n: 1 }),
+    )).toBeInTheDocument())
+    expect(screen.getByRole('checkbox', {
+      name: i18n.t('projects.selectProject', { title: 'Failed' }),
+    })).toBeChecked()
+    expect(screen.getByRole('button', { name: i18n.t('common.done') })).toBeInTheDocument()
   })
 })
 

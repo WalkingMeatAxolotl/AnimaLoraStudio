@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 from pathlib import Path
@@ -30,8 +31,7 @@ from studio.infrastructure.task_log import TaskLogLike
 logger = logging.getLogger(__name__)
 
 EVAL_DIRNAME = "eval"
-# Reproducible default generation seed when sample_seed is 0 (=random for samples).
-DEFAULT_GEN_SEED = 12345
+_RANDOM_SEED_MAX = 2**31 - 1
 DEFAULT_SAMPLE_PROMPT = "masterpiece, best quality"
 
 SCHEMA_VERSION = 1
@@ -196,7 +196,8 @@ def _generation_from_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
         res = int(raw_res)
     else:
         res = 1024
-    seed = int(cfg.get("sample_seed") or 0) or DEFAULT_GEN_SEED
+    requested_seed = int(cfg.get("sample_seed") or 0)
+    seed = requested_seed or (secrets.randbelow(_RANDOM_SEED_MAX) + 1)
     return {
         "width": int(cfg.get("sample_width") or 0) or res,
         "height": int(cfg.get("sample_height") or 0) or res,
@@ -349,11 +350,16 @@ def create_run(
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
     baseline: bool = False,
+    generation_override: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time() if now is None else float(now)
     cfg = _read_config(project, version)
-    generation = _generation_from_cfg(cfg)
+    generation = (
+        dict(generation_override)
+        if generation_override is not None
+        else _generation_from_cfg(cfg)
+    )
     # baseline run = 纯底模对照（同 prompt/seed，lora_scale=0 → LoRA 不生效），
     # 给各 checkpoint 算 Δ = checkpoint − baseline，解决「绝对值难解读」。
     if baseline:

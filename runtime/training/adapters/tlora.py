@@ -7,6 +7,20 @@ from typing import Any
 from training.adapters.protocol import AdapterProtocol
 
 
+def prepare(args, *, device: str, dtype, fp8_base: bool = False):
+    """Preflight only the compatibility T-LoRA path backed by LyCORIS."""
+    if bool(getattr(args, "tlora_use_ortho", False)):
+        return None
+    from training.adapters.lycoris import prepare as prepare_lycoris
+
+    return prepare_lycoris(
+        args,
+        device=device,
+        dtype=dtype,
+        fp8_base=fp8_base,
+    )
+
+
 def build(args, *, preset: dict[str, Any]) -> AdapterProtocol:
     if bool(getattr(args, "tlora_use_ortho", False)):
         from utils.ortho_adapter import OrthoLoRAAdapter

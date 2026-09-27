@@ -3,13 +3,14 @@
  *  目前只覆盖 SnapshotConfigTab 的 refetch trap：父组件每 2s 浅 clone task
  *  做 elapsed time tick，旧实现 [task] 作 deps 会让 snapshot config 也跟着
  *  2s 重拉 —— 浏览器卡顿、loading flash。 */
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
 import { ToastProvider } from '../components/Toast'
 import type { Task } from '../api/client'
+import i18n from '../i18n'
 import QueueDetailPage, { OutputsTab, SnapshotConfigTab } from './QueueDetail'
 
 const SNAPSHOT_URL_PREFIX = '/api/queue/'
@@ -186,9 +187,11 @@ function renderDetailPage() {
   return render(
     <MemoryRouter initialEntries={['/queue/119']}>
       <ToastProvider>
-        <Routes>
-          <Route path="/queue/:id" element={<QueueDetailPage />} />
-        </Routes>
+        <DialogProvider>
+          <Routes>
+            <Route path="/queue/:id" element={<QueueDetailPage />} />
+          </Routes>
+        </DialogProvider>
       </ToastProvider>
     </MemoryRouter>
   )
@@ -197,6 +200,529 @@ function renderDetailPage() {
 function getTaskCalls(): number {
   return fetchMock.mock.calls.filter(([u]) => u === QUEUE_ITEM_URL).length
 }
+
+describe('QueueDetailPage 完整参数', () => {
+  it('详情展示超过200字符的参数全文', async () => {
+    const value = `${'长参数'.repeat(100)} END-OF-PARAM`
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: 'tag', status: 'done', params_decoded: { tag: value } })))
+      : Promise.resolve(new Response('', { status: 404 })))
+    renderDetailPage()
+    expect(await screen.findByText(value)).toHaveClass('break-all')
+  })
+})
+
+describe('QueueDetailPage 加载失败恢复', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+
+  afterEach(async () => {
+    await act(async () => { await i18n.changeLanguage('zh') })
+  })
+
+  it.each([
+    { language: 'zh', title: '任务详情加载失败', reload: '重新加载', loading: '加载中...' },
+    { language: 'en', title: 'Failed to load task details', reload: 'Reload', loading: 'Loading...' },
+  ])('$language：加载失败停止显示加载中，重复失败后仍能重新加载且不重跑任务', async (copy) => {
+    await i18n.changeLanguage(copy.language)
+    const user = userEvent.setup()
+    let settle!: { resolve: (response: Response) => void; reject: (error: Error) => void }
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? new Promise<Response>((resolve, reject) => { settle = { resolve, reject } })
+      : Promise.resolve(new Response('', { status: 404 })))
+    renderDetailPage()
+    expect(screen.getByText(copy.loading)).toBeInTheDocument()
+
+    await act(async () => { settle.reject(new Error('network offline')) })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(copy.title)
+    expect(alert).toHaveTextContent('network offline')
+    expect(screen.queryByText(copy.loading)).not.toBeInTheDocument()
+    const reload = within(alert).getByRole('button', { name: copy.reload })
+    expect(reload).toBeEnabled()
+
+    await user.click(reload)
+    expect(getTaskCalls()).toBe(2)
+    expect(reload).toBeDisabled()
+    expect(reload).toHaveAttribute('aria-busy', 'true')
+    await user.click(reload)
+    expect(getTaskCalls()).toBe(2)
+    await act(async () => {
+      settle.resolve(new Response(JSON.stringify({ error: { message: 'Service unavailable' } }), {
+        status: 503, headers: { 'content-type': 'application/json' },
+      }))
+    })
+    await waitFor(() => expect(reload).toBeEnabled())
+    expect(alert).toHaveTextContent('Service unavailable')
+    expect(screen.queryByText(copy.loading)).not.toBeInTheDocument()
+
+    await user.click(reload)
+    await act(async () => { settle.resolve(queueItemResponse(makeTask({ id: 119, name: 'Recovered task', status: 'done' }))) })
+    expect(await screen.findByTitle('Recovered task')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(getTaskCalls()).toBe(3)
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)
+  })
+
+  it('已加载详情刷新失败时保留内容，重新加载成功后清除错误', async () => {
+    const user = userEvent.setup()
+    let fail = false
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? fail
+        ? Promise.reject(new Error('refresh offline'))
+        : Promise.resolve(queueItemResponse(makeTask({ id: 119, name: 'Keep this task', status: 'done' })))
+      : Promise.resolve(new Response('', { status: 404 })))
+    renderDetailPage()
+    await screen.findByTitle('Keep this task')
+
+    fail = true
+    act(() => {
+      FakeEventSource.instances[FakeEventSource.instances.length - 1].emit({ type: 'task_state_changed', task_id: 119 })
+    })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('refresh offline')
+    expect(screen.getByTitle('Keep this task')).toBeInTheDocument()
+    expect(screen.queryByText('加载中...')).not.toBeInTheDocument()
+
+    fail = false
+    await user.click(within(alert).getByRole('button', { name: '重新加载' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(screen.getByTitle('Keep this task')).toBeInTheDocument()
+    expect(getTaskCalls()).toBe(3)
+  })
+})
+
+describe('QueueDetailPage 重试状态恢复', () => {
+  function mockRetry(retryResponse: () => Promise<Response>, taskType: 'train' | 'generate' = 'train') {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === `${QUEUE_ITEM_URL}/retry`) return retryResponse()
+      if (url === QUEUE_ITEM_URL) {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 119, task_type: taskType, status: 'failed', finished_at: 1200,
+          is_resumable: taskType === 'train',
+        })))
+      }
+      if (url === '/api/queue/120') {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 120, name: 'new task', task_type: taskType, status: 'pending', started_at: null,
+        })))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+  }
+
+  it.each([
+    { taskType: 'train', label: '重新训练' },
+    { taskType: 'generate', label: '重试' },
+  ] as const)('$label 请求失败后释放按钮，并允许再次重试', async ({ taskType, label }) => {
+    const user = userEvent.setup()
+    let rejectRetry!: (reason: Error) => void
+    const retryResponse = vi.fn<() => Promise<Response>>()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRetry = reject }))
+      .mockResolvedValueOnce(queueItemResponse(makeTask({ id: 120, status: 'pending' })))
+    mockRetry(retryResponse, taskType)
+    renderDetailPage()
+
+    const retryButton = await screen.findByRole('button', { name: label })
+    const deleteButton = screen.getByRole('button', { name: '删除记录' })
+    await user.click(retryButton)
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+    expect(retryButton).toBeDisabled()
+    expect(deleteButton).toBeDisabled()
+    if (taskType === 'train') expect(screen.getByTestId('detail-resume-btn')).toBeDisabled()
+    await user.click(retryButton)
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+
+    await act(async () => { rejectRetry(new Error('retry offline')) })
+    expect(await screen.findByText('Error: retry offline')).toBeInTheDocument()
+    await waitFor(() => expect(retryButton).toBeEnabled())
+    expect(deleteButton).toBeEnabled()
+    if (taskType === 'train') expect(screen.getByTestId('detail-resume-btn')).toBeEnabled()
+
+    await user.click(retryButton)
+    expect(retryResponse).toHaveBeenCalledTimes(2)
+    expect(await screen.findByRole('heading', { name: '#120 new task', level: 1 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
+  })
+
+  it('首次重试成功后跳到新任务，且新任务操作不继承 busy', async () => {
+    const user = userEvent.setup()
+    const retryResponse = vi.fn().mockResolvedValue(queueItemResponse(makeTask({ id: 120, status: 'pending' })))
+    mockRetry(retryResponse)
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '重新训练' }))
+
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(`${QUEUE_ITEM_URL}/retry`, expect.objectContaining({ method: 'POST' }))
+    expect(await screen.findByRole('heading', { name: '#120 new task', level: 1 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled())
+  })
+})
+
+describe('QueueDetailPage 来源入口一致性', () => {
+  it.each([
+    { taskType: 'train', projectId: 67, versionId: 112, href: '/projects/67/v/112/train', label: '打开训练配置 →' },
+    { taskType: 'generate', projectId: 67, versionId: 112, href: '/tools/generate?task=119', label: '查看出图结果 →' },
+    { taskType: 'reg_ai', projectId: 67, versionId: 112, href: '/projects/67/v/112/reg', label: '查看正则集 →' },
+    { taskType: 'tag', projectId: 67, versionId: 112, href: '/projects/67/v/112/tag', label: '打开所在页面 →' },
+    { taskType: 'eval_session', projectId: 67, versionId: 112, href: '/projects/67?version=112&tab=eval', label: '打开所在页面 →' },
+  ] as const)('$taskType 指向与任务类型一致的业务页面', async ({ taskType, projectId, versionId, href, label }) => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 119,
+          task_type: taskType,
+          status: 'done',
+          project_id: projectId,
+          version_id: versionId,
+          finished_at: 1200,
+        })))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    const source = await screen.findByRole('link', { name: label })
+    expect(source).toHaveAttribute('href', href)
+    expect(source).toHaveAttribute('title', '打开创建或管理此任务的页面；不会改变任务状态')
+  })
+})
+
+describe('QueueDetailPage 危险操作确认', () => {
+  function actionCalls(path: string): number {
+    return fetchMock.mock.calls.filter(([url, options]) => url === `${QUEUE_ITEM_URL}/${path}` && options?.method === 'POST').length
+  }
+
+  it.each([
+    {
+      taskType: 'train',
+      description: '取消当前任务 #119？将发送停止请求。已有恢复点会保留；仅在存在可用恢复点时才能继续训练。',
+    },
+    {
+      taskType: 'generate',
+      description: '取消当前任务 #119？将发送停止请求，终止本次任务。',
+    },
+    {
+      taskType: 'tag',
+      description: '取消数据任务 #119？运行中的任务会被终止。',
+    },
+  ] as const)('$taskType 取消仅在确认后发送请求，并显示同类型后果', async ({ taskType, description }) => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: taskType, status: 'running' })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: taskType, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '取消任务' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(description)
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+    expect(actionCalls('cancel')).toBe(0)
+
+    await user.click(screen.getByRole('button', { name: '取消任务' }))
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+
+  it('暂停先说明恢复语义，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: 'train', status: 'running', is_pausable: true })))
+      if (url === `${QUEUE_ITEM_URL}/pause`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'running' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-pause-btn'))
+    const modal = await screen.findByTestId('pause-confirm-modal')
+    expect(modal).toHaveTextContent('暂停训练？')
+    expect(modal).toHaveTextContent('恢复时将从上一轮 epoch 结束位置继续')
+    expect(actionCalls('pause')).toBe(0)
+    await user.click(within(modal).getByTestId('pause-confirm-ok'))
+    await waitFor(() => expect(actionCalls('pause')).toBe(1))
+  })
+
+  it('继续训练先确认恢复点语义，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, task_type: 'train', status: 'failed', finished_at: 1200, is_resumable: true })))
+      if (url === `${QUEUE_ITEM_URL}/resume`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-resume-btn'))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('从最近一次 epoch 自动备份继续训练（沿用当时配置）')
+    expect(actionCalls('resume')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '继续训练' }))
+    await waitFor(() => expect(actionCalls('resume')).toBe(1))
+  })
+
+  it('pending 取消说明任务尚未开始，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '取消任务' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('任务尚未开始，不会影响当前运行中的任务')
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+
+  it('scheduled 立即开始说明会进入等待队列，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'scheduled', scheduled_at: 2000 })))
+      if (url === `${QUEUE_ITEM_URL}/start_now`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-startnow-btn'))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('将跳过计划时间，进入等待队列排队')
+    expect(actionCalls('start_now')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '立即开始' }))
+    await waitFor(() => expect(actionCalls('start_now')).toBe(1))
+  })
+
+  it('scheduled 取消计划先说明移入历史，确认后才发送请求', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'scheduled', scheduled_at: 2000 })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByRole('button', { name: '取消计划' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('任务将移入历史，可从历史重新入队')
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(dialog).getByRole('button', { name: '取消计划' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+
+  it('paused 恢复和取消都先确认各自语义', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'paused', is_resumable: true })))
+      if (url === `${QUEUE_ITEM_URL}/resume`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'pending' })))
+      if (url === `${QUEUE_ITEM_URL}/cancel`) return Promise.resolve(queueItemResponse(makeTask({ id: 119, status: 'canceled' })))
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+
+    await user.click(await screen.findByTestId('detail-resume-btn'))
+    const resumeDialog = await screen.findByRole('dialog')
+    expect(resumeDialog).toHaveTextContent('从暂停点继续训练（沿用暂停时配置）')
+    expect(actionCalls('resume')).toBe(0)
+    await user.click(within(resumeDialog).getByRole('button', { name: '取消' }))
+
+    await user.click(screen.getByRole('button', { name: '取消任务' }))
+    const cancelDialog = await screen.findByRole('alertdialog')
+    expect(cancelDialog).toHaveTextContent('恢复点保留，之后仍可继续训练')
+    expect(actionCalls('cancel')).toBe(0)
+    await user.click(within(cancelDialog).getByRole('button', { name: '取消任务' }))
+    await waitFor(() => expect(actionCalls('cancel')).toBe(1))
+  })
+})
+
+describe('QueueDetailPage 删除范围提示', () => {
+  afterEach(async () => {
+    await act(async () => { await i18n.changeLanguage('zh') })
+  })
+
+  const languages = [
+    {
+      language: 'zh', open: '删除记录', title: '删除任务记录', cancel: '取消',
+      common: '同时删除本任务目录中的日志、监控、配置快照、样图，以及本任务的恢复点。此操作无法撤销。',
+      train: '版本级 LoRA 训练产物不受影响。',
+      generate: '还会删除本次生成的图片、XY 输出目录和临时缓存。',
+    },
+    {
+      language: 'en', open: 'Delete record', title: 'Delete task record', cancel: 'Cancel',
+      common: "This also deletes the logs, monitor data, config snapshots and samples in this task's folder, along with its recovery checkpoints. This cannot be undone.",
+      train: 'Version-level LoRA training outputs are not affected.',
+      generate: 'This also deletes the images, XY output folders and temporary cache from this render task.',
+    },
+  ] as const
+
+  for (const copy of languages) {
+    it.each(['train', 'generate', 'tag'] as const)(`${copy.language}：%s 的删除提示准确，取消不删除任务`, async (taskType) => {
+      await i18n.changeLanguage(copy.language)
+      const user = userEvent.setup()
+      fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+        ? Promise.resolve(queueItemResponse(makeTask({
+          id: 119, name: 'example-task-119', task_type: taskType, status: 'done', finished_at: 1200,
+        })))
+        : Promise.resolve(new Response('', { status: 404 })))
+      renderDetailPage()
+
+      const opener = await screen.findByRole('button', { name: copy.open })
+      await user.click(opener)
+      const panel = screen.getByRole('alertdialog', { name: copy.title })
+      expect(panel).toHaveAttribute('aria-modal', 'true')
+      expect(panel).toHaveTextContent('#119 example-task-119')
+      expect(panel).toHaveTextContent(copy.common)
+      expect(panel.textContent!.includes(copy.train)).toBe(taskType === 'train')
+      expect(panel.textContent!.includes(copy.generate)).toBe(taskType === 'generate')
+      const deleteCalls = () => fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')
+      expect(deleteCalls()).toHaveLength(0)
+
+      const cancel = within(panel).getByRole('button', { name: copy.cancel })
+      await waitFor(() => expect(cancel).toHaveFocus())
+      await user.tab({ shift: true })
+      expect(within(panel).getByRole('button', { name: copy.language === 'zh' ? '删除' : 'Delete' })).toHaveFocus()
+      await user.tab()
+      expect(cancel).toHaveFocus()
+      await user.click(cancel)
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(opener).toHaveFocus()
+      await user.click(opener)
+      await user.keyboard('{Escape}')
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(opener).toHaveFocus()
+      expect(screen.getByRole('heading', { name: '#119 example-task-119', level: 1 })).toBeInTheDocument()
+      expect(deleteCalls()).toHaveLength(0)
+    })
+  }
+})
+
+describe('QueueDetailPage 确认框忙碌保护', () => {
+  afterEach(async () => { await act(async () => { await i18n.changeLanguage('zh') }) })
+
+  it('删除请求期间禁止重复提交和Escape/遮罩关闭，失败后恢复入口', async () => {
+    const user = userEvent.setup()
+    let rejectDelete!: (error: Error) => void
+    fetchMock.mockImplementation((url: string, options?: RequestInit) => {
+      if (options?.method === 'DELETE') return new Promise((_resolve, reject) => { rejectDelete = reject })
+      return Promise.resolve(url === QUEUE_ITEM_URL
+        ? queueItemResponse(makeTask({ id: 119, status: 'done' }))
+        : new Response('', { status: 404 }))
+    })
+    renderDetailPage()
+    const opener = await screen.findByRole('button', { name: '删除记录' })
+    await user.click(opener)
+    const dialog = screen.getByRole('alertdialog', { name: '删除任务记录' })
+    const confirm = within(dialog).getByRole('button', { name: '删除' })
+    await user.click(confirm)
+    expect(confirm).toBeDisabled()
+    expect(confirm).toHaveAttribute('aria-busy', 'true')
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeDisabled()
+    await user.click(confirm)
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByTestId('queue-detail-confirm'))
+    expect(dialog).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, opts]) => opts?.method === 'DELETE')).toHaveLength(1)
+    await act(async () => { rejectDelete(new Error('delete offline')) })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(opener).toBeEnabled()
+    expect(opener).toHaveFocus()
+  })
+
+  it.each(['zh', 'en'])('%s：快照确认键盘退出、失败重试与成功提交', async (lang) => {
+    await i18n.changeLanguage(lang)
+    const user = userEvent.setup()
+    let settle!: { resolve: (response: Response) => void; reject: (error: Error) => void }
+    fetchMock.mockImplementation((url: string, options?: RequestInit) => {
+      if (options?.method === 'PUT') return new Promise<Response>((resolve, reject) => { settle = { resolve, reject } })
+      return Promise.resolve(url.endsWith('/snapshot/config') ? snapshotResponse() : new Response('', { status: 404 }))
+    })
+    setup(makeTask({ id: 119, status: 'done', project_id: 7, version_id: 9 }))
+    const label = i18n.t('snapshot.applyBtn')
+    const title = i18n.t('snapshot.applyConfirmTitle')
+    const opener = await screen.findByRole('button', { name: label })
+    await user.click(opener)
+    let dialog = screen.getByRole('alertdialog', { name: title })
+    const cancel = within(dialog).getByRole('button', { name: lang === 'zh' ? '取消' : 'Cancel' })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    await user.tab({ shift: true })
+    expect(within(dialog).getByRole('button', { name: label })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
+    expect(fetchMock.mock.calls.filter(([, opts]) => opts?.method === 'PUT')).toHaveLength(0)
+
+    await user.click(opener)
+    dialog = screen.getByRole('alertdialog', { name: title })
+    const confirm = within(dialog).getByRole('button', { name: label })
+    await user.click(confirm)
+    expect(confirm).toBeDisabled()
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByTestId('queue-detail-confirm'))
+    expect(dialog).toBeInTheDocument()
+    await act(async () => { settle.reject(new Error('apply offline')) })
+    await waitFor(() => expect(confirm).toBeEnabled())
+    expect(dialog).toBeInTheDocument()
+    await user.click(confirm)
+    await act(async () => { settle.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(fetchMock.mock.calls.filter(([, opts]) => opts?.method === 'PUT')).toHaveLength(2)
+  })
+})
+
+describe('QueueDetailPage Overview 语义排版', () => {
+  it('按任务、时间与技术信息分组，长路径跨列且保留全部字段', async () => {
+    const configPath = 'G:/AnimaLoraStudio/studio_data/projects/67-yu-hydra/versions/K2_v1/config.yaml'
+    const monitorPath = 'G:/AnimaLoraStudio/studio_data/tasks/119/monitor/state.json'
+    fetchMock.mockImplementation((url: string) => url === QUEUE_ITEM_URL
+      ? Promise.resolve(queueItemResponse(makeTask({
+        id: 119,
+        name: 'yu-hydra_K2_v1',
+        config_name: 'k2_0823',
+        status: 'failed',
+        priority: 3,
+        scheduled_at: 1050,
+        started_at: 1100,
+        finished_at: 4700,
+        exit_code: 1,
+        pid: null,
+        project_id: 67,
+        version_id: 111,
+        config_path: configPath,
+        monitor_state_path: monitorPath,
+        error_msg: 'supervisor restart while task was running',
+      })))
+      : Promise.resolve(new Response('', { status: 404 })))
+
+    renderDetailPage()
+
+    const overview = await screen.findByTestId('queue-overview-grid')
+    expect(overview).toHaveClass('ui-queue-overview-grid')
+    expect(within(overview).getByRole('heading', { name: '任务与状态', level: 2 }))
+      .toHaveClass('type-section-label')
+    expect(within(overview).getByRole('heading', { name: '时间', level: 2 }))
+      .toHaveClass('type-section-label')
+    expect(within(overview).getByRole('heading', { name: '来源与技术信息', level: 2 }))
+      .toHaveClass('type-section-label')
+
+    const taskGroup = within(overview).getByTestId('queue-overview-group-task')
+    expect(within(taskGroup).getByText('名称')).toHaveClass('type-data-label')
+    expect(within(taskGroup).getByText('yu-hydra_K2_v1')).not.toHaveClass('font-mono')
+    expect(within(taskGroup).getByText('k2_0823.yaml')).toHaveClass('font-mono')
+
+    const configField = within(overview).getByTestId('queue-overview-field-config-path')
+    expect(configField).toHaveClass('ui-queue-overview-field--wide')
+    expect(within(configField).getByText(configPath)).toHaveClass('font-mono', 'break-all')
+    expect(within(overview).getByText(monitorPath)).toBeInTheDocument()
+    expect(within(overview).getByText('supervisor restart while task was running')).toBeInTheDocument()
+    expect(within(overview).getByRole('link', { name: '项目 #67 / v#111' })).toBeInTheDocument()
+  })
+})
 
 describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
   beforeEach(() => {
@@ -212,6 +738,7 @@ describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
       if (url === QUEUE_ITEM_URL) {
         return Promise.resolve(queueItemResponse(makeTask({
           id: 119, status: 'running', is_pausable: pausable,
+          started_at: Math.floor(Date.now() / 1000) - 125,
         })))
       }
       return Promise.resolve({
@@ -222,16 +749,17 @@ describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
 
     renderDetailPage()
 
-    // 初始：running header 已渲染（PID 卡片），但 is_pausable=false → 暂停按钮不在
+    // 运行摘要进入紧凑身份栏，不再用四张常驻卡挤压日志/监控空间。
     await waitFor(() => expect(screen.getByText('取消任务')).toBeInTheDocument())
-    const stats = screen.getByTestId('queue-detail-stats')
-    expect(stats).toHaveClass('ui-queue-detail-stats')
-    expect(stats.querySelector('[title="train"]'))
-      .toHaveClass('overflow-hidden', 'text-ellipsis')
-    expect(screen.getByText('train', { selector: '.ui-queue-detail-title' }))
-      .toHaveAttribute('title', 'train')
-    expect(screen.getByText('train.yaml', { selector: '.ui-queue-detail-title' }))
-      .toHaveAttribute('title', 'train.yaml')
+    expect(screen.queryByTestId('queue-detail-stats')).not.toBeInTheDocument()
+    const header = screen.getByTestId('queue-detail-header')
+    expect(within(header).getByRole('heading', { name: '#119 train', level: 1 }))
+      .toHaveClass('ui-queue-detail-heading')
+    expect(within(header).getByText('train.yaml'))
+      .toHaveClass('ui-queue-detail-config')
+    expect(within(header).getByTestId('queue-detail-running-duration'))
+      .toHaveTextContent(/^· 2m/)
+    expect(screen.queryByRole('link', { name: '← 队列' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '取消任务' })).toHaveClass('btn-warn', 'btn-sm')
     for (const statusBadge of screen.getAllByText('运行中')) {
       expect(statusBadge).toHaveClass('badge-accent')

@@ -299,7 +299,8 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(galleryAction.compareDocumentPosition(datasetAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     await user.click(galleryAction)
-    expect(screen.getByTestId('prompt-gallery-drawer')).toBeInTheDocument()
+    const galleryDrawer = screen.getByTestId('prompt-gallery-drawer')
+    expect(galleryDrawer).toBeInTheDocument()
     await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
     const selectedGalleryCard = screen.getByRole('button', { name: '选择图片 #42' })
     expect(selectedGalleryCard).toHaveAttribute('aria-pressed', 'true')
@@ -312,10 +313,13 @@ describe('GeneratePage 端到端 smoke', () => {
       expect(stored.datasetPrompt).toBe('fresh gallery prompt')
     })
 
+    await user.click(screen.getByRole('tab', { name: '参数' }))
+    expect(galleryDrawer).toBeVisible()
+    await user.click(screen.getByRole('tab', { name: '提示词' }))
+
     const galleryRequestsBeforeClose = fetchMock.mock.calls.filter(
       ([url]) => String(url).startsWith('/api/gallery/search'),
     ).length
-    const galleryDrawer = screen.getByTestId('prompt-gallery-drawer')
     const galleryList = screen.getByTestId('gallery-image-list')
     galleryList.scrollTop = 137
     await user.click(datasetAction)
@@ -335,7 +339,7 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(lastEnqueueBody).toBeNull()
   })
 
-  it('auto-generates with the newly tagged prompt instead of stale persisted prompt', async () => {
+  it('auto-tags the selected gallery image before generating with the fresh prompt', async () => {
     const previousImpl = fetchMock.getMockImplementation()!
     const jsonOk = (body: unknown) => Promise.resolve({
       ok: true, status: 200, json: async () => body,
@@ -368,8 +372,8 @@ describe('GeneratePage 端到端 smoke', () => {
     await openPromptsTab(user)
     await user.click(screen.getByRole('button', { name: '从画廊选取' }))
     await user.click(await screen.findByRole('button', { name: '选择图片 #42' }))
-    await user.click(screen.getByRole('switch', { name: '自动生成' }))
-    await user.click(screen.getByRole('button', { name: '打标' }))
+    await user.click(screen.getByRole('switch', { name: '自动打标' }))
+    await user.click(screen.getByRole('button', { name: /开始生成/ }))
 
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
     expect(lastEnqueueBody!.prompts).toEqual(['base prompt, fresh gallery prompt'])
@@ -649,6 +653,48 @@ describe('GeneratePage 端到端 smoke', () => {
         ...over,
       })
     )
+
+  it('single 随机批量保持每个 task 的 0 哨兵，显式 seed 才递增', async () => {
+    seedPrefs({ mode: 'single', seed: 0 })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+    const batchInput = screen.getByRole('spinbutton', { name: '批次数量' })
+    await user.clear(batchInput)
+    await user.type(batchInput, '3')
+
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).endsWith('/api/generate')
+          && (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(posts).toHaveLength(3)
+      const seeds = posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).seed)
+      expect(seeds).toEqual([0, 0, 0])
+    })
+  })
+
+  it('single 显式 seed 批量按图片递增以保持可复现', async () => {
+    seedPrefs({ mode: 'single', seed: 42 })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+    const batchInput = screen.getByRole('spinbutton', { name: '批次数量' })
+    await user.clear(batchInput)
+    await user.type(batchInput, '3')
+
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).endsWith('/api/generate')
+          && (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(posts).toHaveLength(3)
+      const seeds = posts.map(([, init]) => JSON.parse(String((init as RequestInit).body)).seed)
+      expect(seeds).toEqual([42, 43, 44])
+    })
+  })
 
   it('single 提交只用 singleLoras（不带 xyLoras）', async () => {
     seedPrefs({ mode: 'single', singleLoras: [A], xyLoras: [B] })

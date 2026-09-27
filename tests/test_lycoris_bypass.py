@@ -17,6 +17,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from utils import lycoris_adapter as lycoris_adapter_module
 from utils.lycoris_adapter import AnimaLycorisAdapter
 from training.families.anima.preset import ANIMA_PRESET
 from training.families.krea2.preset import KREA2_PRESET
@@ -198,11 +199,22 @@ def test_adapter_lokr_fp8_base_forces_bypass_and_trains() -> None:
 
 
 def test_adapter_loha_keeps_rebuild() -> None:
-    """algo='loha' 行为不变（LoHa bypass 内部仍 rebuild，开了反而慢；lycoris changelog 原话）"""
+    """Torch backend keeps the established LoHa rebuild path."""
     torch.manual_seed(0)
     model = MockDiT()
     adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="loha", rank=8, alpha=8)
     adapter.inject(model)
     modes = _bypass_modes(adapter)
     assert modes
-    assert not any(modes), f"loha 应保持 rebuild，但 bypass_mode={modes}"
+    assert not any(modes), f"Torch LoHa 应保持 rebuild，但 bypass_mode={modes}"
+
+
+def test_adapter_loha_triton_uses_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A passed direct Triton decision enables LoHa bypass."""
+    monkeypatch.setattr(lycoris_adapter_module, "_LYCORIS_KERNEL_BACKEND", "triton")
+    torch.manual_seed(0)
+    model = MockDiT()
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="loha", rank=8, alpha=8)
+    adapter.inject(model)
+    modes = _bypass_modes(adapter)
+    assert modes and all(modes)

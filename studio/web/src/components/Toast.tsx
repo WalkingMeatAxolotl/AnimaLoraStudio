@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import Alert, { type AlertTone } from './Alert'
 
 type Kind = 'info' | 'success' | 'error'
@@ -41,19 +42,23 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[70] space-y-2 max-w-sm">
-        {items.map((t) => (
-          <Alert
-            key={t.id}
-            tone={ALERT_TONE[t.kind]}
-            role={t.kind === 'error' ? 'alert' : 'status'}
-            aria-atomic="true"
-            className="shadow-lg"
-          >
-            {t.message}
-          </Alert>
-        ))}
-      </div>
+      {/* Keep live feedback outside the app root that Drawer makes inert. */}
+      {createPortal(
+        <div className="fixed bottom-4 right-4 z-[70] space-y-2 max-w-sm">
+          {items.map((t) => (
+            <Alert
+              key={t.id}
+              tone={ALERT_TONE[t.kind]}
+              role={t.kind === 'error' ? 'alert' : 'status'}
+              aria-atomic="true"
+              className="shadow-lg"
+            >
+              {t.message}
+            </Alert>
+          ))}
+        </div>,
+        document.body,
+      )}
     </Ctx.Provider>
   )
 }

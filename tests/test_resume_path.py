@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -236,8 +237,61 @@ def test_snapshot_schema_wrong_falls_back(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# bootstrap_phase: _resolve_sample_seed
+# bootstrap_phase: random seed fallbacks
 # ---------------------------------------------------------------------------
+
+
+def test_resolve_training_seed_zero_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct CLI / legacy snapshots also honor 0=random for the training RNG."""
+    from runtime.training.phases import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_new_random_seed", lambda: 456)
+    args = argparse.Namespace(seed=0)
+    bootstrap._resolve_training_seed(args)
+    assert args.seed == 456
+
+
+def test_resolve_training_seed_explicit_value_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.training.phases import bootstrap
+
+    monkeypatch.setattr(
+        bootstrap, "_new_random_seed",
+        lambda: pytest.fail("an explicit training seed must not be replaced"),
+    )
+    args = argparse.Namespace(seed=42)
+    bootstrap._resolve_training_seed(args)
+    assert args.seed == 42
+
+
+def test_sample_seed_randomness_is_independent_from_training_rng(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resetting ``random`` to the same training seed must not repeat auto sample seeds."""
+    from runtime.training.phases import bootstrap
+
+    values = iter((111, 222))
+    monkeypatch.setattr(bootstrap, "_new_random_seed", lambda: next(values))
+    first = argparse.Namespace(sample_seed=0)
+    second = argparse.Namespace(sample_seed=0)
+    random.seed(42)
+    bootstrap._resolve_sample_seed(first)
+    random.seed(42)
+    bootstrap._resolve_sample_seed(second)
+    assert (first.sample_seed, second.sample_seed) == (111, 222)
+
+
+def test_sample_prompt_rotation_returns_stable_seed_offsets() -> None:
+    from runtime.training.context import TrainingContext
+
+    ctx = TrainingContext(args=argparse.Namespace())
+    ctx.sample_prompts = ["alice", "bob", "carol"]
+    assert [ctx.get_next_sample() for _ in range(5)] == [
+        ("alice", 0), ("bob", 1), ("carol", 2), ("alice", 0), ("bob", 1),
+    ]
 
 
 def test_resolve_sample_seed_zero_is_replaced_with_random_positive() -> None:

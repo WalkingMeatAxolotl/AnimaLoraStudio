@@ -324,8 +324,8 @@ def test_run_xy_matrix_zero_seed_randomizes_once(gen_module, tmp_path, monkeypat
     """base_seed=0 → 随机一次后所有 cell 共享。"""
     fake_img = _make_fake_img(tmp_path)
     family = _stub_family(lambda *a, **k: fake_img)
-    # 固定 random.randint 返回值便于断言
-    monkeypatch.setattr(gen_module.random, "randint", lambda a, b: 12345)
+    # 固定系统随机源返回值便于断言（randbelow 返回 seed - 1）
+    monkeypatch.setattr(gen_module.secrets, "randbelow", lambda _limit: 12344)
 
     gen_module._run_xy_matrix(
         xy_matrix={"x": {"axis": "steps", "values": [20, 25]}, "y": None},

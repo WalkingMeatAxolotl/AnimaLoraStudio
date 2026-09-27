@@ -14,7 +14,7 @@
  *   - `tokenMode: 'whitespace'`：根据空白边界算当前 token，供 Booru 查询等使用。
  *     后两者 commit 时都给 caller `range`，由 caller 切片替换。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 
 import { useTagAutocompleteEnabled } from '../../tagDict/prefs'
@@ -73,6 +73,15 @@ export function useTagSuggest({
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(0)
   const [cursor, setCursor] = useState(0)
+  const blurTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>())
+
+  useEffect(() => {
+    const timers = blurTimersRef.current
+    return () => {
+      for (const timer of timers) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
 
   const tokenInfo = useMemo(() => {
     if (wholeAsToken) return { token: value.trim(), start: 0, end: value.length }
@@ -137,8 +146,14 @@ export function useTagSuggest({
     notifyChange: () => { syncCursor(); if (!off) setOpen(true) },
     // focus 只跟踪 cursor：候选只在输入变化后弹出，点进 prompt 中间不该弹
     notifyFocus: () => { syncCursor() },
-    // 100ms 延迟：给 onMouseDown(pick) 时间完成；用户切到别处不会卡 popover
-    notifyBlur: () => { setTimeout(() => setOpen(false), 120) },
+    // 120ms 延迟：给 onMouseDown(pick) 时间完成；卸载时取消尚未执行的回调。
+    notifyBlur: () => {
+      const timer = setTimeout(() => {
+        blurTimersRef.current.delete(timer)
+        setOpen(false)
+      }, 120)
+      blurTimersRef.current.add(timer)
+    },
     // 鼠标点击 = 用户在挪光标，不是在补全 → 关掉候选
     notifyClick: () => { syncCursor(); setOpen(false) },
     notifySelect: () => { syncCursor() },

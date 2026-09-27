@@ -8,6 +8,8 @@ import {
   type LoraEntry,
 } from '../../../api/client'
 import { createLoraUiState, normalizeLoraPath, type LoraUiState } from './loraSelection'
+import { Input, Select } from '../../../components/FormControl'
+import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import GenerateAttachedDrawer from './GenerateAttachedDrawer'
 
 const EMPTY_RESPONSE: LoraCatalogResponse = {
@@ -16,6 +18,11 @@ const EMPTY_RESPONSE: LoraCatalogResponse = {
 }
 
 type SourceFilter = 'all' | 'project' | 'non_project'
+type SourceSort = 'updated' | 'created' | 'title'
+type ItemSort = 'mtime' | 'name'
+
+const SOURCE_SORT_KEY = 'studio:generate:loraCatalog:sourceSort'
+const ITEM_SORT_KEY = 'studio:generate:loraCatalog:itemSort'
 
 function displayName(name: string): string {
   return name.replace(/\.safetensors$/i, '')
@@ -30,6 +37,25 @@ function sourceDisplayName(source: LoraCatalogSource): string {
   if (source.source_type === 'project') return source.source_label
   const normalized = source.path.replace(/[\\/]+$/, '').replace(/\\/g, '/')
   return normalized.split('/').pop() || source.source_label
+}
+
+export function sortCatalogSources(
+  sources: LoraCatalogSource[],
+  sort: SourceSort,
+): LoraCatalogSource[] {
+  const byName = (left: LoraCatalogSource, right: LoraCatalogSource) => sourceDisplayName(left).localeCompare(
+    sourceDisplayName(right), undefined, { sensitivity: 'base', numeric: true },
+  )
+  if (sort === 'title') return [...sources].sort(byName)
+  const field = sort === 'updated' ? 'updated_at' : 'created_at'
+  return [...sources].sort((left, right) => {
+    const leftTime = left[field]
+    const rightTime = right[field]
+    if (leftTime != null && rightTime != null && leftTime !== rightTime) return rightTime - leftTime
+    if (leftTime != null && rightTime == null) return -1
+    if (leftTime == null && rightTime != null) return 1
+    return byName(left, right)
+  })
 }
 
 function LoraCatalogDrawer({
@@ -50,6 +76,8 @@ function LoraCatalogDrawer({
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [selectedSource, setSelectedSource] = useState<LoraCatalogSource | null>(null)
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  const [sourceSort, setSourceSort] = useLocalStorageState<SourceSort>(SOURCE_SORT_KEY, 'updated')
+  const [itemSort, setItemSort] = useLocalStorageState<ItemSort>(ITEM_SORT_KEY, 'name')
   const [versionId, setVersionId] = useState('')
   const [sources, setSources] = useState<LoraCatalogSource[]>([])
   const [response, setResponse] = useState<LoraCatalogResponse>(EMPTY_RESPONSE)
@@ -90,7 +118,9 @@ function LoraCatalogDrawer({
 
   const requestQuery = selectedSource ? debouncedQuery : ''
   const requestSourceId = selectedSource?.source_id ?? null
-  const requestKey = `${requestSourceId ?? 'sources'}\u0000${requestQuery}\u0000${refreshToken}`
+  const requestSort = selectedSource ? itemSort : 'name'
+  const requestOrder = requestSort === 'mtime' ? 'desc' : 'asc'
+  const requestKey = `${requestSourceId ?? 'sources'}\u0000${requestQuery}\u0000${requestSort}\u0000${requestOrder}\u0000${refreshToken}`
   currentRequestKey.current = requestKey
 
   useEffect(() => {
@@ -111,8 +141,8 @@ function LoraCatalogDrawer({
     void api.getLoraCatalog(requestSourceId ? {
       q: requestQuery,
       source: requestSourceId,
-      sort: 'name',
-      order: 'asc',
+      sort: requestSort,
+      order: requestOrder,
       include_archived: false,
       limit: 500,
       refresh: forceRefresh,
@@ -134,7 +164,7 @@ function LoraCatalogDrawer({
       inFlightRequestKeys.current.delete(requestKey)
       if (currentRequestKey.current === requestKey) setLoading(false)
     })
-  }, [open, requestKey, requestQuery, requestSourceId, refreshToken])
+  }, [open, requestKey, requestOrder, requestQuery, requestSort, requestSourceId, refreshToken])
 
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
@@ -147,10 +177,8 @@ function LoraCatalogDrawer({
         || `${sourceDisplayName(source)}\n${source.source_label}\n${source.path}`.toLocaleLowerCase().includes(needle)
       return hasCatalogItems && matchesFilter && matchesQuery
     })
-    return [...filtered].sort((a, b) => sourceDisplayName(a).localeCompare(
-      sourceDisplayName(b), undefined, { sensitivity: 'base', numeric: true },
-    ))
-  }, [query, sourceFilter, sources])
+    return sortCatalogSources(filtered, sourceSort)
+  }, [query, sourceFilter, sourceSort, sources])
 
   const versions = useMemo(() => {
     const found = new Map<number, string>()
@@ -213,8 +241,8 @@ function LoraCatalogDrawer({
       const next = await api.getLoraCatalog({
         q: debouncedQuery,
         source: selectedSource.source_id,
-        sort: 'name',
-        order: 'asc',
+        sort: itemSort,
+        order: itemSort === 'mtime' ? 'desc' : 'asc',
         include_archived: false,
         limit: 500,
         cursor: response.next_cursor,
@@ -268,32 +296,56 @@ function LoraCatalogDrawer({
             aria-label={t('common.close')}
           >×</button>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {selectedSource?.source_type === 'project' && versions.length > 1 && (
-            <select
-              className="input text-xs shrink-0"
-              style={{ width: 132 }}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+          <Input
+            ref={searchInputRef}
+            controlSize="sm"
+            className="min-w-0"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={selectedSource ? t('generate.catalogSearchLoras') : t('generate.catalogSearchSources')}
+            aria-label={selectedSource ? t('generate.catalogSearchLoras') : t('generate.catalogSearchSources')}
+            autoFocus
+          />
+          {selectedSource ? (
+            <Select
+              controlSize="sm"
+              className="shrink-0"
+              value={itemSort}
+              onChange={(event) => setItemSort(event.target.value as ItemSort)}
+              aria-label={t('generate.catalogSort')}
+            >
+              <option value="mtime">{t('generate.catalogSortModified')}</option>
+              <option value="name">{t('generate.catalogSortName')}</option>
+            </Select>
+          ) : (
+            <Select
+              controlSize="sm"
+              className="shrink-0"
+              value={sourceSort}
+              onChange={(event) => setSourceSort(event.target.value as SourceSort)}
+              aria-label={t('generate.catalogSort')}
+            >
+              <option value="updated">{t('generate.catalogSortUpdated')}</option>
+              <option value="created">{t('generate.catalogSortCreated')}</option>
+              <option value="title">{t('generate.catalogSortName')}</option>
+            </Select>
+          )}
+          {selectedSource?.source_type === 'project' && versions.length > 1 ? (
+            <Select
+              controlSize="sm"
+              className="shrink-0"
               value={versionId}
               onChange={(event) => setVersionId(event.target.value)}
               aria-label={t('generate.catalogVersion')}
             >
               <option value="">{t('generate.catalogAllVersions')}</option>
               {versions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-          )}
-          <input
-            ref={searchInputRef}
-            className="input text-xs flex-1"
-            style={{ minWidth: 240 }}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={selectedSource ? t('generate.catalogSearchLoras') : t('generate.catalogSearchSources')}
-            autoFocus
-          />
-          {!selectedSource && (
-            <select
-              className="input text-xs shrink-0"
-              style={{ width: 132 }}
+            </Select>
+          ) : !selectedSource ? (
+            <Select
+              controlSize="sm"
+              className="shrink-0"
               value={sourceFilter}
               onChange={(event) => setSourceFilter(event.target.value as SourceFilter)}
               aria-label={t('generate.catalogFilter')}
@@ -301,8 +353,8 @@ function LoraCatalogDrawer({
               <option value="all">{t('generate.catalogFilterAll')}</option>
               <option value="project">{t('generate.catalogFilterProjects')}</option>
               <option value="non_project">{t('generate.catalogFilterNonProjects')}</option>
-            </select>
-          )}
+            </Select>
+          ) : null}
         </div>
       </header>
 

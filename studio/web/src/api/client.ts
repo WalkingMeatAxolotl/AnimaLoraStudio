@@ -1647,6 +1647,8 @@ export interface LoraCatalogSource {
   item_count: number
   error: string | null
   project_archived: boolean
+  created_at: number | null
+  updated_at: number | null
 }
 
 export interface LoraCatalogResponse {
@@ -1809,6 +1811,34 @@ export interface XformersInstallResult {
   restart_required: boolean
 }
 
+export interface TritonEnvironment {
+  platform: string
+  python_version: string
+  torch_version: string | null
+  torch_cuda_version: string | null
+  torch_cuda_available: boolean
+  supported: boolean
+  reason: string
+  expected_package: string | null
+  expected_version: string | null
+}
+
+export interface TritonStatus {
+  state: 'not_installed' | 'available' | 'incompatible' | 'restart_required'
+  installed: boolean
+  available: boolean
+  installed_packages: Record<string, string>
+  package: string | null
+  version: string | null
+  expected_package: string | null
+  expected_version: string | null
+  compatible: boolean
+  reason: string
+  restart_required: boolean
+  environment: TritonEnvironment
+  stdout_tail?: string
+}
+
 export type TaskStatus =
   'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused' | 'scheduled'
 
@@ -1905,7 +1935,7 @@ export interface QueueHoldState {
 /** `GET /api/logs/{id}` 分页响应（docs/design/logging-target-state.md §3.4）。
  *  `lines[].offset` = 该行起始字节；`end_offset` = 最后一行结束后的偏移，既是
  *  「往后补拉」的 after 游标，也与 SSE task_log_appended.end_offset 同坐标系；
- *  `start_offset` 给「加载更早」当 before。末尾半行不返回。 */
+ *  `start_offset` 是「加载全部」的 before 游标。末尾半行不返回。 */
 export interface LogPage {
   task_id: number
   lines: { offset: number; text: string }[]
@@ -1915,7 +1945,7 @@ export interface LogPage {
   has_more_before: boolean
 }
 
-/** 分页查询参数：tail / before / after 三选一（都不给 = tail，服务端默认 500 行）。 */
+/** 分页查询参数：tail / before / after 三选一（都不给 = tail，服务端默认 2000 行）。 */
 export type LogPageQuery =
   | { tail?: number }
   | { before: number; limit?: number }
@@ -2277,7 +2307,7 @@ export interface GallerySearchParams {
 export interface AnnouncementPost {
   id: string
   date: string
-  tag: 'release' | 'notice' | 'migration'
+  tag: 'release' | 'guide' | 'notice' | 'migration'
   title: { zh: string; en: string }
   body: { zh: string; en: string }
   pin: boolean
@@ -2588,8 +2618,26 @@ export const api = {
   /** 归档（软隐藏，可逆）：目录 / versions / 任务全部原样。 */
   archiveProject: (pid: number) =>
     req<ProjectDetail>(`/api/projects/${pid}/archive`, { method: 'POST' }),
+  archiveProjects: (projectIds: number[]) =>
+    req<{ updated: number[] }>('/api/projects/archive-batch', {
+      method: 'POST',
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
   unarchiveProject: (pid: number) =>
     req<ProjectDetail>(`/api/projects/${pid}/unarchive`, { method: 'POST' }),
+  unarchiveProjects: (projectIds: number[]) =>
+    req<{ updated: number[] }>('/api/projects/unarchive-batch', {
+      method: 'POST',
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
+  deleteProjects: (projectIds: number[]) =>
+    req<{
+      deleted: number[]
+      failed: Array<{ id: number; code: string; message: string }>
+    }>('/api/projects/delete-batch', {
+      method: 'POST',
+      body: JSON.stringify({ project_ids: projectIds }),
+    }),
 
   listVersions: (pid: number) =>
     req<{ items: Version[] }>(`/api/projects/${pid}/versions`).then(
@@ -3409,6 +3457,13 @@ export const api = {
    *  当前 torch+cu 组合。装完必须重启 Studio（C extension 不能热替换）。 */
   installXformers: () =>
     req<XformersInstallResult>('/api/xformers/install', { method: 'POST' }),
+
+  // LyCORIS Triton 实验 backend（精确 pin、安装不解析 Torch 依赖） ---------
+  getTritonStatus: () => req<TritonStatus>('/api/triton/status'),
+  installTriton: () =>
+    req<TritonStatus>('/api/triton/install', { method: 'POST' }),
+  uninstallTriton: () =>
+    req<TritonStatus>('/api/triton/install', { method: 'DELETE' }),
 
   // PP7 — 训练集导出 / 导入 -----------------------------------------------
   /** 当前 version 的 train/ 打包 zip 直链。<a href download> 触发即可,

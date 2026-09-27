@@ -71,28 +71,35 @@ describe('useTaskLog', () => {
     getLog.mockResolvedValueOnce(page([[4, 'c'], [6, 'd']], { start_offset: 4 }))
     await act(async () => { bus.onOpen?.() })
     await waitFor(() => expect(result.current.lines).toEqual(['a', 'b', 'c', 'd']))
-    expect(getLog).toHaveBeenLastCalledWith(7, { after: 4, limit: 500 })
+    expect(getLog).toHaveBeenLastCalledWith(7, { after: 4, limit: 2000 })
 
     getLog.mockResolvedValueOnce(page([[8, 'e']], { start_offset: 8 }))
     emit({ type: 'task_state_changed', task_id: 7, status: 'done' })
     await waitFor(() => expect(result.current.lines).toEqual(['a', 'b', 'c', 'd', 'e']))
-    expect(getLog).toHaveBeenLastCalledWith(7, { after: 8, limit: 500 })
+    expect(getLog).toHaveBeenLastCalledWith(7, { after: 8, limit: 2000 })
   })
 
-  it('加载更早：before=首行 offset，前插并更新 hasMoreBefore', async () => {
+  it('加载全部：一次点击向前翻到文件头并解除增量裁剪上限', async () => {
     const getLog = vi.spyOn(api, 'getLog')
     getLog.mockResolvedValueOnce(page([[20, 'k'], [22, 'l']], { has_more_before: true }))
-    const { result } = renderHook(() => useTaskLog(7, { tail: 2 }))
+    const { result } = renderHook(() => useTaskLog(7, { tail: 2, maxLines: 3 }))
     await waitFor(() => expect(result.current.status).toBe('ready'))
 
-    getLog.mockResolvedValueOnce(page([[16, 'i'], [18, 'j']], { has_more_before: false }))
-    act(() => result.current.loadEarlier())
-    await waitFor(() => expect(result.current.lines).toEqual(['i', 'j', 'k', 'l']))
-    expect(getLog).toHaveBeenLastCalledWith(7, { before: 20, limit: 2 })
+    getLog
+      .mockResolvedValueOnce(page([[16, 'i'], [18, 'j']], { has_more_before: true }))
+      .mockResolvedValueOnce(page([[12, 'g'], [14, 'h']], { has_more_before: false }))
+    act(() => result.current.loadAll())
+    await waitFor(() => expect(result.current.lines).toEqual(['g', 'h', 'i', 'j', 'k', 'l']))
+    expect(getLog).toHaveBeenNthCalledWith(2, 7, { before: 20, limit: 5000 })
+    expect(getLog).toHaveBeenNthCalledWith(3, 7, { before: 16, limit: 5000 })
     expect(result.current.hasMoreBefore).toBe(false)
-    // 没有更早时 no-op
+    expect(result.current.loadingAll).toBe(false)
+
+    // 用户主动加载全部后，后续 SSE 也不再按 maxLines 裁掉开头。
+    emit({ type: 'task_log_appended', task_id: 7, text: 'm', seq: 5, end_offset: 26 })
+    expect(result.current.lines).toEqual(['g', 'h', 'i', 'j', 'k', 'l', 'm'])
     const calls = getLog.mock.calls.length
-    act(() => result.current.loadEarlier())
+    act(() => result.current.loadAll())
     expect(getLog.mock.calls.length).toBe(calls)
   })
 

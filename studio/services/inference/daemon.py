@@ -87,7 +87,7 @@ class InferenceDaemon:
     `on_event` 收到的事件 dict 形如：
         {"kind": "started", "task_id": 42}
         {"kind": "image_done", "task_id": 42, "filename": "gen_0000_p0_c0_s42.png",
-                                "path": "/tmp/anima_gen_42/..."}
+                                "path": "/tmp/anima_gen_42/...", "seed": 42}
         {"kind": "done", "task_id": 42}
         {"kind": "error", "task_id": 42, "message": "..."}
     """
@@ -767,14 +767,18 @@ class InferenceDaemon:
         if kind == "image_done" and "image_b64" in msg and self._cache_images:
             filename = msg.get("filename") or ""
             xy_info = msg.get("xy") if isinstance(msg.get("xy"), dict) else None
+            resolved_snapshot = dict(active.params_snapshot)
+            resolved_seed = msg.get("seed")
+            if resolved_seed is not None:
+                resolved_snapshot["seed"] = int(resolved_seed)
             try:
                 data = base64.b64decode(msg["image_b64"])
                 generate_cache.cache_image(
                     active.task_id, filename, data,
-                    snapshot=active.params_snapshot,
+                    snapshot=resolved_snapshot,
                 )
                 generate_storage.handle_image_done(
-                    active.task_id, filename, data, active.params_snapshot,
+                    active.task_id, filename, data, resolved_snapshot,
                     mode=active.mode, xy_info=xy_info,
                     save_to_disk=active.save_to_disk,
                 )

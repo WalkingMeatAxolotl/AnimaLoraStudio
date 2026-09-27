@@ -87,8 +87,9 @@ loading. Use no more than `400`, `500`, and `600` for normal UI hierarchy.
 | Page description | `.type-page-description`: `text-md`, secondary, relaxed, max `68ch` | A concise explanation directly below the page title |
 | Section title | `.type-section-title`: `text-lg`, 600, primary | A major region inside a page or dialog |
 | Panel title | `.type-panel-title`: `text-sm`, 600, primary | A card, settings group, or compact panel |
-| Section label | `.type-section-label`: `text-xs`, 600, tertiary, tracked uppercase | A direct category heading such as queue status; never an eyebrow above another heading |
+| Section label | `.type-section-label`: `text-xs`, 600, secondary, tracked uppercase | A direct category heading such as queue status; never an eyebrow above another heading |
 | Field label | `.type-field-label`: `text-sm`, 500, secondary | The human-readable name of a form control |
+| Data label | `.type-data-label`: `text-xs`, 500, secondary | The label of a value in a read-only property or definition list; not a form-control label |
 | Field help | `.type-field-help`: `text-xs`, tertiary, relaxed | Optional supporting copy below a field |
 | Metadata | `text-xs` + tertiary | Timestamps, counts, and passive context |
 | Technical data | `font-mono`; add `.tnum` for comparable numbers | Code, paths, identifiers, logs, and measurements—not generic UI chrome |
@@ -280,7 +281,10 @@ under individual settings.
 
 Use `Alert` for persistent, in-flow information, success confirmation, warnings, and
 errors. `Toast` remains the transient notification pattern and reuses Alert's visual
-tones without changing its timer or invocation API.
+tones without changing its timer or invocation API. Its notification host is portalled
+to `document.body`, outside the inert application root, so Drawer background protection
+does not hide live feedback from assistive technology. Notifications do not move focus
+or create a second live copy inside the active dialog.
 
 | Tone | Meaning | Typical use |
 | --- | --- | --- |
@@ -382,14 +386,59 @@ Dismissal and focus are part of the Pattern rather than caller-owned behavior:
 - Announcement Center is the representative `wide` master-detail modal. Its tag filter
   uses `SegmentedControl`; its announcement list is a labelled single-select listbox with
   wrapping vertical arrows plus Home/End; and the article region owns its own scroll.
-  Announcement data, read-state persistence, update checks, and settings deep links remain
-  feature-owned.
+  `Guide` is the first category after All: it contains stable-ID, continuously maintained
+  reference content and is not pinned merely for being evergreen. Release, notice, and
+  migration retain their event-oriented roles. Announcement data, read-state persistence,
+  update checks, and settings deep links remain feature-owned.
 
 Footer actions use `ActionGroup`: status first, secondary or destructive actions next,
 and the single primary action last. Keep validation near the relevant control; an error
 Toast must not duplicate an error already announced inside the modal. Toast feedback remains
 above the modal layer when an operation keeps the dialog open. Do not recreate modal
 backdrops, panel geometry, focus listeners, or title linkage in feature code.
+
+### Confirmation inside an instant-save editor
+
+When a modal editor needs confirmation for deleting or resetting its current object,
+use a confirmation view in the same Modal, not a second stacked dialog. Keep the editor's
+input state and scroll context mounted but non-interactive during confirmation. Cancel,
+Escape, and backdrop return to editing and its initiating action without closing the
+underlying Drawer. While the confirmed destructive request runs, prevent duplicate
+execution and unsafe dismissal; failure keeps a recoverable view in the same task.
+
+The LLM preset editor is the first adoption. Its parameter and prompt-message panes are
+a specialist side-by-side workspace: retain the `1fr / 2fr` desktop ratio and independent
+column scrolling within a viewport-bounded `wide` Modal, with existing footer action
+groups kept together. This is not permission to widen ordinary forms. The shared shell
+still owns title linkage, focus trapping, scroll protection and opener restoration.
+If confirmed deletion removes the original edit action, return focus to its still-active
+Drawer or main task surface rather than the inert background.
+
+Instant-save editors do not acquire a whole-form draft through this migration. Closing
+by Escape is equivalent to Done or the close control: first blur the active editor field
+so its existing commit path can run, then close. It does not undo applied changes; Enter
+inside a message textarea remains a newline. Preset/credential APIs, ETags and the serial
+mutation queue remain feature-owned. Other editor consumers migrate only in their own
+bounded slices, not by changing the behavior of every Modal.
+
+### Full-screen image preview
+
+`ImagePreviewModal` is a specialized protected dialog, not an ordinary modal card.
+Keep its black media plane, zoom/pan, compare layout, caption/count bar and directional
+navigation. Portal it outside the AppShell stacking context, above workspace content
+but below ordinary confirmations and Toast feedback; a local workspace z-index must
+not turn it into a layer above every global message.
+
+Opening focuses the preview surface so its documented image shortcuts are immediately
+available. Tab and Shift+Tab cycle through the image surface and its controls, so a
+keyboard user can return from zoom controls to the image's accept/delete shortcuts.
+Escape closes it and restores
+the still-connected opener without scrolling the underlying workspace. Changing the
+image does not reset focus. Enter/Space on Close, zoom or navigation buttons retains
+that button's native action, never the image's accept/delete action. Image shortcuts
+belong only to non-interactive preview content, ignore composing/modified input, and
+do not repeat data mutations while a key is held. Do not use window-level business
+key handlers that can act on a background page.
 
 ### Background model prerequisites and direct-edit task setup
 
@@ -523,6 +572,32 @@ persistence, active-filter dots, sorting, API parameters, paging resets, result 
 refresh, clear behavior, and list mutations remain page-owned. Do not add unused result
 or clear slots until a repeated product behavior has been established.
 
+### Ordinary-list batch selection
+
+An ordinary list enters bulk selection through an explicit, labelled mode; permanent
+or high-impact mutations never appear as an always-on action beside ordinary page
+creation and navigation. While the mode is active, the list's normal open/edit actions
+yield to native selection controls and the whole row or card may become a larger pointer
+target for that same selection. Keyboard users retain one labelled checkbox per item;
+selection state must not rely on color alone.
+
+The contextual bulk bar sits after the optional `ListToolbar` and before the collection,
+never inside either the list toolbar or `PageHeader`. It has two visually separated
+clusters: selected count plus select-current-results and clear controls on the leading
+side, and domain mutations on the trailing side. Do not mix reversible domain actions
+such as restore into the selection-control cluster. Within the mutation cluster,
+reversible actions precede the final destructive action. “Select all” means the current
+filtered result set and must say so; changing the filter prunes hidden selections, while
+sorting preserves them. Leaving the view or bulk mode clears selection. During a
+submitted mutation, selection, scope changes, and duplicate execution are disabled.
+Completion produces one aggregate result, not one notification per item, and focus
+returns to a surviving bulk-mode entry point.
+
+Projects is the representative card-list adoption: active projects support batch
+archive; archived projects support batch restore and permanent delete. The backend
+validates the full selection's lifecycle state before mutating it. Permanent deletion
+continues to require one confirmation naming the count and consequences.
+
 ## 14. Async-state and progress contract
 
 Async UI describes real work; it must not fabricate a waiting phase for local static
@@ -621,6 +696,14 @@ Geometry and scroll responsibility are fixed:
   and restores the invoking search control after Escape or backdrop close.
   Drawers may inert the app root; overlays must not alter shell width or
   introduce a second body scrollbar.
+
+Global command search must not interrupt an already blocking task surface. While an
+overlay Drawer, Modal or full-screen image preview is active, Ctrl/Cmd+K does not open
+another command palette. When the palette itself is active, the same shortcut may
+still close it. ImagePreviewModal is the first bounded adoption of this rule; the
+existing Topbar/Modal/Drawer entry paths remain explicit migration debt until their
+separate interaction-coordination slice. Do not silently allow overlapping focus traps
+or solve keyboard ownership by continually raising z-index values.
 
 App-shell responsiveness belongs to `styles/responsive.css` and uses the shared
 1280px breakpoint. Route-specific workbench restructuring is a later Layout

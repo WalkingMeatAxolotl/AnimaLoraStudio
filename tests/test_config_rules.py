@@ -178,6 +178,15 @@ def test_fix_pins_target_when_no_gate() -> None:
     assert fields == ["lr_scheduler"]
 
 
+def test_fix_legacy_triton_flash_pair_prefers_stable_torch_backend() -> None:
+    data = {"lycoris_backend": "triton", "attention_backend": "flash_attn"}
+    fixed, fields = apply_disable_rule_fixes(data, TrainingConfig)
+
+    assert fixed["lycoris_backend"] == "torch"
+    assert fixed["attention_backend"] == "flash_attn"
+    assert fields == ["lycoris_backend"]
+
+
 def test_fix_noop_on_valid_data() -> None:
     fixed, fields = apply_disable_rule_fixes({"epochs": 5}, TrainingConfig)
     assert fixed == {"epochs": 5}

@@ -18,7 +18,7 @@ import { useAnnouncements } from '../lib/Announcements'
 import { useSettingsDrawer } from '../lib/SettingsDrawer'
 import { SECTION_TO_TAB } from '../pages/tools/settings/constants'
 
-const TAG_ORDER: AnnouncementPost['tag'][] = ['release', 'notice', 'migration']
+const TAG_ORDER: AnnouncementPost['tag'][] = ['guide', 'release', 'notice', 'migration']
 
 // 公告正文里的**应用内**链接协议。写 `[清理评估日志残留](app://settings/migrate-eval-orphans)`
 // 就能从公告直接跳到 Settings 对应 section（抽屉自己会切到该 section 所属 tab）。
@@ -68,6 +68,7 @@ function tagChipTone(tag: AnnouncementPost['tag']): BadgeTone {
   switch (tag) {
     case 'release': return 'accent'
     case 'migration': return 'warning'
+    case 'guide': return 'info'
     default: return 'info'
   }
 }

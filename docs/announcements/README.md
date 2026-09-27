@@ -35,6 +35,7 @@ version: "0.16.0"        # 可选，关联版本号
 | tag | 含义 | 何时用 |
 |---|---|---|
 | `release` | 更新日志 | 一个版本的发布说明（Phase 2 起从 release_notes 迁入，一版一篇） |
+| `guide` | 指南 | 面向新用户或高频查阅的常驻用法；内容随当前版本原地维护 |
 | `notice` | 公告 | 一般通知 / 提示 |
 | `migration` | 迁移 | 行为变化、需要用户注意或操作（如入口地址变更） |
 
@@ -45,11 +46,12 @@ version: "0.16.0"        # 可选，关联版本号
 
 1. `studio/services/announcements.py` → `VALID_TAGS`
 2. `studio/web/src/api/client.ts` → `AnnouncementPost['tag']` 联合类型
-3. `studio/web/src/components/AnnouncementCenter.tsx` → `TAG_ORDER` + `tagChipClass`（配色）
+3. `studio/web/src/components/AnnouncementCenter.tsx` → `TAG_ORDER` + `tagChipTone`（配色）
 4. `studio/web/src/i18n/locales/zh.json` + `en.json` → `announcements.tags.<new>`
 5. 本文件上面的 tag 表
 
 ## 模板
 
-直接抄现成的：`2026-06-28-welcome.md` / `.en.md`（`notice`）或
+直接抄现成的：`2026-09-21-studio-overview-guide.md` / `.en.md`（`guide`）、
+`2026-06-28-welcome.md` / `.en.md`（`notice`）或
 `2026-06-28-url-root.md` / `.en.md`（`migration`，置顶）。

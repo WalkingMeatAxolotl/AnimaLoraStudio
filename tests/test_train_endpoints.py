@@ -1,6 +1,7 @@
 """PP6.2 — /api/projects/{pid}/versions/{vid}/config/* HTTP。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,33 @@ def _seed_preset(env, name: str, **overrides) -> None:
     base = TrainingConfig().model_dump()
     base.update(overrides)
     presets_io.write_preset(name, base)
+
+
+def test_reg_ai_zero_seed_is_materialized_in_task_config(
+    client: TestClient, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio.api.routers.projects import training as training_router
+
+    pid, vid = _make(client)
+    with db.connection_for(env["db"]) as conn:
+        project = projects.get_project(conn, pid)
+        version = versions.get_version(conn, vid)
+    assert project is not None and version is not None
+    vdir = versions.version_dir(project["id"], project["slug"], version["label"])
+    train_dir = vdir / "train" / "1_data"
+    train_dir.mkdir(parents=True, exist_ok=True)
+    (train_dir / "a.png").write_bytes(b"png")
+
+    monkeypatch.setattr(training_router, "STUDIO_DATA", tmp_path / "studio_data")
+    monkeypatch.setattr(training_router.stdlib_secrets, "randbelow", lambda _limit: 500)
+    response = client.post(
+        f"/api/projects/{pid}/versions/{vid}/reg/generate-prior",
+        json={"seed": 0},
+    )
+
+    assert response.status_code == 200, response.text
+    config_path = Path(response.json()["config_path"])
+    assert json.loads(config_path.read_text(encoding="utf-8"))["seed"] == 501
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +388,7 @@ def test_enqueue_snapshot_failure_rolls_back_task(
     def fail_freeze(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(training.task_snapshot, "freeze_config", fail_freeze)
+    monkeypatch.setattr(training.task_snapshot, "freeze_training_config", fail_freeze)
     with pytest.raises(OSError, match="disk full"):
         client.post(f"/api/projects/{pid}/versions/{vid}/queue")
     with db.connection_for(env["db"]) as conn:
@@ -457,7 +485,7 @@ def test_concurrent_enqueue_serializes_active_check(
     first_in_freeze = Event()
     release_first = Event()
     second_at_lock = Event()
-    real_freeze = training.task_snapshot.freeze_config
+    real_freeze = training.task_snapshot.freeze_training_config
     real_begin = db.begin_immediate
     begin_count = 0
     begin_count_lock = Lock()
@@ -477,7 +505,9 @@ def test_concurrent_enqueue_serializes_active_check(
             second_at_lock.set()
         return real_begin(conn)
 
-    monkeypatch.setattr(training.task_snapshot, "freeze_config", blocking_first_freeze)
+    monkeypatch.setattr(
+        training.task_snapshot, "freeze_training_config", blocking_first_freeze,
+    )
     monkeypatch.setattr(db, "begin_immediate", traced_begin)
 
     with ThreadPoolExecutor(max_workers=2) as pool:

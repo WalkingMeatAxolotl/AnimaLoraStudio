@@ -83,12 +83,12 @@ Traceback (most recent call last):
 | 解析 | 按 §3.2 行头正则切记录；续行并入 |
 | 过滤 | 视图开关（级别阈值）；不做关键字搜索（非目标） |
 | 着色 | ERROR 红 / WARNING 黄 / INFO 默认 / DEBUG 弱化；单一 token 集，不再四套颜色 |
-| 尾部加载 | 初次只拉尾 N 条（默认 500），顶部「加载更早」按 offset 往前翻；客户端上限 5000 记录 |
+| 尾部加载 | 初次只拉尾部 N 条（默认 2000）；有更早记录时顶部显示「加载全部」，用户确认后分批拉取并解除客户端 5000 记录上限 |
 | 增量 | SSE 按 seq 追加；`onOpen` 重连时用最后 seq/offset 补拉 |
 | 操作 | 自动滚动开关、复制、下载（原始 run.log） |
 | 状态 | 等待日志 / 已结束 / 断线重连中 |
 
-替换关系：`TaskLogDrawer` 内容区、`QueueDetail` LogTab、`DaemonLogDrawer` 内容区、`useEvalLogSource` / `EvalJobsPanel` 全部改用 `LogView`（数据由 `useTaskLog` 提供）。设置页下载日志 / 更新日志 / onboarding 安装日志三个小面**保留原 `<pre>`**：内容不是契约行（downloader / updater / 安装脚本输出），LogView 的解析与工具栏在那里没有增益（刀 3 实施时定）。抽屉的开合状态机、StepShell 的 `logSources` 挂载方式不变；`LogSource` 加可选 `downloadUrl / hasMoreBefore / onLoadEarlier`。
+替换关系：`TaskLogDrawer` 内容区、`QueueDetail` LogTab、`DaemonLogDrawer` 内容区、`useEvalLogSource` / `EvalJobsPanel` 全部改用 `LogView`（数据由 `useTaskLog` 提供）。设置页下载日志 / 更新日志 / onboarding 安装日志三个小面**保留原 `<pre>`**：内容不是契约行（downloader / updater / 安装脚本输出），LogView 的解析与工具栏在那里没有增益（刀 3 实施时定）。抽屉的开合状态机、StepShell 的 `logSources` 挂载方式不变；`LogSource` 加可选 `downloadUrl / hasMoreBefore / onLoadAll`。
 
 其它显示修正：DaemonLogDrawer 渲染 `ts`；PreprocessDuplicates 的 per-line `status` 映射到级别；`PauseProgressModal` 深链改 `navigate('/queue/<id>#log')`；error toast 末尾接上已写好的 `formatErrorTraceSuffix`。
 
@@ -96,7 +96,7 @@ Traceback (most recent call last):
 
 | 端点 / 事件 | 现状 | 目标 |
 |---|---|---|
-| `GET /api/logs/{task_id}` | 全文 `{content,size}` | `?tail=N`（默认 500 行）/ `?before=<offset>&limit=N`（往前翻）/ `?after=<offset>&limit=N`（断线补拉）；返回 `{lines: [{offset,text}], start_offset, end_offset, size, has_more_before}`，`offset` = 行起始字节、`end_offset` = 最后一行结束后的偏移（after 游标）；按字节切行再逐行 `clean_log_line`，与 LogTailer 同文本；末尾半行不返回；服务端仍剥 `__EVENT__:` 行；只按 64KB 块从尾部读 |
+| `GET /api/logs/{task_id}` | 全文 `{content,size}` | `?tail=N`（默认 2000 行）/ `?before=<offset>&limit=N`（加载全部时分批往前取）/ `?after=<offset>&limit=N`（断线补拉）；返回 `{lines: [{offset,text}], start_offset, end_offset, size, has_more_before}`，`offset` = 行起始字节、`end_offset` = 最后一行结束后的偏移（after 游标）；按字节切行再逐行 `clean_log_line`，与 LogTailer 同文本；末尾半行不返回；服务端仍剥 `__EVENT__:` 行；只按 64KB 块从尾部读 |
 | `GET /api/logs/{task_id}/raw` | 无 | 原始文件下载（诊断包 / 下载按钮用） |
 | SSE `task_log_appended` / `job_log_appended` | 两种形状（LogTailer 带 seq、daemon 回写不带） | 统一 `{type, task_id|job_id, seq, end_offset, text}`（`end_offset` 与 API 的 after 游标同坐标系，LogTailer 改按字节切行计算）；daemon 回写路径补 seq/end_offset（`fp.tell()`） |
 | SSE `daemon_log_line` | `{ts, seq, line}` | 不变 |
@@ -137,7 +137,7 @@ studio.log 查看 UI；子进程写 studio.log（D2）；run.log GC（D4）；�
 - 新增 `components/LogView.tsx` + `lib/useLogSource.ts`；`TaskLogDrawer` / `QueueDetail` LogTab / `DaemonLogDrawer` / `useEvalLogSource` 改用；三个小面复用只读模式。
 - 设置页：全局开关「默认显示调试日志」读写 `system.log_debug_default`。
 - `PauseProgressModal.tsx:124` 深链；`api/client.ts` error toast 接 trace suffix；删 `Toast.tsx:66,75` 死导出；孤儿 i18n `duplicates.logTitle` / `reg.aiLogTitle` / `reg.tabConfig` 清理。
-- i18n：`logView.*`（调试开关、加载更早、下载、断线重连、事件解析失败）；`settings.log.*`。
+- i18n：`logView.*`（调试开关、加载全部、下载、断线重连、事件解析失败）；`settings.log.*`。
 
 **文档**
 - ADR 0009 加 Addendum：记录 D1-D4、行契约、`ANIMA_LOG_LEVEL` 语义变化（生成端 → 终端可读性）、GC 条目作废、`extra_handlers` 删除。

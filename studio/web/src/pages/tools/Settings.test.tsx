@@ -459,6 +459,20 @@ beforeEach(() => {
         installed: false, version: null,
       }), { status: 200 }))
     }
+    if (typeof url === 'string' && url.includes('/api/triton/status')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        state: 'not_installed', installed: false, available: false,
+        installed_packages: {}, package: 'triton-windows', version: null,
+        expected_package: 'triton-windows', expected_version: '3.8.0.post28',
+        compatible: false, reason: 'torch_unsupported', restart_required: false,
+        environment: {
+          platform: 'windows_x86_64', python_version: '3.13.0',
+          torch_version: '2.7.0+cu128', torch_cuda_version: '12.8',
+          torch_cuda_available: true, supported: false, reason: 'torch_unsupported',
+          expected_package: 'triton-windows', expected_version: '3.8.0.post28',
+        },
+      }), { status: 200 }))
+    }
     if (typeof url === 'string' && url.includes('/api/wd14/runtime')) {
       return Promise.resolve(
         new Response(
