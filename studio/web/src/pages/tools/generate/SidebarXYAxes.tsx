@@ -103,7 +103,7 @@ function SortableAxisValueCard({
         </div>
         <button
           type="button"
-          className="btn btn-ghost btn-sm text-err absolute right-2 top-1/2 -translate-y-1/2 z-[2] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+          className="btn btn-ghost btn-sm text-err absolute right-2 inset-y-0 my-auto h-fit z-[2] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
           onPointerDown={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
           onClick={onRemove}
