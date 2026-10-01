@@ -99,7 +99,17 @@ describe('SidebarXYAxes', () => {
     const secondCard = screen.getByRole('button', { name: '拖动调整顺序 epoch_80' })
     const deleteSecond = screen.getByRole('button', { name: '删除 epoch_80' })
     expect(firstCard).toHaveClass('rounded-md', 'cursor-grab', 'bg-overlay', 'p-2.5')
-    expect(deleteSecond).toHaveClass('opacity-0', 'pointer-events-none', 'group-hover:opacity-100', 'group-hover:pointer-events-auto', 'group-focus-within:opacity-100')
+    expect(deleteSecond).toHaveClass(
+      'inset-y-0',
+      'my-auto',
+      'h-fit',
+      'opacity-0',
+      'pointer-events-none',
+      'group-hover:opacity-100',
+      'group-hover:pointer-events-auto',
+      'group-focus-within:opacity-100',
+    )
+    expect(deleteSecond).not.toHaveClass('top-1/2', '-translate-y-1/2')
     expect(secondCard).not.toContainElement(deleteSecond)
     expect(deleteSecond.parentElement).toBe(secondCard.parentElement)
     expect(screen.queryByRole('button', { name: /上移|下移/ })).not.toBeInTheDocument()
