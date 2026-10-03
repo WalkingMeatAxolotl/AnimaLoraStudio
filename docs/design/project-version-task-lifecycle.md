@@ -650,13 +650,13 @@ status (主状态机，5 态)
 
 #### 11.5-B 每个 phase 的完成判定 ✅ 已定
 
-**决定**（2026-05-23 讨论）：
+**决定**（2026-05-23 讨论；打标/编辑校验经 [ADR 0021](../adr/0021-decouple-caption-coverage-from-training.md) 修订）：
 
 | phase | 校验条件 | 失败提示样例 |
 |---|---|---|
 | `curating` | `train/ ≥ 1 张图`（不能空，无 warning 阈值） | "训练集为空，请先选择训练图" |
-| `tagging` | caption 文件 **100% 覆盖**（每张 train 图都有同名 .txt） | "还有 N 张未生成 caption，请重跑或删除" |
-| `editing` | caption 文件 **100% 覆盖**（同 tagging，作为兜底） | 同上。大多数时间从 tagging 来时已 100% → 自动通过；仅当 user 删了 caption 时才触发 |
+| `tagging` | `train/ ≥ 1 张图`；Caption 覆盖率仅作信息统计 | "训练集为空，请先选择训练图" |
+| `editing` | 同 tagging；缺失或空 Caption 以空文本训练，不要求补齐 | 同上 |
 | `regularizing` | **无相关 reg job 处于 running / pending**（可跳过 = 不要求正则集非空） | "正则任务进行中，请等待完成" |
 | `ready` | training config 文件存在 + schema 校验通过 | "请先完成训练配置" / 具体哪个字段非法 |
 

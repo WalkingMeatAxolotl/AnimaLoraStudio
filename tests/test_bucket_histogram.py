@@ -1,7 +1,7 @@
 """compute_bucket_histogram：后端用真 BucketManager 算训练集桶分布（桶预览数据源）。
 
 复用 runtime 的 BucketManager + _parse_folder_meta，扫描规则镜像 ImageDataset._scan
-（递归 rglob + 根目录散图 + 只计有 caption 的图），保证与实际训练逐桶一致。
+（递归 rglob + 根目录散图 + 不按 caption 过滤），保证与实际训练逐桶一致。
 """
 from __future__ import annotations
 
@@ -57,14 +57,15 @@ def test_empty_train_dir(tmp_path: Path) -> None:
     assert compute_bucket_histogram(tmp_path / "nope", [1024], 2.0) == []
 
 
-def test_only_captioned_images_counted(tmp_path: Path) -> None:
-    # 镜像 trainer：无 caption 的图被丢弃，不计入直方图（否则预览 ≠ 实际训练）。
+@pytest.mark.parametrize("prefer_json", [True, False])
+def test_uncaptioned_images_counted(tmp_path: Path, prefer_json: bool) -> None:
+    # 缺失或空 caption 不影响样本入选，预估与实际扫描保持一致。
     pytest.importorskip("torch")
     from studio.services.projects.versions import compute_bucket_histogram
     _sq(tmp_path / "1_data", ["a", "b"])               # 有 caption
     _sq(tmp_path / "1_data", ["c"], caption=False)     # 无 caption
-    out = compute_bucket_histogram(tmp_path, [1024], 2.0)
-    assert sum(b["count"] for b in out[0]["buckets"]) == 2  # c 不计
+    out = compute_bucket_histogram(tmp_path, [1024], 2.0, prefer_json=prefer_json)
+    assert sum(b["count"] for b in out[0]["buckets"]) == 3
 
 
 def test_dataset_importable_without_runtime_on_sys_path() -> None:

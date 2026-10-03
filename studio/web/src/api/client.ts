@@ -1414,6 +1414,8 @@ export interface CaptionPreview {
   tag_count: number
   tags_preview: string[]
   has_caption: boolean
+  /** Whether the preferred sidecar renders non-empty train-time caption text. */
+  has_effective_caption?: boolean
 }
 
 /** full=1 时返回的 caption 列表项；含完整 tags + format。 */
@@ -1432,6 +1434,13 @@ export interface CommitResult {
   snapshot: CaptionSnapshot
   written: number
   skipped: string[]
+  /** Persisted state of successfully written captions, including non-editor JSON content. */
+  items?: Array<{
+    folder: string
+    name: string
+    format: 'txt' | 'json'
+    has_effective_caption: boolean
+  }>
 }
 
 export interface CaptionFull {

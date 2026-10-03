@@ -100,7 +100,7 @@ def _filter_existing_captions(images: list[Path]) -> tuple[list[Path], list[Path
     needs_tagging: list[Path] = []
     skipped: list[Path] = []
     for img in images:
-        if tagedit.caption_path(img) is not None:
+        if tagedit.has_effective_caption(img):
             skipped.append(img)
         else:
             needs_tagging.append(img)
@@ -291,7 +291,7 @@ def _write_caption(
     其余（本地打标 tag list / LLM text preset）→ .txt；已存在的 .json 仍走
     .json 更新（tagedit 路径）。请求级 output_format 已删。
 
-    on_existing：已有 caption 文件（.txt 或 .json）时的策略
+    on_existing：已有有效 caption 内容时的策略
       - "overwrite"（默认）：覆盖（原行为）
       - "skip"：直接 return，不改任何文件
       - "append"：tag 级 merge + dedupe，写回原格式；现有保留在前
@@ -304,7 +304,7 @@ def _write_caption(
         会把它作为输出的第一个 token，不参与 shuffle / dropout。
     """
     existing_path = tagedit.caption_path(image)
-    if existing_path is not None:
+    if existing_path is not None and tagedit.has_effective_caption(image):
         if on_existing == "skip":
             return "skipped"
         if on_existing == "append":

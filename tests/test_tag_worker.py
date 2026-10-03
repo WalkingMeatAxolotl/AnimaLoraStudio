@@ -451,6 +451,71 @@ def test_on_existing_skip_filters_before_tagger(env, monkeypatch: pytest.MonkeyP
     assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "tag_b, common"
 
 
+def test_on_existing_skip_retags_empty_caption(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """skip：历史空文件不是有效 caption，必须进入 tagger 并被覆盖。"""
+    seen: list[str] = []
+
+    class _SpyTagger(_FakeTagger):
+        def tag(self, paths, on_progress=lambda d, t: None):
+            seen.extend(p.name for p in paths)
+            yield from super().tag(paths, on_progress=on_progress)
+
+    (env["train"] / "a.txt").write_text("  ,  ", encoding="utf-8")
+    _set_on_existing(env, "skip")
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _SpyTagger(),
+    )
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert seen == ["a.png", "b.png"]
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "tag_a, common"
+
+
+@pytest.mark.parametrize("suffix", ["txt", "json"])
+def test_empty_tagger_result_keeps_sidecar_and_remains_eligible(
+    tmp_path: Path, suffix: str,
+) -> None:
+    from studio.services.dataset import tagedit
+
+    image = tmp_path / "empty.png"
+    image.touch()
+    sidecar = image.with_suffix(f".{suffix}")
+    sidecar.write_text('{"tags": []}' if suffix == "json" else "", encoding="utf-8")
+    for _ in range(2):
+        assert tag_worker._write_caption(image, [], on_existing="skip") == "wrote"
+        assert sidecar.is_file()
+        assert not tagedit.has_effective_caption(image)
+
+
+def test_on_existing_skip_keeps_json_natural_language_caption(
+    env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """结构化 JSON 只有自然语言时仍是有效 caption，不能按空 tags 重打。"""
+    seen: list[str] = []
+
+    class _SpyTagger(_FakeTagger):
+        def tag(self, paths, on_progress=lambda d, t: None):
+            seen.extend(p.name for p in paths)
+            yield from super().tag(paths, on_progress=on_progress)
+
+    (env["train"] / "a.json").write_text(
+        json.dumps({"tags": {"tags": [], "nl": "A quiet scene."}}),
+        encoding="utf-8",
+    )
+    _set_on_existing(env, "skip")
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _SpyTagger(),
+    )
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert seen == ["b.png"]
+    assert not (env["train"] / "a.txt").exists()
+
+
 def test_on_existing_skip_all_does_not_prepare_tagger(env, monkeypatch: pytest.MonkeyPatch) -> None:
     """skip：全量已有 caption 时不实例化 tagger，尤其避免 LLM 请求。"""
     (env["train"] / "a.txt").write_text("manual_a", encoding="utf-8")

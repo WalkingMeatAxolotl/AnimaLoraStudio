@@ -64,8 +64,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Caption source: JSON (tags shuffled by category)",
     },
     "train.dataset_summary": {
-        "zh": "训练集: {images} 张图 → {samples} 样本（含 repeat；打标文本 JSON {json_count} / TXT {txt_count}）",
-        "en": "Training set: {images} images -> {samples} samples (with repeat; captions JSON {json_count} / TXT {txt_count})",
+        "zh": "训练集: {images} 张图 → {samples} 样本（含 repeat；打标文本 JSON {json_count} / TXT {txt_count} / 缺失 {missing_count}）",
+        "en": "Training set: {images} images -> {samples} samples (with repeat; captions JSON {json_count} / TXT {txt_count} / missing {missing_count})",
+    },
+    "train.dataset_empty_captions": {
+        "zh": "空文本训练: {images} 张图 → {samples} 样本（Caption 缺失或内容为空，仍参与训练；不含随机标签丢弃）",
+        "en": "Empty-text training: {images} images -> {samples} samples (missing or empty captions remain included; excludes random tag dropout)",
     },
     "train.dataset_folder": {
         "zh": "文件夹 {name}: {images} 张 × repeat {repeat} × 分辨率 {resolutions} = {samples} 样本",

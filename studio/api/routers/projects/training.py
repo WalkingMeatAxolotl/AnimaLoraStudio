@@ -259,6 +259,7 @@ def commit_captions(pid: int, vid: int, body: CommitRequest) -> dict[str, Any]:
     snap = caption_snapshot.create_snapshot(vdir)
     written = 0
     skipped: list[str] = []
+    items: list[dict[str, Any]] = []
     for it in body.items:
         try:
             img = safe_join(train, it.folder, it.name)
@@ -268,9 +269,15 @@ def commit_captions(pid: int, vid: int, body: CommitRequest) -> dict[str, Any]:
         if not img.exists():
             skipped.append(f"{it.folder}/{it.name}")
             continue
-        tagedit.write_tags(img, it.tags)
+        path = tagedit.write_tags(img, it.tags)
+        items.append({
+            "folder": it.folder,
+            "name": it.name,
+            "format": path.suffix.lstrip("."),
+            "has_effective_caption": tagedit.has_effective_caption(img),
+        })
         written += 1
-    return {"snapshot": snap, "written": written, "skipped": skipped}
+    return {"snapshot": snap, "written": written, "skipped": skipped, "items": items}
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/captions/batch")
