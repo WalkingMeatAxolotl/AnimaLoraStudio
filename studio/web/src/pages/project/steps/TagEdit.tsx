@@ -46,6 +46,7 @@ interface CaptionMeta {
   folder: string
   name: string
   format: 'txt' | 'json' | 'none'
+  hasEffectiveCaption: boolean
 }
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -130,7 +131,12 @@ export default function TagEditPage() {
       for (const it of sorted) {
         const k = keyOf(it.folder, it.name)
         c.set(k, it.tags)
-        m.set(k, { folder: it.folder, name: it.name, format: it.format })
+        m.set(k, {
+          folder: it.folder,
+          name: it.name,
+          format: it.format,
+          hasEffectiveCaption: it.has_effective_caption ?? it.has_caption,
+        })
         ks.push(k)
       }
       setCache(c)
@@ -284,15 +290,26 @@ export default function TagEditPage() {
       filteredKeys.map((k) => {
         const m = meta.get(k)!
         const tags = cache.get(k) ?? []
+        const isDirty = dirtyKeySet.has(k)
+        const ineffective = !m.hasEffectiveCaption
+        const statusMeta = isDirty
+          ? tags.slice(0, 5).join(', ') || t('tagEdit.unsavedBadge')
+          : ineffective
+            ? t('tagEdit.untaggedCaption')
+            : tags.slice(0, 5).join(', ')
         return {
           name: k,
           thumbUrl:
             activeVersion != null
               ? api.versionThumbUrl(project.id, activeVersion.id, 'train', m.name, m.folder)
               : '',
-          meta: tags.slice(0, 5).join(', '),
-          badge: dirtyKeySet.has(k) ? t('tagEdit.unsavedBadge') : undefined,
-          badgeTone: dirtyKeySet.has(k) ? 'warning' as const : undefined,
+          meta: statusMeta,
+          badge: isDirty
+            ? t('tagEdit.unsavedBadge')
+            : ineffective
+              ? t('tagEdit.untaggedBadge')
+              : undefined,
+          badgeTone: isDirty || ineffective ? 'warning' as const : undefined,
         }
       }),
     [filteredKeys, meta, cache, dirtyKeySet, project.id, activeVersion, t]
@@ -446,6 +463,23 @@ export default function TagEditPage() {
       setInitial((prev) => {
         const next = new Map(prev)
         for (const k of writtenKeys) next.set(k, [...(submitted.get(k) ?? [])])
+        return next
+      })
+      const persisted = new Map((r.items ?? []).map((item) => [
+        keyOf(item.folder, item.name), item,
+      ]))
+      setMeta((prev) => {
+        const next = new Map(prev)
+        for (const k of writtenKeys) {
+          const current = next.get(k)
+          if (!current) continue
+          const state = persisted.get(k)
+          next.set(k, {
+            ...current,
+            format: state?.format ?? (current.format === 'none' ? 'txt' : current.format),
+            hasEffectiveCaption: state?.has_effective_caption ?? (submitted.get(k) ?? []).length > 0,
+          })
+        }
         return next
       })
 
@@ -787,7 +821,7 @@ export default function TagEditPage() {
                   </Button>
                 </div>
               </header>
-              <div className="p-2.5 flex-1 min-h-0 flex flex-col">
+              <div className="p-2.5 flex-1 min-h-0 flex flex-col gap-related">
                 <TagEditor
                   resetKey={activeKey}
                   tags={activeTags}

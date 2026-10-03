@@ -846,8 +846,17 @@ owns train/validation coverage and facts recoverable from the last job ledger; n
 present today's global model or preset as the previous run's exact configuration.
 Exact zero-work runs remain valid worker no-ops. Because the API has no per-folder
 tagged count, folder + skip displays “scan after start” rather than a false exact
-estimate. Start exposes labelled busy state, and Advanced is a named disclosure with
-`aria-expanded` / `aria-controls`.
+estimate. Caption completion means that the preferred sidecar renders effective
+train-time text, not merely that a `.txt` or `.json` file exists. Missing, invalid,
+and effectively empty captions remain eligible when existing captions are skipped;
+structured JSON with natural-language text or a trigger remains complete even when
+its flat editable tag list is empty. Caption coverage is independent of training
+eligibility: all images in the selected dataset scope participate, with empty text
+when the caption is missing or empty. Coverage does not block Tagging or Tag Edit
+phase advancement; malformed preferred JSON still fails training preflight.
+Training sample counts, bucket distributions, and NaViT estimates use the same
+image inclusion rules regardless of caption presence. Start exposes labelled busy
+state, and Advanced is a named disclosure with `aria-expanded` / `aria-controls`.
 
 Regularization is a two-stage generation workspace. `Generate` and `Images` use the
 shared underline Tabs immediately below the PageHeader; this stable full-width divider
@@ -904,9 +913,17 @@ Pane geometry follows these rules:
   save-and-refresh or discard-and-refresh actions. Commit responses are authoritative;
   skipped files remain dirty instead of being reported as saved. Text-mode edits enter
   the local cache immediately—there is no separate sync action—and only the page-level
-  Save control persists them. While any caption is dirty, that control uses the danger
-  emphasis; each affected thumbnail and the active tag-editor header carry an explicit
-  unsaved marker so dataset and image scope remain distinguishable.
+  Save control persists them. Saving an empty editable tag list retains the sidecar
+  and persists empty content, preserving non-editor JSON descriptions and trigger
+  metadata. This is an ordinary edit with the commit's automatic restore point, not
+  a delete action, and requires no additional confirmation. Missing and ineffective
+  captions share the Untagged state and remain eligible for Tagging's `skip` policy;
+  unsaved edits take precedence in thumbnail feedback without changing persisted
+  coverage. JSON may remain tagged when its rendered text still contains a description
+  or trigger after the editable tags are cleared. While any caption is dirty, the
+  Save control uses the danger emphasis;
+  each affected thumbnail and the active tag-editor header carry an explicit unsaved
+  marker so dataset and image scope remain distinguishable.
 - Train preview, Tagging status, Generate canvas and attached drawers, preprocessing
   editors, and evaluation matrices retain their specialist topology. Do not add
   resize handles or migrate them to `PaneResizer` without task-specific evidence.

@@ -83,15 +83,17 @@ def test_native_downscale_over_budget(tmp_path: Path) -> None:
     assert out["packs_per_epoch"] == 1
 
 
-def test_uncaptioned_images_skipped(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefer_json", [True, False])
+def test_uncaptioned_images_included(tmp_path: Path, prefer_json: bool) -> None:
     pytest.importorskip("torch")
     from studio.services.projects.versions import compute_navit_pack_estimate
     _img(tmp_path / "1_data", ["a"])
     _img(tmp_path / "1_data", ["b"], caption=False)
     out = compute_navit_pack_estimate(
         [tmp_path], [1024], native_resolution=True, token_budget=16,
+        prefer_json=prefer_json,
     )
-    assert out["samples"] == 1
+    assert out["samples"] == 2
 
 
 def test_reg_dir_joins_the_pool(tmp_path: Path) -> None:

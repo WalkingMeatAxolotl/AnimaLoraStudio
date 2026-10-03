@@ -1,6 +1,6 @@
 # 0007 — Project / Version / Task 生命周期重构
 
-**状态**：Accepted（已落地：`_v8`/`_v9` migration + VersionStatus/Phase + lifecycle 路由）
+**状态**：Accepted（已落地：`_v8`/`_v9` migration + VersionStatus/Phase + lifecycle 路由）；§11.5-B 的打标/编辑校验由 [ADR 0021](0021-decouple-caption-coverage-from-training.md) 局部取代
 **日期**：2026-05-23
 **决策者**：@WalkingMeatAxolotl
 

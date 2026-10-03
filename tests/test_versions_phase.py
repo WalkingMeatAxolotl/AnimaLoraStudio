@@ -58,12 +58,12 @@ def test_check_tagging_full_coverage() -> None:
     assert result.ok
 
 
-def test_check_tagging_partial_coverage() -> None:
+@pytest.mark.parametrize("tagged", [0, 7])
+def test_check_tagging_partial_coverage(tagged: int) -> None:
     result = versions_phase.check_tagging({
-        "train_image_count": 10, "tagged_image_count": 7,
+        "train_image_count": 10, "tagged_image_count": tagged,
     })
-    assert not result.ok
-    assert "3 张" in result.reason
+    assert result.ok
 
 
 def test_check_tagging_empty() -> None:
@@ -181,8 +181,8 @@ def test_advance_phase_curating_to_preprocessing(isolated) -> None:
     assert versions.get_phase(v2) == "preprocessing"
 
 
-def test_advance_phase_tagging_blocked_by_missing_caption(isolated) -> None:
-    """tagging phase + caption 覆盖不到 100% → 失败。"""
+def test_advance_phase_tagging_allows_missing_caption(isolated) -> None:
+    """Caption coverage no longer blocks advancement (ADR 0021)."""
     v = _make_version(isolated)
     with db.connection_for(isolated["db"]) as conn:
         p = projects.get_project(conn, v["project_id"])
@@ -193,9 +193,10 @@ def test_advance_phase_tagging_blocked_by_missing_caption(isolated) -> None:
     _put_image(vdir / "train" / "5_concept", "002", with_caption=True)
 
     with db.connection_for(isolated["db"]) as conn:
-        advanced, result, _ = versions_phase.advance_phase(conn, v["id"])
-    assert not advanced
-    assert "1 张" in result.reason
+        advanced, result, updated = versions_phase.advance_phase(conn, v["id"])
+    assert advanced
+    assert result.ok
+    assert updated == "editing"
 
 
 def test_skip_phase_only_works_for_skippable(isolated) -> None:

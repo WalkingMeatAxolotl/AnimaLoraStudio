@@ -278,8 +278,9 @@ def restore(project_dir, version_label, name):
 
 - 当前 phase = curating → 校验 train/ ≥ 1 → 推进到 preprocessing
 - 当前 phase = preprocessing → 校验无 preprocess job pending/running → skip 推进到 tagging（不强求处理过任何图）
-- 当前 phase = tagging → 校验 caption 100% → 推进到 editing
-- 后续不变
+- 当前 phase = tagging → 校验 train/ ≥ 1 → 推进到 editing；Caption 覆盖率不阻断（[ADR 0021](../adr/0021-decouple-caption-coverage-from-training.md)）
+- 当前 phase = editing → 同样仅校验 train/ ≥ 1 → 推进到 regularizing
+- 其他后续校验不变
 
 ---
 

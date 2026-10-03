@@ -342,14 +342,16 @@ class ImageDataset(Dataset):
         
         self.samples = self._scan()
         json_count = sum(1 for s in self.samples if s.get("json_path"))
-        txt_count = len(self.samples) - json_count
-        unique_count = len(set(id(s) for s in self.samples))
+        txt_count = sum(1 for s in self.samples if s.get("txt_path"))
+        missing_count = len(self.samples) - json_count - txt_count
+        unique_count = len({s["image"] for s in self.samples})
         logger.info(msg(
             "train.dataset_summary",
             images=unique_count, samples=len(self.samples),
-            json_count=json_count, txt_count=txt_count,
+            json_count=json_count, txt_count=txt_count, missing_count=missing_count,
         ))
-        self._preflight_json_captions()
+        empty_json = self._preflight_json_captions()
+        self._log_empty_caption_summary(empty_json)
         self.bucket_for_index = self._build_bucket_for_index()
 
     def _build_bucket_for_index(self):
@@ -463,7 +465,7 @@ class ImageDataset(Dataset):
         return mgr
 
     def _make_sample(self, img_path):
-        """为单张图构建 sample dict，找不到 caption 返回 None"""
+        """Build a sample even without a caption; absence means empty-text training."""
         sample = {"image": img_path}
         json_path = img_path.with_suffix(".json")
         if self.prefer_json and json_path.exists():
@@ -473,10 +475,8 @@ class ImageDataset(Dataset):
             txt_path = img_path.with_suffix(".txt")
             if not txt_path.exists():
                 txt_path = img_path.with_suffix(".caption")
-            if not txt_path.exists():
-                return None
             sample["json_path"] = None
-            sample["txt_path"] = txt_path
+            sample["txt_path"] = txt_path if txt_path.exists() else None
         return sample
 
     def _scan(self):
@@ -558,7 +558,7 @@ class ImageDataset(Dataset):
         caption_override 全局覆盖时不读 caption 文件，跳过。
         """
         if self.caption_override is not None:
-            return
+            return set()
         json_paths = []
         seen = set()
         for s in self.samples:
@@ -567,13 +567,14 @@ class ImageDataset(Dataset):
                 seen.add(jp)
                 json_paths.append(jp)
         if not json_paths:
-            return
+            return set()
         if self.caption_utils is None:
             raise ValueError(
                 f"数据集含 {len(json_paths)} 个 JSON caption，但 caption_utils 加载失败"
                 f"（见上方 warning），这些图将以空 caption 训练，已拒绝开训。"
             )
         bad = []
+        empty = set()
         for jp in json_paths:
             try:
                 caption = self.caption_utils["load_and_build"](
@@ -583,6 +584,8 @@ class ImageDataset(Dataset):
                 caption = None
             if caption is None:
                 bad.append(jp)
+            elif not caption.strip():
+                empty.add(jp)
         if bad:
             preview = "\n".join(f"  - {p}" for p in bad[:5])
             more = f"\n  ...等共 {len(bad)} 个" if len(bad) > 5 else ""
@@ -591,6 +594,28 @@ class ImageDataset(Dataset):
                 f"（连触发词都没有）参与训练，已拒绝开训。"
                 f"请在打标页检查或重新打标这些文件：\n{preview}{more}"
             )
+        return empty
+
+    def _log_empty_caption_summary(self, empty_json):
+        """Count source-empty captions without shuffle/dropout or RNG consumption."""
+        unique = {s["image"]: s for s in self.samples}
+        empty_images = set()
+        for image, sample in unique.items():
+            if self.caption_override is not None:
+                is_empty = not str(self.caption_override).strip()
+            elif sample.get("json_path"):
+                is_empty = sample["json_path"] in empty_json
+            else:
+                path = sample.get("txt_path")
+                text = path.read_text(encoding="utf-8") if path else ""
+                is_empty = not any(tag.strip() for tag in text.split(","))
+            if is_empty:
+                empty_images.add(image)
+        logger.info(msg(
+            "train.dataset_empty_captions",
+            images=len(empty_images),
+            samples=sum(s["image"] in empty_images for s in self.samples),
+        ))
 
     def _process_caption_txt(self, caption):
         """处理 TXT caption：kohya 语义的 keep_tokens + shuffle + tag_dropout。

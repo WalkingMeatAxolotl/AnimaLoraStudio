@@ -5,8 +5,8 @@ Phase enum 见 ``versions.VersionPhase``：
 
 完成判定（§11.5-B）：
 - ``curating``: ``train/ ≥ 1`` 张图
-- ``tagging``: caption 100% 覆盖（每张 train 图都有同名 .txt）
-- ``editing``: 同 tagging（兜底，防 user 删了 caption）
+- ``tagging``: ``train/ ≥ 1`` 张图；Caption 覆盖率仅作信息统计（ADR 0021）
+- ``editing``: 同 tagging；缺失或空 Caption 不阻断推进
 - ``regularizing``: 无 reg_build job 处于 pending/running（可跳过，§11.5-A SKIPPABLE）
 - ``ready``: training config 文件存在 + schema 校验通过
 
@@ -48,15 +48,8 @@ def check_curating(stats: dict[str, Any]) -> CheckResult:
 
 
 def check_tagging(stats: dict[str, Any]) -> CheckResult:
-    """caption 100% 覆盖（§11.5-B）。"""
-    total = int(stats.get("train_image_count", 0))
-    tagged = int(stats.get("tagged_image_count", 0))
-    if total < 1:
-        return CheckResult(False, "训练集为空，请先选择训练图")
-    if tagged < total:
-        missing = total - tagged
-        return CheckResult(False, f"还有 {missing} 张未生成 caption，请重跑或删除")
-    return CheckResult(True)
+    """Caption coverage is informational; empty-text training is allowed (ADR 0021)."""
+    return check_curating(stats)
 
 
 def check_editing(stats: dict[str, Any]) -> CheckResult:

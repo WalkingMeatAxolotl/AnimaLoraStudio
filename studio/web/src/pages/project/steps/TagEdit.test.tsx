@@ -125,9 +125,9 @@ vi.mock('../../../components/TagStatsPanel', () => ({
 const captions = {
   folder: null,
   items: [
-    { folder: '人物 A', name: 'a1.png', tags: ['cat'], format: 'json' as const, tag_count: 1, tags_preview: ['cat'], has_caption: true },
-    { folder: '人物 A', name: 'a2.png', tags: ['dog'], format: 'txt' as const, tag_count: 1, tags_preview: ['dog'], has_caption: true },
-    { folder: '人物 B', name: 'b1.png', tags: ['cat'], format: 'txt' as const, tag_count: 1, tags_preview: ['cat'], has_caption: true },
+    { folder: '人物 A', name: 'a1.png', tags: ['cat'], format: 'json' as const, tag_count: 1, tags_preview: ['cat'], has_caption: true, has_effective_caption: true },
+    { folder: '人物 A', name: 'a2.png', tags: ['dog'], format: 'txt' as const, tag_count: 1, tags_preview: ['dog'], has_caption: true, has_effective_caption: true },
+    { folder: '人物 B', name: 'b1.png', tags: ['cat'], format: 'txt' as const, tag_count: 1, tags_preview: ['cat'], has_caption: true, has_effective_caption: true },
   ],
 }
 
@@ -162,11 +162,17 @@ beforeEach(() => {
   localStorage.clear()
   mocks.onEvent = undefined
   vi.spyOn(api, 'listCaptionsFull').mockResolvedValue(captions)
-  vi.spyOn(api, 'commitCaptions').mockResolvedValue({
-    written: 1,
+  vi.spyOn(api, 'commitCaptions').mockImplementation(async (_pid, _vid, items) => ({
+    written: items.length,
     skipped: [],
     snapshot: { id: 'snap-1', created_at: 1, size: 1, file_count: 1 },
-  })
+    items: items.map((item) => ({
+      folder: item.folder,
+      name: item.name,
+      format: captions.items.find((caption) => caption.name === item.name)?.format ?? 'txt',
+      has_effective_caption: item.tags.length > 0,
+    })),
+  }))
 })
 
 describe('TagEdit workspace', () => {
@@ -478,6 +484,79 @@ describe('TagEdit workspace', () => {
     expect(closeButton.querySelector('svg')).toHaveAttribute('stroke', 'currentColor')
     await user.click(closeButton)
     expect(screen.queryByTestId('preview-image')).not.toBeInTheDocument()
+  })
+
+  it.each(['txt', 'none'] as const)('shows %s empty/missing Caption as untagged without an extra warning', async (format) => {
+    vi.mocked(api.listCaptionsFull).mockResolvedValue({
+      folder: null,
+      items: [{
+        folder: '人物 A',
+        name: 'empty.png',
+        tags: [],
+        format,
+        tag_count: 0,
+        tags_preview: [],
+        has_caption: format !== 'none',
+        has_effective_caption: false,
+      }],
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+
+    expect(screen.getByTestId('image-badge-人物 A/empty.png')).toHaveTextContent('未打标')
+    await user.click(screen.getByRole('button', { name: '打开 人物 A/empty.png' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(api.commitCaptions).not.toHaveBeenCalled()
+  })
+
+  it.each(['txt', 'json'] as const)('saves empty editable tags as an ordinary %s edit without deletion confirmation', async (format) => {
+    vi.mocked(api.listCaptionsFull).mockResolvedValue({
+      ...captions,
+      items: captions.items.map((item) => item.name === 'a1.png' ? { ...item, format } : item),
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+
+    await user.click(screen.getByRole('button', { name: '打开 人物 A/a1.png' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '以文本编辑标签' }), {
+      target: { value: '' },
+    })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(api.commitCaptions).not.toHaveBeenCalled()
+    expect(screen.getByTestId('image-badge-人物 A/a1.png')).toHaveTextContent('未保存')
+    await user.click(screen.getByRole('button', { name: '保存（1）' }))
+
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    await waitFor(() => expect(api.commitCaptions).toHaveBeenCalledWith(7, 11, [{
+      folder: '人物 A',
+      name: 'a1.png',
+      tags: [],
+    }]))
+    await waitFor(() => {
+      expect(screen.getByTestId('image-badge-人物 A/a1.png')).toHaveTextContent('未打标')
+    })
+  })
+
+  it('uses committed JSON content state rather than inferring it from an empty tag list', async () => {
+    vi.mocked(api.commitCaptions).mockResolvedValue({
+      written: 1,
+      skipped: [],
+      snapshot: { id: 'snap-json', created_at: 1, size: 1, file_count: 1 },
+      items: [{ folder: '人物 A', name: 'a1.png', format: 'json', has_effective_caption: true }],
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await ready()
+    await user.click(screen.getByRole('button', { name: '打开 人物 A/a1.png' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '以文本编辑标签' }), {
+      target: { value: '' },
+    })
+    await user.click(screen.getByRole('button', { name: '保存（1）' }))
+    await waitFor(() => expect(screen.queryByTestId('image-badge-人物 A/a1.png')).not.toBeInTheDocument())
+    expect(mocks.confirm).not.toHaveBeenCalled()
   })
 
   it('saves the latest text edit with one dataset-level save action', async () => {

@@ -26,6 +26,7 @@
 | 0018 | [用提案式 ONNX 检测生成可撤销的头部空间遮罩](0018-proposal-based-auto-head-mask.md) | Accepted | 2026-09-06 |
 | 0019 | [在 stable 升级前开放受限的 Triton 实验通道](0019-restricted-triton-opt-in.md) | Accepted | 2026-09-12 |
 | 0020 | [在任务边界解析随机种子并冻结比较组](0020-task-scoped-random-seeds.md) | Accepted | 2026-09-12 |
+| 0021 | [将 Caption 覆盖率与训练样本入选解耦](0021-decouple-caption-coverage-from-training.md) | Accepted | 2026-10-03 |
 
 ## 状态值
 

@@ -644,6 +644,71 @@ def test_commit_writes_and_snapshots(client: TestClient) -> None:
     assert cap["tags"] == ["old"]
 
 
+def test_commit_empty_tags_keeps_caption_and_snapshot_restores_content(
+    client: TestClient,
+) -> None:
+    pid, vid = _make(client)
+    _seed_train(client, pid, vid, "1_data", {"a.png": "old"})
+
+    result = client.post(
+        f"/api/projects/{pid}/versions/{vid}/captions/commit",
+        json={"items": [{"folder": "1_data", "name": "a.png", "tags": []}]},
+    ).json()
+    assert result["written"] == 1
+
+    caption = client.get(
+        f"/api/projects/{pid}/versions/{vid}/captions/1_data/a.png"
+    ).json()
+    assert caption == {"name": "a.png", "tags": [], "format": "txt"}
+    assert result["items"] == [{
+        "folder": "1_data", "name": "a.png", "format": "txt",
+        "has_effective_caption": False,
+    }]
+
+    detail = client.get(f"/api/projects/{pid}/versions/{vid}").json()
+    assert detail["stats"]["tagged_image_count"] == 0
+
+    restored = client.post(
+        f"/api/projects/{pid}/versions/{vid}/captions/snapshots/"
+        f"{result['snapshot']['id']}/restore"
+    ).json()
+    assert restored["written"] == 1
+    caption = client.get(
+        f"/api/projects/{pid}/versions/{vid}/captions/1_data/a.png"
+    ).json()
+    assert caption["tags"] == ["old"]
+    assert caption["format"] == "txt"
+
+
+@pytest.mark.parametrize("content", [
+    {"ai_output": {"tags": ["old"], "nl": "A quiet scene."}},
+    {"tags": ["old"], "meta": {"trigger": "sks"}},
+])
+def test_commit_empty_tags_keeps_non_editor_json_and_returns_effective_state(
+    client: TestClient, content: dict,
+) -> None:
+    import json
+
+    pid, vid = _make(client)
+    train = _seed_train(client, pid, vid, "1_data", {"a.png": "txt fallback"})
+    sidecar = train / "a.json"
+    sidecar.write_text(json.dumps(content), encoding="utf-8")
+    result = client.post(
+        f"/api/projects/{pid}/versions/{vid}/captions/commit",
+        json={"items": [{"folder": "1_data", "name": "a.png", "tags": []}]},
+    ).json()
+    assert result["items"] == [{
+        "folder": "1_data", "name": "a.png", "format": "json",
+        "has_effective_caption": True,
+    }]
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert saved["tags"] == []
+    for key, value in content.items():
+        if key != "tags":
+            assert saved[key] == value
+    assert (train / "a.txt").read_text(encoding="utf-8") == "txt fallback"
+
+
 def test_commit_skips_path_traversal(client: TestClient) -> None:
     pid, vid = _make(client)
     _seed_train(client, pid, vid, "1_data", {"a.png": "x"})

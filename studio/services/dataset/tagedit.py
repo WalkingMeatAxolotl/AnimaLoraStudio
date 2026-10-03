@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from .scan import IMAGE_EXTS
-from ..tagging.caption_format import caption_json_to_tags
+from ..tagging.caption_format import caption_json_to_tags, caption_json_to_text
 
 ScopeKind = Literal["all", "folder", "files"]
 
@@ -36,6 +36,35 @@ def caption_path(image: Path) -> Path | None:
     if txt.exists():
         return txt
     return None
+
+
+def has_effective_caption(image: Path) -> bool:
+    """Return whether the preferred caption contains trainable text.
+
+    Caption identity follows :func:`caption_path`: JSON wins when both sidecars
+    exist.  Empty, whitespace-only, or invalid captions are deliberately treated
+    as untagged so ``on_existing=skip`` can repair historical empty files.
+    Structured JSON may carry natural-language text or a trigger outside the flat
+    editor tag list, so check its rendered text rather than ``read_tags`` alone.
+    """
+    path = caption_path(image)
+    if path is None:
+        return False
+    if path.suffix == ".json":
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return False
+            if caption_json_to_text(data).strip():
+                return True
+            meta = data.get("meta")
+            return isinstance(meta, dict) and bool(str(meta.get("trigger") or "").strip())
+        except Exception:
+            return False
+    try:
+        return bool(read_tags(image))
+    except OSError:
+        return False
 
 
 def read_tags(image: Path) -> list[str]:
@@ -68,7 +97,12 @@ def read_tags(image: Path) -> list[str]:
 
 
 def write_tags(image: Path, tags: list[str]) -> Path:
-    """写 caption。已有 .json 就更新；否则写 .txt。"""
+    """Write editable tags, retaining the sidecar and non-editor JSON fields.
+
+    Empty tags persist as empty content rather than deleting the caption.  JSON's
+    flat list remains authoritative, including when empty; descriptions and trigger
+    metadata are preserved for both individual edits and batch operations.
+    """
     js = image.with_suffix(".json")
     if js.exists():
         try:
@@ -269,6 +303,7 @@ def list_captions_in_folder(
             "tag_count": len(tags),
             "tags_preview": tags[:preview],
             "has_caption": cap_path is not None,
+            "has_effective_caption": has_effective_caption(img),
         }
         if full:
             item["tags"] = tags

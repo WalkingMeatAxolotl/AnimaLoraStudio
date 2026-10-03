@@ -1,6 +1,7 @@
 """PP1 — versions.py: label 唯一、目录树、fork、active reassign。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -269,6 +270,24 @@ def test_stats_for_version_counts_validation(isolated) -> None:
     # validation 不掺进训练集计数
     assert stats["train_image_count"] == 0
     assert stats["tagged_image_count"] == 0
+
+
+def test_stats_treats_empty_caption_as_untagged(isolated) -> None:
+    p = _new_project(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        v = versions.create_version(conn, project_id=p["id"], label="v1")
+    train = versions.version_dir(p["id"], p["slug"], "v1") / "train" / "1_data"
+    (train / "empty.png").write_bytes(b"x")
+    (train / "empty.txt").write_text("  ,  ", encoding="utf-8")
+    (train / "prose.png").write_bytes(b"x")
+    (train / "prose.json").write_text(
+        json.dumps({"tags": {"tags": [], "nl": "A quiet scene."}}),
+        encoding="utf-8",
+    )
+
+    stats = versions.stats_for_version(p, v)
+    assert stats["train_image_count"] == 2
+    assert stats["tagged_image_count"] == 1
 
 
 def test_create_version_provisions_default_train_folder(isolated) -> None:
