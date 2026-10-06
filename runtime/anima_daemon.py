@@ -51,6 +51,7 @@ from studio.services.inference.core import (  # noqa: E402
     DeferredVAE,
     LoRAMeta,
     LoRASpec,
+    LoraWarning,
     _check_lora_compat_or_raise,
     apply_loras,
     read_lora_meta,
@@ -148,11 +149,31 @@ def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
     _emit({"id": req_id, "kind": kind, **extra})
 
 
-def _warning_emitter(req_id: str) -> Callable[[str], None]:
+#: 已推过的 warning（按请求去重）：同一请求里 _run_generate 挂一次 LoRA、XY
+#: 每格还会重挂，同一条提示只推一次。daemon 串行处理请求，只记当前请求。
+_warned_lock = threading.Lock()
+_warned_req: Optional[str] = None
+_warned_keys: set[tuple[str, str]] = set()
+
+
+def _warning_emitter(req_id: str) -> Callable[[LoraWarning], None]:
     """task 级 warning 事件（非致命提示，如 LoRA 与底模可能不匹配）→ supervisor
-    转 SSE generate_warning → 前端 toast。日志由调用方（core._warn）另打。"""
-    def _emit_warning(message: str) -> None:
-        _emit_for(req_id, "warning", message=str(message))
+    转 SSE generate_warning → 前端按 code 走 i18n 弹 toast。日志由调用方
+    （core._warn）另打；同一请求内同一 (code, lora) 只推一次。"""
+    def _emit_warning(warning: LoraWarning) -> None:
+        global _warned_req
+        key = (warning.code, str(warning.params.get("lora", "")))
+        with _warned_lock:
+            if _warned_req != req_id:
+                _warned_req = req_id
+                _warned_keys.clear()
+            if key in _warned_keys:
+                return
+            _warned_keys.add(key)
+        _emit_for(
+            req_id, "warning",
+            code=warning.code, params=dict(warning.params), message=warning.message,
+        )
 
     return _emit_warning
 
@@ -699,7 +720,7 @@ class ModelCache:
     def apply_loras(
         self,
         lora_configs: list[dict[str, Any]],
-        on_warning: Callable[[str], None] | None = None,
+        on_warning: Callable[[LoraWarning], None] | None = None,
     ) -> list[Any]:
         """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。
 

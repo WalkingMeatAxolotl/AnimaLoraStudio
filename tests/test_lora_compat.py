@@ -133,6 +133,11 @@ def test_check_lora_compat_rules(lora, model_blocks, level):
     assert verdict.level == level
     if level != "ok":
         assert "x.safetensors" in verdict.reason and "层" in verdict.reason
+        # 结构化字段 + 英文日志行（WARNING / ERROR 日志面统一英文）
+        assert (verdict.lora_blocks, verdict.base_blocks) == (lora.num_blocks, model_blocks)
+        assert verdict.log_message.isascii() and str(model_blocks) in verdict.log_message
+    else:
+        assert verdict.log_message == ""
 
 
 # ── 三处消费 ─────────────────────────────────────────────────────────────────
@@ -166,7 +171,7 @@ def test_apply_loras_rejects_metadata_mismatch_and_warns_on_key_lower_bound(tmp_
         apply_loras(model, [LoRASpec(path=str(p_reject))], "cpu", torch.float32, family_id="anima")
 
     p_warn = _write_lora(tmp_path / "legacy.safetensors", key_block=27)
-    warnings: list[str] = []
+    warnings: list = []
     # 走到 inject 前就该 warn；用 fake adapter 截住后续（不依赖 lycoris）
     import sys
     import types
@@ -186,7 +191,54 @@ def test_apply_loras_rejects_metadata_mismatch_and_warns_on_key_lower_bound(tmp_
             model, [LoRASpec(path=str(p_warn))], "cpu", torch.float32,
             family_id="anima", on_warning=warnings.append,
         )
-    assert len(warnings) == 1 and "28" in warnings[0] and "40" in warnings[0]
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w.code == "lora_base_layers_maybe_mismatch"
+    assert w.params == {"lora": "legacy.safetensors", "lora_blocks": 28, "base_blocks": 40}
+    assert w.message.isascii()
+
+
+def test_apply_loras_partial_unexpected_keys_log_only(tmp_path, caplog):
+    """部分键没被吃掉：只打英文 WARNING 日志，不走 on_warning（外部 LoRA 常带
+    TE / adapter 键，每次出图弹 toast 是噪音）。"""
+    import logging
+    import sys
+    import types
+    from unittest.mock import MagicMock, patch
+
+    from studio.services.inference.core import LoRASpec, apply_loras
+
+    model = _TinyDiT(28)
+    p = tmp_path / "ok28.safetensors"
+
+    def _fake_adapter(*a, **k):
+        m = MagicMock()
+        m.network = MagicMock()
+        m.network.loras = []
+        # 1 个键全部 unexpected 会被判「全不匹配」拒绝；这里模拟 2 个键里 1 个没吃掉
+        m.load_state_dict.return_value = MagicMock(missing_keys=[], unexpected_keys=["x"])
+        return m
+
+    fake_mod = types.ModuleType("utils.lycoris_adapter")
+    fake_mod.AnimaLycorisAdapter = _fake_adapter  # type: ignore[attr-defined]
+    warnings: list = []
+    save_file(
+        {
+            "lora_unet_blocks_0_self_attn_q_proj.lokr_w1": torch.zeros(2, 2),
+            "lora_te_extra.lokr_w1": torch.zeros(2, 2),
+        },
+        str(p),
+        metadata={"ss_network_dim": "8", "ss_network_alpha": "8", "ss_network_args": json.dumps(
+            {"algo": "lokr", "factor": 8, "model_family": "anima", KEY_BASE_NUM_BLOCKS: 28},
+        )},
+    )
+    with patch.dict(sys.modules, {"utils.lycoris_adapter": fake_mod}),             caplog.at_level(logging.WARNING, logger="studio.services.inference.core"):
+        apply_loras(
+            model, [LoRASpec(path=str(p))], "cpu", torch.float32,
+            family_id="anima", on_warning=warnings.append,
+        )
+    assert warnings == []
+    assert any("no matching layer" in r.getMessage() for r in caplog.records)
 
 
 def test_resume_lora_check_rejects_and_warns(tmp_path):
@@ -258,3 +310,31 @@ def test_lycoris_adapter_save_writes_base_arch_via_metadata_extra(tmp_path):
     adapter.save(out)
     meta = read_lora_meta(str(out))
     assert meta.base_arch == LoraBaseArch(2, "metadata", None, "base.safetensors")
+
+
+def test_daemon_warning_emitter_dedupes_within_request(monkeypatch):
+    """同一请求里 _run_generate 挂一次 LoRA、XY 每格重挂：同一 (code, lora) 只推一次；
+    新请求重新计。事件带 code / params 供前端 i18n。"""
+    import importlib
+
+    from studio.services.inference.core import LoraWarning
+
+    mod = importlib.import_module("anima_daemon")
+    sent: list[tuple[str, dict]] = []
+    monkeypatch.setattr(mod, "_emit_for", lambda req_id, kind, **extra: sent.append((req_id, extra)))
+    monkeypatch.setattr(mod, "_warned_req", None)
+    monkeypatch.setattr(mod, "_warned_keys", set())
+
+    w = LoraWarning("lora_base_layers_maybe_mismatch",
+                    {"lora": "a.safetensors", "lora_blocks": 28, "base_blocks": 40}, "msg")
+    other = LoraWarning(w.code, {**w.params, "lora": "b.safetensors"}, "msg")
+    for _ in range(3):                      # 同请求、多次挂载（XY 每格）
+        mod._warning_emitter("r1")(w)
+    mod._warning_emitter("r1")(other)       # 不同 LoRA 各推一次
+    mod._warning_emitter("r2")(w)           # 新请求重新计
+
+    assert [(r, e["params"]["lora"]) for r, e in sent] == [
+        ("r1", "a.safetensors"), ("r1", "b.safetensors"), ("r2", "a.safetensors"),
+    ]
+    assert sent[0][1]["code"] == "lora_base_layers_maybe_mismatch"
+    assert sent[0][1]["message"] == "msg"

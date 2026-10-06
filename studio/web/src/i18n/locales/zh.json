@@ -1633,6 +1633,9 @@
     "latestHint": "（最新 running，没有则显示空）"
   },
   "generate": {
+    "warning": {
+      "lora_base_layers_maybe_mismatch": "{{lora}} 没有记录训练底模层数，权重只覆盖前 {{lora_blocks}} 层，当前底模 {{base_blocks}} 层：若它训练自层数更少的底模，生成结果会错位"
+    },
     "singleMode": "单图",
     "xyMode": "XY 矩阵",
     "viewModes": "生成模式",

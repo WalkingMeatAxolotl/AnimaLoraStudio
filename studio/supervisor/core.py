@@ -1276,9 +1276,12 @@ class Supervisor:
             return
         if kind == "warning":
             # 非致命提示（如 LoRA 与底模层数可能不匹配）→ 前端 toast；任务继续跑
+            params = event.get("params")
             self._on_event({
                 "type": "generate_warning",
                 "task_id": tid,
+                "code": str(event.get("code") or ""),
+                "params": params if isinstance(params, dict) else {},
                 "message": str(event.get("message") or ""),
             })
             return

@@ -380,4 +380,4 @@ def _check_resume_lora_compat(ctx: TrainingContext, path) -> None:
     if verdict.level == "reject":
         raise RuntimeError(f"resume_lora 与当前底模层数不匹配：{verdict.reason}")
     if verdict.level == "warn":
-        logger.warning("resume_lora：%s", verdict.reason)
+        logger.warning("resume_lora %s: %s", Path(str(path)).name, verdict.log_message)

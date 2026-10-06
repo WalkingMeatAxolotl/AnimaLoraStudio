@@ -328,11 +328,25 @@ def _normalize_peft_lora_sd(
     return normalized, max_rank, reg_dims
 
 
-def _warn(on_warning: Optional[Callable[[str], None]], message: str) -> None:
-    logger.warning(message)
+@dataclass(frozen=True)
+class LoraWarning:
+    """出图侧非致命提示（结构化）：daemon 转 ``generate_warning`` 事件，前端按
+    ``code`` 查 i18n、用 ``params`` 填占位；``message`` 是英文日志行兼兜底文案。"""
+
+    code: str
+    params: dict[str, Any]
+    message: str
+
+
+#: LoRA 无底模层数元数据、键只覆盖到底模前若干层（lora_compat warn 档）
+WARN_LORA_BASE_LAYERS_MAYBE = "lora_base_layers_maybe_mismatch"
+
+
+def _warn(on_warning: Optional[Callable[[LoraWarning], None]], warning: LoraWarning) -> None:
+    logger.warning("%s: %s", warning.params.get("lora", "LoRA"), warning.message)
     if on_warning is not None:
         try:
-            on_warning(message)
+            on_warning(warning)
         except Exception:  # noqa: BLE001 — 通知失败不能影响出图
             logger.exception("on_warning callback failed")
 
@@ -341,7 +355,7 @@ def _check_lora_compat_or_raise(
     meta: LoRAMeta,
     model: Any,
     lora_name: str,
-    on_warning: Optional[Callable[[str], None]] = None,
+    on_warning: Optional[Callable[[LoraWarning], None]] = None,
 ) -> None:
     """lora_compat 契约的出图侧消费：reject → ValueError；warn → 回调 + 日志。
 
@@ -351,7 +365,15 @@ def _check_lora_compat_or_raise(
     if verdict.level == "reject":
         raise ValueError(f"LoRA 与当前底模层数不匹配：{verdict.reason}。请换用在同一底模上训练的 LoRA，或切换底模。")
     if verdict.level == "warn":
-        _warn(on_warning, verdict.reason)
+        _warn(on_warning, LoraWarning(
+            code=WARN_LORA_BASE_LAYERS_MAYBE,
+            params={
+                "lora": lora_name,
+                "lora_blocks": verdict.lora_blocks,
+                "base_blocks": verdict.base_blocks,
+            },
+            message=verdict.log_message,
+        ))
 
 
 def apply_loras(
@@ -363,7 +385,7 @@ def apply_loras(
     lora_merge_precision: str = "fp32",
     lora_merge_chunk_rows: int = 1024,
     keep_merge_backup: bool = True,
-    on_warning: Optional[Callable[[str], None]] = None,
+    on_warning: Optional[Callable[[LoraWarning], None]] = None,
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
@@ -497,11 +519,13 @@ def apply_loras(
                 f"（可能属于其他模型族，或是本路径尚不支持的键格式）。"
             )
         if unexpected:
-            # 部分键没被吃掉：与 fp8 merge 路径（lora_fp8_merge）同口径升为 warning，
-            # 不再只是一行 info（此前 28 层 LoRA 挂 40 层底模就是这样静默过去的）
-            _warn(
-                on_warning,
-                f"{Path(path).name} 有 {unexpected}/{len(sd)} 个权重键在当前底模上找不到对应层，已忽略",
+            # 部分键没被吃掉：与 fp8 merge 路径（lora_fp8_merge）同口径升为 warning
+            # 日志行。不推 toast——外部 LoRA 常带本路径不挂的键（TE / adapter），
+            # 每次出图都弹是噪音；层数错位由上面的 lora_compat 判定负责提示。
+            logger.warning(
+                "%s: %d/%d LoRA weight keys have no matching layer in the current "
+                "base model and were ignored",
+                Path(path).name, unexpected, len(sd),
             )
         logger.info(
             "loaded LoRA: name=%s algo=%s rank=%s alpha=%s scale=%s "

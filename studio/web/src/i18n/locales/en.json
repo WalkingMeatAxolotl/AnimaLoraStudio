@@ -1633,6 +1633,9 @@
     "latestHint": "(Latest running task, empty if none)"
   },
   "generate": {
+    "warning": {
+      "lora_base_layers_maybe_mismatch": "{{lora}} has no base-model layer metadata and only covers the first {{lora_blocks}} layers, while the current base model has {{base_blocks}}: if it was trained on a shallower base, results will be misaligned"
+    },
     "singleMode": "Single",
     "xyMode": "XY Matrix",
     "viewModes": "Generation mode",

@@ -241,6 +241,7 @@ Pydantic 兼容模型仍在 `studio/infrastructure/secrets.py`（`studio/secrets
 | `preprocess_progress` | `job_id`, `project_id`, `idx`, `total`, `name`, `status`, `action?`, `succeeded`, `failed`, `skipped` | preprocess_worker 放大每张图完成 → 前端实时刷 files / 进度 / 盘占 |
 | `crop_progress` | `job_id`, `project_id`, `idx`, `total`, `name`, `status`, `n_out?`, `outputs?`, `succeeded`, `failed`, `skipped` | preprocess_worker 裁剪每张图完成；worker 端节流 ≥1Hz（done 事件聚合，skip/fail/首末强发）|
 | `head_mask_progress` | `job_id`, `project_id`, `version_id`, `idx`, `total`, `name`, `status`, `detections?`, `succeeded`, `failed`, `skipped` | preprocess_worker 自动头部检测逐图进度；只生成提案，不写原图或 mask |
+| `generate_warning` | `task_id`, `code`, `params`, `message` | 出图 daemon 的非致命提示（如 LoRA 与底模层数可能不匹配），同一任务内同一 `(code, lora)` 只发一次；前端按 `generate.warning.<code>` i18n 渲染 toast，`message` 是英文兜底 |
 | `system_stats_updated` | `payload`（CPU / GPU / 内存 / 显存指标） | `studio/api/lifespan.py` 资源采样线程周期推送 Topbar 指标 |
 
 前端 `useEventStream.ts` 共享一条 `EventSource`，多个组件订阅不会重复连。

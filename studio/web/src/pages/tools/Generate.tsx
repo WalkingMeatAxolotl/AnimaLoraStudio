@@ -602,10 +602,17 @@ export default function GeneratePage() {
         void historyRef.current.refresh()
       }, 300)
     }
-    if (evt.type === 'generate_warning' && typeof evt.message === 'string' && evt.message) {
+    if (evt.type === 'generate_warning') {
       // daemon 侧非致命提示（如 LoRA 与底模层数可能不匹配）：不管当前显示哪个任务都提示，
-      // 因为它是用户刚提交的那次出图的事，图照出但可能不对
-      toast(evt.message, 'warning')
+      // 因为它是用户刚提交的那次出图的事，图照出但可能不对。按 code 走 i18n，
+      // 未知 code 退回后端英文 message。
+      const code = typeof evt.code === 'string' ? evt.code : ''
+      const params = (evt.params && typeof evt.params === 'object') ? evt.params as Record<string, unknown> : {}
+      const fallback = typeof evt.message === 'string' ? evt.message : ''
+      const text = code
+        ? t(`generate.warning.${code}`, { ...params, defaultValue: fallback })
+        : fallback
+      if (text) toast(text, 'warning')
     }
     const tid = taskIdRef.current
     if (tid == null) return

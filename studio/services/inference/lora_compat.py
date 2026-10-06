@@ -170,12 +170,28 @@ def lora_base_arch(network_args: dict[str, Any], keys: Iterable[str] = ()) -> Lo
 @dataclass(frozen=True)
 class CompatVerdict:
     level: CompatLevel
-    #: 事实句（用户可读，中文），ok 时为空串
+    #: 事实句（用户可读，中文，进异常文案），ok 时为空串
     reason: str = ""
+    #: 判定依据的两个层数（warn / reject 时有值）：告警事件按它们结构化下发，
+    #: 前端按 i18n 渲染；日志行由 :attr:`log_message` 拼英文
+    lora_blocks: Optional[int] = None
+    base_blocks: Optional[int] = None
 
     @property
     def ok(self) -> bool:
         return self.level == "ok"
+
+    @property
+    def log_message(self) -> str:
+        """英文排障行（WARNING / ERROR 日志面统一英文）；ok 时为空串。"""
+        if self.level == "reject":
+            return (f"LoRA base has {self.lora_blocks} blocks but the current base model "
+                    f"has {self.base_blocks}; layers do not line up")
+        if self.level == "warn":
+            return (f"LoRA only covers the first {self.lora_blocks} blocks (no base-arch "
+                    f"metadata) while the current base model has {self.base_blocks}; "
+                    f"if it was trained on a shallower base, layers do not line up")
+        return ""
 
 
 def check_lora_compat(
@@ -196,6 +212,7 @@ def check_lora_compat(
                 "reject",
                 f"{lora_name} 训练自 {lora.num_blocks} 层底模，当前底模 {model_num_blocks} 层，"
                 f"层与层对不上，不能挂载",
+                lora.num_blocks, model_num_blocks,
             )
         return CompatVerdict("ok")
     # 无元数据：键扫描只是下界
@@ -204,12 +221,14 @@ def check_lora_compat(
             "reject",
             f"{lora_name} 含 blocks.{lora.num_blocks - 1} 的权重，当前底模只有 {model_num_blocks} 层，"
             f"层与层对不上，不能挂载",
+            lora.num_blocks, model_num_blocks,
         )
     if lora.num_blocks < model_num_blocks:
         return CompatVerdict(
             "warn",
             f"{lora_name} 只覆盖前 {lora.num_blocks} 层（无底模层数元数据），当前底模 {model_num_blocks} 层："
             f"若它训练自层数更少的底模，挂上去层与层对不上",
+            lora.num_blocks, model_num_blocks,
         )
     return CompatVerdict("ok")
 
