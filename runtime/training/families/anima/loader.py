@@ -73,9 +73,12 @@ def drop_derived_buffers(sd: dict) -> dict:
     dropped = [k for k in sd if _DERIVED_BUFFER_RE.search(k)]
     if not dropped:
         return sd
-    logger.info("忽略 checkpoint 里的 %d 个 RoPE 派生缓冲（本地按配置重算）: %s",
-                len(dropped), ", ".join(dropped[:4]))
-    return {k: v for k, v in sd.items() if k not in set(dropped)}
+    logger.debug(
+        "dropping %d derived RoPE buffer(s) from checkpoint (recomputed from local config): %s",
+        len(dropped), ", ".join(dropped[:4]),
+    )
+    dropped_set = set(dropped)
+    return {k: v for k, v in sd.items() if k not in dropped_set}
 
 
 def place_model_for_block_swap(model, device, dtype, blocks_to_swap: int) -> int:
