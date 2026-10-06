@@ -28,13 +28,9 @@ class AnimaVariant:
     key: str
     subpath: str
     repo: str = ANIMA_REPO
-    #: official（circlestone-labs 官方）| community（第三方续训 / 扩展版）
-    group: str = "official"
     #: 显示名；空 → key
     label: str = ""
-    #: 第三方条目的作者（前端拼描述用；官方为空）
-    author: str = ""
-    #: 下载头行展示的文件字节数估计；0 = 用默认值（官方 28 层约 4 GB）
+    #: 下载头行展示的文件字节数估计；0 = 用默认值（28 层约 4 GB）
     size_estimate: int = 0
 
     @property
@@ -42,21 +38,20 @@ class AnimaVariant:
         return Path(self.subpath).name
 
 
-# 顺序：官方最新在前，第三方在官方之后。`find_anima_main` 的 fallback 查找按
-# 本表序遍历（LATEST 优先），`build_catalog` 给 UI 的 variants 列表也复用本
-# 顺序——所以官方新版本加在最前，老版本往下排，第三方条目放官方后面。
+# 顺序：`find_anima_main` 的 fallback 查找按本表序遍历（LATEST 优先），
+# `build_catalog` 给 UI 的 variants 列表也复用本顺序——circlestone-labs 新版本
+# 加在最前，老版本往下排，其它 repo 的条目放在后面。
 ANIMA_VARIANT_TABLE: tuple[AnimaVariant, ...] = (
     AnimaVariant("1.0", "split_files/diffusion_models/anima-base-v1.0.safetensors"),
     AnimaVariant("preview3-base", "split_files/diffusion_models/anima-preview3-base.safetensors"),
     AnimaVariant("preview2", "split_files/diffusion_models/anima-preview2.safetensors"),
     AnimaVariant("preview", "split_files/diffusion_models/anima-preview.safetensors"),
-    # 第三方：Anima v1.0 的 28 层 DiT 插层扩到 40 层并续训（LLaMA Pro 式），
+    # Anima v1.0 的 28 层 DiT 插层扩到 40 层并续训（LLaMA Pro 式），
     # TE / VAE / key 布局全同；许可同 Anima（非商用，derivative）。作者仍在
     # 出新版：跟版本 = 改这一行的 filename。
     AnimaVariant(
         "2.9b-preview-v1", "Anima-2.9B-preview-v1.safetensors",
-        repo="Gazingstars123/Anima-2.9B", group="community",
-        label="Anima-2.9B preview-v1", author="Gazingstars123",
+        repo="Gazingstars123/Anima-2.9B", label="Anima-2.9B preview-v1",
         size_estimate=5_840_000_000,
     ),
 )
@@ -68,7 +63,7 @@ ANIMA_VAE_PATH = "split_files/vae/qwen_image_vae.safetensors"
 
 
 def anima_variant_repo(variant: str) -> str:
-    """variant 的下载 repo（官方 circlestone-labs/Anima；第三方各自的 repo）。"""
+    """variant 的下载 repo（默认 circlestone-labs/Anima，个别条目各自的 repo）。"""
     if variant == "latest":
         variant = LATEST_ANIMA
     v = ANIMA_VARIANT_BY_KEY.get(variant)
@@ -221,9 +216,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
         anima_variants.append({
             "variant": v.key,
             "label": v.label or v.key,
-            "group": v.group,
             "repo": v.repo,
-            "author": v.author,
             "is_latest": v.key == LATEST_ANIMA,
             "target_path": str(target),
             **_file_status(target),
@@ -289,7 +282,7 @@ def path_choices(root: Path, models_cfg: Any, source_cfg: Any = None) -> dict[st
 
     **只列磁盘上已就绪的**：没下载的选了也训不起来，下载是 Settings 页的职责。
     label 一律取 basename（文件名 / 目录名），与用户在 Settings 看到的一致；
-    `group`（official / community / custom）/ `note` 是给前端翻译的 id，不是
+    `group`（official=内置条目 / custom=用户注册）/ `note` 是给前端翻译的 id，不是
     显示文案；``arch`` 是 header 探测的层数 / 参数量（前端标「N 层」）。
     """
     transformer: list[dict[str, Any]] = []
@@ -299,7 +292,7 @@ def path_choices(root: Path, models_cfg: Any, source_cfg: Any = None) -> dict[st
             transformer.append({
                 "label": target.name,
                 "path": str(target),
-                "group": v.group,
+                "group": "official",
                 "note": "latest" if v.key == LATEST_ANIMA else "",
                 "arch": arch_summary(target),
             })

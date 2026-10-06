@@ -332,8 +332,7 @@
     "loading": "加载中…",
     "empty": "模型设置里还没有已下载的可选模型 —— 去设置页下载，或在输入框手填路径",
     "group": {
-      "official": "官方",
-      "community": "第三方",
+      "official": "内置",
       "custom": "自定义"
     },
     "note": {
@@ -1221,7 +1220,6 @@
     "removeCandidateShort": "移除",
     "localBadge": "本地",
     "candidateAdded": "已添加 {{name}}",
-    "communityVariantDesc": "第三方续训 / 扩展版（{{author}}，{{repo}}）· 同 Anima 许可（非商用）",
     "candidateRemoved": "已从列表移除（文件保留）",
     "selectSourceCandidate": "选作当前模型",
     "clTaggerVersionTitle": "{{name}}（版本）",

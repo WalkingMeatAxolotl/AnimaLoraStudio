@@ -284,11 +284,6 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                         {t(`baseModel.purpose.${row.extra.purpose}`)}
                       </span>
                     ) : null}
-                    {row.extra.group === 'community' ? (
-                      <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
-                        {t('modelPicker.group.community')}
-                      </span>
-                    ) : null}
                     {/* 层数：header 探测（文件在盘上才有）。同族不同层数的 LoRA 不通用，
                         所以是主模型行最该看到的一个数 */}
                     {row.arch?.num_blocks ? (
@@ -297,11 +292,6 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                       </span>
                     ) : null}
                   </>
-                )}
-                describeRow={(row) => (
-                  row.kind === 'preset' && row.extra.group === 'community'
-                    ? t('settings.communityVariantDesc', { author: row.extra.author, repo: row.description })
-                    : row.description
                 )}
                 t={t}
               />

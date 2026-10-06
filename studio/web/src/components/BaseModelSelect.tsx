@@ -2,14 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type BaseModelArch, type ModelsCatalog } from '../api/client'
 
-/** 底模下拉的分组：官方 variant / 第三方内置条目 / 用户注册（本地或下载）。 */
-export type BaseModelGroup = 'official' | 'community' | 'custom'
-
 /** 底模下拉的一个选项：value = 官方 variant key 或本地 custom 绝对路径。 */
 export interface BaseModelOption {
   value: string
   label: string
-  group: BaseModelGroup
   /** 官方 variant 的用途声明（krea2：raw=training / turbo=inference）；
    *  custom 权重无此元数据。页面可据此应用蒸馏推理默认参数。 */
   purpose?: 'training' | 'inference'
@@ -24,7 +20,6 @@ interface FamilyMainSection {
   variants: Array<{
     variant: string
     label?: string
-    group?: 'official' | 'community'
     exists: boolean
     /** krea2 起 variant 带用途声明（raw=training / turbo=inference）。 */
     purpose?: 'training' | 'inference'
@@ -77,7 +72,6 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
       out.push({
         value: v.variant,
         label: `${v.label ?? v.variant}${badge}${archSuffix(v.arch, t)}`,
-        group: v.group ?? 'official',
         purpose: v.purpose,
         arch: v.arch ?? null,
       })
@@ -86,7 +80,7 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
       if (c.exists) {
         out.push({
           value: c.path, label: `${c.name}${archSuffix(c.arch, t)}`,
-          group: 'custom', arch: c.arch ?? null,
+          arch: c.arch ?? null,
         })
       }
     }
@@ -145,20 +139,12 @@ export default function BaseModelSelect({
   style?: React.CSSProperties
   ariaLabel?: string
 }) {
-  const { t } = useTranslation()
   const { options, defaultValue } = useBaseModelOptions(family)
   // 有效值：显式覆盖优先，否则跟随设置页默认。
   const effective = value ?? defaultValue ?? ''
   // effective 不在 options 里（例如设置页选的 variant 还没下载）时补一项，
   // 避免 select 落到列表首项造成「显示的不是实际生效的」。
   const missing = effective !== '' && !options.some((o) => o.value === effective)
-  // 分组：官方 / 第三方 / 自定义；只有一组时不渲染 optgroup（保持既有单列观感）
-  const groups = (['official', 'community', 'custom'] as const)
-    .map((g) => ({ key: g, items: options.filter((o) => o.group === g) }))
-    .filter((g) => g.items.length > 0)
-  const renderOptions = (items: BaseModelOption[]) => items.map((o) => (
-    <option key={o.value} value={o.value}>{o.label}</option>
-  ))
   return (
     <select
       className={className}
@@ -168,13 +154,9 @@ export default function BaseModelSelect({
       aria-label={ariaLabel}
     >
       {missing && <option value={effective}>{basename(effective)}</option>}
-      {groups.length <= 1
-        ? renderOptions(options)
-        : groups.map((g) => (
-          <optgroup key={g.key} label={t(`modelPicker.group.${g.key}`)}>
-            {renderOptions(g.items)}
-          </optgroup>
-        ))}
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
     </select>
   )
 }

@@ -54,7 +54,7 @@ describe('ModelPathPicker', () => {
     await screen.findByText('anima-base-v1.0.safetensors')
     expect(api.getModelPathChoices).toHaveBeenCalledWith('anima')
     // group / note 是翻译 id，渲染出来的是译文而不是 id 本身
-    expect(screen.getByText('官方')).toBeInTheDocument()
+    expect(screen.getByText('内置')).toBeInTheDocument()
     expect(screen.getByText('自定义')).toBeInTheDocument()
     expect(screen.getByText('最新')).toBeInTheDocument()
   })

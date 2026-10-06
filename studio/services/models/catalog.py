@@ -568,20 +568,14 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             models_cfg.selected.get(family_id) or main.get("latest") or "")
         fam_rows: list[dict[str, Any]] = []
         for v in main["variants"]:
-            # extra.group：official / community（第三方续训 / 扩展版）；
-            # extra.arch：header 探测的层数 / 参数量（文件存在才有）
+            # arch：header 探测的层数 / 参数量（文件存在才有）
             fam_rows.append(_source_row(
                 kind="preset", value=v["variant"],
                 label=str(v.get("label") or v["variant"]),
                 download_id=f"{family_id}_main",
                 exists=bool(v.get("exists")), size=int(v.get("size") or 0),
                 is_current=v["variant"] == selected_val,
-                description=str(v.get("repo") or "") if v.get("group") == "community" else "",
-                extra={
-                    "purpose": str(v.get("purpose") or ""),
-                    "group": str(v.get("group") or "official"),
-                    "author": str(v.get("author") or ""),
-                },
+                extra={"purpose": str(v.get("purpose") or "")},
                 arch=v.get("arch"),
             ))
         for c in source_cfg.get(family_id, []):

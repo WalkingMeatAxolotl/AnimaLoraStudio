@@ -763,15 +763,11 @@ export interface BaseModelArch {
 
 export interface FamilyMainVariantInfo extends ModelFileStatus {
   variant: string
-  /** 显示名（anima 第三方条目如 "Anima-2.9B preview-v1"）；缺省 = variant。 */
+  /** 显示名（如 "Anima-2.9B preview-v1"）；缺省 = variant。 */
   label?: string
-  /** official（官方）| community（第三方续训 / 扩展版）。 */
-  group?: 'official' | 'community'
-  /** 第三方条目的作者（拼描述用）。 */
-  author?: string
   is_latest: boolean
   target_path: string
-  /** variant 级 repo（krea2：Raw/Turbo 各自的 HF 仓库；anima 第三方条目各自的 repo）。 */
+  /** variant 级 repo（krea2：Raw/Turbo 各自的 HF 仓库；anima 个别条目各自的 repo）。 */
   repo?: string
   /** 用途声明（krea2：raw=training / turbo=inference）。 */
   purpose?: 'training' | 'inference'
@@ -919,7 +915,7 @@ export interface ModelSourceRow {
   removable: boolean
   /** local 候选永不从 UI 删除磁盘文件。 */
   deletable: boolean
-  /** 域相关附加位（字符串）：主模型行有 purpose / group（official|community）/ author。 */
+  /** 域相关附加位（字符串）：主模型行有 purpose。 */
   extra: Record<string, string>
   /** 主模型行：底模架构（层数等，header 探测；文件存在且是 Anima 结构才有）。 */
   arch?: BaseModelArch | null
@@ -993,7 +989,7 @@ export interface FamilySwitchResponse {
 export interface ModelPathChoice {
   label: string
   path: string
-  group: 'official' | 'community' | 'custom'
+  group: 'official' | 'custom'
   note: string
   /** 底模架构（层数等，header 探测）；非主模型字段 / 非 Anima 结构为空。 */
   arch?: BaseModelArch | null

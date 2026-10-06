@@ -332,8 +332,7 @@
     "loading": "Loading…",
     "empty": "No downloaded models available — download one in Settings, or type a path directly",
     "group": {
-      "official": "Official",
-      "community": "Community",
+      "official": "Built-in",
       "custom": "Custom"
     },
     "note": {
@@ -1221,7 +1220,6 @@
     "removeCandidateShort": "Remove",
     "localBadge": "local",
     "candidateAdded": "Added {{name}}",
-    "communityVariantDesc": "Community fine-tune / expansion ({{author}}, {{repo}}) · same non-commercial Anima license",
     "candidateRemoved": "Removed from list (files kept)",
     "selectSourceCandidate": "Use as current model",
     "clTaggerVersionTitle": "{{name}} (versions)",

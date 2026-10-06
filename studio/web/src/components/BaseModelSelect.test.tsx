@@ -53,12 +53,12 @@ describe('BaseModelSelect per family（多模型 P4-4）', () => {
     expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('raw')
   })
 
-  it('anima variants show layer count + community group + custom arch', async () => {
+  it('anima variants show layer count + display label + custom arch in one flat list', async () => {
     vi.mocked(api.getModelsCatalog).mockResolvedValue({
       anima_main: {
         variants: [
-          { variant: '1.0', exists: true, group: 'official', arch: { num_blocks: 28, model_channels: 2048, param_count: 1 } },
-          { variant: '2.9b-preview-v1', label: 'Anima-2.9B preview-v1', exists: true, group: 'community', arch: { num_blocks: 40, model_channels: 2048, param_count: 1 } },
+          { variant: '1.0', exists: true, arch: { num_blocks: 28, model_channels: 2048, param_count: 1 } },
+          { variant: '2.9b-preview-v1', label: 'Anima-2.9B preview-v1', exists: true, arch: { num_blocks: 40, model_channels: 2048, param_count: 1 } },
         ],
         custom: [{ path: 'G:/m/ft.safetensors', name: 'ft.safetensors', exists: true, arch: null }],
         selected: '1.0',
@@ -70,9 +70,8 @@ describe('BaseModelSelect per family（多模型 P4-4）', () => {
     expect(screen.getByRole('option', { name: '1.0 · 28 层' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Anima-2.9B preview-v1 · 40 层' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'ft.safetensors' })).toBeInTheDocument()
-    // 三组 → optgroup 分组（官方 / 第三方 / 自定义）
-    const groups = Array.from(document.querySelectorAll('optgroup')).map((g) => g.label)
-    expect(groups).toEqual(['官方', '第三方', '自定义'])
+    // 不分组：内置条目与用户注册的底模在同一列表
+    expect(document.querySelectorAll('optgroup')).toHaveLength(0)
     expect(optionValues()).toEqual(['1.0', '2.9b-preview-v1', 'G:/m/ft.safetensors'])
   })
 })
