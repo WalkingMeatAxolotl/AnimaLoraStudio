@@ -9,7 +9,6 @@ high-lr 这种语义名），同 project 内唯一，且不可改（路径锚点
 """
 from __future__ import annotations
 
-import functools
 import json
 import re
 import shutil
@@ -21,13 +20,7 @@ from typing import Any, Optional
 from . import projects
 from ...services.dataset import tagedit
 from ...services.dataset.scan import IMAGE_EXTS
-from ...services.inference.lora_compat import LoraBaseArch, read_lora_base_arch
-
-
-@functools.lru_cache(maxsize=4096)
-def _lora_base_arch_cached(path: str, size: int, mtime: float) -> LoraBaseArch:
-    """LoRA header 只读一次（按 path+size+mtime 失效）；训练中 ckpt 列表会反复拉。"""
-    return read_lora_base_arch(path)
+from ...services.inference.lora_compat import read_lora_base_arch_cached
 
 # ADR-0007 §11.3-B：versions 状态机用 status + phase 两个正交字段。
 # 老 stage 已在 PR-5 移除（PR-5 commit 2 删 VALID_STAGES / advance_stage）。
@@ -254,7 +247,7 @@ def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
         except OSError:
             mtime = 0.0
             size = -1
-        arch = _lora_base_arch_cached(str(f), size, mtime)
+        arch = read_lora_base_arch_cached(str(f), size, mtime)
         items.append({
             "kind": kind, "value": value, "label": label,
             "path": str(f), "mtime": mtime,

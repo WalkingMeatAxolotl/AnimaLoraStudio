@@ -21,6 +21,9 @@ class LoraCatalogItem(BaseModel):
     version_label: str | None = None
     project_archived: bool = False
     kind: Literal["final", "step", "epoch", "other"] = "other"
+    #: 训练底模 DiT 层数（lora_compat 契约：元数据 / 键扫描下界 / 未知）
+    base_num_blocks: int | None = None
+    base_arch_source: Literal["metadata", "keys", "unknown"] = "unknown"
 
 
 class LoraCatalogSource(BaseModel):

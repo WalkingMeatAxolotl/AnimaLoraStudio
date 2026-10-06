@@ -1667,6 +1667,9 @@ export interface LoraCatalogItem {
   version_label: string | null
   project_archived: boolean
   kind: 'final' | 'step' | 'epoch' | 'other'
+  /** 训练底模的 DiT 层数（lora_compat 契约）：元数据 / 键扫描下界 / 未知(null)。 */
+  base_num_blocks?: number | null
+  base_arch_source?: 'metadata' | 'keys' | 'unknown'
 }
 
 export interface LoraCatalogSource {

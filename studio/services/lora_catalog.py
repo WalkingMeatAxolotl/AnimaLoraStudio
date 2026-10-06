@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .. import db, secrets
+from .inference.lora_compat import read_lora_base_arch_cached
 from .models import models_root
 from .projects import projects, versions
 
@@ -105,6 +106,9 @@ def _project_item(
         "version_label": str(version["label"]),
         "project_archived": bool(project.get("archived_at")),
         "kind": str(checkpoint.get("kind") or "other"),
+        # lora_compat 契约：list_lora_ckpts 已按 header 读好，直接透传
+        "base_num_blocks": checkpoint.get("base_num_blocks"),
+        "base_arch_source": str(checkpoint.get("base_arch_source") or "unknown"),
     }
 
 
@@ -165,6 +169,7 @@ def _scan_directory(
                 except OSError as exc:
                     errors.append(_error_text(exc))
                     continue
+                arch = read_lora_base_arch_cached(str(path), stat.st_size, stat.st_mtime)
                 items.append({
                     "path": str(_absolute_path(path)),
                     "name": path.name,
@@ -180,6 +185,8 @@ def _scan_directory(
                     "version_label": None,
                     "project_archived": False,
                     "kind": "other",
+                    "base_num_blocks": arch.num_blocks,
+                    "base_arch_source": arch.source,
                 })
     except OSError as exc:
         errors.append(_error_text(exc))
