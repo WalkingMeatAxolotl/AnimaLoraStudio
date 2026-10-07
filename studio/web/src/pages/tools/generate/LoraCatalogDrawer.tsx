@@ -8,6 +8,7 @@ import {
   type LoraEntry,
 } from '../../../api/client'
 import { createLoraUiState, normalizeLoraPath, type LoraUiState } from './loraSelection'
+import { loraCompatLevel, useBaseNumBlocks } from './baseArchContext'
 import { Input, Select } from '../../../components/FormControl'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import GenerateAttachedDrawer from './GenerateAttachedDrawer'
@@ -31,6 +32,32 @@ function displayName(name: string): string {
 function relativeDirectory(item: LoraCatalogItem): string {
   const parts = item.relative_path.replace(/\\/g, '/').split('/')
   return parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+}
+
+/** 训练底模层数徽标（lora_compat 契约）+ 与当前底模的预检结论。只是展示：
+ *  真正的拒绝 / 告警在后端 apply 时按同一规则执行。层数未知不渲染。 */
+function LoraLayersBadge({ item }: { item: LoraCatalogItem }) {
+  const { t } = useTranslation()
+  const baseNumBlocks = useBaseNumBlocks()
+  const layers = item.base_num_blocks ?? null
+  if (layers == null) return null
+  const compat = loraCompatLevel(item, baseNumBlocks)
+  const title = compat === 'reject'
+    ? t('lora.baseLayersMismatch', { lora: layers, base: baseNumBlocks })
+    : compat === 'warn'
+      ? t('lora.baseLayersMaybe', { lora: layers, base: baseNumBlocks })
+      : t('lora.baseLayers', { n: layers })
+  const tone = compat === 'reject' ? 'text-err' : compat === 'warn' ? 'text-warn' : 'text-fg-tertiary'
+  return (
+    <span
+      className={`shrink-0 text-2xs ${tone}`}
+      title={title}
+      data-testid="lora-base-layers"
+      data-compat={compat}
+    >
+      {compat === 'reject' ? '⚠ ' : ''}{t('baseModel.layers', { n: layers })}
+    </span>
+  )
 }
 
 function sourceDisplayName(source: LoraCatalogSource): string {
@@ -391,6 +418,7 @@ function LoraCatalogDrawer({
                         <span className="block font-mono text-xs text-fg-primary truncate" title={displayName(item.name)}>{displayName(item.name)}</span>
                         {secondary && <span className="block text-2xs text-fg-tertiary truncate">{secondary}</span>}
                       </span>
+                      <LoraLayersBadge item={item} />
                     </button>
                   )
                 })}

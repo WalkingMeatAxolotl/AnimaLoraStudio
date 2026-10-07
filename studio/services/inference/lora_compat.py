@@ -26,6 +26,7 @@ LoRA 按模块名 ``blocks.N.xxx`` 套用，28 层底模上训的 LoRA 挂到 40
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 from dataclasses import dataclass
@@ -138,6 +139,14 @@ def read_lora_base_arch(path: Any) -> LoraBaseArch:
     except (TypeError, ValueError):
         ss_args = {}
     return lora_base_arch(ss_args, (k for k in header if k != "__metadata__"))
+
+
+@functools.lru_cache(maxsize=4096)
+def read_lora_base_arch_cached(path: str, size: int, mtime: float) -> LoraBaseArch:
+    """:func:`read_lora_base_arch` 的缓存版（按 path+size+mtime 失效）：版本 ckpt
+    列表与 LoRA 目录会反复拉，header 只读一次。"""
+    del size, mtime  # 只作缓存键
+    return read_lora_base_arch(path)
 
 
 def lora_base_arch(network_args: dict[str, Any], keys: Iterable[str] = ()) -> LoraBaseArch:

@@ -62,6 +62,7 @@ import {
   type GenerateFamily, type SamplerName, type SchedulerName,
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
+import { BaseNumBlocksContext } from './generate/baseArchContext'
 import {
   axisText, axisView, buildXYMatrix, cellCount,
   type XYAxisDraft,
@@ -354,6 +355,11 @@ export default function GeneratePage() {
   // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
   const { options: baseModelOptions, defaultValue: defaultBaseModel } = useBaseModelOptions(modelFamily)
   const fp8BaseModel = modelFamily === 'krea2' && isFp8BaseModel(baseModel ?? defaultBaseModel)
+  // 当前生效底模的 DiT 层数（catalog header 探测）→ LoRA picker 标「N 层」+ 不匹配预检
+  const baseNumBlocks = useMemo(() => {
+    const effective = baseModel ?? defaultBaseModel
+    return baseModelOptions.find((o) => o.value === effective)?.arch?.num_blocks ?? null
+  }, [baseModel, defaultBaseModel, baseModelOptions])
   const onBaseModelChange = (v: string) => {
     setBaseModel(v)
     const picked = baseModelOptions.find((o) => o.value === v)
@@ -1082,6 +1088,7 @@ export default function GeneratePage() {
     || (axisDrawerOpen && mode === 'xy')
 
   return (
+    <BaseNumBlocksContext.Provider value={baseNumBlocks}>
     <div className="fade-in flex flex-col" style={{ height: '100%', overflow: 'hidden' }}>
       <PageHeader
         title={t('generate.title')}
@@ -1697,5 +1704,6 @@ export default function GeneratePage() {
       {/* daemon log 抽屉（fixed 定位 + translateY，隐藏时完全不可见，不占 layout） */}
       <DaemonLogDrawer open={logOpen} onClose={() => setLogOpen(false)} />
     </div>
+    </BaseNumBlocksContext.Provider>
   )
 }

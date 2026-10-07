@@ -254,3 +254,32 @@ def test_archived_projects_are_opt_in(client: TestClient, catalog_env: dict) -> 
     item = next(item for item in shown["items"] if item["name"] == path.name)
     assert item["project_archived"] is True
     assert item["kind"] == "step"
+
+
+def test_catalog_items_carry_lora_base_arch(client: TestClient, catalog_env: dict) -> None:
+    """lora_compat 契约：目录行带训练底模层数（元数据优先 / 键扫描下界 / 坏文件未知），
+    前端据此标「N 层」并与当前底模预检。"""
+    import json
+
+    import torch
+    from safetensors.torch import save_file
+
+    catalog_env["default"].mkdir(parents=True, exist_ok=True)
+    catalog_env["external"].mkdir(parents=True, exist_ok=True)
+    meta40 = catalog_env["default"] / "meta40.safetensors"
+    save_file(
+        {"lora_unet_blocks_0_self_attn_q_proj.lokr_w1": torch.zeros(1)}, str(meta40),
+        metadata={"ss_network_args": json.dumps({"base_num_blocks": 40})},
+    )
+    keys28 = catalog_env["external"] / "keys28.safetensors"
+    save_file({"lora_unet_blocks_27_self_attn_q_proj.lokr_w1": torch.zeros(1)}, str(keys28))
+    _write(catalog_env["external"] / "broken.safetensors", b"not a safetensors file")
+
+    body = client.get("/api/lora-catalog?refresh=true&limit=50").json()
+    by_name = {item["name"]: item for item in body["items"]}
+    assert (by_name["meta40.safetensors"]["base_num_blocks"],
+            by_name["meta40.safetensors"]["base_arch_source"]) == (40, "metadata")
+    assert (by_name["keys28.safetensors"]["base_num_blocks"],
+            by_name["keys28.safetensors"]["base_arch_source"]) == (28, "keys")
+    assert (by_name["broken.safetensors"]["base_num_blocks"],
+            by_name["broken.safetensors"]["base_arch_source"]) == (None, "unknown")

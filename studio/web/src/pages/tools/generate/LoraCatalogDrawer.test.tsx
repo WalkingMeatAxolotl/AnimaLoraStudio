@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LoraCatalogItem, LoraEntry } from '../../../api/client'
 import LoraCatalogDrawer, { sortCatalogSources } from './LoraCatalogDrawer'
+import { BaseNumBlocksContext } from './baseArchContext'
 import type { LoraUiState } from './loraSelection'
 
 const fetchMock = vi.fn()
@@ -286,5 +287,29 @@ describe('LoraCatalogDrawer', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.getByTestId('lora-catalog-drawer')).not.toBeVisible())
+  })
+  it('marks each LoRA with its base layer count and the precheck against the current base', async () => {
+    // 元数据 28 ≠ 40 → 拒绝；键扫描 28 < 40 → 可能不匹配；元数据 40 = 40 → ok；未知不标
+    const rows: LoraCatalogItem[] = [
+      { ...item, path: 'D:/l/meta28.safetensors', name: 'meta28.safetensors', base_num_blocks: 28, base_arch_source: 'metadata' },
+      { ...item, path: 'D:/l/keys28.safetensors', name: 'keys28.safetensors', base_num_blocks: 28, base_arch_source: 'keys' },
+      { ...item, path: 'D:/l/meta40.safetensors', name: 'meta40.safetensors', base_num_blocks: 40, base_arch_source: 'metadata' },
+      { ...item, path: 'D:/l/unknown.safetensors', name: 'unknown.safetensors', base_num_blocks: null, base_arch_source: 'unknown' },
+    ]
+    fetchMock.mockImplementation((input: string | URL | Request) => (
+      Promise.resolve(response(String(input).includes('source=external%3A0') ? rows : []))
+    ))
+    const user = userEvent.setup()
+    render(<BaseNumBlocksContext.Provider value={40}><Harness /></BaseNumBlocksContext.Provider>)
+    await user.click(await screen.findByRole('button', { name: /^loras / }))
+    await waitFor(() => expect(screen.getAllByTestId('lora-catalog-item')).toHaveLength(4))
+
+    const badgeOf = (name: string) => screen.getByText(name).closest('[data-testid="lora-catalog-item"]')!
+      .querySelector('[data-testid="lora-base-layers"]')
+    expect(badgeOf('meta28')?.getAttribute('data-compat')).toBe('reject')
+    expect(badgeOf('meta28')?.textContent).toBe('⚠ 28 层')
+    expect(badgeOf('keys28')?.getAttribute('data-compat')).toBe('warn')
+    expect(badgeOf('meta40')?.getAttribute('data-compat')).toBe('ok')
+    expect(badgeOf('unknown')).toBeNull()
   })
 })

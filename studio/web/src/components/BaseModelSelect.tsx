@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type ModelsCatalog } from '../api/client'
+import { api, type BaseModelArch, type ModelsCatalog } from '../api/client'
 
 /** 底模下拉的一个选项：value = 官方 variant key 或本地 custom 绝对路径。 */
 export interface BaseModelOption {
@@ -9,6 +9,8 @@ export interface BaseModelOption {
   /** 官方 variant 的用途声明（krea2：raw=training / turbo=inference）；
    *  custom 权重无此元数据。页面可据此应用蒸馏推理默认参数。 */
   purpose?: 'training' | 'inference'
+  /** 底模架构（层数等，后端 header 探测）；未知为 null。层数决定 LoRA 能否互换。 */
+  arch: BaseModelArch | null
 }
 
 /** 支持底模选择的模型族。catalog section 键 = `${family}_main`。 */
@@ -17,12 +19,19 @@ export type BaseModelFamily = 'anima' | 'krea2'
 interface FamilyMainSection {
   variants: Array<{
     variant: string
+    label?: string
     exists: boolean
     /** krea2 起 variant 带用途声明（raw=training / turbo=inference）。 */
     purpose?: 'training' | 'inference'
+    arch?: BaseModelArch | null
   }>
-  custom: Array<{ path: string; name: string; exists: boolean }>
+  custom: Array<{ path: string; name: string; exists: boolean; arch?: BaseModelArch | null }>
   selected: string
+}
+
+/** 「N 层」后缀（arch 未知不显示）。层数是 LoRA 互换性的判据，所以进 label 而非 tooltip。 */
+export function archSuffix(arch: BaseModelArch | null | undefined, t: (k: string, o?: Record<string, unknown>) => string): string {
+  return arch?.num_blocks ? ` · ${t('baseModel.layers', { n: arch.num_blocks })}` : ''
 }
 
 function mainSection(
@@ -62,12 +71,18 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
         : ''
       out.push({
         value: v.variant,
-        label: `${v.variant}${badge}`,
+        label: `${v.label ?? v.variant}${badge}${archSuffix(v.arch, t)}`,
         purpose: v.purpose,
+        arch: v.arch ?? null,
       })
     }
     for (const c of section.custom) {
-      if (c.exists) out.push({ value: c.path, label: c.name })
+      if (c.exists) {
+        out.push({
+          value: c.path, label: `${c.name}${archSuffix(c.arch, t)}`,
+          arch: c.arch ?? null,
+        })
+      }
     }
     return out
   }, [catalog, family, t])
