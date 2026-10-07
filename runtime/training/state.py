@@ -32,7 +32,7 @@ def save_training_state(
     path, injector, optimizer, epoch, global_step,
     loss_history=None, rng_state=None, monitor_state=None,
     scheduler=None, timestep_sampler=None, sra_aligner=None,
-    scaler=None, model_family=None, internal=False,
+    scaler=None, model_family=None, internal=False, base_num_blocks=None,
 ):
     """保存完整训练状态，支持断点续训。
 
@@ -41,6 +41,10 @@ def save_training_state(
 
     ``internal``：True = 系统内部的每 epoch auto backup（ADR 0006 Addendum 1 方案 Δ），
     不是用户产物 → 收尾行走 DEBUG；False = 用户开的周期 save → INFO 叙事行。
+
+    base_num_blocks：底模 DiT 层数（lora_compat 契约）。同族不同层数的底模之间
+    resume，LoRA 网络形状对不上、optimizer param group 也对不上——load 侧按它
+    fail-fast 并说人话，而不是崩在 torch 的 param group 报错上。
     """
     state = {
         "lora_state_dict": injector.state_dict(),
@@ -57,6 +61,8 @@ def save_training_state(
         # 多模型 D13：族标记；load 侧跨族 fail-fast（strict=False 会静默冷启动）
         "model_family": str(model_family or "anima"),
     }
+    if base_num_blocks is not None:
+        state["base_num_blocks"] = int(base_num_blocks)
     if scheduler is not None:
         state["scheduler_state_dict"] = scheduler.state_dict()
     if sra_aligner is not None and hasattr(sra_aligner, "state_dict"):
@@ -114,11 +120,14 @@ def save_training_state(
         ))
 
 
-def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None, expected_family=None):
+def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None, expected_family=None, expected_num_blocks=None):
     """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)。
 
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
     实现了 load_state_dict，把 EMA / CDF / FIFO 灌回去；否则保持冷启动（warning 提示）。
+
+    expected_num_blocks：当前底模层数；恢复点记了 base_num_blocks 且不等 → 拒绝
+    （同族不同层数底模之间的 resume 一定错）。老恢复点没记 → 不判。
     """
     logger.info(msg("train.resume_state_loading", path=path))
     state = torch.load(path, map_location="cpu", weights_only=False)
@@ -130,6 +139,17 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
             f"跨模型族 resume 被拒绝：恢复点属于 '{saved_family}'，"
             f"当前 model_family='{expected_family}'。"
             f"（strict=False 加载会静默变成全 missing 冷启动，比崩溃更糟）"
+        )
+    saved_blocks = state.get("base_num_blocks")
+    if (
+        expected_num_blocks is not None
+        and saved_blocks is not None
+        and int(saved_blocks) != int(expected_num_blocks)
+    ):
+        raise RuntimeError(
+            f"resume 与当前底模层数不匹配：恢复点训练自 {int(saved_blocks)} 层底模，"
+            f"当前底模 {int(expected_num_blocks)} 层，层与层对不上。"
+            f"请换回原底模，或新开版本从头训练。"
         )
 
     # 加载 LoRA 权重（lycoris-lora backend）— 一次性导入 state_dict

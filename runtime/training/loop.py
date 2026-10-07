@@ -32,6 +32,7 @@ from training.snapshot import (
 )
 from training.state import save_training_state
 from training.timestep_sampling import apply_resolution_shift, latent_token_counts
+from studio.services.inference.lora_compat import model_num_blocks
 from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_mode
 
 
@@ -874,6 +875,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                             sra_aligner=ctx.sra_aligner,
                             scaler=ctx.scaler,
                             model_family=ctx.family.spec.family_id,
+                            base_num_blocks=model_num_blocks(ctx.model),
                         )
                         # 同时保存 LoRA 权重
                         lora_path = ctx.output_dir / f"{args.output_name}_step{ctx.global_step}.safetensors"
@@ -954,6 +956,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                         sra_aligner=ctx.sra_aligner,
                         scaler=ctx.scaler,
                         model_family=ctx.family.spec.family_id,
+                        base_num_blocks=model_num_blocks(ctx.model),
                     )
                     lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                     if not lora_path.exists():
@@ -988,6 +991,7 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                     scaler=ctx.scaler,
                     model_family=ctx.family.spec.family_id,
                     internal=True,  # 系统级恢复点，不是用户产物 → DEBUG
+                    base_num_blocks=model_num_blocks(ctx.model),
                 )
             ctx.wandb_monitor.upload_state_auto(auto_state_path)
             # 更新 ctx 字段供 handle_interrupt emit pause_state 用
