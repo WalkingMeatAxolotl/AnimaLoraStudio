@@ -167,8 +167,8 @@ class TrainingConfig(BaseModel):
     # 换出多少层对产出的 LoRA 逐位无影响（纯资源旋钮，同 vae_tiling / cache_latents）
     blocks_to_swap: int = Field(
         0, ge=0,
-        description="Block 交换：换出到内存的 DiT 层数（0=关闭；Anima 接受 0-28，每层约 0.13GB；"
-                    "Krea 2 接受 0-28，每层约 0.4GB fp8 底模 / 0.8GB bf16 底模）。"
+        description="Block 交换：换出到内存的 DiT 层数（0=关闭；超过底模层数按全部换出；"
+                    "Anima 每层约 0.13GB，Krea 2 每层约 0.4GB fp8 底模 / 0.8GB bf16 底模）。"
                     "数值越大，显存占用越少、内存占用越大",
         json_schema_extra=_meta(
             "system",
@@ -927,8 +927,8 @@ class TrainingConfig(BaseModel):
         ),
     )
     sra_block: int = Field(
-        4, ge=1, le=35,
-        description="【SRA v2】从哪一层 block 取中间表征做对齐（0-indexed）。论文建议浅层效果最好",
+        4, ge=1,
+        description="【SRA v2】从哪一层 block 取中间表征做对齐（0-indexed；超过底模层数按最后一层）。论文建议浅层效果最好",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )
     sra_weight: float = Field(
