@@ -197,3 +197,14 @@ def test_load_weights_rejects_checkpoint_with_more_blocks_than_model():
     sd_ok["some_extra.weight"] = torch.zeros(1)
     info = _load_weights_best_effort(model, sd_ok, label="Transformer")
     assert info["unexpected"] == ["some_extra.weight"]
+
+
+def test_sra_block_has_no_layer_count_ceiling():
+    """sra_block 不能按某个底模层数设上限（层数由 checkpoint 决定，40 / 68 层…）；
+    超过实际层数由 runtime 压到最后一层。"""
+    from studio.domain.training import TrainingConfig
+
+    assert "maximum" not in TrainingConfig.model_json_schema()["properties"]["sra_block"]
+    assert TrainingConfig(sra_block=60).sra_block == 60
+    with pytest.raises(ValueError):
+        TrainingConfig(sra_block=0)
