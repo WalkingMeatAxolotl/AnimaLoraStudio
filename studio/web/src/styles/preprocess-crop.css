@@ -176,7 +176,7 @@
 }
 .fs-thumb:hover {
   border-color: var(--border-default);
-  transform: translateY(-2px);
+  translate: 0 -2px;
 }
 .fs-thumb.is-active {
   border-color: var(--accent);
