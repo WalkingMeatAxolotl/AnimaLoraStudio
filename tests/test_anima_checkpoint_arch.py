@@ -4,7 +4,7 @@
 ① loader 按 model_channels 查表把层数写死 28（多出的层进 unexpected 只 log，静默丢层）；
 ② 文件里带 RoPE 派生缓冲 pos_embedder.seq [256]，与本地 [512] 形状不同，
    load_state_dict(strict=False) 对 shape 不匹配照样 raise。
-修法：层数从 header 数；加载前剥派生缓冲；unexpected 关键层硬报错。
+修法：层数从 header 数；派生缓冲 persistent=False 且加载前剥掉；unexpected 关键层硬报错。
 """
 
 from __future__ import annotations
@@ -170,6 +170,31 @@ def test_drop_derived_buffers_strips_pos_embedder_only():
     assert set(out) == {"net.blocks.0.self_attn.q_proj.weight", "net.x_embedder.proj.1.weight"}
     # 没有派生缓冲时原样返回（不复制多 GB 的 dict）
     assert drop_derived_buffers(out) is out
+
+
+def test_rope_derived_buffers_not_in_state_dict_and_ignore_foreign_shapes():
+    """RoPE 派生缓冲不参与 state_dict（对齐 diffusion-pipe / ComfyUI 的 persistent=False）：
+    别家按 max_img_h=512 存的 seq[256] 喂给本地 max_img_h=1024（seq[512]）的模型
+    不能因形状不同 raise——即使绕过 drop_derived_buffers 直接 load_state_dict。"""
+    from modeling.anima.cosmos_predict2_modeling import VideoRopePosition3DEmb
+
+    pe = VideoRopePosition3DEmb(head_dim=128, len_h=512, len_w=512, len_t=128)
+    assert pe.state_dict() == {}
+    assert pe.seq.shape == (512,)
+
+    foreign = {
+        "seq": torch.arange(256, dtype=torch.float),
+        "dim_spatial_range": torch.zeros(21),
+        "dim_temporal_range": torch.zeros(22),
+    }
+    result = pe.load_state_dict(foreign, strict=False)
+    assert set(result.unexpected_keys) == set(foreign)
+    # 本地派生值不被文件覆盖
+    assert pe.seq.shape == (512,)
+    assert torch.equal(pe.seq, torch.arange(512, dtype=torch.float))
+    # reset_parameters 重建后仍是非持久缓冲（直接赋值不会把它变回 persistent）
+    pe.reset_parameters()
+    assert pe.state_dict() == {}
 
 
 class _TinyDiT(torch.nn.Module):

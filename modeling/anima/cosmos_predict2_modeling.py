@@ -732,7 +732,10 @@ class VideoRopePosition3DEmb(VideoPositionEmb):
     ):
         del kwargs
         super().__init__()
-        self.register_buffer("seq", torch.arange(max(len_h, len_w, len_t), dtype=torch.float))
+        # 三个缓冲都是本地配置派生的常量（seq 长度 = max_img_h // patch），不是权重：
+        # 不进 state_dict，否则别家按不同 max_img_h 存的文件会因形状不同让
+        # load_state_dict raise。与 diffusion-pipe / ComfyUI 一致（persistent=False）。
+        self.register_buffer("seq", torch.arange(max(len_h, len_w, len_t), dtype=torch.float), persistent=False)
         self.base_fps = base_fps
         self.max_h = len_h
         self.max_w = len_w
@@ -746,12 +749,12 @@ class VideoRopePosition3DEmb(VideoPositionEmb):
         self.register_buffer(
             "dim_spatial_range",
             torch.arange(0, dim_h, 2)[: (dim_h // 2)].float() / dim_h,
-            persistent=True,
+            persistent=False,
         )
         self.register_buffer(
             "dim_temporal_range",
             torch.arange(0, dim_t, 2)[: (dim_t // 2)].float() / dim_t,
-            persistent=True,
+            persistent=False,
         )
         self._dim_h = dim_h
         self._dim_t = dim_t
