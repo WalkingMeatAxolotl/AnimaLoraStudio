@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 #: checkpoint 里随模型一起存下来的 RoPE 派生缓冲（第三方训练器会把
 #: ``pos_embedder.seq / dim_spatial_range / dim_temporal_range`` 存进文件）。
 #: 它们不是权重，形状与值都由本地建模配置决定（seq 长度 = max_img_h // patch），
-#: 与写文件那边的配置无关；留在 state dict 里会因形状不同让 load_state_dict
-#: 直接 raise（strict=False 只管缺/多 key，不管 shape）。加载前一律剥掉。
+#: 与写文件那边的配置无关。根因修在建模侧（三者均 ``persistent=False``，不参与
+#: load_state_dict 的形状比对）；这里加载前再剥一遍，只为不把它们记成 unexpected。
 _DERIVED_BUFFER_RE = re.compile(r"(?:^|\.)pos_embedder\.")
 
 
