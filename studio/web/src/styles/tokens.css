@@ -320,10 +320,12 @@ select option:checked {
     border-color 120ms ease,
     color 120ms ease,
     box-shadow 120ms ease,
-    transform 120ms ease;
+    translate 120ms ease;
 }
 .btn:hover:not(:disabled) { text-decoration: none; }
-.btn:active:not(:disabled) { transform: translateY(1px); }
+/* 按压 / 悬停位移用独立的 translate 属性而非 transform：transform 会整体覆盖
+ * Tailwind 的 -translate-* 定位（如 absolute top-1/2 -translate-y-1/2），按下时元素跳位。 */
+.btn:active:not(:disabled) { translate: 0 1px; }
 .btn:focus-visible {
   outline: none;
   border-color: var(--accent);
@@ -351,7 +353,7 @@ select option:checked {
 .btn-icon { width: 38px; padding-inline: 0; }
 .btn-icon.btn-sm { width: 30px; }
 .btn-icon.btn-xs { width: 24px; }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; translate: none; }
 .btn-loading { cursor: progress; }
 .btn-spinner {
   width: 12px;
@@ -379,9 +381,9 @@ select option:checked {
     background-color 120ms ease,
     border-color 120ms ease,
     box-shadow 120ms ease,
-    transform 120ms ease;
+    translate 120ms ease;
 }
-.card-hover:hover { box-shadow: var(--sh-md); border-color: var(--border-default); transform: translateY(-1px); }
+.card-hover:hover { box-shadow: var(--sh-md); border-color: var(--border-default); translate: 0 -1px; }
 .card[data-selected="true"] {
   background: var(--row-selected-bg);
   border-color: var(--row-selected-border);
