@@ -184,8 +184,8 @@ def test_failed_task_sets_version_failed(env) -> None:
 def test_spawn_sets_version_training_then_terminal(env) -> None:
     """task 启动时 version.status 立刻变 training，task 完成后变 completed。"""
     def slow_cmd(task: dict[str, Any], cfg: Path) -> list[str]:
-        # 给 supervisor 有时间观察 training 状态
-        return [sys.executable, "-c", "import time; time.sleep(0.3)"]
+        # 给测试留出观察 training 状态的窗口（慢 runner 上 0.3s 不够稳）
+        return [sys.executable, "-c", "import time; time.sleep(1.0)"]
 
     sup = Supervisor(
         cmd_builder=slow_cmd,
@@ -196,14 +196,19 @@ def test_spawn_sets_version_training_then_terminal(env) -> None:
     tid = _create_versioned_task(env)
     sup.start()
     try:
-        # 等到 task 状态变 running 并验证 version.status='training'
+        # 等到 task 状态变 running 并验证 version.status='training'。
+        # 两个状态是分别提交的两次写，task 先落盘；读到 running 时 version
+        # 可能还是 preparing，所以 version 也要轮询，不能裸 assert。
         assert _wait_for(
             lambda: db.get_task(_open(env["db"]), tid)["status"] == "running",
             timeout=10,
         )
-        with db.connection_for(env["db"]) as conn:
-            v = versions.get_version(conn, env["version"]["id"])
-        assert v["status"] == "training"
+        assert _wait_for(
+            lambda: versions.get_version(
+                _open(env["db"]), env["version"]["id"]
+            )["status"] == "training",
+            timeout=10,
+        )
 
         # 等到 done
         assert _wait_for(
