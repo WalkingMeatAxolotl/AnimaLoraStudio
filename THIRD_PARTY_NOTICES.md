@@ -72,6 +72,9 @@
     的 `ModelSpec.latent` 引用此单一副本）；`runtime/anima_daemon.py`
     `_decode_latent2rgb_preview` 的投影 + 范围映射对齐 ComfyUI `latent_preview.py`
     `Latent2RGBPreviewer`
+  - `runtime/training/families/latent_spaces.py` — `_FLUX2_RGB_FACTORS` /
+    `_FLUX2_RGB_BIAS` 取自 ComfyUI `comfy/latent_formats.py` 的 `Flux2`（32 行系数，
+    Comfy 经 `latent_rgb_factors_reshape` 还原成 32ch/f8 后使用，与本项目缓存排布一致）
 
 > 由于包含/派生自 GPL-3.0 代码，本项目整体以 GPL-3.0 发布（见 `LICENSE`）。
 
@@ -83,6 +86,15 @@
   - `modeling/cosmos_predict2_modeling.py`
 
 本仓库额外提供 `LICENSE-APACHE` 以便分发 Apache-2.0 许可文本。
+
+### Black Forest Labs FLUX.2 VAE (Apache-2.0)
+
+- **来源**：[`black-forest-labs/flux2`](https://github.com/black-forest-labs/flux2)
+  `src/flux2/autoencoder.py`
+- **许可**：Apache-2.0（上游 `LICENSE.md`；本仓库附 `LICENSE-APACHE`）
+- **涉及文件**：
+  - `modeling/flux2/autoencoder.py` — 结构与参数命名原样移植（模块路径即 checkpoint
+    键名），仅加模块 docstring 与 `from __future__ import annotations`
 
 ### Alibaba Wan2.1 VAE（请再次确认上游许可）
 
