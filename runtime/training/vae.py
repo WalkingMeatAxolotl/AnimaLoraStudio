@@ -65,11 +65,21 @@ class VAEWrapper:
     # 把会撞崖的(大图、fp32、或叠加常驻模型)切到分块。
     _TILE_VRAM_FRACTION = 0.5
 
-    def __init__(self, model, mean, std, tiling: str = "auto"):
+    def __init__(self, model, mean, std, tiling: str = "auto", *, latent_align: int = 1):
         self.model = model
         self.mean = mean
         self.std = std
         self.scale = [mean, 1.0 / std]
+        # latent 通道数（WAN VAE 16；FLUX.2 32）——分块 encode 的累加器按它开。
+        self.latent_channels = int(getattr(model, "z_dim", 16))
+        # 分块边界在 latent 上须对齐的格数。FLUX.2 的归一化按 2×2 子像素位置取统计量，
+        # 块起点落在奇数格会让块内 patch 分组与全图错位（训练/vae_flux2.py）。
+        self.latent_align = int(latent_align)
+        if self._TILE_LATENT % self.latent_align or self._STRIDE_LATENT % self.latent_align:
+            raise ValueError(
+                f"decode 分块几何 {self._TILE_LATENT}/{self._STRIDE_LATENT} 不是 "
+                f"latent_align={self.latent_align} 的整倍数"
+            )
         # VAE 权重精度（mean/std 与 model 同 dtype）。encode/decode 入口按此 cast 输入，
         # 这样 fp16 训练 + fp32 VAE 时调用方传 fp16 latent / pixel 也不会 dtype mismatch。
         self.dtype = mean.dtype
@@ -265,7 +275,7 @@ class VAEWrapper:
 
         - 默认 tile=512px / stride=384px / overlap=128px（= decode 的 64/48/16 latent ×8）
         - ``tile_px`` / ``overlap_px``（像素）非 None 时覆盖默认，供缓存分块按 config 传入；
-          二者须为 VAE 下采样（``up``）的整倍数（latent 块边界落整格）
+          二者须为 ``up × latent_align`` 的整倍数（latent 块边界落整格，且对齐 patch 分组）
         - 像素起点恒为 8 的倍数 → latent 位置为整数（_TILE/_STRIDE×8 与 H/W 均整除 8）
         - blend 在 latent 空间，accumulator 走 fp32
         - encode 非线性，拼接为近似（overlap+cosine 抹平 tile 边界），用于 latent 缓存足够
@@ -278,11 +288,12 @@ class VAEWrapper:
         else:
             tile_px = int(tile_px)
             ov_px = int(overlap_px) if overlap_px is not None else (self._TILE_LATENT - self._STRIDE_LATENT) * up
+            unit = up * self.latent_align
             for _name, _v in (("tile_px", tile_px), ("overlap_px", ov_px)):
-                if _v % up != 0:
+                if _v % unit != 0:
                     raise ValueError(
-                        f"_tiled_encode 要求 {_name}={_v} 是 VAE 下采样 {up} 的整倍数"
-                        "（latent 块边界需落整格）。"
+                        f"_tiled_encode 要求 {_name}={_v} 是 {unit}px 的整倍数"
+                        f"（VAE 下采样 {up} × latent 对齐 {self.latent_align}）。"
                     )
             if not (0 <= ov_px < tile_px):
                 raise ValueError(f"overlap_px={ov_px} 必须满足 0 <= overlap < tile_px={tile_px}")
@@ -297,8 +308,8 @@ class VAEWrapper:
         tile_lh, tile_lw = eff_h // up, eff_w // up
         overlap_lat = (tile_px - stride_px) // up
 
-        # encode 输出通道 = z_dim(16)。从第一个 tile 拿真实通道数更稳，但 WAN VAE 固定 16。
-        acc = torch.zeros(b, 16, t, lat_h, lat_w, dtype=torch.float32, device=pixels.device)
+        # encode 输出通道 = 底层模型的 z_dim（WAN 16 / FLUX.2 32）
+        acc = torch.zeros(b, self.latent_channels, t, lat_h, lat_w, dtype=torch.float32, device=pixels.device)
         wsum = torch.zeros(1, 1, 1, lat_h, lat_w, dtype=torch.float32, device=pixels.device)
 
         mask = _cosine_blend_mask(tile_lh, tile_lw, fade=overlap_lat, device=pixels.device)
