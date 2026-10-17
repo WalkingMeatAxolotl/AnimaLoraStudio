@@ -12,6 +12,9 @@ runtime → studio 已是既有约定；且 studio 服务端列目录时不能�
 
 header 解析自己做（8 字节小端长度 + JSON），不走 ``safetensors.safe_open``：
 后者 ``framework="pt"`` 会 import torch。
+
+另含族无关的整数量化版判定（:func:`detect_unsupported_quant`）：int8 等 ComfyUI
+逐层量化底模 / TE 两族都不支持，加载入口与 studio 目录扫描共用这一处判据。
 """
 from __future__ import annotations
 
@@ -65,6 +68,115 @@ def read_safetensors_header(path: str | os.PathLike[str]) -> dict[str, Any]:
     if not isinstance(header, dict):
         raise CheckpointInspectError(f"safetensors header 结构异常: {path}")
     return header
+
+
+#: 训练 / 出图只认浮点（bf16/fp16/fp32）与 fp8 权重。``*.weight`` 是整数 dtype
+#: = 量化存储（int8 tensorwise/rowwise 为 I8；nvfp4 等打包格式为 U8），两族
+#: 都没有对应的反量化前向，只能拒绝。
+_INT_DTYPES = frozenset({"I8", "U8"})
+_COMFY_QUANT_SUFFIX = ".comfy_quant"
+#: comfy_quant 配置 blob 是几十字节的 JSON；超过这个数不当配置读。
+_MAX_QUANT_BLOB_BYTES = 4096
+
+
+class UnsupportedQuantizationError(CheckpointInspectError):
+    """checkpoint 是整数量化版（int8 等），训练 / 出图不支持。"""
+
+
+@dataclass(frozen=True)
+class UnsupportedQuant:
+    """header 判定出的不支持量化格式。"""
+
+    #: 人类可读格式名，如 ``int8_tensorwise + ConvRot``；无配置 blob 时退回 dtype
+    format_label: str
+    #: 整数 dtype 的 ``*.weight`` 张量数
+    layer_count: int
+
+
+def _read_tensor_bytes(path: str | os.PathLike[str], entry: dict[str, Any]) -> bytes | None:
+    offsets = entry.get("data_offsets") or ()
+    if len(offsets) != 2:
+        return None
+    start, end = int(offsets[0]), int(offsets[1])
+    if end <= start or end - start > _MAX_QUANT_BLOB_BYTES:
+        return None
+    with open(path, "rb") as f:
+        (n,) = struct.unpack("<Q", f.read(8))
+        f.seek(8 + n + start)
+        return f.read(end - start)
+
+
+def _quant_format_label(
+    header: dict[str, Any], layer: str, path: str | os.PathLike[str] | None,
+) -> str | None:
+    """读 ``{layer}.comfy_quant`` 配置 blob（ComfyUI 逐层量化格式）拼格式名。"""
+    entry = header.get(layer + _COMFY_QUANT_SUFFIX)
+    if path is None or not isinstance(entry, dict):
+        return None
+    try:
+        raw = _read_tensor_bytes(path, entry)
+        conf = json.loads(raw.decode("utf-8")) if raw else None
+    except (OSError, ValueError, struct.error):
+        return None
+    if not isinstance(conf, dict) or not conf.get("format"):
+        return None
+    label = str(conf["format"])
+    if conf.get("convrot"):
+        label += " + ConvRot"
+    return label
+
+
+def detect_unsupported_quant(
+    header: dict[str, Any], *, path: str | os.PathLike[str] | None = None,
+) -> UnsupportedQuant | None:
+    """header 里有整数 dtype 的 ``*.weight`` → 量化版权重；否则 None。
+
+    判据只看 dtype，不看 ``comfy_quant`` 键是否存在——Comfy 新式 fp8 文件也带
+    ``comfy_quant``，那是支持的。给了 ``path`` 时额外读一个配置 blob（几十字节）
+    拿到具体格式名，读不到就退回 dtype 名。
+    """
+    int_weights = [
+        k for k, ent in header.items()
+        if k != "__metadata__" and isinstance(ent, dict)
+        and k.endswith(".weight") and ent.get("dtype") in _INT_DTYPES
+    ]
+    if not int_weights:
+        return None
+    sample = int_weights[0]
+    layer = sample[: -len(".weight")]
+    label = _quant_format_label(header, layer, path)
+    if label is None:
+        dtype = str(header[sample].get("dtype"))
+        label = {"I8": "int8", "U8": "uint8"}.get(dtype, dtype.lower())
+    return UnsupportedQuant(format_label=label, layer_count=len(int_weights))
+
+
+def ensure_supported_quantization(
+    header: dict[str, Any], *, path: str | os.PathLike[str],
+) -> None:
+    """量化版权重直接报错（文案进 i18n 字典，用户在任务错误里看到）。"""
+    found = detect_unsupported_quant(header, path=path)
+    if found is None:
+        return
+    from studio.infrastructure.log_messages import msg  # noqa: PLC0415
+
+    raise UnsupportedQuantizationError(msg(
+        "train.unsupported_quant_checkpoint",
+        name=Path(path).name, fmt=found.format_label, layers=found.layer_count,
+    ))
+
+
+def ensure_supported_quantization_file(path: str | os.PathLike[str]) -> None:
+    """按文件做 :func:`ensure_supported_quantization`（供 safe_open 加载路径前置）。
+
+    header 读不出来（坏文件 / 非 safetensors）不在这里报，交还调用方原有加载
+    路径给出它自己的报错。
+    """
+    try:
+        header = read_safetensors_header(path)
+    except (OSError, CheckpointInspectError):
+        return
+    ensure_supported_quantization(header, path=path)
 
 
 def _numel(shape: Any) -> int:
@@ -175,6 +287,9 @@ def inspect_anima_checkpoint(path: str | os.PathLike[str]) -> AnimaCheckpointArc
     """读文件头并推断架构（毫秒级；不读 payload、不 import torch）。"""
     p = Path(path)
     header = read_safetensors_header(p)
+    # 先于架构推断：int8 文件键名与 bf16 版只差 weight_scale/comfy_quant，
+    # 架构探测会「成功」，到 load_state_dict 才以「层数不一致」的误导文案炸
+    ensure_supported_quantization(header, path=p)
     try:
         file_bytes = p.stat().st_size
     except OSError:

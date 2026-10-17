@@ -26,6 +26,7 @@ import torch
 from torch import Tensor
 
 from studio.infrastructure.log_messages import msg
+from studio.services.inference.checkpoint_arch import ensure_supported_quantization_file
 from ...text_cache import TextCacheEntry, TextCacheStore
 
 
@@ -200,6 +201,9 @@ def _load_comfy_single_file_te(
         patch_fp8_linears,
     )
 
+    # int8 版 TE（如 Comfy-Org 的 *_int8_convrot）：不拦会被 cast 成 bf16 后
+    # 由 patch_fp8_linears 报「权重不是 fp8」
+    ensure_supported_quantization_file(weights_file)
     logger.info(msg("train.loading_text_encoder_file", path=weights_file))
     config = AutoConfig.from_pretrained(str(model_path), local_files_only=True)
     try:

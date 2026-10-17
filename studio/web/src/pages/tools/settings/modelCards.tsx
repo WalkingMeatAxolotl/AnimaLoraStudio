@@ -113,7 +113,7 @@ export function SourceSelect({ opt, onChange }: {
 
 export function ModelSourceCard({
   domain, title, helpTooltip, catalog, currentValue, onSelect,
-  addDownload, addLocal, selectRequiresExists = false, renderRowMeta, describeRow, t,
+  addDownload, addLocal, selectRequiresExists = false, rowUnusableReason, renderRowMeta, describeRow, t,
 }: {
   domain: string
   title: string
@@ -129,6 +129,8 @@ export function ModelSourceCard({
   addLocal?: { dirOnly?: boolean; secondFileKey?: string }
   /** true：未下载的候选禁选（主模型/放大器语义）；false：可选中，运行时懒下载（wd14/eval 语义）。 */
   selectRequiresExists?: boolean
+  /** 文件在盘上但不能用（如 int8 量化版主模型）：返回原因则该行禁选，原因作 radio tooltip。 */
+  rowUnusableReason?: (row: ModelSourceRow) => string | null
   /** 行副内容逃生舱（label 旁 chip，如主模型 purpose 徽标）。 */
   renderRowMeta?: (row: ModelSourceRow) => React.ReactNode
   /** 行描述文本覆盖（如放大器 preset 描述的 i18n 翻译）；默认 row.description。 */
@@ -203,9 +205,10 @@ export function ModelSourceCard({
         {rows.map((row) => {
           const dl = row.status_key ? catalog.downloads[row.status_key] : undefined
           const isSel = row.value === currentValue
-          const canSelect = row.kind === 'local'
+          const unusable = rowUnusableReason?.(row) ?? null
+          const canSelect = !unusable && (row.kind === 'local'
             ? row.exists
-            : (dl?.status !== 'running' && (!selectRequiresExists || row.exists))
+            : (dl?.status !== 'running' && (!selectRequiresExists || row.exists)))
           return (
             <li key={`${row.kind}:${row.value}`} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
               isSel ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
@@ -215,7 +218,7 @@ export function ModelSourceCard({
                 onChange={() => onSelect(row.value, row)}
                 className="shrink-0"
                 style={{ accentColor: 'var(--accent)' }}
-                title={canSelect ? t('settings.selectSourceCandidate') : t('settings.downloadRequiredFirst')}
+                title={canSelect ? t('settings.selectSourceCandidate') : (unusable ?? t('settings.downloadRequiredFirst'))}
               />
               <div className="flex flex-col flex-1 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">

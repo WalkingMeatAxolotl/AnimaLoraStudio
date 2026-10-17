@@ -277,6 +277,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 }}
                 addLocal={{}}
                 selectRequiresExists
+                rowUnusableReason={(row) => (row.arch?.unsupported_quant ? t('baseModel.unsupportedQuantHint') : null)}
                 renderRowMeta={(row) => (
                   <>
                     {row.extra.purpose ? (
@@ -289,6 +290,13 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                     {row.arch?.num_blocks ? (
                       <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
                         {t('baseModel.layers', { n: row.arch.num_blocks })}
+                      </span>
+                    ) : null}
+                    {/* int8 等整数量化版：两族训练 / 出图都不支持，选上也会在加载时报错 */}
+                    {row.arch?.unsupported_quant ? (
+                      <span className="text-2xs px-1 py-0.5 rounded-sm bg-err-soft text-err shrink-0"
+                        title={t('baseModel.unsupportedQuantHint')}>
+                        {t('baseModel.unsupportedQuant', { fmt: row.arch.unsupported_quant })}
                       </span>
                     ) : null}
                   </>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ModelPathChoice } from '../api/client'
+import { archLabel } from './BaseModelSelect'
 
 /**
  * 模型路径字段的 dropdown picker：点字段旁的「选择模型」按钮触发，列出模型设置里
@@ -87,7 +88,7 @@ export default function ModelPathPicker({
                 key={it.path}
                 label={it.label}
                 note={it.note ? t(`modelPicker.note.${it.note}`, { defaultValue: it.note }) : ''}
-                arch={it.arch?.num_blocks ? t('baseModel.layers', { n: it.arch.num_blocks }) : ''}
+                arch={archLabel(it.arch, t)}
                 selected={it.path === value}
                 onPick={() => { onChange(it.path); onClose() }}
               />

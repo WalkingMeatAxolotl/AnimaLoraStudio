@@ -8,7 +8,8 @@
 底模能在设置页选中出图，却不进训练页下拉与底模下拉。这里统一成一处。
 
 底模架构（层数 / 参数量）用 ``studio.services.inference.checkpoint_arch`` 只读 header
-探测，按 (path, size, mtime) 缓存；非 Anima 结构（krea2）返回 None。
+探测，按 (path, size, mtime) 缓存；非 Anima 结构（krea2）返回 None；int8 等
+整数量化版（两族都不支持）只返回格式名供前端标不可用。
 """
 from __future__ import annotations
 
@@ -16,7 +17,12 @@ import functools
 from pathlib import Path
 from typing import Any, Optional
 
-from ...inference.checkpoint_arch import inspect_anima_checkpoint
+from ...inference.checkpoint_arch import (
+    CheckpointInspectError,
+    arch_from_header,
+    detect_unsupported_quant,
+    read_safetensors_header,
+)
 
 
 def registered_main_paths(
@@ -52,7 +58,15 @@ def registered_main_paths(
 @functools.lru_cache(maxsize=512)
 def _probe(path: str, size: int, mtime: float) -> Optional[dict[str, Any]]:
     try:
-        arch = inspect_anima_checkpoint(path)
+        header = read_safetensors_header(path)
+    except (OSError, CheckpointInspectError):
+        return None
+    # int8 等整数量化版两族都不能训练 / 出图：只带格式名，前端标「不可用」
+    quant = detect_unsupported_quant(header, path=path)
+    if quant is not None:
+        return {"unsupported_quant": quant.format_label}
+    try:
+        arch = arch_from_header(header, file_bytes=size)
     except Exception:  # noqa: BLE001 — 非 Anima 结构 / 坏文件：不展示架构
         return None
     return {
@@ -63,7 +77,10 @@ def _probe(path: str, size: int, mtime: float) -> Optional[dict[str, Any]]:
 
 
 def arch_summary(path: Path) -> Optional[dict[str, Any]]:
-    """底模架构摘要（层数 / 通道 / 参数量），文件不存在或不是 Anima 结构 → None。"""
+    """底模架构摘要（层数 / 通道 / 参数量），文件不存在或不是 Anima 结构 → None。
+
+    整数量化版（两族通用）→ ``{"unsupported_quant": 格式名}``，不含层数。
+    """
     try:
         st = path.stat()
     except OSError:
