@@ -3377,7 +3377,9 @@
       "training": "training",
       "inference": "inference"
     },
-    "layers": "{{n}} layers"
+    "layers": "{{n}} layers",
+    "unsupportedQuant": "{{fmt}} quantized · unsupported",
+    "unsupportedQuantHint": "Quantized weights can't be used for training or generation; use the bf16 or fp8 release of the same model"
   },
   "lora": {
     "baseLayers": "Trained on a {{n}}-layer base",

@@ -24,6 +24,7 @@ import torch
 from safetensors import safe_open
 
 from modeling.krea2 import KREA2_CONFIG, Krea2Config, SingleStreamDiT
+from studio.services.inference.checkpoint_arch import ensure_supported_quantization_file
 from training.families.krea2.quant_fp8 import (
     parse_quantization_metadata,
     patch_fp8_linears,
@@ -135,6 +136,9 @@ def _inspect(
     if expected_shapes is None:
         _, expected_shapes = _expected_state(config)
     expected_keys = set(expected_shapes)
+    # int8 等整数量化版（Comfy 逐层量化格式）先给明确文案，否则会落进下面
+    # 「非浮点 tensor + 多出 comfy_quant 键」的结构指纹报错
+    ensure_supported_quantization_file(checkpoint)
 
     with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
         quant_meta = (
