@@ -333,6 +333,20 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "Krea2 固定使用 PyTorch SDPA: 已忽略 attention_backend={backend}",
         "en": "Krea2 always uses PyTorch SDPA: attention_backend={backend} ignored",
     },
+    "train.moss_loading_text_encoder": {
+        "zh": "加载文本编码器: Qwen3.5-9B（{path}）",
+        "en": "Loading text encoder: Qwen3.5-9B ({path})",
+    },
+    "train.moss_transformers_too_old": {
+        "zh": (
+            "MOSS-Image 的文本编码器（Qwen3.5）需要 transformers {required} 或更新版本，"
+            "当前为 {current}。请在 venv 中运行 pip install -U \"transformers>={required}\" 后重试"
+        ),
+        "en": (
+            "The MOSS-Image text encoder (Qwen3.5) requires transformers {required} or newer; "
+            "found {current}. Run pip install -U \"transformers>={required}\" in the venv and retry"
+        ),
+    },
     "train.fp8_merge_done": {
         "zh": "LoRA 已合并进 fp8 底模: {loras} 份 LoRA → {layers} 个层",
         "en": "LoRA merged into the fp8 base model: {loras} LoRA(s) into {layers} layers",
