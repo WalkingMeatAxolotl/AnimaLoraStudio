@@ -84,6 +84,24 @@
 
 本仓库额外提供 `LICENSE-APACHE` 以便分发 Apache-2.0 许可文本。
 
+### OpenMOSS MOSS-Image (Apache-2.0)
+
+- **来源**：[`OpenMOSS-Team/MOSS-Image-SFT`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)
+  随权重发布的 `pipeline_moss_image.py`（[`OpenMOSS/MOSS-Image`](https://github.com/OpenMOSS/MOSS-Image)）
+- **许可**：Apache-2.0（模型卡与仓库 `LICENSE`；本仓库附 `LICENSE-APACHE`）
+- **涉及文件**：
+  - `modeling/moss/moss_modeling.py` — DiT 结构移植，模块路径保持上游命名；本项目改动
+    （FLUX.2 VAE 排布进出、σ×1000 timestep 口径、RoPE 现算、梯度检查点）见文件头
+
+### comfy-kitchen (Apache-2.0)
+
+- **来源**：[`Comfy-Org/comfy-kitchen`](https://pypi.org/project/comfy-kitchen/) 0.2.38
+  `tensor/int8_utils.py`、`backends/eager/quantization.py`
+- **许可**：Apache-2.0
+- **涉及文件**：
+  - `runtime/training/families/moss/quant_int8.py` — ConvRot 规则 Hadamard 构造与
+    `int8_tensorwise + convrot` 权重的存储 / 反量化约定（前向为本项目 W8A16 实现）
+
 ### Alibaba Wan2.1 VAE（请再次确认上游许可）
 
 - **来源**：[`Wan-Video/Wan2.1`](https://github.com/Wan-Video/Wan2.1) 的 VAE 实现（与
