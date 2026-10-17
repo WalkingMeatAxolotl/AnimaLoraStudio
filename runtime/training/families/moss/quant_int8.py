@@ -111,6 +111,32 @@ def patch_int8_linear(module: nn.Linear, scale: Tensor, group: int) -> None:
     module.forward = MethodType(_int8_convrot_forward, module)
 
 
+def _int8_convrot_embedding_forward(self: nn.Embedding, input: Tensor) -> Tensor:
+    # comfy-kitchen dequantize_embedding 同口径：只取用到的行，逐行反量化后
+    # 沿 hidden 维反旋转（W = W_rot @ Hᵀ，H 对称 → 与激活旋转同一个运算）
+    rows = self.weight[input].float() * self.weight_scale[input].float()
+    return rotate_activation(rows, self.convrot_groupsize).to(self._int8_compute_dtype)
+
+
+def patch_int8_embedding(module: nn.Embedding, scale: Tensor, group: int,
+                         compute_dtype: torch.dtype) -> None:
+    """给 int8 权重的 Embedding 挂按行反量化的 lookup（Comfy int8 TE 的 embed_tokens）。"""
+    if not isinstance(module, nn.Embedding):
+        raise ValueError(f"int8 embedding patch 目标不是 Embedding：{type(module).__name__}")
+    if module.weight.dtype != torch.int8:
+        raise ValueError(f"int8 embedding patch 目标权重不是 int8：{module.weight.dtype}")
+    if scale.shape not in ((module.num_embeddings, 1), (module.num_embeddings,)):
+        raise ValueError(
+            f"int8 embedding weight_scale 形状 {tuple(scale.shape)} 与词表 {module.num_embeddings} 不符"
+        )
+    if module.embedding_dim % group:
+        raise ValueError(f"embedding_dim={module.embedding_dim} 不能被 convrot 组大小 {group} 整除")
+    module.register_buffer("weight_scale", scale.reshape(-1, 1).to(dtype=torch.float32), persistent=False)
+    module.convrot_groupsize = int(group)
+    module._int8_compute_dtype = compute_dtype
+    module.forward = MethodType(_int8_convrot_embedding_forward, module)
+
+
 def model_has_int8_layers(model: object) -> bool:
     modules = getattr(model, "modules", None)
     if not callable(modules):
