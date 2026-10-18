@@ -43,11 +43,15 @@ def hadamard(size: int, *, device=None, dtype: torch.dtype = torch.float32) -> T
     cached = _HADAMARD_CACHE.get(key)
     if cached is not None:
         return cached
-    h4 = torch.tensor([[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]], dtype=torch.float64)
-    h = h4
-    while h.shape[0] < size:
-        h = torch.kron(h, h4)
-    out = (h / math.sqrt(size)).to(device=device, dtype=dtype)
+    # 缓存是进程级的：TE 编码在 inference_mode 里首次构造的 H 若是 inference tensor，
+    # 之后被 DiT 训练前向（同 device / dtype / 组大小）复用时，autograd 存不下它，
+    # 反向直接报错。构造时显式退出 inference_mode，产物恒为普通张量。
+    with torch.inference_mode(False):
+        h4 = torch.tensor([[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]], dtype=torch.float64)
+        h = h4
+        while h.shape[0] < size:
+            h = torch.kron(h, h4)
+        out = (h / math.sqrt(size)).to(device=device, dtype=dtype)
     _HADAMARD_CACHE[key] = out
     return out
 

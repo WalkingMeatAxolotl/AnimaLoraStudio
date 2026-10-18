@@ -48,7 +48,7 @@ class TrainingConfig(BaseModel):
     # 相对路径解析（与历史行为一致）。
     # 一级决策不藏高级区（P4-3）。前端对该字段的变更做「切换动作」拦截：
     # 经 /api/models/family-switch 重算路径 + 重置族风味字段 + 确认后才写。
-    model_family: Literal["anima", "krea2"] = Field(
+    model_family: Literal["anima", "krea2", "moss"] = Field(
         "anima",
         description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐。切换将重算模型路径并重置族相关默认值",
         json_schema_extra=_meta("model"),
@@ -1254,7 +1254,7 @@ class TrainingConfig(BaseModel):
         "er_sde",
         description="采样器。er_sde / dpmpp_3m_sde 为 Anima 的 ComfyUI 同款栈"
                     "（dpmpp_3m_sde 走 BrownianTree 噪声，需要 torchsde）；"
-                    "euler 为 Krea 2 的 FlowMatchEuler",
+                    "euler 为 Krea 2 的 FlowMatchEuler；MOSS-Image 可选 euler / er_sde（ComfyUI 同款）",
         json_schema_extra=_meta(
             "sample", option_show_when=sampling_option_gates("samplers"),
         ),
@@ -1262,7 +1262,7 @@ class TrainingConfig(BaseModel):
     sample_scheduler: Literal["simple", "sgm_uniform"] = Field(
         "simple",
         description="调度器。与 ComfyUI 同名同义；sigma 表由模型族决定"
-                    "（Krea 2 的 simple 含固定 shift=1.15 口径）",
+                    "（Krea 2 的 simple 含固定 shift=1.15 口径，MOSS-Image 为 shift=5）",
         json_schema_extra=_meta(
             "sample", option_show_when=sampling_option_gates("schedulers"),
         ),

@@ -23,6 +23,7 @@ from .spec import (  # noqa: F401  (re-export)
 )
 from .anima import ANIMA_SPEC
 from .krea2 import KREA2_SPEC
+from .moss import MOSS_SPEC
 
 SPECS: dict[str, ModelSpec] = {}
 
@@ -36,6 +37,7 @@ def _register(spec: ModelSpec) -> None:
 
 _register(ANIMA_SPEC)
 _register(KREA2_SPEC)
+_register(MOSS_SPEC)
 
 
 _FAMILIES: dict[str, object] = {}
@@ -54,6 +56,10 @@ def get_family(family_id: str):
             from .krea2 import Krea2Family
 
             fam = Krea2Family()
+        elif family_id == "moss":
+            from .moss import MossFamily
+
+            fam = MossFamily()
         else:  # pragma: no cover - registry 与 SPECS 同步维护
             raise ValueError(f"模型族 '{family_id}' 缺少 ModelFamily 实现")
         _FAMILIES[family_id] = fam

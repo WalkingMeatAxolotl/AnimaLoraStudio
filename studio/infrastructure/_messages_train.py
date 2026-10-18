@@ -333,6 +333,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "Krea2 固定使用 PyTorch SDPA: 已忽略 attention_backend={backend}",
         "en": "Krea2 always uses PyTorch SDPA: attention_backend={backend} ignored",
     },
+    "train.int8_base_detected": {
+        "zh": "检测到 int8 底模（{format}）: 权重以 int8 常驻显存，前向时逐层反量化计算，LoRA 增量单独计算",
+        "en": "int8 base model detected ({format}): weights stay in int8 in VRAM, each layer is dequantized for the forward pass, LoRA deltas are computed separately",
+    },
+    "train.moss_sdpa_only": {
+        "zh": "MOSS-Image 固定使用 PyTorch SDPA: 已忽略 attention_backend={backend}",
+        "en": "MOSS-Image always uses PyTorch SDPA: attention_backend={backend} ignored",
+    },
     "train.moss_loading_text_encoder": {
         "zh": "加载文本编码器: Qwen3.5-9B（{path}）",
         "en": "Loading text encoder: Qwen3.5-9B ({path})",

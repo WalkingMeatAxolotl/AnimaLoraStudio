@@ -24,6 +24,8 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
         "caption_tag_ops", "online_text", "masked_loss", "block_swap",
     }),
     "krea2": frozenset({"masked_loss", "text_cache", "block_swap"}),
+    # block_swap 随 MOSS PR-5 接入（DiT 的层容器是 layers 不是 blocks）
+    "moss": frozenset({"masked_loss", "text_cache", "int8_base"}),
 }
 
 # 族默认 overlay 的单一权威源（ModelSpec.config_defaults 直接引用本表，R3）。
@@ -43,6 +45,23 @@ FAMILY_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "sample_scheduler": "simple",
         "sample_infer_steps": 28,
         "sample_cfg_scale": 4.5,
+    },
+    # MOSS 设计稿 M5/M6：文本缓存族（tag shuffle/dropout 与缓存互斥）；训练 t 采样
+    # 取官方预训练口径 logit_normal + shift 1（scheduler training_shift=1.0），可改；
+    # 采样默认取官方推荐 euler / simple / 50 步 / CFG 3
+    "moss": {
+        "shuffle_caption": False,
+        "keep_tokens": 0,
+        "tag_dropout": 0.0,
+        "text_encoder_cache": True,
+        "attention_backend": "none",
+        "timestep_sampling": "logit_normal",
+        "timestep_shift": 1.0,
+        "timestep_shift_resolution_aware": False,
+        "sample_sampler_name": "euler",
+        "sample_scheduler": "simple",
+        "sample_infer_steps": 50,
+        "sample_cfg_scale": 3.0,
     },
 }
 
@@ -65,6 +84,11 @@ FAMILY_SAMPLING: dict[str, dict[str, tuple[str, ...]]] = {
         # 时取的就是本项目 krea2 sigma 口径——shift 属模型口径不属 scheduler 名
         # （曾名 krea2_shift；存量值经 Literal-外归并落回 simple）。
         "samplers": ("euler",),
+        "schedulers": ("simple",),
+    },
+    # ComfyUI parity（ModelSamplingDiscreteFlow shift=5）；er_sde 为作者 Comfy 工作流在用
+    "moss": {
+        "samplers": ("euler", "er_sde"),
         "schedulers": ("simple",),
     },
 }

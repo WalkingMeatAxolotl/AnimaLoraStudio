@@ -209,6 +209,20 @@ class LycorisAdapter:
             extra["bypass_mode"] = True
             logger.debug("fp8 base detected: LoKr forward switched to bypass mode")
 
+        # MOSS int8 (ComfyUI int8_tensorwise + convrot) Linear weights hold
+        # rotated int8 codes; only the patched forward knows the scale and the
+        # Hadamard rotation. The rebuild path would add the delta to those raw
+        # codes and silently compute garbage, so every algo that LyCORIS can run
+        # in bypass is forced there (adapters that read raw base weights are
+        # rejected earlier by the trainer's int8 base validation).
+        has_int8_base = any(
+            isinstance(module, nn.Linear) and module.weight.dtype == torch.int8
+            for module in model.modules()
+        )
+        if has_int8_base and self.algo in {"lora", "lokr", "loha"}:
+            extra["bypass_mode"] = True
+            logger.debug("int8 base detected: %s forward switched to bypass mode", self.algo)
+
         with _suppress_lokr_dropout_spam() as _dropout_filter:
             self.network = LycorisNetwork(
                 model,

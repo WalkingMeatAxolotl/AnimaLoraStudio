@@ -173,6 +173,27 @@ def test_gradient_checkpoint_matches_plain_forward() -> None:
 # ── int8 convrot 运行时 ──────────────────────────────────────────────────
 
 
+def test_hadamard_cached_under_inference_mode_still_backprops() -> None:
+    """回归：TE 编码（inference_mode）先构造并缓存 H，DiT 训练前向复用同一缓存项。
+
+    曾因缓存了 inference tensor，训练第一步反向报
+    「Inference tensors cannot be saved for backward」。
+    """
+    import training.families.moss.quant_int8 as qi
+
+    torch.manual_seed(0)
+    lin = torch.nn.Linear(64, 32, bias=False)
+    q, s = _quantize_convrot(lin.weight.detach(), _GROUP)
+    lin.weight = torch.nn.Parameter(q, requires_grad=False)
+    patch_int8_linear(lin, s, _GROUP)
+    qi._HADAMARD_CACHE.clear()  # 量化时已在普通模式下缓存过同一项；清掉才能复现
+    with torch.inference_mode():
+        lin(torch.randn(2, 64))  # 首次构造 H 发生在 inference_mode 里
+    x = torch.randn(2, 64, requires_grad=True)
+    lin(x).sum().backward()
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+
+
 def test_hadamard_is_symmetric_orthogonal_involution() -> None:
     for g in (16, 64, 256):
         h = hadamard(g, dtype=torch.float64)

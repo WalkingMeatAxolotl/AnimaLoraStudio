@@ -131,9 +131,9 @@ def test_default_config_valid_and_yaml_roundtrip():
 
 def test_option_gates_render_expressions():
     assert sampling_option_gates("samplers") == {
-        "er_sde": "model_family==anima",
+        "er_sde": "model_family==anima||model_family==moss",
         "dpmpp_3m_sde": "model_family==anima",
-        "euler": "model_family==krea2",
+        "euler": "model_family==krea2||model_family==moss",
     }
     assert option_gates(TIMESTEP_SAMPLING_OPTION_FAMILIES) == {
         "krea2_shift": "model_family==krea2",

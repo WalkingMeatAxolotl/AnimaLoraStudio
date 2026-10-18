@@ -264,7 +264,7 @@ def test_run_sample_no_clear_method_does_not_crash() -> None:
 
 
 def test_tlora_inject_never_sets_bypass_mode() -> None:
-    """inject() 只允许 LoRA 或 FP8 LoKr 设置 bypass_mode=True；
+    """inject() 只允许 LoRA、FP8 LoKr 或 int8 底模（显式白名单）设置 bypass_mode=True；
     algo='tlora' 不进，必走 make_weight rebuild 路径让 mask patch 生效。
 
     防止后续维护误把 tlora 也加进 bypass 路径让 mask 静默失效。"""
@@ -287,8 +287,14 @@ def test_tlora_inject_never_sets_bypass_mode() -> None:
         has_fp8_lokr_guard = bool(re.search(
             r'self\.algo\s*==\s*["\']lokr["\']\s+and\s+has_fp8_base', ctx,
         ))
+        # int8 底模（MOSS）：增量必须单独算；白名单里不能有 tlora（下面统一检查）
+        has_int8_guard = bool(re.search(
+            r'has_int8_base\s+and\s+self\.algo\s+in\s+\{', ctx,
+        ))
         mentions_tlora_nearby = "tlora" in ctx.lower()
-        assert (has_lora_guard or has_fp8_lokr_guard) and not mentions_tlora_nearby, (
+        assert (
+            has_lora_guard or has_fp8_lokr_guard or has_int8_guard
+        ) and not mentions_tlora_nearby, (
             f"extra['bypass_mode'] 赋值 (位置 {m.start()}) 上方 250 字符内未见到"
             f" LoRA 或 FP8 LoKr 的独立守卫；可能让 tlora / 普通 LoKr 误走"
             f" bypass，让 make_weight 路径静默失效。"

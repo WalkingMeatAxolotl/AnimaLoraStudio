@@ -1,6 +1,6 @@
 """模型族资产 registry（studio 侧三居所之一，多模型 PR-4）。
 
-与 runtime `training/families` 的 SPECS 共用族名 join key（"anima" / "krea2"）。
+与 runtime `training/families` 的 SPECS 共用族名 join key（"anima" / "krea2" / "moss"）。
 下载资产允许先于训练实现落地，测试保证所有 runtime 族都有对应资产清单。
 判定标准（01 §8.1）：出现在
 TrainingConfig 权重路径字段里的是「模型族资产」进本包；打标 / 放大 / 评估 /
@@ -19,10 +19,12 @@ from typing import Any, Optional
 
 from . import anima as _anima
 from . import krea2 as _krea2
+from . import moss as _moss
 
 FAMILY_ASSETS = {
     "anima": _anima.ASSETS,
     "krea2": _krea2.ASSETS,
+    "moss": _moss.ASSETS,
 }
 
 

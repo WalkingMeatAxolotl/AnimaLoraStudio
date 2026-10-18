@@ -283,6 +283,58 @@ def _validate_fp8_base(ctx: TrainingContext) -> bool:
     return True
 
 
+#: int8 底模下能正确训练的适配器：LyCORIS 的 lora / lokr / loha 在量化底模上强制走
+#: bypass（增量单独算，不碰底模权重）。ortho / tlora 初始化或前向要读底模权重的原始
+#: 数值，int8 存的是旋转后的整数，直接读会静默算错。
+_INT8_BASE_LORA_TYPES = frozenset({"lora", "lokr", "loha"})
+
+
+def _validate_int8_base(ctx: TrainingContext) -> bool:
+    """int8 底模（ComfyUI int8_tensorwise + convrot）的组合校验，口径同 fp8 底模。
+
+    只对声明了 ``int8_base`` 能力位的族生效；其余族的 int8 文件交给各自 loader
+    报「不支持的量化格式」（#605），这里不抢先给出无关的配置报错。
+    """
+    spec = getattr(getattr(ctx, "family", None), "spec", None)
+    if "int8_base" not in getattr(spec, "capabilities", ()):
+        return False
+    from studio.services.inference.checkpoint_arch import (
+        CheckpointInspectError,
+        detect_unsupported_quant,
+        read_safetensors_header,
+    )
+
+    path = getattr(ctx.args, "transformer_path", "") or ""
+    try:
+        quant = detect_unsupported_quant(read_safetensors_header(path), path=path)
+    except (OSError, CheckpointInspectError):
+        return False  # 文件问题留给 loader 报
+    if quant is None:
+        return False
+    args = ctx.args
+    problems = []
+    if not bool(getattr(args, "grad_checkpoint", True)):
+        problems.append(
+            "grad_checkpoint=false：int8 底模的逐层反量化临时权重会被 autograd "
+            "全量驻留，显存占用反超 bf16。请开启梯度检查点。"
+        )
+    if bool(getattr(args, "lora_dora", False)):
+        problems.append(
+            "lora_dora=true：DoRA 初始化读取底模权重数值，int8 存储下数值不正确。"
+            "请关闭 DoRA 或改用 bf16 底模。"
+        )
+    lora_type = str(getattr(args, "lora_type", "lora"))
+    if lora_type not in _INT8_BASE_LORA_TYPES:
+        problems.append(
+            f"lora_type={lora_type}：该适配器要读底模权重的原始数值，int8 存储下数值"
+            f"不正确。请改用 {' / '.join(sorted(_INT8_BASE_LORA_TYPES))}，或改用 bf16 底模。"
+        )
+    if problems:
+        raise RuntimeError("int8 底模与当前配置不兼容：\n- " + "\n- ".join(problems))
+    logger.info(msg("train.int8_base_detected", format=quant.format_label))
+    return True
+
+
 def run(ctx: TrainingContext) -> None:
     """Resolve paths and load either the complete stack or the cache-first half."""
     from training.sysmem import check_load_budget, guard_enabled_from_env
@@ -290,7 +342,9 @@ def run(ctx: TrainingContext) -> None:
     if ctx.family is None:
         ctx.family = resolve_family(ctx.args)
     _resolve_paths(ctx)
-    fp8_base = _validate_fp8_base(ctx)
+    # 「量化底模」：fp8 或 int8。传给 prepare_adapter 的 fp8_base 语义即「冻结底模是
+    # 量化存储、适配器须走 bypass」，int8 与 fp8 同一处理
+    fp8_base = _validate_fp8_base(ctx) or _validate_int8_base(ctx)
 
     # Adapter-specific startup work stays behind the plugin registry.  For
     # LyCORIS optional kernels this runs an isolated CUDA F/B probe before the

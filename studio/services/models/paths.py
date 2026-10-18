@@ -235,6 +235,15 @@ def qwen_image_vae_target(root: Path) -> Path:
     return root / "vae" / "qwen_image_vae.safetensors"
 
 
+def flux2_vae_target(root: Path) -> Path:
+    """FLUX.2 VAE（BFL / ComfyUI 格式单文件）的本地落点——族无关共享资产。
+
+    目前只有 MOSS-Image 用它；将来再有 FLUX.2 latent 空间的族直接复用同一文件
+    （同 ``latent_spaces.FLUX2_F8C32_BN``）。下载渠道仍归各族资产清单。
+    """
+    return root / "vae" / "flux2-vae.safetensors"
+
+
 def taeflux_dir(root: Optional[Path] = None) -> Path:
     """TAEFlux 本地目录。daemon 用 AutoencoderTiny.from_pretrained 加载。"""
     r = root or models_root()
