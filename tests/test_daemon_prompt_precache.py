@@ -211,6 +211,34 @@ def test_dit_restore_waits_for_cuda_copies_before_sampling(monkeypatch):
     assert events == ["dit:cuda", "sync:cuda", "empty_cache"]
 
 
+def test_dit_move_skips_swap_managed_params_under_block_swap(monkeypatch):
+    """block swap 下任务级让位/搬回走 move_module_excluding：一刀切 .to(cuda)
+    会把换出层 CPU pinned 主副本整份传上卡（峰值 = 完整模型）。"""
+    import training.block_swap as block_swap_module
+
+    moves: list[tuple[object, str, object]] = []
+
+    class _Model:
+        def to(self, device):  # 有 swap 时绝不能被调用
+            raise AssertionError("bare model.to() under block swap")
+
+    swap = object()
+    cache = anima_daemon.ModelCache()
+    cache.model = _Model()
+    cache.adapters = []
+    cache.block_swap = swap
+    monkeypatch.setattr(
+        block_swap_module, "move_module_excluding",
+        lambda m, device, s: moves.append((m, device, s)),
+    )
+    monkeypatch.setattr(anima_daemon.torch.cuda, "is_available", lambda: False)
+
+    cache._move_dit_and_adapters("cpu")
+    cache._move_dit_and_adapters("cuda")
+
+    assert moves == [(cache.model, "cpu", swap), (cache.model, "cuda", swap)]
+
+
 def test_cuda_oom_retries_once_with_same_seed(monkeypatch):
     events: list[str] = []
     attempts = 0

@@ -904,7 +904,14 @@ class ModelCache:
 
     def _move_dit_and_adapters(self, device: str) -> None:
         """Move only the sampling model side; leave TE/VAE orchestration alone."""
-        _move_module_to_device(self.model, device)
+        if self.block_swap is not None:
+            # 同 _move_runtime_to_device：换出层归 swap 管，一刀切 .to(cuda) 会把
+            # CPU pinned 主副本整份传上卡（让位后搬回时峰值 = 完整模型）
+            from training.block_swap import move_module_excluding
+
+            move_module_excluding(self.model, device, self.block_swap)
+        else:
+            _move_module_to_device(self.model, device)
         for adapter in self.adapters:
             _move_adapter_to_device(adapter, device, self.lora_dtype)
         if torch.cuda.is_available():

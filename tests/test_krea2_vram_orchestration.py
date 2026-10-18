@@ -147,3 +147,77 @@ def test_auto_te_already_resident_skips_yield(monkeypatch):
     )
     assert model.moves == []
     assert text.offload_calls == 0  # 9GB > 1024² 余量 5GB，继续同驻
+
+
+# —— block swap 下的逐格让位：只搬常驻部分，换出层绝不跟着 .to() ——————————
+
+
+def _swap_model():
+    """四层 ModuleList 上登记一个 swap 句柄（替身即可：这里只验句柄的找回与透传）。"""
+    from torch import nn
+
+    from training.block_swap import _OWNER_ATTR
+
+    blocks = nn.ModuleList([nn.Linear(4, 4) for _ in range(4)])
+    swap = object()
+    setattr(blocks, _OWNER_ATTR, swap)
+    return nn.Sequential(blocks), swap
+
+
+def test_find_block_swap_resolves_registered_handle():
+    from torch import nn
+
+    from training.block_swap import find_block_swap
+
+    model, swap = _swap_model()
+    assert find_block_swap(model) is swap
+    # 无 swap 的普通模型 / 测试替身（无 modules()）→ None，走原 model.to()
+    assert find_block_swap(nn.Sequential(nn.Linear(2, 2))) is None
+    assert find_block_swap(_OrchestraModel()) is None
+
+
+def test_yield_threads_swap_handle_through_both_moves(monkeypatch):
+    """让位与搬回都必须带着 swap 句柄走 move_module_excluding——
+    任一处退回裸 model.to() 都会把换出层主副本整份传上卡。
+
+    （move_module_excluding 跳过被管理张量的真实行为在 CUDA 测试
+    tests/test_block_swap_krea2_yield.py 里验。）
+    """
+    model, swap = _swap_model()
+    moves = []
+    monkeypatch.setattr(
+        krea2_module, "move_module_excluding",
+        lambda m, device, s: moves.append((m, str(device), s)),
+    )
+    monkeypatch.setattr(
+        krea2_module, "prepare_sampling_condition", lambda *a, **k: "cond",
+    )
+    monkeypatch.setattr(krea2_module, "sample_image", lambda *a, **k: "image")
+    result = Krea2Family().sample_image(
+        model, object(), _OrchestraText(), "a prompt",
+        distilled=True, device="cpu", vram_policy="save_vram",
+    )
+    assert result == "image"
+    assert moves == [(model, "cpu", swap), (model, "cpu", swap)]
+
+
+def test_yield_without_swap_passes_none(monkeypatch):
+    """无 block swap：swap=None → move_module_excluding 退化为 model.to()，
+    与修复前逐字节一致（_OrchestraModel 的 .to 记录见上方既有用例）。"""
+    from torch import nn
+
+    model = nn.Sequential(nn.Linear(4, 4))
+    moves = []
+    monkeypatch.setattr(
+        krea2_module, "move_module_excluding",
+        lambda m, device, s: moves.append(s),
+    )
+    monkeypatch.setattr(
+        krea2_module, "prepare_sampling_condition", lambda *a, **k: "cond",
+    )
+    monkeypatch.setattr(krea2_module, "sample_image", lambda *a, **k: "image")
+    Krea2Family().sample_image(
+        model, object(), _OrchestraText(), "a prompt",
+        distilled=True, device="cpu", vram_policy="save_vram",
+    )
+    assert moves == [None, None]

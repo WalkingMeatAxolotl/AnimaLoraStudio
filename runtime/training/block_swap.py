@@ -39,6 +39,11 @@ from torch import nn
 
 logger = logging.getLogger(__name__)
 
+#: 构造成功后 ``PinnedBlockSwap`` 把自己登记在被管理的 ``nn.ModuleList`` 上的属性名，
+#: 供只拿得到 model 的调用方（family 的 sample_image）经 ``find_block_swap`` 取回句柄，
+#: 不必把 swap 对象穿过各层签名、也不必在共享代码里按族名分支。
+_OWNER_ATTR = "_pinned_block_swap"
+
 _GIB = 1024 ** 3
 
 def _pow2_ceil(n: int) -> int:
@@ -255,6 +260,9 @@ class PinnedBlockSwap:
         self._pinned_bytes = 0
         self._handles: list = []
         self._build(blocks)
+        # 登记在被管理的 ModuleList 上（非 Module/Tensor 属性，nn.Module 按普通
+        # 属性存）：持有 model 的任何代码都能找到本对象，见 find_block_swap
+        setattr(blocks, _OWNER_ATTR, self)
 
     # ------------------------------------------------------------------ 构造
     def _build(self, blocks: nn.ModuleList) -> None:
@@ -529,6 +537,8 @@ class PinnedBlockSwap:
         self._param_specs.clear()
         self._slot_holds = []
         self._pinned_bytes = 0
+        if getattr(self.blocks, _OWNER_ATTR, None) is self:
+            delattr(self.blocks, _OWNER_ATTR)
 
     def iter_forward(self) -> Iterator[tuple[int, nn.Module]]:
         """前向遍历便捷封装：yield (index, block)，自动 ensure_resident+预取+release。
@@ -564,6 +574,24 @@ def release_pinned_host_cache() -> None:
         torch._C._host_emptyCache()
     except Exception:  # noqa: BLE001
         pass
+
+
+def find_block_swap(module) -> "PinnedBlockSwap | None":
+    """返回挂在 ``module`` 子树上的 ``PinnedBlockSwap``（没有则 None）。
+
+    给只拿得到 model、拿不到 swap 句柄的调用方用（family 的 ``sample_image``
+    由 daemon / generate 传入 model，swap 对象在 daemon 的 CACHE 上）。配合
+    ``move_module_excluding`` 即可在不认族名的前提下做 swap 安全的整模型搬运。
+    非 ``nn.Module`` 的 duck-type 对象（测试替身）直接返回 None。
+    """
+    modules = getattr(module, "modules", None)
+    if not callable(modules):
+        return None
+    for sub in modules():
+        swap = getattr(sub, _OWNER_ATTR, None)
+        if swap is not None:
+            return swap
+    return None
 
 
 def move_module_excluding(module: nn.Module, device, swap: "PinnedBlockSwap | None") -> None:
