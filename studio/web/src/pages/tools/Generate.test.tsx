@@ -857,6 +857,20 @@ describe('GeneratePage 端到端 smoke', () => {
     })
   }
 
+  it('MOSS int8 底模的 checkpoint × weight 组合同样显示量化 merge 性能警告', async () => {
+    seedPrefs({
+      mode: 'xy',
+      modelFamily: 'moss',
+      samplerName: 'euler',
+      xDraft: { axis: 'lora_ckpt', raw: A.path, loraIndex: null, checkpointAnchor: A },
+      yDraft: { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null },
+    })
+    mockMossCatalog()  // selected = base_int8
+    setup()
+
+    expect(await screen.findByText(/量化底模（fp8 \/ int8）.*每个单元格都可能重新合并/)).toBeInTheDocument()
+  })
+
   it('MOSS：TE 下拉按族列 int8 / bf16（未下载禁用），SLG 参数与 TE 进 payload 和快照', async () => {
     seedPrefs({ mode: 'single', modelFamily: 'moss', samplerName: 'euler', steps: 50, cfgScale: 3 })
     mockMossCatalog()

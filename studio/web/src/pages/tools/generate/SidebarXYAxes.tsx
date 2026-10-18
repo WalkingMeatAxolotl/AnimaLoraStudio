@@ -258,7 +258,7 @@ export default function SidebarXYAxes({
   yDraft,
   yEnabled,
   activeAxis,
-  fp8BaseModel,
+  quantizedBaseModel,
   onAxisChange,
   onManualReorder,
 }: {
@@ -266,7 +266,8 @@ export default function SidebarXYAxes({
   yDraft: XYAxisDraft
   yEnabled: boolean
   activeAxis: 'X' | 'Y'
-  fp8BaseModel: boolean
+  /** 量化底模（fp8 / int8）：LoRA 走 merge，逐格换 LoRA 要重新合并 */
+  quantizedBaseModel: boolean
   onAxisChange: (axis: 'X' | 'Y', draft: XYAxisDraft) => void
   onManualReorder: (axis: 'X' | 'Y') => void
 }) {
@@ -276,7 +277,7 @@ export default function SidebarXYAxes({
     axisView(xDraft).values.length,
     yEnabled ? axisView(yDraft).values.length : null,
   )
-  const fp8MergeHeavy = fp8BaseModel
+  const mergeHeavy = quantizedBaseModel
     && yEnabled
     && [xDraft.axis, yDraft.axis].includes('lora_ckpt')
     && [xDraft.axis, yDraft.axis].includes('lora_scale')
@@ -298,8 +299,8 @@ export default function SidebarXYAxes({
       {total > 50 && (
         <div className="text-2xs text-warn">{t('generate.xyLargeMatrixWarning')}</div>
       )}
-      {fp8MergeHeavy && (
-        <div className="text-2xs text-warn">{t('generate.xyFp8MergeWarning')}</div>
+      {mergeHeavy && (
+        <div className="text-2xs text-warn">{t('generate.xyQuantizedMergeWarning')}</div>
       )}
     </div>
   )

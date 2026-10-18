@@ -50,7 +50,7 @@ function Harness({
         yDraft={yDraft}
         yEnabled={yEnabled}
         activeAxis={activeAxis}
-        fp8BaseModel={false}
+        quantizedBaseModel={false}
         onAxisChange={(axis, draft) => axis === 'X' ? setXDraft(draft) : setYDraft(draft)}
         onManualReorder={() => setManualReorders((count) => count + 1)}
       />

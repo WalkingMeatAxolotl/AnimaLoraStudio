@@ -140,7 +140,7 @@ class GenerateConfig(BaseModel):
     )
     vram_policy: Literal["auto", "save_vram", "performance"] = Field(
         "auto",
-        description="显存策略（krea2 生效）：auto=按空闲显存决定文本编码器与 DiT 是否让位（推荐）；"
+        description="显存策略（Krea 2 / MOSS-Image 生效）：auto=按空闲显存决定文本编码器与 DiT 是否让位（推荐）；"
                     "save_vram=强制顺序化，峰值最低（16GB 卡可跑 fp8）、每图多几秒 CPU↔GPU 搬运；"
                     "performance=全部常驻显存，峰值最高、零搬运",
     )

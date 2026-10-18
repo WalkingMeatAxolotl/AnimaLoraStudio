@@ -118,12 +118,14 @@ function galleryDatasetOverride(prompt: string): GenerateDatasetOverride {
   return { datasetPick: null, datasetPrompt: prompt }
 }
 
-/** 识别官方 variant key 与常见 custom 文件名中的 FP8 标记。
- * 这是性能提示，不参与后端执行判定；daemon 仍以实际模型层类型为准。 */
-function isFp8BaseModel(value: string | null): boolean {
+/** 识别官方 variant key 与常见 custom 文件名中的量化标记（fp8 / int8）。
+ * 量化底模挂 LoRA 走 merge 进权重（Krea2 fp8、MOSS int8 convrot），XY 逐格换
+ * LoRA 时要重新合并。这是性能提示，不参与后端执行判定；daemon 仍以实际模型层
+ * 类型为准。不看族名：族资产里只有这两类量化底模带此标记。 */
+function isQuantizedBaseModel(value: string | null): boolean {
   if (!value) return false
   const name = value.split(/[\\/]/).pop() ?? value
-  return /(?:^|[-_.])fp8(?:[-_.]|$)/i.test(name)
+  return /(?:^|[-_.])(?:fp8|int8)(?:[-_.]|$)/i.test(name)
 }
 
 /** 归一化 / 迁移持久化 prefs（readPersisted 不 merge default，必须自己补齐）：
@@ -373,7 +375,7 @@ export default function GeneratePage() {
   // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
   // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
   const { options: baseModelOptions, defaultValue: defaultBaseModel } = useBaseModelOptions(modelFamily)
-  const fp8BaseModel = modelFamily === 'krea2' && isFp8BaseModel(baseModel ?? defaultBaseModel)
+  const quantizedBaseModel = isQuantizedBaseModel(baseModel ?? defaultBaseModel)
   // 当前生效底模的 DiT 层数（catalog header 探测）→ LoRA picker 标「N 层」+ 不匹配预检
   const baseNumBlocks = useMemo(() => {
     const effective = baseModel ?? defaultBaseModel
@@ -1245,7 +1247,7 @@ export default function GeneratePage() {
                     ...revision,
                     [axis]: revision[axis] + 1,
                   }))}
-                  fp8BaseModel={fp8BaseModel}
+                  quantizedBaseModel={quantizedBaseModel}
                 />
               </div>
               <div

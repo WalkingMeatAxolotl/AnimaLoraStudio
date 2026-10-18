@@ -609,7 +609,7 @@ class GenerateConfig(BaseModel):
     - `save_test_images`：开关测试出图自动落盘。默认关；开后每张出图由
       server 直落 studio_data/test/<date>/{single,xy}/（generate_storage，
       dispatch 时冻结开关），关时图只进会话级加密 cache、会话结束释放。
-    - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
+    - `vram_policy`：测试出图显存策略（Krea 2 / MOSS-Image 生效）。`'auto'`（默认）按空闲
       显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
     - `ram_guard`：内存/显存水位保护。加载大模型前按权重文件实际大小
@@ -633,7 +633,7 @@ class GenerateConfig(BaseModel):
     save_test_images: bool = False
     vram_policy: str = "auto"
     ram_guard: bool = False
-    #: 换出到内存的 DiT 层数（0=关闭，krea2 生效）。与 vram_policy 分工不同：
+    #: 换出到内存的 DiT 层数（0=关闭，声明 block_swap 能力的族生效）。与 vram_policy 分工不同：
     #: 前者管模型之间谁让位，本项管单个 DiT 内部——单个模型自己就装不下显存时
     #: 唯一的办法。见 docs/design/block-swap.md。
     blocks_to_swap: int = 0
