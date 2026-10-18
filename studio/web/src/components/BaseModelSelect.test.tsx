@@ -74,4 +74,23 @@ describe('BaseModelSelect per family（多模型 P4-4）', () => {
     expect(document.querySelectorAll('optgroup')).toHaveLength(0)
     expect(optionValues()).toEqual(['1.0', '2.9b-preview-v1', 'G:/m/ft.safetensors'])
   })
+
+  it('int8 quantized custom checkpoint is labelled and disabled', async () => {
+    vi.mocked(api.getModelsCatalog).mockResolvedValue({
+      anima_main: {
+        variants: [{ variant: '1.0', exists: true, arch: { num_blocks: 28, model_channels: 2048, param_count: 1 } }],
+        custom: [{
+          path: 'G:/m/anima-int8convrot.safetensors', name: 'anima-int8convrot.safetensors', exists: true,
+          arch: { unsupported_quant: 'int8_tensorwise + ConvRot' },
+        }],
+        selected: '1.0',
+      },
+    } as never)
+    render(<BaseModelSelect value={null} onChange={() => {}} />)
+    const opt = await screen.findByRole('option', {
+      name: 'anima-int8convrot.safetensors · int8_tensorwise + ConvRot 量化版 · 不可用',
+    }) as HTMLOptionElement
+    expect(opt.disabled).toBe(true)
+    expect((screen.getByRole('option', { name: '1.0 · 28 层' }) as HTMLOptionElement).disabled).toBe(false)
+  })
 })

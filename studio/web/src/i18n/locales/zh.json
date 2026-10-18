@@ -3377,7 +3377,9 @@
       "training": "训练",
       "inference": "推理"
     },
-    "layers": "{{n}} 层"
+    "layers": "{{n}} 层",
+    "unsupportedQuant": "{{fmt}} 量化版 · 不可用",
+    "unsupportedQuantHint": "量化版权重训练和出图都不支持，请改用同一模型的 bf16 或 fp8 版本"
   },
   "lora": {
     "baseLayers": "训练底模 {{n}} 层",

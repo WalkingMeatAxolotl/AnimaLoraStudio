@@ -29,9 +29,17 @@ interface FamilyMainSection {
   selected: string
 }
 
-/** 「N 层」后缀（arch 未知不显示）。层数是 LoRA 互换性的判据，所以进 label 而非 tooltip。 */
+/** 底模架构标记：「N 层」，或整数量化版的「不可用」标记；未知为空串。
+ *  层数是 LoRA 互换性的判据，所以进 label 而非 tooltip。 */
+export function archLabel(arch: BaseModelArch | null | undefined, t: (k: string, o?: Record<string, unknown>) => string): string {
+  if (arch?.unsupported_quant) return t('baseModel.unsupportedQuant', { fmt: arch.unsupported_quant })
+  return arch?.num_blocks ? t('baseModel.layers', { n: arch.num_blocks }) : ''
+}
+
+/** label 后缀形式的 {@link archLabel}（空则不加分隔符）。 */
 export function archSuffix(arch: BaseModelArch | null | undefined, t: (k: string, o?: Record<string, unknown>) => string): string {
-  return arch?.num_blocks ? ` · ${t('baseModel.layers', { n: arch.num_blocks })}` : ''
+  const s = archLabel(arch, t)
+  return s ? ` · ${s}` : ''
 }
 
 function mainSection(
@@ -155,7 +163,7 @@ export default function BaseModelSelect({
     >
       {missing && <option value={effective}>{basename(effective)}</option>}
       {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
+        <option key={o.value} value={o.value} disabled={!!o.arch?.unsupported_quant}>{o.label}</option>
       ))}
     </select>
   )

@@ -756,9 +756,12 @@ export interface ModelFileStatus {
 /** 底模架构摘要（header 探测；文件存在且是 Anima 结构才有，krea2 为 null）。
  *  层数决定 LoRA 能否互换 —— 同族不同层数（Anima 28 层 vs 第三方 40 层）的 LoRA 不通用。 */
 export interface BaseModelArch {
-  num_blocks: number
-  model_channels: number
-  param_count: number
+  num_blocks?: number
+  model_channels?: number
+  param_count?: number
+  /** int8 等整数量化版（如 "int8_tensorwise + ConvRot"）：训练 / 出图不支持，
+   *  此时不含层数等字段。 */
+  unsupported_quant?: string
 }
 
 export interface FamilyMainVariantInfo extends ModelFileStatus {
