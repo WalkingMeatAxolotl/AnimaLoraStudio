@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 import torch
 
-from training.block_swap import find_block_swap, move_module_excluding
+from ...block_swap import find_block_swap, move_module_excluding
 
 from .preset import KREA2_PRESET
 from .sampling import (
