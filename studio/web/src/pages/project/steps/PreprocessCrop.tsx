@@ -139,6 +139,9 @@ function StageWorkspace() {
   const [busy, setBusy] = useState(false)
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
+  // 每个 crop job 实际提交了哪些图：完成时只清这些图的框，
+  // 「裁剪当前图」不能连带清掉其他图还没提交的框。
+  const submittedRef = useRef<{ jobId: number; names: string[] } | null>(null)
 
   // 回放（issue #251）：crop 与放大共用 kind=preprocess，走同一 status 端点
   // 恢复最近一次 preprocess job + log_tail；同一 job 本地已有 SSE 积累时不覆盖。
@@ -179,8 +182,17 @@ function StageWorkspace() {
       if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
         void refreshWorkspace()
         void reload()
-        // Clear in-memory crops only on success — keep on failure for retry
-        if (evt.status === 'done') setCropsByImage({})
+        // Clear in-memory crops only on success — keep on failure for retry.
+        // Only the images this job submitted; unsubmitted rects stay.
+        const submitted = submittedRef.current
+        if (evt.status === 'done' && submitted?.jobId === jid) {
+          setCropsByImage((prev) => {
+            const next = { ...prev }
+            for (const name of submitted.names) delete next[name]
+            return next
+          })
+          submittedRef.current = null
+        }
       }
     } else if (evt.type === 'crop_progress' && jid && evt.job_id === jid) {
       // Backend throttles crop_progress to ≥1Hz; safe to refresh per event here
@@ -358,6 +370,7 @@ function StageWorkspace() {
       if (!mounted.current) return
       statusRequest.current++
       jobIdRef.current = j.id
+      submittedRef.current = { jobId: j.id, names: Object.keys(payload) }
       setJob(j)
       setLogs([])
       toast(t('preprocessCrop.toastStarted', { id: j.id }), 'success')
