@@ -234,6 +234,9 @@ class MossTextStack(VarlenTextStack):
         self.is_int8_storage = is_int8_text_encoder(model_path) if is_int8 is None else bool(is_int8)
         if self.is_int8_storage:
             text_fingerprint = f"{text_fingerprint}{_INT8_FINGERPRINT_SUFFIX}"
+        #: TE 上卡的显存增量估计（daemon 让位判据的兜底；首次加载后改用实测）：
+        #: int8 权重 9.75GB 实测编码峰值 ≈8.1GB（不含视觉塔）；bf16 权重 ≈16.8GB
+        self.te_load_bytes_estimate = (9 if self.is_int8_storage else 18) * 1024 ** 3
         super().__init__(
             model_path,
             device=device,

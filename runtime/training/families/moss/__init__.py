@@ -73,12 +73,28 @@ class MossFamily:
         del repo_root, purpose
         from training.families.moss.loader import load_moss_model
 
-        if blocks_to_swap:
-            # 能力位里没有 block_swap（PR-5 接入），phases 已 fail-fast；这里兜底
-            raise RuntimeError("MOSS 暂不支持 block swap，请将 blocks_to_swap 置 0")
         if attention_backend != "none":
             logger.info(msg("train.moss_sdpa_only", backend=attention_backend))
-        return load_moss_model(path, device, dtype)
+        return load_moss_model(path, device, dtype, blocks_to_swap=blocks_to_swap)
+
+    def dit_blocks(self, model):
+        """DiT 的同构层序列（block swap 按它换出末尾 N 层）；MOSS 的层容器叫 layers。"""
+        return model.layers
+
+    def swapped_param_ratio(self, blocks_to_swap: int, *,
+                            checkpoint_path: str | None = None) -> float:
+        """换出层占全模型参数的比例（显存预算折扣用；按参数量不按字节，见 loader）。
+
+        未给路径 / 读失败返回 0：护栏退化为保守（按完整模型预算）。
+        """
+        if blocks_to_swap <= 0 or not checkpoint_path:
+            return 0.0
+        try:
+            from training.families.moss.loader import swapped_param_ratio
+
+            return swapped_param_ratio(checkpoint_path, blocks_to_swap)
+        except Exception:  # noqa: BLE001
+            return 0.0
 
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         from training.vae_flux2 import load_flux2_vae
@@ -124,8 +140,8 @@ class MossFamily:
                      device="cuda", dtype=None, step_callback=None,
                      phase_callback=None, seed: int | None = None,
                      vram_policy: str | None = None):
-        # MOSS 无蒸馏 variant，distilled 接受并忽略（调用方按统一协议传）；显存编排随 PR-5
-        del distilled, vram_policy
+        # MOSS 无蒸馏 variant，distilled 接受并忽略（调用方按统一协议传）
+        del distilled
         dtype = dtype or torch.bfloat16
         steps = int(steps or MOSS_DEFAULT_STEPS)
         cfg = MOSS_DEFAULT_CFG if cfg_scale is None else float(cfg_scale)
@@ -133,9 +149,13 @@ class MossFamily:
             text, prompt, negative_prompt=negative_prompt or "", cfg_scale=cfg,
             device=device, dtype=dtype, phase_callback=phase_callback,
         )
+        # TE 与 DiT 的先后由调用方的任务级编排负责（daemon / CLI 先预编码全部
+        # prompt 再释放 TE，DiT 让位走 block swap 安全的搬运）；这里只处置逐图
+        # 兜底路径编码后的 TE：performance 档全部常驻，其余档卸到 CPU 给采样让
+        # 显存。vram_policy=None（训练预览）照旧卸——缓存模式下 TE 已释放，no-op
         offload = getattr(text, "offload_model", None)
-        if callable(offload):
-            offload()  # 训练缓存模式下 TE 本就已释放，no-op
+        if callable(offload) and vram_policy != "performance":
+            offload()
         if phase_callback:
             phase_callback("sample")
         latents = sample_latents(

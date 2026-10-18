@@ -135,7 +135,7 @@ class GenerateConfig(BaseModel):
                     "vram_policy 管模型之间（文本编码器 / DiT 谁让位），本项管单个 DiT 内部，"
                     "是「单个模型自己就装不下」时唯一的解法。"
                     "出图每一步都要搬一遍全部换出层，步数越多累计耗时越长。"
-                    "需要等量的可用内存（Krea 2 每层约 0.4GB fp8 / 0.8GB bf16，Anima 每层约 0.13GB），"
+                    "需要等量的可用内存（Krea 2 每层约 0.4GB fp8 / 0.8GB bf16，Anima 每层约 0.13GB，MOSS-Image 每层约 0.11GB int8 / 0.21GB bf16），"
                     "且内存会被锁定不可换页。超过模型总层数的值按全部换出处理",
     )
     vram_policy: Literal["auto", "save_vram", "performance"] = Field(

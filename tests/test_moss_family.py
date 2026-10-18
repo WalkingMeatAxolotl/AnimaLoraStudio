@@ -56,7 +56,7 @@ def test_registered_spec_and_family() -> None:
     assert MOSS_SPEC.latent is FLUX2_F8C32_BN
     assert MOSS_SPEC.text.strategy == "cached_varlen"
     assert {"masked_loss", "text_cache", "int8_base"} <= MOSS_SPEC.capabilities
-    assert "block_swap" not in MOSS_SPEC.capabilities  # PR-5 接入
+    assert "block_swap" in MOSS_SPEC.capabilities  # PR-5 接入（层容器经 dit_blocks 取）
     s = MOSS_SPEC.sampling
     assert (s.default_sampler, s.default_scheduler, s.default_steps, s.default_cfg) == ("euler", "simple", 50, 3.0)
     assert s.shift_policy.shift == 5.0

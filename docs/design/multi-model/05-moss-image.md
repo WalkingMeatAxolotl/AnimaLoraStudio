@@ -152,7 +152,7 @@
 
 **LyCORIS**：`utils/lycoris_adapter.py` 现在只对 fp8 底模的 LoKr 切 bypass，规则要扩展到 int8 底模（判定条件从「fp8 dtype」改为「量化底模」）。DoRA（`weight_decompose`）需要底模权重范数，v1 在量化底模上拒绝并给出明确提示。
 
-**block swap**：int8 权重 + `weight_scale` 一起换出；`PinnedPacker` 按实际 dtype 计算字节（int8 换出量约为 bf16 的一半）；swap 比例沿用「按参数比例、不按字节」的口径（见 Krea2 `swapped_param_ratio` 的注释）。
+**block swap**（PR-5 实施）：换出层的 int8 权重与浮点参数由 loader 直接落 CPU pinned、不经过显存；`weight_scale` 是非持久 buffer、不归 swap 管，且每层只有几 KB，恒放计算设备（跟着权重落 CPU 会让前向每步多一次 H2D）。`PinnedPacker` 按实际 dtype 计算字节（int8 换出量约为 bf16 的一半）；swap 比例沿用「按参数比例、不按字节」的口径（见 Krea2 `swapped_param_ratio` 的注释）。层容器叫 `layers`，共享代码经族接口 `dit_blocks(model)` 取，不读 `model.blocks`。
 
 ### 5.5 TE 加载与文本缓存
 
@@ -205,6 +205,18 @@
 | navit / sra / leap / compile_blocks / caption_tag_ops | 关 |
 
 权重常驻量（不含激活，仅供参考，不作承诺）：DiT bf16 10.2GB / int8 5.4GB；TE（只在缓存阶段存活）bf16 16.8GB / int8 9.75GB（含视觉塔，跳过后更小）。
+
+**PR-5 实测（只记录，不承诺）**：RTX 5090，int8 DiT + int8 TE，读数为 torch 峰值已分配显存（与显卡型号无关；WDDM 驱动开销另计）。每层约 1.13 亿参数，换出时锁页内存约 0.11GB/层（int8）/ 0.21GB/层（bf16）。
+
+| 场景 | swap 0 | swap 21 | swap 42 |
+|---|---|---|---|
+| 出图 832×1216 采样+解码（TE 已预编码释放） | 7.27 GiB | 5.27 GiB | 3.05 GiB |
+| 出图 DiT 常驻 | 5.05 GiB | 3.05 GiB | 0.83 GiB |
+| 出图 8 步耗时 | 7.3 s | 7.6 s | 7.9 s |
+| 训练 512px batch 1 训练步（grad checkpoint） | 7.05 GB | 4.90 GB | — |
+| 训练中采样 | 6.63 GB | 4.48 GB | — |
+
+TE 阶段与 swap 无关：出图预编码 7.51 GiB，训练文本缓存 8.23 GB——开 swap 后它成为整条流程的峰值。不同 swap 下出图逐像素一致；daemon 开 swap 21 与不开 swap 的出图逐像素一致。
 
 ## 7. 资产清单（`studio/services/models/families/moss.py`）
 

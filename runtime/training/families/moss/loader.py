@@ -12,10 +12,16 @@
 scale 是逐行的，行与行互相独立。
 
 层数、宽度等结构参数一律从 checkpoint header 推断，不查表。
+
+block swap（``blocks_to_swap`` > 0）：末尾 N 层的权重直接载到 CPU pinned、不经过
+显存，由 ``training.block_swap.PinnedBlockSwap`` 就地接管（与 Krea2 loader 同口径）。
+int8 层的 ``weight_scale`` 恒放计算设备——它是 buffer 不归 swap 管，跟着权重落 CPU
+会让前向每步做一次 H2D。
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +31,8 @@ from safetensors import safe_open
 
 from modeling.moss.moss_modeling import MossConfig, MossImageTransformer
 from training.families.moss.quant_int8 import parse_comfy_quant, patch_int8_linear
+
+logger = logging.getLogger(__name__)
 
 #: 外层前缀候选（按序尝试；"" = 无前缀，Comfy-Org / civitai 文件即此形态）
 _PREFIX_CANDIDATES = ("", "model.diffusion_model.", "diffusion_model.", "model.", "transformer.")
@@ -141,10 +149,80 @@ def inspect_moss_checkpoint(path) -> MossCheckpointInfo:
     return MossCheckpointInfo(config=config, prefix=prefix, fused_qkv=fused, int8_layers=int8_layers)
 
 
-def load_moss_model(path, device, dtype: torch.dtype) -> MossImageTransformer:
+_DTYPE_BYTES = {"I8": 1, "U8": 1, "BF16": 2, "F16": 2, "F32": 4}
+
+
+def _swapped_prefixes(depth: int, blocks_to_swap: int) -> tuple[str, ...]:
+    """被换出层的键前缀（末尾 N 层，超界 clamp，与 PinnedBlockSwap 同口径）。"""
+    num_swap = min(max(int(blocks_to_swap), 0), depth)
+    return tuple(f"layers.{i}." for i in range(depth - num_swap, depth))
+
+
+def _header_layer_numel(path) -> tuple[dict[int, int], int]:
+    """header 里每层参数量与全模型参数量（不读权重；weight_scale / comfy_quant 不计）。"""
+    checkpoint = _checkpoint_path(path)
+    per_layer: dict[int, int] = {}
+    total = 0
+    with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+        keys = list(handle.keys())
+        prefix = _choose_prefix(keys)
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            name = key[len(prefix):]
+            if _IGNORED_KEY_RE.match(name) or name.endswith((".comfy_quant", ".weight_scale")):
+                continue
+            numel = 1
+            for dim in handle.get_slice(key).get_shape():
+                numel *= int(dim)
+            total += numel
+            if m := _LAYER_RE.match(name):
+                per_layer[int(m.group(1))] = per_layer.get(int(m.group(1)), 0) + numel
+    return per_layer, total
+
+
+def swapped_param_ratio(path, blocks_to_swap: int) -> float:
+    """换出层占全模型参数的比例（显存预算折扣用，按参数量不按字节——int8 与 bf16
+    文件大小差一倍，按字节折扣会在 int8 场景把护栏折扣穿；同 Krea2 口径）。"""
+    if blocks_to_swap <= 0:
+        return 0.0
+    per_layer, total = _header_layer_numel(path)
+    depth = len(per_layer)
+    first = depth - min(int(blocks_to_swap), depth)
+    swapped = sum(n for i, n in per_layer.items() if i >= first)
+    return swapped / total if total else 0.0
+
+
+def _swapped_pinned_bytes(path, prefixes: tuple[str, ...], dtype: torch.dtype) -> int:
+    """换出层落 pinned 后的精确字节数：int8 原样 1 字节，浮点按计算 dtype。"""
+    checkpoint = _checkpoint_path(path)
+    float_bytes = torch.empty(0, dtype=dtype).element_size()
+    need = 0
+    with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+        keys = list(handle.keys())
+        prefix = _choose_prefix(keys)
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            name = key[len(prefix):]
+            if not name.startswith(prefixes) or _IGNORED_KEY_RE.match(name):
+                continue
+            if name.endswith((".comfy_quant", ".weight_scale")):
+                continue
+            sl = handle.get_slice(key)
+            numel = 1
+            for dim in sl.get_shape():
+                numel *= int(dim)
+            need += numel * (1 if sl.get_dtype() == "I8" else float_bytes)
+    return need
+
+
+def load_moss_model(path, device, dtype: torch.dtype, *,
+                    blocks_to_swap: int = 0) -> MossImageTransformer:
     """strict 加载 MOSS DiT：浮点张量 cast 到 ``dtype``，int8 原样常驻并挂 W8A16 前向。
 
-    结果 ``requires_grad_(False)``（底模冻结，LoRA 另挂）。
+    结果 ``requires_grad_(False)``（底模冻结，LoRA 另挂）。``blocks_to_swap`` > 0 时
+    末尾 N 层直接落 CPU pinned（见模块 docstring）。
     """
     if dtype not in {torch.float16, torch.bfloat16, torch.float32}:
         raise ValueError(f"MOSS loader 不支持 dtype={dtype}")
@@ -158,6 +236,18 @@ def load_moss_model(path, device, dtype: torch.dtype) -> MossImageTransformer:
         model = MossImageTransformer(info.config)
     model.requires_grad_(False)
     expected = set(model.state_dict().keys())
+
+    swapped = _swapped_prefixes(info.config.num_layers, blocks_to_swap)
+    packer = None
+    if swapped:
+        from training.block_swap import PinnedPacker
+        from training.sysmem import check_pinned_budget
+
+        # 预算护栏先行（任何权重读取之前，失败即 fail-fast）；再按精确总量一次性
+        # 预分配 pinned 大块（逐张量 pin 会被 host allocator 按 2 的幂取整白锁）
+        need = _swapped_pinned_bytes(checkpoint, swapped, dtype)
+        check_pinned_budget(need, blocks=len(swapped))
+        packer = PinnedPacker(need)
 
     state: dict[str, torch.Tensor] = {}
     scales: dict[str, torch.Tensor] = {}
@@ -182,6 +272,10 @@ def load_moss_model(path, device, dtype: torch.dtype) -> MossImageTransformer:
             for target_name, value in targets.items():
                 if target_name.endswith(".weight_scale"):
                     scales[target_name[: -len(".weight_scale")]] = value.to(device=target)
+                elif packer is not None and target_name.startswith(swapped):
+                    state[target_name] = packer.pin(
+                        value, dtype=None if value.dtype == torch.int8 else dtype,
+                    )
                 elif value.dtype == torch.int8:
                     state[target_name] = value.to(device=target)
                 else:
@@ -202,4 +296,10 @@ def load_moss_model(path, device, dtype: torch.dtype) -> MossImageTransformer:
     modules = dict(model.named_modules())
     for layer, group in info.int8_layers.items():
         patch_int8_linear(modules[layer], scales[layer], group)
+    if packer is not None:
+        logger.debug(
+            "block_swap: placement swapped=%d/%d pinned=%.2f GB locked=%.2f GB",
+            len(swapped), info.config.num_layers, packer.packed_bytes / 1024 ** 3,
+            packer.allocated_bytes / 1024 ** 3,
+        )
     return model.eval()

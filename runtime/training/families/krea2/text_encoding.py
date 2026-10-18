@@ -351,6 +351,8 @@ class Krea2TextStack(VarlenTextStack):
         # 目录是官方 fp8_scaled 单文件形态（comfy 布局）——影响编排层的
         # TE 上卡显存判据（权重 ~5GB vs fp16 8.9GB）与训练文本缓存指纹
         self.is_fp8_storage = _comfy_te_single_file(model_path) is not None
+        #: TE 上卡的显存增量估计（daemon 让位判据的兜底；首次加载后改用实测）
+        self.te_load_bytes_estimate = (7 if self.is_fp8_storage else 11) * 1024 ** 3
         # fp8 TE 编码的嵌入与 bf16 有量化级差异——指纹区分防缓存混源
         # （换 TE 精度 → 指纹变 → sidecar 全量重编，一次性）
         if self.is_fp8_storage:

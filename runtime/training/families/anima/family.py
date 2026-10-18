@@ -35,6 +35,10 @@ class AnimaFamily:
             enable_xformers(model)
         return model
 
+    def dit_blocks(self, model):
+        """DiT 的同构层序列（block swap 按它换出末尾 N 层）。"""
+        return model.blocks
+
     def swapped_param_ratio(self, blocks_to_swap: int, *,
                             checkpoint_path: str | None = None) -> float:
         """换出层占全模型参数的比例（显存预算折扣用，krea2 同款语义）。

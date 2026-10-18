@@ -178,10 +178,10 @@ def _setup_block_swap(ctx: TrainingContext) -> None:
     from training.block_swap import PinnedBlockSwap
 
     # clamp 到总层数：blocks_to_swap 是跨族/跨版本共享的设置值（krea2 28 层、
-    # anima 层数由 checkpoint 决定），超界按全量换出处理而非 fail（loader 侧同口径）
-    ctx.block_swap = PinnedBlockSwap(
-        ctx.model.blocks, min(blocks_to_swap, len(ctx.model.blocks)), ctx.device,
-    )
+    # anima 层数由 checkpoint 决定、moss 42 层），超界按全量换出处理而非 fail
+    # （loader 侧同口径）。层容器名各族不同（blocks / layers），经族接口取
+    blocks = ctx.family.dit_blocks(ctx.model)
+    ctx.block_swap = PinnedBlockSwap(blocks, min(blocks_to_swap, len(blocks)), ctx.device)
     ctx.block_swap.attach()
     log_vram("train.vram_stage_block_swap_ready", ctx.device)
 

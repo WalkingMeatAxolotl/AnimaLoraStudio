@@ -168,7 +168,7 @@ class TrainingConfig(BaseModel):
     blocks_to_swap: int = Field(
         0, ge=0,
         description="Block 交换：换出到内存的 DiT 层数（0=关闭；超过底模层数按全部换出；"
-                    "Anima 每层约 0.13GB，Krea 2 每层约 0.4GB fp8 底模 / 0.8GB bf16 底模）。"
+                    "Anima 每层约 0.13GB，Krea 2 每层约 0.4GB fp8 底模 / 0.8GB bf16 底模，MOSS-Image 每层约 0.11GB int8 底模 / 0.21GB bf16 底模）。"
                     "数值越大，显存占用越少、内存占用越大",
         json_schema_extra=_meta(
             "system",

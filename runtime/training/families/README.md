@@ -25,6 +25,10 @@
 - Krea2 的 `text_encoder_cache=true` 先预缓存并释放 Qwen3-VL、再加载 DiT；关闭时
   完全不读写文本 sidecar，TE 与 DiT 常驻，供大显存/小磁盘云端逐 batch 编码。
 - 演化：方法追加参数一律 keyword-only 带默认值；禁止 `**kwargs`。
+- **层容器经族接口取**：block swap 等共享代码一律调 `family.dit_blocks(model)`
+  拿 DiT 的同构层序列（Anima / Krea2 是 `model.blocks`，MOSS 是 `model.layers`），
+  不直接读 `model.blocks`。加族时实现这个方法；声明 `block_swap` 能力还需要
+  loader 支持 `blocks_to_swap`（换出层直落 pinned）与 `swapped_param_ratio`。
 
 ## 加第 3 个族的步骤
 

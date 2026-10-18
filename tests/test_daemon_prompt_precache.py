@@ -35,6 +35,7 @@ class _Stack:
         self.is_model_loaded = False
         self.is_model_on_device = False
         self.is_fp8_storage = True
+        self.te_load_bytes_estimate = 7 * 1024 ** 3  # 同真实 Krea2 fp8 栈
 
     def precache_online_prompts(self, prompts):
         if self.fail:
@@ -321,6 +322,9 @@ def test_ensure_text_ready_builds_and_reuses(monkeypatch):
     built = []
 
     class _Family:
+        # TE 先行编排按文本策略判定（cached_varlen = Krea2 / MOSS）
+        spec = SimpleNamespace(text=SimpleNamespace(strategy="cached_varlen"))
+
         def load_text(self, path, device, dtype, **kw):
             built.append(str(path))
             return _Stack()
@@ -378,8 +382,10 @@ def test_unload_keep_text_preserves_stack(monkeypatch):
 class _LoadFamily:
     """_load 依赖面 fake：load_dit/load_vae 占位，load_text 计数。"""
 
-    def __init__(self, text_stack_factory):
-        self.spec = SimpleNamespace(capabilities=set())
+    def __init__(self, text_stack_factory, *, strategy="cached_varlen"):
+        self.spec = SimpleNamespace(
+            capabilities=set(), text=SimpleNamespace(strategy=strategy),
+        )
         self._factory = text_stack_factory
         self.load_text_calls = 0
 
@@ -421,7 +427,7 @@ def test_cross_family_switch_rebuilds_krea2_text_stack(monkeypatch):
     monkeypatch.setattr(sysmem, "trim_working_set", lambda: None)
     monkeypatch.setattr(anima_daemon.torch.cuda, "is_available", lambda: False)
     krea = _LoadFamily(_Stack)
-    anima = _LoadFamily(lambda: ("qwen", "qwen_tok", "t5_tok"))
+    anima = _LoadFamily(lambda: ("qwen", "qwen_tok", "t5_tok"), strategy="online")
     monkeypatch.setattr(
         anima_daemon._T, "get_family",
         lambda fid: {"krea2": krea, "anima": anima}[fid],

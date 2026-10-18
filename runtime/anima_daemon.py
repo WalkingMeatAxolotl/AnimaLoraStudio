@@ -126,9 +126,19 @@ def _keep_third_party_logs_off_stdout(
 _keep_third_party_logs_off_stdout()
 
 _GIB = 1024 ** 3
-_TE_LOAD_FALLBACK_FP8 = 7 * _GIB
+#: 文本栈未声明 ``te_load_bytes_estimate`` 时的 TE 上卡增量兜底
 _TE_LOAD_FALLBACK_FULL = 11 * _GIB
 _TE_ENCODE_FALLBACK = 2 * _GIB
+
+
+def _uses_te_first(family: Any) -> bool:
+    """该族是否走 TE 先行编排（先就绪文本栈 → 预编码 → 释放 → 才加载 DiT）。
+
+    判据是文本策略而非族名：``cached_varlen`` 的文本栈是独立大模型（Krea2 的
+    Qwen3-VL、MOSS 的 Qwen3.5-9B），带在线 LRU / precache / release；Anima 的
+    ``online`` 栈是小 TE 常驻，走全家桶加载。
+    """
+    return family.spec.text.strategy == "cached_varlen"
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +500,8 @@ class ModelCache:
             cfg, force_exact_ksampler_backend=False,
         )
         family_id = str(cfg.get("model_family") or "anima")
-        if family_id != "krea2":
+        family = _T.get_family(family_id)
+        if not _uses_te_first(family):
             return
         repo_root = _T.find_diffusion_pipe_root()
         bases = [Path.cwd(), _THIS_DIR, repo_root]
@@ -502,7 +513,6 @@ class ModelCache:
             return
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _torch_dtype_from_precision(cfg.get("mixed_precision", "bf16"))
-        family = _T.get_family(family_id)
         logger.info(msg("model.load_text_encoder_ahead", path=text_encoder_path))
         self.text_stack = family.load_text(
             text_encoder_path, device, dtype,
@@ -652,10 +662,10 @@ class ModelCache:
             label=f"VAE {vae_path}",
         )
 
-        # 族 opaque 文本栈，不拆包。krea2 的 TE 先行栈（ensure_text_ready）
+        # 族 opaque 文本栈，不拆包。TE 先行族（ensure_text_ready）的文本栈
         # 已就绪且身份匹配时复用——保住预编码 LRU，不重复加载。
         if (
-            family_id == "krea2"
+            _uses_te_first(family)
             and self.text_stack is not None
             and self._text_ready_key == (family_id, text_encoder_path)
         ):
@@ -680,9 +690,11 @@ class ModelCache:
             from training.block_swap import PinnedBlockSwap
 
             # clamp 到总层数：全局设置值跨族/跨版本共享（krea2 28 层、anima
-            # 层数由 checkpoint 决定），超界按全量换出处理而非 fail（训练侧同口径）
+            # 层数由 checkpoint 决定、moss 42 层），超界按全量换出处理而非 fail
+            # （训练侧同口径）。层容器经族接口取（blocks / layers）
+            blocks = family.dit_blocks(model)
             self.block_swap = PinnedBlockSwap(
-                model.blocks, min(blocks_to_swap, len(model.blocks)), device,
+                blocks, min(blocks_to_swap, len(blocks)), device,
             )
             self.block_swap.attach()
 
@@ -1074,10 +1086,12 @@ def _precache_prompts_and_release(
     else:
         if te_resident:
             te_increment = _TE_ENCODE_FALLBACK
-        elif getattr(CACHE.text_stack, "is_fp8_storage", False):
-            te_increment = _TE_LOAD_FALLBACK_FP8
         else:
-            te_increment = _TE_LOAD_FALLBACK_FULL
+            # 文本栈按自身存储形态声明上卡增量（Krea2 fp8 / bf16、MOSS int8 / bf16）
+            te_increment = int(
+                getattr(CACHE.text_stack, "te_load_bytes_estimate", 0)
+                or _TE_LOAD_FALLBACK_FULL
+            )
         estimate_source = "fallback"
 
     yielded_dit = False
@@ -1172,9 +1186,9 @@ def _precache_prompts_and_release(
 
 
 def _begin_initial_te_peak_calibration(cfg: dict[str, Any]) -> int | None:
-    """Start measuring the first Krea2 TE load before ``CACHE.device`` exists."""
+    """Start measuring the first TE-first load before ``CACHE.device`` exists."""
     if (
-        str(cfg.get("model_family") or "anima") != "krea2"
+        not _uses_te_first(_T.get_family(str(cfg.get("model_family") or "anima")))
         or CACHE.model is not None
         or not torch.cuda.is_available()
     ):
