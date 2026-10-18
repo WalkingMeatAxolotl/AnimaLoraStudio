@@ -57,7 +57,17 @@
     batched CFG / sample helper 对齐 ComfyUI `ModelSamplingDiscreteFlow` + KSampler 行为
   - `runtime/training/inference_samplers/er_sde.py` — `sample_er_sde` +
     `default_noise_sampler` 参考 ComfyUI `k_diffusion_sampling`
-    （删去 model_patcher 依赖）
+    （删去 model_patcher 依赖；half-log-SNR 与 alpha 按 ComfyUI 0.41.0 原式）
+  - `runtime/training/families/moss/comfy_forward.py` — MOSS-Image DiT 推理前向的
+    算子顺序与舍入路径对齐 ComfyUI 0.41.0 `comfy/ldm/moss_image/model.py`，RoPE /
+    时间嵌入对齐 `comfy/ldm/flux/math.py`、`layers.py`，SDPA 后端优先级对齐
+    `comfy/ops.py`
+  - `runtime/training/families/moss/lora_int8_merge.py`、
+    `runtime/training/families/comfy_lora_merge.py` — LoRA merge 语义（经典
+    ModelPatcher 路径、`calculate_weight`、`string_to_seed`、融合 qkv 的行切片）
+    对齐 ComfyUI `model_patcher.py` / `lora.py` / `weight_adapter`
+  - `runtime/training/families/moss/sampling.py` — CFG 组合顺序、
+    `percent_to_sigma` 精度对齐 ComfyUI `samplers.py` / `model_sampling.py`
   - `runtime/training/inference_samplers/dpmpp_3m_sde.py` —
     DPM-Solver++(3M) SDE / BrownianTree noise / first-sigma offset / log-SNR 细节
     对齐 ComfyUI `comfy/k_diffusion/sampling.py` + `comfy/model_sampling.py`
@@ -112,7 +122,11 @@
 - **许可**：Apache-2.0
 - **涉及文件**：
   - `runtime/training/families/moss/quant_int8.py` — ConvRot 规则 Hadamard 构造与
-    `int8_tensorwise + convrot` 权重的存储 / 反量化约定（前向为本项目 W8A16 实现）
+    `int8_tensorwise + convrot` 权重的存储 / 反量化约定；出图用的 W8A8 前向、逐行
+    量化、`int8_mm` 补零、随机舍入重新量化逐位复刻 eager 后端
+    `backends/eager/quantization.py`（训练用的 W8A16 前向为本项目实现）
+  - `runtime/training/families/moss/comfy_forward.py` — `rms_adaln`、
+    `rms_rope_split_half` 的 eager 实现（`backends/eager/adaln.py`、`rope.py`）
 
 ### Alibaba Wan2.1 VAE（请再次确认上游许可）
 

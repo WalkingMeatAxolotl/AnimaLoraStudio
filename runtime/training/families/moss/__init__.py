@@ -70,12 +70,21 @@ class MossFamily:
     def load_dit(self, path, device, dtype, *,
                  attention_backend: str = "flash_attn", repo_root=None,
                  purpose: str = "train", blocks_to_swap: int = 0):
-        del repo_root, purpose
+        del repo_root
         from training.families.moss.loader import load_moss_model
 
         if attention_backend != "none":
             logger.info(msg("train.moss_sdpa_only", backend=attention_backend))
-        return load_moss_model(path, device, dtype, blocks_to_swap=blocks_to_swap)
+        # int8 底模两条前向（M9）：训练 W8A16（数值准、可反传）；出图 / 评估 / 先验
+        # 生成按 ComfyUI 实际跑的 W8A8 eager 路径逐位复刻
+        generate = purpose == "generate"
+        model = load_moss_model(
+            path, device, dtype, blocks_to_swap=blocks_to_swap,
+            int8_forward="w8a8" if generate else "w8a16",
+        )
+        # 出图走 ComfyUI 口径的推理前向（comfy_forward）；训练与训练中采样仍走上游前向
+        model.moss_comfy_forward = generate
+        return model
 
     def dit_blocks(self, model):
         """DiT 的同构层序列（block swap 按它换出末尾 N 层）；MOSS 的层容器叫 layers。"""

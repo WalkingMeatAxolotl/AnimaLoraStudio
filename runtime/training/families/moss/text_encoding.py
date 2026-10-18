@@ -41,7 +41,9 @@ MOSS_TEXT_WIDTH = 4096
 MOSS_MAX_TOKENS = 4096
 #: 指纹 = TE 身份 + 取层 + 模板版本；存储形态另加后缀（设计稿 M8）
 MOSS_TEXT_FINGERPRINT = "qwen3.5-9b-moss-last-think-v1"
-_INT8_FINGERPRINT_SUFFIX = "-int8convrot"
+#: int8 TE 走 ComfyUI 的「逐层反量化到 compute dtype + 普通 linear」（``-dq``）。
+#: 曾用 W8A16 前向（后缀无 ``-dq``），两者嵌入有舍入级差异，换后缀让旧缓存重编
+_INT8_FINGERPRINT_SUFFIX = "-int8convrot-dq"
 #: 官方要求（模型卡 `transformers>=5.3`）；实际判据是 qwen3_5 模型类能否导入
 MOSS_MIN_TRANSFORMERS = "5.3"
 _TEMPLATE = "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n"
@@ -174,7 +176,8 @@ def load_moss_text_model(model_path: Path, device: torch.device, dtype: torch.dt
         if isinstance(module, torch.nn.Embedding):
             patch_int8_embedding(module, scales[layer], quant[layer], dtype)
         else:
-            patch_int8_linear(module, scales[layer], quant[layer])
+            # ComfyUI 编码时 TE 不走 W8A8（full_precision_mm）：每次前向反量化
+            patch_int8_linear(module, scales[layer], quant[layer], forward="dequant")
     # buffers 构造在 CPU（init_empty_weights 只 meta 化参数）——搬到目标 device
     model.to(device)
     leftover = [n for n, t in (*model.named_parameters(), *model.named_buffers()) if t.device.type == "meta"]

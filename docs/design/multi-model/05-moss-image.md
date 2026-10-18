@@ -195,6 +195,23 @@
 - **parity 实现**照搬 Krea2 `lora_fp8_merge.py` 的做法：以 comfy-kitchen eager 路径为 oracle，逐步复刻 dequant（`q.float() × scale`，再按组乘 Hᵀ）→ merge（Comfy 的 `lora_compute_dtype` 与 delta 公式）→ requant（旋转 → 逐行 amax/127 → `_round_int8` 随机舍入，seed = Comfy `string_to_seed("diffusion_model.{layer}.weight")`）→ W8A8 前向（`torch._int_mm`）。CUDA 与 CPU 的随机数序列不同，逐位 parity 只在 GPU 上成立（与 Krea2 相同）。
 - TE 不挂 LoRA，所以 ComfyUI 编码时 TE 恒走 W8A8；我们缓存用的 W8A16 与之只差激活量化。§11-3 会量化这个差异。
 
+**PR-6 实施结论（作者本地 ComfyUI 0.41.0 + comfy-kitchen 0.2.38 + torch 2.7 cu128 实测）**：
+
+- ComfyUI 在 torch < cu130 时禁用 comfy-kitchen 的 cuda / triton 后端，int8 线性层、量化、RoPE、AdaLN 全部走 eager 纯 PyTorch 实现——这条路径可以逐位复刻。cuda 后端的 `int8_linear` 与 eager 约 31% 的输出不同，所以 oracle 必须是 eager。
+- **DiT 注意力**：Comfy-Org 的 MOSS 文件每层带 `{"attention": "comfy_kitchen_int8"}`，走 comfy-kitchen 自带的 INT8 SageAttention CUDA 内核（闭源二进制），不受后端禁用影响。本项目用 SDPA，并照搬 `comfy/ops.py` 的后端优先级（≥128K 元素时 FLASH → CUDNN → EFFICIENT → MATH）。
+- **TE 不是 W8A8**：编码时 `full_precision_mm`，每次前向把 int8 权重反量化成 compute dtype 再普通 `F.linear`。本项目 TE 改走同一条反量化路径，int8 TE 的缓存指纹改后缀 `-int8convrot-dq`（旧缓存自动重编）。剩余差异来自 Qwen3.5 实现不同（HF transformers vs Comfy 自己的实现）。
+- **LoRA**：作者环境（`--highvram`、torch < 2.8）走经典 ModelPatcher 路径而非 dynamic VRAM：fp16 反量化 → fp32 算 ΔW → fp16 相加 → fp16 旋转、逐行 amax、随机舍入；种子 = `crc32("diffusion_model.{Comfy 权重键}.weight")`，融合 qkv 按整块 merge。dynamic VRAM 路径（bf16 merge、种子取模块名）在作者环境不启用，未实现。
+- **DiT 推理前向**：上游前向与 Comfy 数学相同、舍入路径不同（调制在 fp32 vs bf16、RoPE 先转 bf16 vs fp32 里旋转、RMSNorm 写法、残差 addcmul）。出图另走 `comfy_forward.py` 逐算子复刻；训练与训练中采样仍走上游前向。
+- **采样**：er_sde 的 half-log-SNR / alpha 改用 Comfy 原式（Anima 共用，出图更贴近 Comfy）；CFG 在去噪结果上组合；`percent_to_sigma` 用 double——SLG 窗口闭区间，fp32 边界会在 end_percent 那一步多跳一层。
+
+**验收**（同 torch 2.7 环境、注意力统一 SDPA）：DiT 42 层前向、LoRA merge 后的 int8 权重与 scale、8 步 er_sde + CFG + SLG 的端到端 latent，全部与 ComfyUI 逐位一致（max diff 0）。W8A8 线性层在 torch 2.11 下喂 Comfy 的真实输入同样逐位一致。
+
+**剩余差异**（作者实际环境，不在 PR-6 范围）：
+- torch 2.11 的 `F.rms_norm` 是融合内核、2.7 是组合实现，`mean` 归约顺序不同，1200 万元素约 70 个差 1 个 bf16 最小单位；单次 DiT 前向对这种扰动的放大约 7.7%（只改本项目自己的 RMSNorm 写法也是 7.7%），所以跨 torch 版本逐位不可能。
+- 个别形状的 fp32 批量 GEMM 跨版本选不同 cuBLAS 算法（merge 时 `o` 层 0.01% 元素差 1）。
+- Comfy 的 INT8 注意力内核；VAE 解码两边实现不同（最多差 4 级像素）。
+- 整图（作者工作流 832×1216 / 30 步 / CFG 10 / SLG 22 @ 0–0.5）vs Comfy：er_sde 16.30 → 16.60 dB，euler 18.57 → 20.94 dB。
+
 ## 6. 能力矩阵与显存
 
 | 项 | v1 |

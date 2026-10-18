@@ -1737,9 +1737,10 @@ def _run_xy(
     # 状态连续跑完 Y，Y 轴变化时保持原有 Y 外层；两轴都变化时保持稳定顺序。
     fp8_model = False
     if CACHE.model is not None:
-        from training.families.krea2.quant_fp8 import model_has_fp8_layers
+        # fp8（Krea2）/ int8（MOSS）量化底模都走 merge
+        from studio.services.inference.core import model_uses_lora_merge
 
-        fp8_model = model_has_fp8_layers(CACHE.model)
+        fp8_model = model_uses_lora_merge(CACHE.model)
 
     if base_seed == 0:
         base_seed = secrets.randbelow(2**31 - 1) + 1

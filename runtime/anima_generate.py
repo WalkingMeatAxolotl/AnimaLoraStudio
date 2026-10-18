@@ -434,11 +434,11 @@ def _run_xy_matrix(
     # （_cell_lora_configs）；CLI runner 无缓存管理，与 lora_ckpt 轴同款
     # 不接入。
     if x_spec.get("axis") == "lora_scale" or (y_spec and y_spec.get("axis") == "lora_scale"):
-        from training.families.krea2.quant_fp8 import model_has_fp8_layers
+        from studio.services.inference.core import model_uses_lora_merge
 
-        if model_has_fp8_layers(model):
+        if model_uses_lora_merge(model):
             raise NotImplementedError(
-                "fp8 底模的 LoRA 强度轴需逐格重新合并，走 daemon path "
+                "量化底模（fp8 / int8）的 LoRA 强度轴需逐格重新合并，走 daemon path "
                 "(runtime/anima_daemon.py)；CLI runner 请改用 bf16 底模。"
             )
 

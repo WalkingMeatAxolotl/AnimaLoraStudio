@@ -40,21 +40,27 @@ eager 路径，docs/design/krea2-fp8-inference.md §1.5）：
 from __future__ import annotations
 
 import logging
-import zlib
 
 import torch
 from torch import Tensor
 
 from studio.infrastructure.log_messages import msg
+# 与存储格式无关的 Comfy merge 语义在中立层（MOSS int8 共用）；名字在此重新导出
+from training.families.comfy_lora_merge import (  # noqa: F401
+    LORA_PREFIX as _LORA_PREFIX,
+    QuantizedMergeAdapter,
+    apply_lora_delta as _apply_lora_delta,
+    group_lora_layers as _group_lora_layers,
+    string_to_seed,
+)
 from training.families.krea2.quant_fp8 import _FP8_TORCH_DTYPES
+
+#: 旧名（daemon / 测试按它识别 merge 句柄）
+Fp8LoraMergeAdapter = QuantizedMergeAdapter
 
 
 logger = logging.getLogger(__name__)
 
-_LORA_PREFIX = "lora_unet_"
-_COMFY_PREFIX = "diffusion_model."
-# Keep the merge bounded to one layer's live workspace.  NVML tracing showed
-# that even an eight-layer interval adds about 2.4 GiB to the high-water mark.
 _CUDA_CACHE_TRIM_EVERY_LAYERS = 1
 # PEFT/comfy 键后缀 → kohya/lycoris 命名（civitai 生态 krea2 LoRA 常见形态：
 # ``diffusion_model.{点分层名}.lora_A/lora_B``，lora_A=down、lora_B=up，
@@ -68,17 +74,6 @@ _PEFT_SUFFIXES = (
     ("alpha", "alpha"),
     ("dora_scale", "dora_scale"),
 )
-
-
-def string_to_seed(key: str) -> int:
-    """comfy.utils.string_to_seed 等价：标准 CRC-32（0xEDB88320）。
-
-    comfy 手写实现对 str 逐字符 ord() 异或——层名均为 ASCII，与 utf-8 字节
-    序列一致，zlib.crc32 逐位相同（单测对拍手写参考实现）。
-    """
-    if not key.isascii():
-        raise ValueError(f"seed key 必须是 ASCII（comfy 层名域）：{key!r}")
-    return zlib.crc32(key.encode("utf-8"))
 
 
 def _calc_mantissa(
@@ -154,172 +149,6 @@ def _requantize_scaled(w16: Tensor, fp8_dtype: torch.dtype, seed: int) -> tuple[
         scale = 1.0 / torch.clamp(1.0 / scale, min=tensor_info.min, max=tensor_info.max)
     w16 = w16 * (1.0 / scale).to(w16.dtype)
     return stochastic_round_to_fp8(w16, fp8_dtype, seed), scale
-
-
-def _group_lora_layers(sd: dict[str, Tensor]) -> dict[str, dict[str, Tensor]]:
-    """按层聚合，两种键格式归一到 {layer_underscored: {kohya_suffix: tensor}}：
-
-    - kohya/lycoris：``lora_unet_{层名下划线}.{suffix}``（本 app 训练产物）
-    - PEFT/comfy：``diffusion_model.{层名点分}.{lora_A|lora_B|alpha}``
-      （civitai / musubi / comfy 生态）
-    """
-    layers: dict[str, dict[str, Tensor]] = {}
-    for key, tensor in sd.items():
-        if key.startswith(_LORA_PREFIX):
-            name, _, suffix = key.partition(".")
-            layers.setdefault(name[len(_LORA_PREFIX):], {})[suffix] = tensor
-        elif key.startswith(_COMFY_PREFIX):
-            rest = key[len(_COMFY_PREFIX):]
-            for peft_suffix, kohya_suffix in _PEFT_SUFFIXES:
-                if rest.endswith("." + peft_suffix):
-                    layer = rest[: -len(peft_suffix) - 1]
-                    layers.setdefault(layer.replace(".", "_"), {})[kohya_suffix] = tensor
-                    break
-            else:
-                raise ValueError(
-                    f"fp8 merge 无法识别 comfy 形态 LoRA 键的后缀：{key}"
-                )
-    return layers
-
-
-def _apply_lora_delta(
-    w16: Tensor,
-    tensors: dict[str, Tensor],
-    strength: float,
-    layer: str,
-    source: str,
-    compute_dtype: torch.dtype = torch.float32,
-    chunk_rows: int | None = None,
-) -> Tensor:
-    """单层单 LoRA merge：可选 fp32/bf16 算 diff，fp16 域相加。"""
-    device = w16.device
-    if "dora_scale" in tensors:
-        raise ValueError(
-            f"fp8 底模 merge 不支持 DoRA（weight_decompose）LoRA：{source} 层 {layer}。"
-            f"请改用 bf16 版本底模挂载。"
-        )
-
-    if "lora_down.weight" in tensors:  # plain LoRA / LoCon Linear
-        if "lora_mid.weight" in tensors:
-            raise ValueError(f"fp8 merge 不支持 LoCon mid（tucker）形态：{source} 层 {layer}")
-        mat1 = tensors["lora_up.weight"].to(device=device, dtype=compute_dtype)
-        mat2 = tensors["lora_down.weight"].to(device=device, dtype=compute_dtype)
-        alpha = float(tensors["alpha"]) / mat2.shape[0] if "alpha" in tensors else 1.0
-        mat1 = mat1.flatten(start_dim=1)
-        mat2 = mat2.flatten(start_dim=1)
-        rows = int(mat1.shape[0])
-        if chunk_rows is not None and 0 < int(chunk_rows) < rows:
-            # A rank-r LoRA is small, but materializing its out×in dense delta
-            # can consume almost 1 GiB for Krea2's tproj layer.  Compute row
-            # slices and add them immediately so peak workspace is bounded by
-            # chunk_rows×in instead of the full weight.  Only plain Linear LoRA
-            # uses this path; LoHa/LoKr retain their exact legacy algorithms.
-            w_rows = w16.reshape(rows, -1)
-            for start in range(0, rows, int(chunk_rows)):
-                end = min(start + int(chunk_rows), rows)
-                lora_diff = torch.mm(mat1[start:end], mat2)
-                w_rows[start:end] += (
-                    (strength * alpha) * lora_diff
-                ).type(w16.dtype)
-                del lora_diff
-        else:
-            lora_diff = torch.mm(mat1, mat2).reshape(w16.shape)
-            w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
-        return w16
-
-    if "hada_w1_a" in tensors:  # LoHa
-        if "hada_t1" in tensors or "hada_t2" in tensors:
-            raise ValueError(f"fp8 merge 不支持 LoHa tucker（t1/t2）形态：{source} 层 {layer}")
-        m1 = torch.mm(
-            tensors["hada_w1_a"].to(device=device, dtype=compute_dtype),
-            tensors["hada_w1_b"].to(device=device, dtype=compute_dtype),
-        )
-        m2 = torch.mm(
-            tensors["hada_w2_a"].to(device=device, dtype=compute_dtype),
-            tensors["hada_w2_b"].to(device=device, dtype=compute_dtype),
-        )
-        # dim 语义照 comfy weight_adapter/loha.py：divisor = w1_b 的 rank 维
-        alpha = float(tensors["alpha"]) / tensors["hada_w1_b"].shape[0] if "alpha" in tensors else 1.0
-        lora_diff = (m1 * m2).reshape(w16.shape)
-        w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
-        return w16
-
-    if "lokr_w1" in tensors or "lokr_w1_a" in tensors:  # LoKr
-        if "lokr_t2" in tensors:
-            raise ValueError(f"fp8 merge 不支持 LoKr tucker（t2）形态：{source} 层 {layer}")
-        # dim 语义照 comfy weight_adapter/lokr.py：w1/w2 各自分解时都会赋值，
-        # 两者都分解时 w2_b 的赋值在后、生效（覆盖），两者都是全矩阵时保持
-        # None → alpha 系数取 1.0
-        dim = None
-        if "lokr_w1" in tensors:
-            w1 = tensors["lokr_w1"].to(device=device, dtype=compute_dtype)
-        else:
-            dim = tensors["lokr_w1_b"].shape[0]
-            w1 = torch.mm(
-                tensors["lokr_w1_a"].to(device=device, dtype=compute_dtype),
-                tensors["lokr_w1_b"].to(device=device, dtype=compute_dtype),
-            )
-        if "lokr_w2" in tensors:
-            w2 = tensors["lokr_w2"].to(device=device, dtype=compute_dtype)
-        else:
-            dim = tensors["lokr_w2_b"].shape[0]
-            w2 = torch.mm(
-                tensors["lokr_w2_a"].to(device=device, dtype=compute_dtype),
-                tensors["lokr_w2_b"].to(device=device, dtype=compute_dtype),
-            )
-        if "alpha" in tensors and dim is not None:
-            alpha = float(tensors["alpha"]) / dim
-        else:
-            alpha = 1.0
-        lora_diff = torch.kron(w1, w2).reshape(w16.shape)
-        w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
-        return w16
-
-    raise ValueError(
-        f"fp8 merge 无法识别 LoRA 层形态：{source} 层 {layer}（{sorted(tensors)}）"
-    )
-
-
-class Fp8LoraMergeAdapter:
-    """merge 回写的生命周期句柄——daemon adapters 列表的 duck-type 成员。
-
-    - ``detach()``：从 CPU 备份逐位还原原始权重与 scale（换 LoRA / 卸载）
-    - ``network = None``：让 lycoris 侧的 multiplier 设值路径安全 no-op
-    - ``supports_hot_reload = False``：merge 无常驻 network，禁用 daemon
-      的权重热换路径（必须走 detach → 重 merge）
-    """
-
-    network = None
-    supports_hot_reload = False
-
-    def __init__(self, model: torch.nn.Module,
-                 backup: dict[str, tuple[Tensor, Tensor | None]],
-                 *, can_restore: bool = True) -> None:
-        self._model = model
-        self._backup = backup
-        #: 是否留了备份。False = 换 LoRA 时无法就地还原，detach() 返回 False
-        #: 让 daemon 走「重载模型」兜底（省下与整个模型等大的一份 CPU 备份）。
-        self._can_restore = can_restore
-
-    def detach(self) -> bool:
-        if not self._can_restore:
-            # 没留备份：告诉调用方「还不了」，由它重载模型保证干净状态。
-            # 模型引用必须一并丢掉——这个句柄还被 _run_generate/_run_xy 的
-            # 局部 adapters 变量持着，不置空则重载兜底期间旧模型整份钉在
-            # 显存里（XY 逐格换 LoRA 时最多三份模型同驻，直接 OOM）
-            self._model = None
-            return False
-        if not self._backup:
-            return True
-        modules = dict(self._model.named_modules())
-        for layer, (weight_cpu, scale_cpu) in self._backup.items():
-            module = modules[layer]
-            module.weight.data.copy_(weight_cpu.to(module.weight.device))
-            if scale_cpu is not None:
-                module.weight_scale.copy_(scale_cpu.to(module.weight_scale.device))
-        self._backup = {}
-        self._model = None
-        return True
 
 
 def merge_loras_into_fp8_model(
@@ -451,4 +280,4 @@ def merge_loras_into_fp8_model(
         normalized_chunk_rows or "off",
         "kept (detach can restore)" if keep_backup else "none (reload to swap LoRA)",
     )
-    return Fp8LoraMergeAdapter(model, backup, can_restore=keep_backup)
+    return QuantizedMergeAdapter(model, backup, can_restore=keep_backup)

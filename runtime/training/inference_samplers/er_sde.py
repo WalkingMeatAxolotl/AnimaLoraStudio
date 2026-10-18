@@ -70,12 +70,10 @@ def sample(
     # 对齐 ComfyUI：先 offset σ_0（≥1 → ~0.9997），再算 half-log-SNR。直接 clamp
     # 到 1-1e-12 会让 er_lambda≈1e12 → noise_scaler exp 溢出 NaN。
     sigmas = _offset_first_sigma_for_snr(sigmas, shift=shift)
-    # CONST: half_log_snr = log((1 - t) / t) = -logit(t)。末尾 0 留给下方
-    # sigmas[i+1]==0 分支处理，这里只 clamp 下界避免 log(0)。
-    eps = 1e-12
-    t = sigmas.clamp(min=eps, max=1.0 - eps)
-    half_log_snrs = torch.log((1 - t) / t)
-    er_lambdas = half_log_snrs.neg().exp()  # er_lambda = t / (1 - t)
+    # CONST：half_log_snr = -logit(σ)（ComfyUI sigma_to_half_log_snr 原式，舍入与
+    # log((1-σ)/σ) 不同）。末尾 σ=0 得 er_lambda=0，只在 sigmas[i+1]==0 分支之外用不到
+    half_log_snrs = sigmas.logit().neg()
+    er_lambdas = half_log_snrs.neg().exp()  # er_lambda = σ / (1 - σ)
 
     old_denoised = None
     old_denoised_d = None
@@ -103,8 +101,9 @@ def sample(
             x = denoised
         else:
             er_lambda_s, er_lambda_t = er_lambdas[i], er_lambdas[i + 1]
-            alpha_s = 1.0 - sigmas[i]
-            alpha_t = 1.0 - sigmas[i + 1]
+            # ComfyUI 原式 σ / er_lambda（= 1 − σ，舍入不同）
+            alpha_s = sigmas[i] / er_lambda_s
+            alpha_t = sigmas[i + 1] / er_lambda_t
             r_alpha = alpha_t / alpha_s
             r = noise_scaler(er_lambda_t) / noise_scaler(er_lambda_s)
 
@@ -133,8 +132,9 @@ def sample(
             # Stochastic term
             if s_noise and float(s_noise) > 0:
                 noise = noise_sampler(float(sigmas[i]), float(sigmas[i + 1]))
-                sde_scale = (er_lambda_t ** 2 - (er_lambda_s ** 2) * (r ** 2)).clamp(min=0).sqrt().nan_to_num(nan=0.0)
-                x = x + alpha_t * noise * float(s_noise) * sde_scale
+                x = x + alpha_t * noise * float(s_noise) * (
+                    er_lambda_t ** 2 - er_lambda_s ** 2 * r ** 2
+                ).sqrt().nan_to_num(nan=0.0)
 
         old_denoised = denoised
 

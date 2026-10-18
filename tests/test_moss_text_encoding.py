@@ -259,7 +259,7 @@ def test_int8_text_encoder_has_distinct_fingerprint(tmp_path) -> None:
     hf = te.MossTextStack(_hf_dir(tmp_path, src), device="cpu", tokenizer=_FakeTokenizer())
     q8 = te.MossTextStack(_comfy_int8_dir(tmp_path, src), device="cpu", tokenizer=_FakeTokenizer())
     assert hf.store.text_fingerprint == te.MOSS_TEXT_FINGERPRINT
-    assert q8.store.text_fingerprint == te.MOSS_TEXT_FINGERPRINT + "-int8convrot"
+    assert q8.store.text_fingerprint == te.MOSS_TEXT_FINGERPRINT + "-int8convrot-dq"
     assert q8.is_int8_storage and not hf.is_int8_storage
 
 

@@ -359,6 +359,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "LoRA 已合并进 fp8 底模: {loras} 份 LoRA → {layers} 个层",
         "en": "LoRA merged into the fp8 base model: {loras} LoRA(s) into {layers} layers",
     },
+    "train.int8_merge_done": {
+        "zh": "LoRA 已合并进 int8 底模并重新量化: {loras} 份 LoRA → {layers} 个层",
+        "en": "LoRA merged into the int8 base model and requantized: {loras} LoRA(s) into {layers} layers",
+    },
     "train.unsupported_quant_checkpoint": {
         "zh": "{name} 是 {fmt} 量化版权重（{layers} 个量化层），训练和出图不支持；请改用同一模型的 bf16 或 fp8 版本",
         "en": "{name} is a {fmt} quantized checkpoint ({layers} quantized layers), which training and generation do not support; use the bf16 or fp8 release of the same model instead",

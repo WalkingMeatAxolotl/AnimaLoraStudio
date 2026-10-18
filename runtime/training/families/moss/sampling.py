@@ -65,12 +65,19 @@ def build_sigmas(steps: int, *, shift: float = MOSS_SHIFT, scheduler: str = "sim
 
 
 def percent_to_sigma(percent: float, *, shift: float = MOSS_SHIFT) -> float:
-    """ComfyUI ``ModelSamplingDiscreteFlow.percent_to_sigma``。"""
+    """ComfyUI ``ModelSamplingDiscreteFlow.percent_to_sigma``：Python 浮点（double）计算。
+
+    精度要与 Comfy 一致——SLG 窗口两端闭区间，边界 σ（如 end_percent=0.5 → 5/6）
+    在 double 下比 fp32 σ 表里的同一档略大，Comfy 在该步不跳层；用 fp32 算边界会
+    恰好相等而多跳一步。
+    """
     if percent <= 0.0:
         return 1.0
     if percent >= 1.0:
         return 0.0
-    return float(_time_snr_shift(float(shift), torch.tensor(1.0 - float(percent))))
+    t = 1.0 - float(percent)
+    shift = float(shift)
+    return t if shift == 1.0 else shift * t / (1 + (shift - 1) * t)
 
 
 def comfy_initial_noise(height: int, width: int, *, seed: int | None) -> Tensor:
@@ -141,7 +148,20 @@ def sample_latents(
     cond = condition.cond
     uncond = condition.uncond
 
+    comfy_numerics = bool(getattr(model, "moss_comfy_forward", False))
+
     def velocity(x128: Tensor, sigma: Tensor, text: MossTextCondition, skip_layers) -> Tensor:
+        if comfy_numerics:
+            # 出图：ComfyUI 口径前向（逐算子复刻其舍入路径，见 comfy_forward）
+            from training.families.moss.comfy_forward import comfy_forward
+
+            mask = text.attention_mask[0].to(device).bool()
+            ctx = text.context.to(device=device, dtype=dtype)[:, mask]
+            v = comfy_forward(
+                model, x128.to(dtype), sigma.reshape(1).to(device=device, dtype=torch.float32),
+                ctx, skip_layers=skip_layers or (),
+            )
+            return v.float()
         x_model = unpatchify(x128).to(dtype)  # → 32ch f8（DiT 输入排布）
         v = model(
             x_model, sigma.reshape(1).to(device=device, dtype=torch.float32),
@@ -154,13 +174,15 @@ def sample_latents(
     def denoise_fn(x_in: Tensor, sigma_in) -> Tensor:
         sigma = sigma_in if torch.is_tensor(sigma_in) else torch.tensor(float(sigma_in))
         sigma = sigma.to(device=device, dtype=torch.float32)
-        v = velocity(x_in, sigma, cond, ())
+        # ComfyUI 运算顺序（浮点舍入逐位一致）：每个分支先 CONST calculate_denoised
+        # ``x − v·σ``（fp32），再在去噪结果上做 cfg_function ``u + (c − u)·cfg``
+        x0 = x_in - velocity(x_in, sigma, cond, ()) * sigma
         if use_cfg:
             s = float(sigma)
             skip_now = skip if (skip and sigma_lo <= s <= sigma_hi) else ()
-            v_uncond = velocity(x_in, sigma, uncond, skip_now)
-            v = v_uncond + float(cfg_scale) * (v - v_uncond)
-        return x_in - sigma * v  # CONST：x0 = x − σ·v
+            x0_uncond = x_in - velocity(x_in, sigma, uncond, skip_now) * sigma
+            x0 = x0_uncond + (x0 - x0_uncond) * float(cfg_scale)
+        return x0
 
     from training.inference_samplers import build_inference_sampler
 

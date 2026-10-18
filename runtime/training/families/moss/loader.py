@@ -218,11 +218,16 @@ def _swapped_pinned_bytes(path, prefixes: tuple[str, ...], dtype: torch.dtype) -
 
 
 def load_moss_model(path, device, dtype: torch.dtype, *,
-                    blocks_to_swap: int = 0) -> MossImageTransformer:
+                    blocks_to_swap: int = 0, int8_forward: str = "w8a16") -> MossImageTransformer:
     """strict 加载 MOSS DiT：浮点张量 cast 到 ``dtype``，int8 原样常驻并挂 W8A16 前向。
 
     结果 ``requires_grad_(False)``（底模冻结，LoRA 另挂）。``blocks_to_swap`` > 0 时
-    末尾 N 层直接落 CPU pinned（见模块 docstring）。
+    末尾 N 层直接落 CPU pinned（见模块 docstring）。``int8_forward``：训练用
+    ``w8a16``，出图用 ``w8a8``（ComfyUI parity，见 quant_int8）。
+
+    模型上记 ``moss_fused_qkv``：checkpoint 的 qkv 是否融合存储。ComfyUI 对融合
+    qkv 按整块 ``layers.N.proj.qkv`` merge 与重新量化（随机舍入的种子和随机数形状
+    都按整块取），parity merge 要据此把 q/k/v 拼回去。
     """
     if dtype not in {torch.float16, torch.bfloat16, torch.float32}:
         raise ValueError(f"MOSS loader 不支持 dtype={dtype}")
@@ -295,7 +300,8 @@ def load_moss_model(path, device, dtype: torch.dtype, *,
     del state
     modules = dict(model.named_modules())
     for layer, group in info.int8_layers.items():
-        patch_int8_linear(modules[layer], scales[layer], group)
+        patch_int8_linear(modules[layer], scales[layer], group, forward=int8_forward)
+    model.moss_fused_qkv = bool(info.fused_qkv)
     if packer is not None:
         logger.debug(
             "block_swap: placement swapped=%d/%d pinned=%.2f GB locked=%.2f GB",
