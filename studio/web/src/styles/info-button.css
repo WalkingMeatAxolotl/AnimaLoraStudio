@@ -38,13 +38,16 @@
   background: var(--accent-soft);
 }
 
+/* 面板 portal 到 body、fixed 定位；top/left/width 由 InfoButton.tsx 按 trigger
+ * 视口坐标算好写 inline style。z-index 要压过 Modal（60）/ Drawer（40）——
+ * 弹层是从它们内部的 trigger 打开的，必须盖在上面。 */
 .info-btn-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 75;
   width: 380px;
   max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: 8px;
