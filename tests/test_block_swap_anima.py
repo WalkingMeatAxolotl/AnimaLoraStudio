@@ -1,5 +1,5 @@
 """Anima 族 block swap 接线（docs/design/block-swap.md B3：机制 family 无关，
-接线 = loader 落位 + 能力位 + 版本感知折扣 + 采样 offload 互斥）。
+接线 = loader 落位 + 能力位 + 版本感知折扣 + 采样 offload 只搬常驻部分）。
 
 机制核心（四钩子 / 双缓冲 / pinned 生命周期）已由 test_block_swap*.py 钉死，
 这里只测 anima 侧新增的接线面。
@@ -103,14 +103,13 @@ def test_pinned_budget_guard_fails_fast_before_any_placement(monkeypatch):
     model = _TinyDiT()
     with pytest.raises(RuntimeError, match="内存不足以换出"):
         place_model_for_block_swap(model, "cuda", torch.float32, 2)
-    # fail-fast 语义：模型分毫未动（全部仍在 CPU、无标记）
+    # fail-fast 语义：模型分毫未动（全部仍在 CPU）
     assert all(p.device.type == "cpu" for p in model.parameters())
-    assert getattr(model, "blocks_to_swap", 0) == 0
 
 
 @pytest.mark.skipif(not _CUDA, reason="需要 CUDA")
 def test_placement_keeps_swapped_blocks_on_cpu():
-    """非换出部分上卡、末尾 N 层留 CPU、dtype 已 cast、标记落位、超界 clamp。"""
+    """非换出部分上卡、末尾 N 层留 CPU、dtype 已 cast、超界 clamp。"""
     model = _TinyDiT(num_blocks=4)
     num = place_model_for_block_swap(model, "cuda", torch.bfloat16, 99)
     assert num == 4  # clamp 到总层数
@@ -118,7 +117,6 @@ def test_placement_keeps_swapped_blocks_on_cpu():
     model2 = _TinyDiT(num_blocks=4)
     num2 = place_model_for_block_swap(model2, "cuda", torch.bfloat16, 2)
     assert num2 == 2
-    assert model2.blocks_to_swap == 2
     for i, block in enumerate(model2.blocks):
         expect = "cpu" if i >= 2 else "cuda"
         for p in block.parameters():
@@ -192,16 +190,54 @@ def test_anima_forward_backward_matches_without_swap():
     swap.close()
 
 
-# ── 采样期 VAE decode offload 与 swap 互斥 ─────────────────────────────────
+# ── 采样期 VAE decode offload：swap 句柄穿到搬运（真 CUDA 见 *_vae_offload.py） ──
 
-def test_decode_offload_skips_swapped_dit():
-    from training.families.anima.sampling import _decode_offload_targets
+class _RecordingModule:
+    """duck-type 非 nn.Module 模块（Qwen 替身）：只记 .to() 调用。"""
 
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def to(self, device):
+        self.calls.append(device)
+        return self
+
+
+def _patch_cuda_device(monkeypatch, sampling):
+    cuda = torch.device("cuda", 0)
+    monkeypatch.setattr(sampling, "_module_device", lambda m: cuda)
+    return cuda
+
+
+def test_decode_offload_threads_swap_handle_through(monkeypatch):
+    """DiT 挂了 swap → offload / 恢复两次搬运都带同一个句柄；Qwen 无 swap → None。"""
+    from training.families.anima import sampling
+
+    cuda = _patch_cuda_device(monkeypatch, sampling)
     model = _TinyDiT()
-    qwen = object()
-    # 无 swap：DiT + Qwen 都可 offload
-    assert _decode_offload_targets(model, qwen) == (model, qwen)
-    # swap 生效（loader 落的标记）：只 offload Qwen —— 恢复期的一刀切 .to()
-    # 会把 CPU pinned 主副本搬上卡，DiT 必须跳过
-    model.blocks_to_swap = 2
-    assert _decode_offload_targets(model, qwen) == (qwen,)
+    sentinel = object()
+    setattr(model.blocks, "_pinned_block_swap", sentinel)  # PinnedBlockSwap 构造时的登记
+    qwen = _RecordingModule()
+    moves: list = []
+    monkeypatch.setattr(
+        sampling, "move_module_excluding",
+        lambda m, device, swap: moves.append((m, device, swap)),
+    )
+
+    offloaded = sampling._offload_modules_for_vae_decode(model, qwen)
+    assert moves == [(model, "cpu", sentinel), (qwen, "cpu", None)]
+
+    moves.clear()
+    sampling._restore_offloaded_modules(offloaded)
+    assert moves == [(model, cuda, sentinel), (qwen, cuda, None)]
+
+
+def test_decode_offload_without_swap_is_plain_to(monkeypatch):
+    """无 swap：退化为原来的 module.to("cpu") / module.to(device)，行为不变。"""
+    from training.families.anima import sampling
+
+    cuda = _patch_cuda_device(monkeypatch, sampling)
+    qwen = _RecordingModule()
+    offloaded = sampling._offload_modules_for_vae_decode(qwen)
+    sampling._restore_offloaded_modules(offloaded)
+    assert qwen.calls == ["cpu", cuda]

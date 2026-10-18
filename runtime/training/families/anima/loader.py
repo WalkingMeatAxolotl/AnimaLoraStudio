@@ -117,10 +117,6 @@ def place_model_for_block_swap(model, device, dtype, blocks_to_swap: int) -> int
     for name, buf in model.named_buffers():
         if not name.startswith(swapped_prefixes):
             buf.data = buf.data.to(target)
-    # 公开标记：采样期 VAE decode 的整模型 offload 必须跳过本模型（一刀切
-    # .to() 恢复时会把 CPU 主副本搬上卡，swap 白做且瞬时占用=完整模型），
-    # families/anima/sampling.py 按它分流
-    model.blocks_to_swap = num_swap
     logger.debug(
         "block_swap: placement swapped=%d/%d pinned=%.2f GB rest_on_gpu=true",
         num_swap, total, need / 1024 ** 3,

@@ -20,6 +20,7 @@ import sys
 import torch
 import torch.nn.functional as F
 
+from training.block_swap import find_block_swap, move_module_excluding
 from training.families.anima import ANIMA_SPEC
 from training.families.anima.text_encoding import (
     build_comfy_anima_conditioning_inputs,
@@ -79,36 +80,29 @@ def _module_device(module) -> torch.device | None:
     return param.device
 
 
-def _decode_offload_targets(model, qwen_model) -> tuple:
-    """VAE decode 期允许 offload 的模块。
+def _offload_modules_for_vae_decode(*modules) -> list[tuple[object, torch.device, object]]:
+    """Move large, inactive modules off GPU while fp32 VAE decode runs.
 
-    block swap 生效时 DiT 必须跳过：恢复用的一刀切 ``.to(device)`` 会把换出层
-    的 CPU pinned 主副本整个搬上卡——swap 白做、瞬时占用=完整模型（小卡直接
-    OOM）；且换出后 DiT 常驻只剩零头，offload 它本就无意义。标记由
-    loader.place_model_for_block_swap 落在 model 上。
+    block swap 下 DiT 换出层的权重归 PinnedBlockSwap 管（CPU pinned 主副本 + GPU
+    槽），一刀切 ``.to()`` 恢复时会把整份主副本传上卡、峰值回到完整模型——只搬
+    常驻部分。无 swap 时 swap=None，退化为 ``module.to()``。
     """
-    if int(getattr(model, "blocks_to_swap", 0) or 0) > 0:
-        return (qwen_model,)
-    return (model, qwen_model)
-
-
-def _offload_modules_for_vae_decode(*modules) -> list[tuple[object, torch.device]]:
-    """Move large, inactive modules off GPU while fp32 VAE decode runs."""
-    offloaded: list[tuple[object, torch.device]] = []
+    offloaded: list[tuple[object, torch.device, object]] = []
     for module in modules:
         device = _module_device(module)
         if device is None or device.type != "cuda" or not hasattr(module, "to"):
             continue
-        module.to("cpu")
-        offloaded.append((module, device))
+        swap = find_block_swap(module)
+        move_module_excluding(module, "cpu", swap)
+        offloaded.append((module, device, swap))
     if offloaded and torch.cuda.is_available():
         torch.cuda.empty_cache()
     return offloaded
 
 
-def _restore_offloaded_modules(offloaded: list[tuple[object, torch.device]]) -> None:
-    for module, device in offloaded:
-        module.to(device)
+def _restore_offloaded_modules(offloaded: list[tuple[object, torch.device, object]]) -> None:
+    for module, device, swap in offloaded:
+        move_module_excluding(module, device, swap)
     if offloaded and torch.cuda.is_available():
         torch.cuda.empty_cache()
 
@@ -511,7 +505,7 @@ def sample_image(
                 "(free VRAM is tight but the projected peak fits)"
             )
             offloaded_modules = _offload_modules_for_vae_decode(
-                *_decode_offload_targets(model, qwen_model)
+                model, qwen_model
             )
         images = _decode_vae(vae, latents)
         images = images.squeeze(2)  # [B,C,H,W]
