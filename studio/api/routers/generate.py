@@ -125,6 +125,27 @@ def _cleanup_xy_tmp_folders() -> None:
 _cleanup_xy_tmp_folders()
 
 
+def _text_encoder_override(family: str, variant: str) -> str:
+    """出图请求临时选用的 TE variant → 目录（族资产声明 variant 与落点）。"""
+    from ...services.models.families import get_assets
+    from ...services.models.paths import models_root
+
+    assets = get_assets(family)
+    if variant not in assets.text_encoder_variants:
+        raise HTTPException(
+            status_code=422,
+            detail=f"文本编码器 variant '{variant}' 不适用于 model_family='{family}'",
+        )
+    te_dir = assets.text_encoder_dir(models_root(), variant)
+    if not (te_dir / "config.json").exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"{assets.display_name} 的 {variant} 文本编码器未下载——请到 设置 → 模型下载 "
+                   "下载后重试。",
+        )
+    return str(te_dir)
+
+
 @router.post("/api/generate")
 def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
@@ -133,20 +154,11 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
 
     _validate_lora_files(body)
     model_paths = _resolve_model_paths(body.base_model, family=body.model_family)
-    # TE variant 覆盖（krea2）：请求显式给 bf16/fp8 时覆盖 selected_te 默认
-    # （default_paths 已按 selected_te 解析）；fp8 未下载给可操作报错。
-    if body.text_encoder and body.model_family == "krea2":
-        from ...services.models.families.krea2 import qwen3_vl_dir_for
-        from ...services.models.paths import models_root
-
-        te_dir = qwen3_vl_dir_for(models_root(), body.text_encoder)
-        if body.text_encoder == "fp8" and not (te_dir / "config.json").exists():
-            raise HTTPException(
-                status_code=409,
-                detail="Qwen3-VL fp8 文本编码器未下载——请到 设置 → 模型下载 "
-                       "下载后重试。",
-            )
-        model_paths["text_encoder_path"] = str(te_dir)
+    # TE variant 覆盖（krea2 bf16/fp8、moss int8/bf16）：请求显式给 variant 时覆盖
+    # selected_te 默认（default_paths 已按 selected_te 解析）；未下载给可操作报错。
+    if body.text_encoder:
+        model_paths["text_encoder_path"] = _text_encoder_override(
+            body.model_family, body.text_encoder)
     # Turbo 检测（A4/C9）：官方蒸馏 variant → daemon 走 8 步/guidance 0/固定 mu
     # 的采样时刻表默认；custom 权重无 purpose 元数据按非蒸馏处理
     distilled = bool(get_assets(body.model_family).is_distilled_path(
@@ -222,6 +234,9 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             scheduler=body.scheduler,
             count=body.count,
             seed=body.seed,
+            uncond_skip_layers=body.uncond_skip_layers,
+            uncond_skip_start_percent=body.uncond_skip_start_percent,
+            uncond_skip_end_percent=body.uncond_skip_end_percent,
             lora_configs=[lc.model_dump() for lc in body.lora_configs],
             mixed_precision="bf16",
             vae_precision=vae_precision,
@@ -552,24 +567,17 @@ def count_prompt_tokens(body: dict) -> dict[str, Any]:
     """prompt 的真实 token 数（前端角标用；tokenizer 与训练/推理同源）。
 
     krea2 的文本条件训练口径 512 token，超出部分模型没见过（不拦截、
-    不警告——质量后果由用户掌握，前端只给中性计数）。tokenizer 惰性
-    加载并缓存；不可用时返回 tokens=null，前端隐藏角标。
+    不警告——质量后果由用户掌握，前端只给中性计数）。tokenizer 取该族当前
+    选中的文本编码器目录，惰性加载并缓存；不可用时返回 tokens=null，前端隐藏角标。
     """
     text = str(body.get("text") or "")
     family = str(body.get("model_family") or "anima")
     try:
+        from ...services.models.families import get_assets
         from ...services.models.paths import models_root
 
-        if family == "krea2":
-            from ...services.models.families.krea2 import (
-                qwen3_vl_dir_for, selected_te_variant,
-            )
-
-            tok_dir = str(qwen3_vl_dir_for(models_root(), selected_te_variant()))
-        else:
-            from ...services.models.families.anima import qwen_dir
-
-            tok_dir = str(qwen_dir(models_root()))
+        assets = get_assets(family)
+        tok_dir = str(assets.text_encoder_dir(models_root(), assets.selected_text_encoder()))
         tokenizer = _TOKENIZER_CACHE.get(tok_dir)
         if tokenizer is None:
             from transformers import AutoTokenizer

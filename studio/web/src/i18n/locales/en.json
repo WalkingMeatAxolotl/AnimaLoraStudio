@@ -1784,9 +1784,24 @@
     "baseModel": "Base model",
     "baseModelHint": "Defaults to the main model selected in Settings; switch to another downloaded version for this run",
     "textEncoder": "Text encoder",
-    "textEncoderBf16": "bf16 (~8.9 GB)",
-    "textEncoderFp8": "fp8 (~5 GB, official quantization)",
-    "textEncoderFp8NotDownloaded": "fp8 — not downloaded (Settings → Models)",
+    "textEncoderVariant": {
+      "krea2": {
+        "bf16": "bf16 (~8.9 GB)",
+        "fp8": "fp8 (~5 GB, official quantization)"
+      },
+      "moss": {
+        "int8": "int8 (~9.8 GB, ComfyUI quantization)",
+        "bf16": "bf16 (~16.8 GB)"
+      }
+    },
+    "textEncoderNotDownloaded": "{{label}} — not downloaded (Settings → Models)",
+    "skipLayerGuidance": "Skip Layer Guidance",
+    "skipLayerGuidanceHelp": "The unconditional (negative) branch skips these DiT layers within the start–end window, matching ComfyUI's SkipLayerGuidanceDiTSimple. Layers are 0-based and comma-separated; leave empty to turn it off. Start and end are sampling progress (0 = first step, 1 = last). Default: layer 22 for the whole run (official pipeline).",
+    "skipLayers": "Skip layers",
+    "skipStart": "Start",
+    "skipEnd": "End",
+    "skipLayersInvalid": "Skip layers must be comma-separated non-negative integers (empty = off)",
+    "skipRangeInvalid": "Skip Layer Guidance start cannot be greater than end",
     "swapSizeTitle": "Swap width and height (landscape ↔ portrait)",
     "cancelCurrentTitle": "Cancel current task",
     "sharedGpu": "Shares GPU with training",

@@ -47,6 +47,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.domain.comfy_parity import force_comfy_parity_runtime_config  # noqa: E402
+from studio.domain.generate import skip_layer_guidance_kwargs  # noqa: E402
 from studio.services.inference.core import (  # noqa: E402
     DeferredVAE,
     LoRAMeta,
@@ -1565,6 +1566,8 @@ def _run_generate(
     # 蒸馏推理底模（Krea2 Turbo）：studio 按 catalog variant purpose 检测后注入；
     # anima family 接受并忽略
     distilled: bool = bool(cfg.get("distilled", False))
+    # 族条件采样旋钮（SLG）：config 校验已保证只有声明能力位的族带值
+    sampling_extras = skip_layer_guidance_kwargs(cfg)
 
     # phase 上报：加载模型/LoRA 阶段（clip/sample/vae 由 sample_image 内部报）→ 进度条覆盖全流程
     _emit_for(req_id, "phase", name="load")
@@ -1644,6 +1647,7 @@ def _run_generate(
                             phase_callback=_phase_cb,
                             seed=seed,
                             vram_policy=vram_policy,
+                            **sampling_extras,
                         )
 
                     img = _sample_with_cuda_oom_retry(
@@ -1801,6 +1805,7 @@ def _run_xy(
                         dtype=CACHE.dtype,
                         seed=cur_seed,
                         vram_policy=vram_policy,
+                        **skip_layer_guidance_kwargs(cfg),
                     )
 
                 img = _sample_with_cuda_oom_retry(

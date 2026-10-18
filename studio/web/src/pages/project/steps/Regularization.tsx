@@ -33,6 +33,9 @@ import { useToast } from '../../../components/Toast'
 import { compareImagePath } from '../../../lib/imageSort'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
+import {
+  FAMILY_GENERATE_DEFAULTS, coerceGenerateFamily, type GenerateFamily,
+} from '../../tools/generate/types'
 
 interface Ctx {
   project: ProjectDetail
@@ -129,16 +132,19 @@ export default function RegularizationPage() {
   const [aiBaseModel, setAiBaseModel] = useState<string | null>(null)
   // 先验生成的模型族跟随 version 训练配置（服务端权威解析；这里只为
   // BaseModelSelect 列对族的底模）。无 config / 读失败 → anima。
-  const [aiFamily, setAiFamily] = useState<'anima' | 'krea2'>('anima')
+  const [aiFamily, setAiFamily] = useState<GenerateFamily>('anima')
   useEffect(() => {
     if (!vid) return
     let alive = true
     api.getVersionConfig(project.id, vid)
       .then((r) => {
         if (!alive) return
-        const fam = r.config?.model_family === 'krea2' ? 'krea2' : 'anima'
+        const fam = coerceGenerateFamily(r.config?.model_family)
         setAiFamily(fam)
         setAiBaseModel(null)  // 族变 → 清临时底模覆盖（variant key 是族内值）
+        // 步数 / CFG 跟随族采样默认（与测试页切族同一张表）
+        setAiSteps(FAMILY_GENERATE_DEFAULTS[fam].steps)
+        setAiCfg(FAMILY_GENERATE_DEFAULTS[fam].cfgScale)
       })
       .catch(() => {})
     return () => { alive = false }
@@ -1179,7 +1185,7 @@ function AiForm({
   seed: number; onSeedChange: (v: number) => void
   baseModel: string | null; onBaseModelChange: (v: string) => void
   /** version 训练配置声明的模型族（底模列表按族列） */
-  family: 'anima' | 'krea2'
+  family: GenerateFamily
   incremental: boolean; onIncrementalChange: (v: boolean) => void
 }) {
   const { t } = useTranslation()

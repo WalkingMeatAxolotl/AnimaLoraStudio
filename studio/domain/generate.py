@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .common import FAMILY_SAMPLING, AttentionBackend
+from .common import FAMILY_SAMPLING, AttentionBackend, supports_capability
 from .lora import LoraEntry
 from .xy_matrix import XYMatrixSpec, _check_axis_values
 
@@ -38,6 +38,22 @@ def validate_sampling_for_family(
             )
 
 
+#: Skip Layer Guidance 的三个旋钮（族能力位 ``skip_layer_guidance`` 门控）。
+#: 值为 None = 不传、走族 sample_image 的默认（MOSS：第 22 层、全程）。
+SKIP_LAYER_GUIDANCE_FIELDS = (
+    "uncond_skip_layers", "uncond_skip_start_percent", "uncond_skip_end_percent",
+)
+
+
+def skip_layer_guidance_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
+    """出图 config 里显式给出的 SLG 旋钮 → 族 ``sample_image`` 的 kwargs。
+
+    GenerateConfig 已保证只有声明能力位的族会带非 None 值，所以调用方按统一
+    协议透传、不按族分支。
+    """
+    return {k: cfg[k] for k in SKIP_LAYER_GUIDANCE_FIELDS if cfg.get(k) is not None}
+
+
 class GenerateConfig(BaseModel):
     """测试出图任务参数。对应 runtime/anima_generate.py 的 JSON 配置。
 
@@ -48,7 +64,7 @@ class GenerateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # 模型族（服务端从请求填充；daemon 按此派发加载与采样栈）
-    model_family: Literal["anima", "krea2"] = Field("anima")
+    model_family: Literal["anima", "krea2", "moss"] = Field("anima")
     # 蒸馏推理底模（Krea2 Turbo：8 步 / guidance 0 / mu 固定 1.15）。
     # 服务端按 catalog variant purpose 检测官方 Turbo 路径后注入
     distilled: bool = Field(False)
@@ -73,6 +89,11 @@ class GenerateConfig(BaseModel):
     scheduler: Literal["simple", "sgm_uniform"] = Field("simple")
     count: int = Field(1, ge=1, le=32, description="每个 prompt 生成张数")
     seed: int = Field(0, description="随机种子（0=随机）")
+    # Skip Layer Guidance（对齐 ComfyUI SkipLayerGuidanceDiTSimple）：uncond 分支在
+    # [start, end] 采样进度区间内跳过这些 DiT 层；空列表 = 关闭。None = 族默认
+    uncond_skip_layers: Optional[list[int]] = Field(None)
+    uncond_skip_start_percent: Optional[float] = Field(None, ge=0.0, le=1.0)
+    uncond_skip_end_percent: Optional[float] = Field(None, ge=0.0, le=1.0)
 
     # LoRA（多 LoRA 独立 inject + multiplier=scale 控贡献权重）
     lora_configs: list[LoraEntry] = Field(
@@ -134,6 +155,23 @@ class GenerateConfig(BaseModel):
     def _validate_sampler_family(self) -> "GenerateConfig":
         validate_sampling_for_family(
             self.model_family, self.sampler_name, self.scheduler)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_skip_layer_guidance(self) -> "GenerateConfig":
+        given = [k for k in SKIP_LAYER_GUIDANCE_FIELDS if getattr(self, k) is not None]
+        if given and not supports_capability(self.model_family, "skip_layer_guidance"):
+            raise ValueError(
+                f"{'、'.join(given)} 不适用于 model_family='{self.model_family}'"
+                "（该族不支持 Skip Layer Guidance）"
+            )
+        if any(i < 0 for i in (self.uncond_skip_layers or ())):
+            raise ValueError("uncond_skip_layers 须为非负的层序号")
+        start, end = self.uncond_skip_start_percent, self.uncond_skip_end_percent
+        if start is not None and end is not None and start > end:
+            raise ValueError(
+                f"uncond_skip_start_percent={start} 不能大于 uncond_skip_end_percent={end}"
+            )
         return self
 
     @model_validator(mode="after")

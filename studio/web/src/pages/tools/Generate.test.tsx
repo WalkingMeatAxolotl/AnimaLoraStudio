@@ -828,6 +828,98 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(await screen.findByText(/每个单元格都可能重新合并/)).toBeInTheDocument()
   })
 
+  const mockMossCatalog = () => {
+    const previousImpl = fetchMock.getMockImplementation()
+    const ready = (weights: string) => [
+      { name: weights, exists: true },
+      { name: 'config.json', exists: true },
+      { name: 'tokenizer.json', exists: true },
+    ]
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/models/catalog')) {
+        const body = {
+          moss_main: {
+            variants: [{ variant: 'base_int8', exists: true, purpose: 'training' }],
+            custom: [],
+            selected: 'base_int8',
+          },
+          moss_text_encoder_int8: { selected: 'int8', files: ready('qwen3.5_9b_int8_convrot.safetensors') },
+          moss_text_encoder_bf16: { selected: 'int8', files: [] },
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl!(url, init)
+    })
+  }
+
+  it('MOSS：TE 下拉按族列 int8 / bf16（未下载禁用），SLG 参数与 TE 进 payload 和快照', async () => {
+    seedPrefs({ mode: 'single', modelFamily: 'moss', samplerName: 'euler', steps: 50, cfgScale: 3 })
+    mockMossCatalog()
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    const te = await screen.findByLabelText('文本编码器')
+    await waitFor(() => expect(te).toHaveValue('int8'))
+    const options = Array.from((te as HTMLSelectElement).options)
+    const bf16 = options.find((o) => o.value === 'bf16')!
+    expect(bf16.textContent).toMatch(/16\.8 GB.*未下载/)
+    expect(bf16.disabled).toBe(true)
+
+    const layers = screen.getByLabelText('跳过层')
+    expect(layers).toHaveValue('22')
+    await user.clear(layers)
+    await user.type(layers, '7, 8')
+
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody).toMatchObject({
+      model_family: 'moss',
+      text_encoder: 'int8',
+      uncond_skip_layers: [7, 8],
+      uncond_skip_start_percent: 0,
+      uncond_skip_end_percent: 1,
+    })
+    expect(lastEnqueueBody!.params_snapshot).toMatchObject({
+      model_family: 'moss', text_encoder: 'int8', uncond_skip_layers: [7, 8],
+    })
+  })
+
+  it('MOSS：SLG 层号非法时不入队', async () => {
+    seedPrefs({ mode: 'single', modelFamily: 'moss', samplerName: 'euler' })
+    mockMossCatalog()
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    const layers = await screen.findByLabelText('跳过层')
+    await user.clear(layers)
+    await user.type(layers, '22, a')
+    expect(layers).toHaveAttribute('aria-invalid', 'true')
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    expect(await screen.findByText(/Skip 层须为逗号分隔的非负整数/)).toBeInTheDocument()
+    expect(lastEnqueueBody).toBeNull()
+  })
+
+  it('anima 不显示 SLG / TE 选择，请求不带这些字段', async () => {
+    seedPrefs({ mode: 'single' })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    expect(screen.queryByLabelText('跳过层')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('文本编码器')).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: '开始生成' }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody).not.toHaveProperty('uncond_skip_layers')
+    expect(lastEnqueueBody!.text_encoder).toBeUndefined()
+  })
+
   it('xy 新草稿持久化 checkpointAnchor，不依赖旧 xyLoras 索引', async () => {
     seedPrefs({
       mode: 'xy',

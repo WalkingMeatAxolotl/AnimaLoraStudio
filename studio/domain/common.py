@@ -25,7 +25,7 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
     }),
     "krea2": frozenset({"masked_loss", "text_cache", "block_swap"}),
     # block_swap 随 MOSS PR-5 接入（DiT 的层容器是 layers 不是 blocks）
-    "moss": frozenset({"masked_loss", "text_cache", "int8_base"}),
+    "moss": frozenset({"masked_loss", "text_cache", "int8_base", "skip_layer_guidance"}),
 }
 
 # 族默认 overlay 的单一权威源（ModelSpec.config_defaults 直接引用本表，R3）。

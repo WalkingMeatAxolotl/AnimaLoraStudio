@@ -1784,9 +1784,24 @@
     "baseModel": "底模",
     "baseModelHint": "默认用设置页选定的主模型；可临时换成其它已下载的版本出图",
     "textEncoder": "文本编码器",
-    "textEncoderBf16": "bf16（约 8.9 GB）",
-    "textEncoderFp8": "fp8（约 5 GB，官方量化）",
-    "textEncoderFp8NotDownloaded": "fp8 —— 未下载（设置 → 模型下载）",
+    "textEncoderVariant": {
+      "krea2": {
+        "bf16": "bf16（约 8.9 GB）",
+        "fp8": "fp8（约 5 GB，官方量化）"
+      },
+      "moss": {
+        "int8": "int8（约 9.8 GB，ComfyUI 量化）",
+        "bf16": "bf16（约 16.8 GB）"
+      }
+    },
+    "textEncoderNotDownloaded": "{{label}} —— 未下载（设置 → 模型下载）",
+    "skipLayerGuidance": "Skip Layer Guidance",
+    "skipLayerGuidanceHelp": "无条件（负面）分支在起止区间内跳过这些 DiT 层，对齐 ComfyUI 的 SkipLayerGuidanceDiTSimple。层号从 0 起、逗号分隔，留空即关闭；起止为采样进度（0 = 开始，1 = 结束）。默认第 22 层、全程（官方 pipeline）。",
+    "skipLayers": "跳过层",
+    "skipStart": "起始",
+    "skipEnd": "结束",
+    "skipLayersInvalid": "Skip 层须为逗号分隔的非负整数（留空 = 关闭）",
+    "skipRangeInvalid": "Skip Layer Guidance 的起始不能大于结束",
     "swapSizeTitle": "交换宽高（横版 ↔ 竖版）",
     "cancelCurrentTitle": "取消当前任务",
     "sharedGpu": "与训练共享 GPU",

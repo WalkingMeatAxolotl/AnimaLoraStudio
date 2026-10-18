@@ -101,29 +101,56 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
   }
 }
 
-/** krea2 TE 选项状态：fp8 目录是否就绪（权重 + config 已下载，决定测试页
- *  下拉里 fp8 的可选性）+ 下载中心选中的默认 variant（下拉初值）。 */
-export function useKrea2TeOptions(): { fp8Ready: boolean; selected: 'bf16' | 'fp8' } {
-  const [state, setState] = useState<{ fp8Ready: boolean; selected: 'bf16' | 'fp8' }>({
-    fp8Ready: false, selected: 'bf16',
-  })
+/** 文本编码器 variant（krea2 bf16/fp8、moss int8/bf16）。 */
+export type TextEncoderVariant = 'bf16' | 'fp8' | 'int8'
+
+/** 带可选 TE variant 的族：下拉顺序（首项 = 族默认）+ 每个 variant 在
+ *  /api/models/catalog 里的目录区块。没列出的族只有一个 TE，测试页不出选择。 */
+export const TEXT_ENCODER_VARIANTS: Partial<Record<BaseModelFamily, ReadonlyArray<{
+  variant: TextEncoderVariant
+  catalogKey: 'krea2_text_encoder' | 'krea2_text_encoder_fp8' | 'moss_text_encoder_int8' | 'moss_text_encoder_bf16'
+}>>> = {
+  krea2: [
+    { variant: 'bf16', catalogKey: 'krea2_text_encoder' },
+    { variant: 'fp8', catalogKey: 'krea2_text_encoder_fp8' },
+  ],
+  moss: [
+    { variant: 'int8', catalogKey: 'moss_text_encoder_int8' },
+    { variant: 'bf16', catalogKey: 'moss_text_encoder_bf16' },
+  ],
+}
+
+/** 该族的 TE 选项状态：每个 variant 的目录是否就绪（权重 + config + tokenizer
+ *  已下载，决定测试页下拉的可选性）+ 下载中心选中的默认 variant（下拉初值）。
+ *  无 variant 的族返回空列表与 null。 */
+export function useTextEncoderOptions(family: BaseModelFamily): {
+  variants: Array<{ variant: TextEncoderVariant; ready: boolean }>
+  selected: TextEncoderVariant | null
+} {
+  const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
   useEffect(() => {
     let alive = true
-    api.getModelsCatalog().then((c) => {
-      if (!alive) return
-      const files = c.krea2_text_encoder_fp8?.files ?? []
+    api.getModelsCatalog().then((c) => { if (alive) setCatalog(c) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  return useMemo(() => {
+    const table = TEXT_ENCODER_VARIANTS[family] ?? []
+    const variants = table.map(({ variant, catalogKey }) => {
+      const files = catalog?.[catalogKey]?.files ?? []
       const existing = new Set(files.filter((f) => f.exists).map((f) => f.name))
-      const fp8Ready = (
+      const ready = (
         files.some((f) => f.name.endsWith('.safetensors') && f.exists)
         && existing.has('config.json')
         && existing.has('tokenizer.json')
       )
-      const sel = c.krea2_text_encoder?.selected
-      setState({ fp8Ready, selected: sel === 'fp8' ? 'fp8' : 'bf16' })
-    }).catch(() => {})
-    return () => { alive = false }
-  }, [])
-  return state
+      return { variant, ready }
+    })
+    if (table.length === 0) return { variants, selected: null }
+    // 同族各 variant 区块共享同一个 selected（下载中心的 selected_te）
+    const sel = catalog?.[table[0].catalogKey]?.selected
+    const selected = table.find((v) => v.variant === sel)?.variant ?? table[0].variant
+    return { variants, selected }
+  }, [catalog, family])
 }
 
 function basename(p: string): string {

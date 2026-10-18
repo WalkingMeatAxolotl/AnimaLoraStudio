@@ -27,7 +27,7 @@ class RegAiConfig(BaseModel):
 
     # 模型族（服务端从 version config 读取——先验生成是 version 级操作，
     # 族跟随该 version 的训练配置，不是用户请求级选择）
-    model_family: Literal["anima", "krea2"] = Field("anima")
+    model_family: Literal["anima", "krea2", "moss"] = Field("anima")
 
     # 模型路径（服务端从 secrets 填充）
     transformer_path: str = Field("")

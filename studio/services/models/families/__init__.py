@@ -12,6 +12,9 @@ TrainingConfig 权重路径字段里的是「模型族资产」进本包；打�
 - transformer_path_for(sel) — 显式底模选择 → transformer 绝对路径
 - selected_variant() — Settings 当前选中 variant
 - catalog_sections(root, models_cfg) — /api/models/catalog 的本族区块
+- text_encoder_variants / text_encoder_dir(root, variant) / selected_text_encoder()
+  — 文本编码器 variant（出图请求临时覆盖、token 计数用）；没有 variant 的族
+  variants 为空、selected 为 None、dir 忽略 variant
 """
 from __future__ import annotations
 

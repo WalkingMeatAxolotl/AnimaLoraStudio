@@ -19,18 +19,22 @@ class GenerateRequest(BaseModel):
     scheduler: Literal["simple", "sgm_uniform"] = "simple"
     count: int = 1
     seed: int = 0
+    # Skip Layer Guidance（族能力位 skip_layer_guidance，当前仅 moss）：None = 族默认
+    uncond_skip_layers: Optional[list[int]] = None
+    uncond_skip_start_percent: Optional[float] = None
+    uncond_skip_end_percent: Optional[float] = None
     lora_configs: list[LoraEntry] = []
     mixed_precision: str = "bf16"
     # 底模所属模型族（多模型 P4-4）：决定路径解析 / daemon 加载与采样栈；
     # sampler 按族白名单校验（GenerateConfig validator，越族 422）
-    model_family: Literal["anima", "krea2"] = "anima"
+    model_family: Literal["anima", "krea2", "moss"] = "anima"
     # 本次出图临时选用的底模（官方 variant key 或注册的本地 custom 路径）；
     # None → 用 Settings 里该族 selected。只换 transformer 权重。
     base_model: Optional[str] = None
-    # 本次出图选用的文本编码器 variant（krea2 生效）：None → 跟随下载中心
-    # 选中的 TE（selected_te）；显式 "bf16"/"fp8" 临时覆盖（与 base_model
-    # 语义对称）。
-    text_encoder: Optional[Literal["bf16", "fp8"]] = None
+    # 本次出图选用的文本编码器 variant（krea2 bf16/fp8、moss int8/bf16）：None →
+    # 跟随下载中心选中的 TE（selected_te）；显式给出时临时覆盖（与 base_model
+    # 语义对称），variant 是否属于该族由族资产校验（越族 422）。
+    text_encoder: Optional[Literal["bf16", "fp8", "int8"]] = None
     # commit C：attention_backend 默认从 secrets.generate.attention_backend 读，
     # 前端 Generate 页不再发这个字段；保留 Optional 兼容老客户端 / 临时覆盖。
     attention_backend: Optional[AttentionBackend] = None

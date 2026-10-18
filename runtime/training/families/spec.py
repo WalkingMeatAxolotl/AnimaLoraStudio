@@ -117,6 +117,9 @@ KNOWN_CAPABILITIES = frozenset({
     "block_swap",
     # 族 loader 接受 ComfyUI int8_tensorwise + convrot 底模（训练前的量化底模校验据此放行）
     "int8_base",
+    # 族 sample_image 接受 uncond_skip_layers / uncond_skip_{start,end}_percent
+    # （Skip Layer Guidance；出图设置的三个旋钮据此放行）
+    "skip_layer_guidance",
 })
 
 

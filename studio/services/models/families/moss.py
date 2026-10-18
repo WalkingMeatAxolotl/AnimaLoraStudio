@@ -311,6 +311,9 @@ class _MossAssets:
     path_choices = staticmethod(path_choices)
     is_distilled_path = staticmethod(is_distilled_path)
     supported_quant_formats = SUPPORTED_QUANT_FORMATS
+    text_encoder_variants = MOSS_TE_VARIANTS
+    text_encoder_dir = staticmethod(moss_te_dir)
+    selected_text_encoder = staticmethod(selected_te_variant)
 
 
 ASSETS = _MossAssets()

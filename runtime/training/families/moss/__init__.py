@@ -117,13 +117,15 @@ class MossFamily:
                      negative_prompt: str = "",
                      sampler_name: str | None = None,
                      scheduler: str | None = None,
+                     distilled: bool = False,
                      uncond_skip_layers=MOSS_UNCOND_SKIP_LAYERS,
                      uncond_skip_start_percent: float = 0.0,
                      uncond_skip_end_percent: float = 1.0,
                      device="cuda", dtype=None, step_callback=None,
                      phase_callback=None, seed: int | None = None,
                      vram_policy: str | None = None):
-        del vram_policy  # 显存编排随 PR-5
+        # MOSS 无蒸馏 variant，distilled 接受并忽略（调用方按统一协议传）；显存编排随 PR-5
+        del distilled, vram_policy
         dtype = dtype or torch.bfloat16
         steps = int(steps or MOSS_DEFAULT_STEPS)
         cfg = MOSS_DEFAULT_CFG if cfg_scale is None else float(cfg_scale)

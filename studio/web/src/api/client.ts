@@ -1736,13 +1736,17 @@ export interface XYMatrixSpec {
 export interface GenerateRequest {
   prompts: string[]
   /** 底模所属模型族（多模型 P4-4）；省略 = anima。 */
-  model_family?: 'anima' | 'krea2'
+  model_family?: 'anima' | 'krea2' | 'moss'
   /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
    *  省略 → server 用 Settings 里该族的 selected。 */
   base_model?: string
-  /** 本次出图的文本编码器 variant（krea2 生效）：省略 = 跟随下载中心选中
-   *  的 TE（selected_te）；显式 bf16/fp8 临时覆盖（与 base_model 对称）。 */
-  text_encoder?: 'bf16' | 'fp8'
+  /** 本次出图的文本编码器 variant（krea2 bf16/fp8、moss int8/bf16）：省略 = 跟随
+   *  下载中心选中的 TE（selected_te）；显式给出时临时覆盖（与 base_model 对称）。 */
+  text_encoder?: 'bf16' | 'fp8' | 'int8'
+  /** Skip Layer Guidance（族能力位 skip_layer_guidance，当前仅 moss）；省略 = 族默认 */
+  uncond_skip_layers?: number[]
+  uncond_skip_start_percent?: number
+  uncond_skip_end_percent?: number
   negative_prompt?: string
   width?: number
   height?: number

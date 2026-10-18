@@ -367,6 +367,9 @@ class _Krea2Assets:
     catalog_sections = staticmethod(catalog_sections)
     path_choices = staticmethod(path_choices)
     is_distilled_path = staticmethod(is_distilled_path)
+    text_encoder_variants = QWEN3_VL_TE_VARIANTS
+    text_encoder_dir = staticmethod(qwen3_vl_dir_for)
+    selected_text_encoder = staticmethod(selected_te_variant)
 
 
 ASSETS = _Krea2Assets()

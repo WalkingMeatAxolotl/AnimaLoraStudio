@@ -340,6 +340,10 @@ class _AnimaAssets:
     path_choices = staticmethod(path_choices)
     # Anima 无蒸馏推理 variant
     is_distilled_path = staticmethod(lambda path: False)
+    # 单一文本编码器（Qwen3-0.6B），没有可选 variant
+    text_encoder_variants: tuple[str, ...] = ()
+    text_encoder_dir = staticmethod(lambda root, variant=None: qwen_dir(root))
+    selected_text_encoder = staticmethod(lambda: None)
 
 
 ASSETS = _AnimaAssets()

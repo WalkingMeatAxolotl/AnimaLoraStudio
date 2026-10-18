@@ -376,3 +376,27 @@ def test_run_xy_matrix_skips_failing_cell(gen_module, tmp_path, monkeypatch) -> 
     # 仅 cell 0 + cell 2 落盘（cell 1 抛了）
     files = sorted(p.name for p in tmp_path.iterdir())
     assert files == ["xy_x00_y00_s42.png", "xy_x02_y00_s42.png"]
+
+
+def test_run_xy_matrix_forwards_family_sampling_extras(gen_module, tmp_path) -> None:
+    """族条件采样旋钮（MOSS 的 SLG）按统一协议透传到每个 cell 的 sample_image。"""
+    calls: list[dict] = []
+    fake_img = _make_fake_img(tmp_path)
+
+    def _stub(*args, **kwargs):
+        calls.append(kwargs)
+        return fake_img
+
+    extras = {"uncond_skip_layers": [22], "uncond_skip_end_percent": 0.5}
+    gen_module._run_xy_matrix(
+        xy_matrix={"x": {"axis": "steps", "values": [20, 30]}, "y": None},
+        base_specs=[], adapters=[],
+        prompt="p", negative_prompt="",
+        base_seed=1, base_steps=25, base_cfg_scale=3.0, base_sampler="euler",
+        scheduler="simple", height=1024, width=1024,
+        family=_stub_family(_stub), model=None, vae=None, text=None,
+        device="cpu", dtype=None, output_dir=tmp_path, update_monitor=None,
+        sampling_extras=extras,
+    )
+    assert len(calls) == 2
+    assert all(c["uncond_skip_layers"] == [22] and c["uncond_skip_end_percent"] == 0.5 for c in calls)

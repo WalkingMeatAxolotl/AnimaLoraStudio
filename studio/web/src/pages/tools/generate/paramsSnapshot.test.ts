@@ -213,6 +213,20 @@ describe('applySnapshot（async + 注入 resolver/projectExists）', () => {
     expect((await applySnapshot(snapshot(), resolver, projectExists)).baseModel).toBeNull()
   })
 
+  it('moss 快照：族与 SLG 回填，缺字段的项落回族默认；不支持的族为 null', async () => {
+    const full = await applySnapshot(snapshot({
+      model_family: 'moss', sampler_name: 'er_sde',
+      uncond_skip_layers: [7, 8], uncond_skip_start_percent: 0, uncond_skip_end_percent: 0.5,
+    }), resolver, projectExists)
+    expect(full.modelFamily).toBe('moss')
+    expect(full.samplerName).toBe('er_sde')
+    expect(full.skipLayerGuidance).toEqual({ layers: '7, 8', start: 0, end: 0.5 })
+    const partial = await applySnapshot(
+      snapshot({ model_family: 'moss', uncond_skip_end_percent: 0.5 }), resolver, projectExists)
+    expect(partial.skipLayerGuidance).toEqual({ layers: '22', start: 0, end: 0.5 })
+    expect((await applySnapshot(snapshot(), resolver, projectExists)).skipLayerGuidance).toBeNull()
+  })
+
   it('compare 模式映射到 xy（子视图无 selectedIndices 不能直接进）', async () => {
     const snap = snapshot({ mode: 'compare' })
     expect((await applySnapshot(snap, resolver, projectExists)).mode).toBe('xy')

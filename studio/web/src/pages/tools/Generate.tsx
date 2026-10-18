@@ -8,7 +8,10 @@ import {
   type Task,
   type XYMatrixSpec,
 } from '../../api/client'
-import BaseModelSelect, { useBaseModelOptions, useKrea2TeOptions } from '../../components/BaseModelSelect'
+import BaseModelSelect, {
+  TEXT_ENCODER_VARIANTS, useBaseModelOptions, useTextEncoderOptions, type TextEncoderVariant,
+} from '../../components/BaseModelSelect'
+import { InfoButton } from '../../components/InfoButton'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { schemaEnumLabel } from '../../lib/schema'
@@ -57,9 +60,10 @@ import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
 import {
   DEFAULT_NEG, DEFAULT_SAMPLER, DEFAULT_SCHEDULER,
-  DISTILLED_GENERATE_DEFAULTS, FAMILY_GENERATE_DEFAULTS,
+  DISTILLED_GENERATE_DEFAULTS, FAMILY_GENERATE_DEFAULTS, FAMILY_SKIP_LAYER_DEFAULTS,
   SAMPLER_OPTIONS_BY_FAMILY, SCHEDULER_OPTIONS_BY_FAMILY,
-  type GenerateFamily, type SamplerName, type SchedulerName,
+  coerceGenerateFamily, parseSkipLayers,
+  type GenerateFamily, type SamplerName, type SchedulerName, type SkipLayerGuidance,
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
 import { BaseNumBlocksContext } from './generate/baseArchContext'
@@ -98,7 +102,9 @@ const DEFAULT_GENERATE_PREFS = {
   // 底模 / TE 的显式覆盖也持久化（用户反馈：切页面被重置回全局默认太烦）。
   // null = 跟随设置页 selected / selected_te（仍是默认行为）。
   baseModel: null as string | null,
-  textEncoder: null as 'bf16' | 'fp8' | null,
+  textEncoder: null as TextEncoderVariant | null,
+  // Skip Layer Guidance：仅支持该能力的族非 null（切族时落回族默认）
+  skipLayerGuidance: null as SkipLayerGuidance | null,
 }
 
 type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
@@ -174,8 +180,10 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
   }
   // 族与 sampler 一致性（多模型 P4-4）：老 prefs 无 modelFamily / 持久化的
   // sampler 与当前族白名单不符时（越族值后端 422），落回族默认（首项）。
-  const family: GenerateFamily =
-    merged.modelFamily === 'krea2' ? 'krea2' : 'anima'
+  const family = coerceGenerateFamily(merged.modelFamily)
+  const teVariants = (TEXT_ENCODER_VARIANTS[family] ?? []).map((v) => v.variant) as readonly string[]
+  const slgDefault = FAMILY_SKIP_LAYER_DEFAULTS[family]
+  const slg = merged.skipLayerGuidance
   const samplers = SAMPLER_OPTIONS_BY_FAMILY[family] as readonly string[]
   const schedulers = SCHEDULER_OPTIONS_BY_FAMILY[family] as readonly string[]
   return {
@@ -185,8 +193,12 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
       ? merged.samplerName : samplers[0]) as SamplerName,
     scheduler: (schedulers.includes(merged.scheduler)
       ? merged.scheduler : schedulers[0]) as SchedulerName,
-    textEncoder: (merged.textEncoder === 'bf16' || merged.textEncoder === 'fp8')
-      ? merged.textEncoder : null,
+    textEncoder: teVariants.includes(merged.textEncoder ?? '') ? merged.textEncoder : null,
+    skipLayerGuidance: slgDefault
+      ? (slg && typeof slg.layers === 'string'
+          && typeof slg.start === 'number' && typeof slg.end === 'number'
+          ? slg : { ...slgDefault })
+      : null,
   }
 }
 
@@ -265,6 +277,8 @@ export default function GeneratePage() {
       scheduler: SCHEDULER_OPTIONS_BY_FAMILY[family][0] as SchedulerName,
       steps: FAMILY_GENERATE_DEFAULTS[family].steps,
       cfgScale: FAMILY_GENERATE_DEFAULTS[family].cfgScale,
+      skipLayerGuidance: FAMILY_SKIP_LAYER_DEFAULTS[family]
+        ? { ...FAMILY_SKIP_LAYER_DEFAULTS[family] } : null,
     }))
   }
   // 0.17 P-I：batch size（每次入队 task 数）是**瞬态** UI 值——不进 prefs、不持久化、
@@ -347,10 +361,15 @@ export default function GeneratePage() {
   const baseModel = prefs.baseModel
   const setBaseModel = (v: string | null) => setPrefs((p) => ({ ...p, baseModel: v }))
   const textEncoder = prefs.textEncoder
-  const setTextEncoder = (v: 'bf16' | 'fp8' | null) =>
+  const setTextEncoder = (v: TextEncoderVariant | null) =>
     setPrefs((p) => ({ ...p, textEncoder: v }))
-  const teOptions = useKrea2TeOptions()
+  const teOptions = useTextEncoderOptions(modelFamily)
+  // 无 variant 的族（anima）为 null → 请求不带 text_encoder
   const effectiveTe = textEncoder ?? teOptions.selected
+  const skipLayerGuidance = prefs.skipLayerGuidance
+  const setSkipLayerGuidance = (patch: Partial<SkipLayerGuidance>) =>
+    setPrefs((p) => (p.skipLayerGuidance
+      ? { ...p, skipLayerGuidance: { ...p.skipLayerGuidance, ...patch } } : p))
   // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
   // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
   const { options: baseModelOptions, defaultValue: defaultBaseModel } = useBaseModelOptions(modelFamily)
@@ -758,6 +777,7 @@ export default function GeneratePage() {
         ...prev,
         mode: applied.mode,
         modelFamily: applied.modelFamily,
+        skipLayerGuidance: applied.skipLayerGuidance,
         baseModel: applied.baseModel,
         prompts: applied.prompts.length > 0 ? applied.prompts : prev.prompts,
         negPrompt: applied.negPrompt,
@@ -829,6 +849,25 @@ export default function GeneratePage() {
     if (!prompts.some((p) => p.trim()) && !datasetSuffix) {
       toast(t('generate.promptOrDatasetRequired'), 'error')
       return
+    }
+    // SLG 只在族支持时发送；层号原文非法时不提交
+    let slgParams: Pick<GenerateRequest,
+      'uncond_skip_layers' | 'uncond_skip_start_percent' | 'uncond_skip_end_percent'> = {}
+    if (skipLayerGuidance) {
+      const layers = parseSkipLayers(skipLayerGuidance.layers)
+      if (layers === null) {
+        toast(t('generate.skipLayersInvalid'), 'error')
+        return
+      }
+      if (skipLayerGuidance.start > skipLayerGuidance.end) {
+        toast(t('generate.skipRangeInvalid'), 'error')
+        return
+      }
+      slgParams = {
+        uncond_skip_layers: layers,
+        uncond_skip_start_percent: skipLayerGuidance.start,
+        uncond_skip_end_percent: skipLayerGuidance.end,
+      }
     }
 
     let xy_matrix: XYMatrixSpec | null = null
@@ -942,7 +981,8 @@ export default function GeneratePage() {
         count: 1,  // 0.17 P-I：每个 task 出 1 张；batch 拆成多 task（下面循环）
         seed,
         base_model: baseModel,
-        text_encoder: modelFamily === 'krea2' ? effectiveTe : undefined,
+        text_encoder: effectiveTe ?? undefined,
+        ...slgParams,
         loras: snapshotLoras,
         xy_draft: mode === 'xy'
           ? {
@@ -964,7 +1004,8 @@ export default function GeneratePage() {
           prompts: mergedPrompts,
           model_family: modelFamily,
           base_model: baseModel ?? undefined,
-          text_encoder: modelFamily === 'krea2' ? effectiveTe : undefined,
+          text_encoder: effectiveTe ?? undefined,
+          ...slgParams,
           negative_prompt: negPrompt,
           width, height, steps,
           count: 1,
@@ -1434,6 +1475,43 @@ export default function GeneratePage() {
                     </select>
                   </div>
                 </div>
+                {skipLayerGuidance && (
+                  <div>
+                    <div className="flex items-center gap-1 mb-1">
+                      <span className="caption">{t('generate.skipLayerGuidance')}</span>
+                      <InfoButton ariaLabel={t('generate.skipLayerGuidance')}>
+                        {t('generate.skipLayerGuidanceHelp')}
+                      </InfoButton>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex flex-col gap-1 flex-1 min-w-0">
+                        <label className="caption truncate" htmlFor="generate-skip-layers">
+                          {t('generate.skipLayers')}
+                        </label>
+                        <input
+                          id="generate-skip-layers"
+                          className="input w-full font-mono"
+                          value={skipLayerGuidance.layers}
+                          onChange={(e) => setSkipLayerGuidance({ layers: e.target.value })}
+                          aria-invalid={parseSkipLayers(skipLayerGuidance.layers) === null}
+                          placeholder="22"
+                        />
+                      </div>
+                      <NumField
+                        label={t('generate.skipStart')}
+                        value={skipLayerGuidance.start}
+                        onChange={(start) => setSkipLayerGuidance({ start })}
+                        min={0} max={1} step={0.05}
+                      />
+                      <NumField
+                        label={t('generate.skipEnd')}
+                        value={skipLayerGuidance.end}
+                        onChange={(end) => setSkipLayerGuidance({ end })}
+                        min={0} max={1} step={0.05}
+                      />
+                    </div>
+                  </div>
+                )}
                 <NumField
                   label={t('generate.seed')}
                   value={seed}
@@ -1453,6 +1531,7 @@ export default function GeneratePage() {
                   >
                     <option value="anima">{schemaEnumLabel('model_family', 'anima', t)}</option>
                     <option value="krea2">{schemaEnumLabel('model_family', 'krea2', t)}</option>
+                    <option value="moss">{schemaEnumLabel('model_family', 'moss', t)}</option>
                   </select>
                 </div>
                 <div>
@@ -1468,21 +1547,23 @@ export default function GeneratePage() {
                     {t('generate.baseModelHint')}
                   </div>
                 </div>
-                {modelFamily === 'krea2' && (
+                {teOptions.variants.length > 0 && effectiveTe && (
                   <div>
                     <label className="caption block mb-1">{t('generate.textEncoder')}</label>
                     <select
                       className="input text-xs w-full"
                       value={effectiveTe}
-                      onChange={(e) => setTextEncoder(e.target.value as 'bf16' | 'fp8')}
+                      onChange={(e) => setTextEncoder(e.target.value as TextEncoderVariant)}
                       aria-label={t('generate.textEncoder')}
                     >
-                      <option value="bf16">{t('generate.textEncoderBf16')}</option>
-                      <option value="fp8" disabled={!teOptions.fp8Ready}>
-                        {teOptions.fp8Ready
-                          ? t('generate.textEncoderFp8')
-                          : t('generate.textEncoderFp8NotDownloaded')}
-                      </option>
+                      {teOptions.variants.map(({ variant, ready }) => {
+                        const label = t(`generate.textEncoderVariant.${modelFamily}.${variant}`)
+                        return (
+                          <option key={variant} value={variant} disabled={!ready}>
+                            {ready ? label : t('generate.textEncoderNotDownloaded', { label })}
+                          </option>
+                        )
+                      })}
                     </select>
                   </div>
                 )}

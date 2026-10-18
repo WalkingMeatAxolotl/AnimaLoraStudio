@@ -17,8 +17,9 @@
 import type { LoraEntry, XYAxisType } from '../../../api/client'
 import type { DatasetPick } from './PromptFromDatasetPicker'
 import {
-  SAMPLER_OPTIONS_BY_FAMILY, SCHEDULER_OPTIONS_BY_FAMILY,
-  type SamplerName, type SchedulerName,
+  FAMILY_SKIP_LAYER_DEFAULTS, SAMPLER_OPTIONS_BY_FAMILY, SCHEDULER_OPTIONS_BY_FAMILY,
+  coerceGenerateFamily,
+  type GenerateFamily, type SamplerName, type SchedulerName, type SkipLayerGuidance,
 } from './types'
 import { splitAxisRaw, type XYAxisDraft } from './xy'
 
@@ -58,7 +59,7 @@ export interface GenerateParamsSnapshot {
   /** 当时的 mode；回填时按 mode 决定灌 singleLoras 还是 xyLoras + xDraft/yDraft */
   mode: 'single' | 'xy' | 'compare'
   /** 当时的模型族（多模型 P4-4）；老快照无此字段 → anima */
-  model_family?: 'anima' | 'krea2'
+  model_family?: GenerateFamily
   /** prefs.prompts 原文（未与 datasetPick.tags 合并） */
   prompts: string[]
   negative_prompt: string
@@ -72,9 +73,13 @@ export interface GenerateParamsSnapshot {
   /** 当时选用的底模（官方 variant key 或本地 custom 路径）；null/缺省 = 跟随
    *  设置页默认底模。老快照无此字段，回填到 null（沿用默认）。 */
   base_model?: string | null
-  /** 当时选用的文本编码器 variant（krea2）：'bf16' | 'fp8'；缺省 = 当时
-   *  的默认。展示用；老快照无此字段。 */
-  text_encoder?: 'bf16' | 'fp8'
+  /** 当时选用的文本编码器 variant（krea2 'bf16' | 'fp8'；moss 'int8' | 'bf16'）；
+   *  缺省 = 当时的默认。展示用；老快照无此字段。 */
+  text_encoder?: 'bf16' | 'fp8' | 'int8'
+  /** Skip Layer Guidance（仅支持该能力的族，当前 moss）；缺省 = 族默认 */
+  uncond_skip_layers?: number[]
+  uncond_skip_start_percent?: number
+  uncond_skip_end_percent?: number
   /** xy 模式下 daemon 端强制 1，仅 single 有意义 */
   count: number
   seed: number
@@ -238,7 +243,9 @@ export type SnapshotLoraResolver = (snap: SnapshotLora) => Promise<LoraEntry>
 export interface AppliedSnapshot {
   mode: 'single' | 'xy'  // compare 视图回填映射到 xy
   /** 当时的模型族；老快照缺省 anima */
-  modelFamily: 'anima' | 'krea2'
+  modelFamily: GenerateFamily
+  /** 当时的 SLG 参数（族支持时；快照缺字段的项落回族默认）；不支持的族为 null */
+  skipLayerGuidance: SkipLayerGuidance | null
   prompts: string[]
   negPrompt: string
   width: number
@@ -264,13 +271,13 @@ export interface AppliedSnapshot {
 
 /** 快照里的 sampler/scheduler 归并到合法值 —— 老快照缺字段、或外部 PNG 带了
  *  本程序不支持的值时按族回退默认，而不是把非法值灌进 prefs。 */
-function coerceSampler(v: string | undefined, family: 'anima' | 'krea2'): SamplerName {
+function coerceSampler(v: string | undefined, family: GenerateFamily): SamplerName {
   const allowed = SAMPLER_OPTIONS_BY_FAMILY[family] as readonly string[]
   return allowed.includes(v ?? '')
     ? (v as SamplerName)
     : (allowed[0] as SamplerName)
 }
-function coerceScheduler(v: string | undefined, family: 'anima' | 'krea2'): SchedulerName {
+function coerceScheduler(v: string | undefined, family: GenerateFamily): SchedulerName {
   const allowed = SCHEDULER_OPTIONS_BY_FAMILY[family] as readonly string[]
   return allowed.includes(v ?? '')
     ? (v as SchedulerName)
@@ -298,11 +305,19 @@ export async function applySnapshot(
     datasetPick = null
   }
 
-  const family: 'anima' | 'krea2' =
-    snap.model_family === 'krea2' ? 'krea2' : 'anima'
+  const family = coerceGenerateFamily(snap.model_family)
+  const slgDefault = FAMILY_SKIP_LAYER_DEFAULTS[family]
   const applied: AppliedSnapshot = {
     mode,
     modelFamily: family,
+    skipLayerGuidance: slgDefault
+      ? {
+          layers: Array.isArray(snap.uncond_skip_layers)
+            ? snap.uncond_skip_layers.join(', ') : slgDefault.layers,
+          start: snap.uncond_skip_start_percent ?? slgDefault.start,
+          end: snap.uncond_skip_end_percent ?? slgDefault.end,
+        }
+      : null,
     prompts,
     negPrompt: snap.negative_prompt,
     width: snap.width,

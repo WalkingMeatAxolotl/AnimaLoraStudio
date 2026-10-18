@@ -376,6 +376,11 @@ def _check_lora_compat_or_raise(
         ))
 
 
+#: int8 底模上 LyCORIS 能以 bypass 正确前向的算法（与 utils/lycoris_adapter 的 int8
+#: bypass 白名单、训练侧 phases/models._INT8_BASE_LORA_TYPES 同一集合）
+_INT8_BASE_LORA_ALGOS = frozenset({"lora", "lokr", "loha"})
+
+
 def apply_loras(
     model: Any,
     specs: Sequence[LoRASpec],
@@ -427,10 +432,16 @@ def apply_loras(
     # dtype 崩或产生与 Comfy 不一致的数值。目前只有 krea2 loader 会产出
     # fp8 权重（Anima loader 拒绝 fp8）。
     fp8_merge = False
+    int8_base = False
     if specs:
         from training.families.krea2.quant_fp8 import model_has_fp8_layers  # noqa: PLC0415
+        from training.families.moss.quant_int8 import model_has_int8_layers  # noqa: PLC0415
 
         fp8_merge = model_has_fp8_layers(model)
+        # int8 convrot 底模（MOSS）：权重是旋转后的整数码，LoRA 只能走 bypass
+        # （增量单独算，adapter 对 lora/lokr/loha 自动切换）；读底模原始数值的
+        # 算法（DoRA / ortho / tlora …）会静默算错，下面逐个拒绝
+        int8_base = model_has_int8_layers(model)
 
     merge_sources: list[tuple[dict, float, str]] = []
     adapters: list[Any] = []
@@ -469,6 +480,12 @@ def apply_loras(
             alpha = float(rank)   # per-layer alpha 已补进 sd，全局值仅建网用
             algo = "lora"         # PEFT 双矩阵 = plain LoRA
 
+        if int8_base and (meta.weight_decompose or algo not in _INT8_BASE_LORA_ALGOS):
+            kind = f"{algo} + DoRA" if meta.weight_decompose else algo
+            raise ValueError(
+                f"int8 量化底模只支持挂载 {' / '.join(sorted(_INT8_BASE_LORA_ALGOS))}"
+                f"（非 DoRA）训练的 LoRA：{Path(path).name} 是 {kind}。请改用 bf16 版本底模。"
+            )
         if fp8_merge:
             # merge 是权重级线性操作，只认 per-layer alpha/dim 缩放。
             # rs_lora 产物无需特判：lycoris 保存时把 √rank 校正烘进
