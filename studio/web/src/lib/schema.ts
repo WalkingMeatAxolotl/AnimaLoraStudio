@@ -112,6 +112,7 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
   model_family: {
     anima: 'schema.enums.modelFamily.anima',
     krea2: 'schema.enums.modelFamily.krea2',
+    moss: 'schema.enums.modelFamily.moss',
   },
   lora_type: {
     lora: 'schema.enums.loraType.lora',

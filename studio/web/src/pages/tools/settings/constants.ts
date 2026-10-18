@@ -54,6 +54,7 @@ export type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' 
 export const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
   'krea2-models': 'training',
+  'moss-models': 'training',
   'eval-metrics': 'monitor',
   'version': 'system',
   'service': 'system',
@@ -96,6 +97,7 @@ export const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'training-params', labelKey: 'settings.trainingParams' },
     { id: 'models', labelKey: 'settings.animaModels' },
     { id: 'krea2-models', labelKey: 'settings.krea2Models' },
+    { id: 'moss-models', labelKey: 'settings.mossModels' },
   ],
   monitor: [
     { id: 'eval-metrics', labelKey: 'settings.evalMetrics' },
@@ -242,7 +244,7 @@ export const EMPTY: Secrets = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected: { anima: '1.0', krea2: 'raw' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', selected_head_detector: 'builtin', auto_sync_paths: true },
+  models: { root: null, selected: { anima: '1.0', krea2: 'raw', moss: 'base_int8' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', selected_head_detector: 'builtin', auto_sync_paths: true },
   queue: { light_tasks_during_train: true },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', lora_merge_precision: 'fp32', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: false, blocks_to_swap: 0, task_timeout_minutes: 0, lora_catalog_dirs: [] },
   training: { ram_guard: false },
@@ -267,6 +269,10 @@ export const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   krea2_main: 'settings.modelDescriptions.krea2Main',
   krea2_text_encoder: 'settings.modelDescriptions.krea2TextEncoder',
   krea2_text_encoder_fp8: 'settings.modelDescriptions.krea2TextEncoderFp8',
+  moss_main: 'settings.modelDescriptions.mossMain',
+  moss_text_encoder_int8: 'settings.modelDescriptions.mossTextEncoderInt8',
+  moss_text_encoder_bf16: 'settings.modelDescriptions.mossTextEncoderBf16',
+  moss_vae: 'settings.modelDescriptions.mossVae',
   wd14: 'settings.modelDescriptions.wd14',
   cltagger: 'settings.modelDescriptions.cltagger',
 }

@@ -422,7 +422,8 @@
       },
       "modelFamily": {
         "anima": "Anima",
-        "krea2": "Krea 2"
+        "krea2": "Krea 2",
+        "moss": "MOSS-Image"
       }
     },
     "disableHints": {
@@ -1226,6 +1227,7 @@
     "repoHelp": "{{desc}}. Repo: <code>{{repo}}</code>",
     "animaModels": "Anima models",
     "krea2Models": "Krea2 models",
+    "mossModels": "MOSS-Image models",
     "modelsRoot": "Model root (models_root)",
     "savePathConfig": "Save path config",
     "notModified": "Not modified",
@@ -1300,6 +1302,10 @@
       "krea2Main": "Raw training base / Turbo inference base (~26.3 GB each)",
       "krea2TextEncoder": "Natural-language text encoder (~8.89 GB)",
       "krea2TextEncoderFp8": "Official fp8-quantized text encoder (~5.24 GB) — optional for test generation, roughly halves weight VRAM",
+      "mossMain": "Base / SFT, each in bf16 (10.2 GB) and int8 convrot (5.4 GB, roughly halves weight VRAM)",
+      "mossTextEncoderInt8": "int8 convrot text encoder (~9.75 GB), the same file the ComfyUI community uses",
+      "mossTextEncoderBf16": "Official bf16 text encoder (~16.8 GB)",
+      "mossVae": "FLUX.2 VAE (~340 MB)",
       "wd14": "SmilingWolf ONNX tagging models",
       "cltagger": "cella110n CLTagger ONNX"
     },
@@ -1432,6 +1438,7 @@
       "blocksToSwapHelp": "Keeps the weights of the last N DiT layers in system RAM, moving each one onto the GPU only when it is that layer's turn and releasing it right after. This is a different job from VRAM policy: that one decides which model yields to which, this one works inside a single model — when one model alone does not fit in VRAM, this is the only way. The cost is that every sampling step has to move all swapped layers again, so more steps means more total time. Needs an equal amount of free RAM (Krea 2: about 0.4GB per layer for an fp8 base model, 0.8GB for bf16; Anima: about 0.13GB per layer), and that RAM is locked so other programs cannot use it. The layer count comes from the base model file (shown as \"N layers\" in the base model list); values above the layer count swap out everything (0 = off). Start around 14 if you are short on VRAM."
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
+    "mossTeCardTitle": "MOSS-Image · Qwen3.5-9B text encoder",
     "deleteAsset": "Delete",
     "deleteAssetTitle": "Delete the downloaded files (re-download anytime)",
     "confirmDeleteAsset": "Delete the downloaded files of {{name}}? You can re-download anytime.",

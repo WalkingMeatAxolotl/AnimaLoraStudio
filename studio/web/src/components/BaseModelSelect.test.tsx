@@ -53,6 +53,26 @@ describe('BaseModelSelect per family（多模型 P4-4）', () => {
     expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('raw')
   })
 
+  it('moss family reads moss_main and keeps its int8 custom model selectable', async () => {
+    vi.mocked(api.getModelsCatalog).mockResolvedValue({
+      ...(catalog as object),
+      moss_main: {
+        variants: [
+          { variant: 'base_int8', exists: true, purpose: 'training' },
+          { variant: 'base_bf16', exists: false, purpose: 'training' },
+        ],
+        // 后端不给 MOSS 的 int8 convrot 文件挂 unsupported_quant（族支持该格式）
+        custom: [{ path: 'G:/m/moss-ft-int8.safetensors', name: 'moss-ft-int8.safetensors', exists: true }],
+        selected: 'base_int8',
+      },
+    } as never)
+    render(<BaseModelSelect value={null} onChange={() => {}} family="moss" />)
+    await screen.findByRole('option', { name: /base_int8/ })
+    expect(optionValues()).toEqual(['base_int8', 'G:/m/moss-ft-int8.safetensors'])
+    expect((screen.getByRole('option', { name: /moss-ft-int8/ }) as HTMLOptionElement).disabled).toBe(false)
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('base_int8')
+  })
+
   it('anima variants show layer count + display label + custom arch in one flat list', async () => {
     vi.mocked(api.getModelsCatalog).mockResolvedValue({
       anima_main: {

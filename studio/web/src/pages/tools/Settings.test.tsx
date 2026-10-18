@@ -802,6 +802,77 @@ describe('SettingsPage (PP0)', () => {
     expect(within(turboRow).getByText('推理')).toBeInTheDocument()
   })
 
+  it('MOSS-Image section: main card, int8/bf16 TE variant card and its own FLUX.2 VAE', async () => {
+    const files = (names: string[]) => names.map((name) => ({ name, exists: true, size: 10, mtime: 1 }))
+    const mossCatalog = {
+      ...emptyModelsCatalog,
+      moss_main: {
+        id: 'moss_main', name: 'MOSS-Image 主模型', description: 'test', repo: 'Comfy-Org/MOSS-Image',
+        variants: [{
+          variant: 'base_int8', is_latest: true, repo: 'Comfy-Org/MOSS-Image', purpose: 'training',
+          size_estimate: 5_413_698_958, target_path: '/tmp/anima/diffusion_models/moss-image-base-int8-convrot.safetensors',
+          exists: true, size: 10, mtime: 1,
+        }],
+        custom: [], selected: 'base_int8', latest: 'base_int8',
+        license: 'Apache-2.0', license_url: 'https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base',
+      },
+      moss_text_encoder_int8: {
+        id: 'moss_text_encoder_int8', name: 'MOSS-Image · Qwen3.5-9B int8', description: 'test',
+        repo: 'Comfy-Org/MOSS-Image', target_dir: '/tmp/anima/text_encoders/moss-qwen3.5-9b-int8',
+        selected: 'int8', files: files(['qwen3.5_9b_int8_convrot.safetensors', 'config.json']),
+      },
+      moss_text_encoder_bf16: {
+        id: 'moss_text_encoder_bf16', name: 'MOSS-Image · Qwen3.5-9B bf16', description: 'test',
+        repo: 'OpenMOSS-Team/MOSS-Image-Base', target_dir: '/tmp/anima/text_encoders/bf16',
+        selected: 'int8', files: files(['model.safetensors.index.json', 'config.json']),
+      },
+      moss_vae: {
+        id: 'moss_vae', name: 'FLUX.2 VAE', description: 'test', repo: 'Comfy-Org/MOSS-Image',
+        target_path: '/tmp/anima/vae/flux2-vae.safetensors', exists: false, size: 0, mtime: 0,
+      },
+      model_sources: {
+        ...emptyModelsCatalog.model_sources,
+        moss: [{
+          kind: 'preset', candidate: null, value: 'base_int8', label: 'base_int8',
+          description: '', download_id: 'moss_main', download_variant: 'base_int8',
+          status_key: 'moss_main:base_int8', exists: true, size: 10, files: null,
+          size_estimate: 0, is_current: true, removable: false, deletable: true,
+          extra: { purpose: 'training' },
+        }],
+      },
+    }
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/models/catalog')) {
+        return Promise.resolve(new Response(JSON.stringify(mossCatalog), { status: 200 }))
+      }
+      return base(url, init)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '训练' }))
+    expect(await screen.findByRole('heading', { name: 'MOSS-Image 模型' })).toBeInTheDocument()
+    const section = document.getElementById('moss-models') as HTMLElement
+    expect(await within(section).findByText('MOSS-Image 主模型')).toBeInTheDocument()
+    expect(within(section).getByText('MOSS-Image · Qwen3.5-9B 文本编码器')).toBeInTheDocument()
+    // 本族自己的 VAE（不是 Anima / Krea2 共用的 Qwen-Image VAE）
+    expect(within(section).getByText('FLUX.2 VAE')).toBeInTheDocument()
+    expect(within(section).queryByText('Anima VAE')).not.toBeInTheDocument()
+
+    const teRadios = section.querySelectorAll<HTMLInputElement>('input[name="moss-te-variant"]')
+    expect(teRadios).toHaveLength(2)
+    expect(teRadios[0].checked).toBe(true) // int8 = catalog 回填的选中值
+    await user.click(teRadios[1])
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u, i]) => {
+        if (i?.method !== 'PATCH' || !String(u).includes('/api/settings')) return false
+        return JSON.parse(String(i.body)).models?.selected_te !== undefined
+      })
+      expect(call).toBeDefined()
+      expect(JSON.parse(String(call![1].body))).toEqual({ models: { selected_te: { moss: 'bf16' } } })
+    })
+  })
+
   it('picking a variant writes new-style selected.{family}（多模型 P4-5）', async () => {
     const user = userEvent.setup()
     renderPage()

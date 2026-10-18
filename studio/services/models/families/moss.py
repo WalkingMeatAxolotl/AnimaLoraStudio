@@ -23,6 +23,8 @@ from .custom_paths import registered_main_paths
 FAMILY_ID = "moss"
 COMFY_REPO = "Comfy-Org/MOSS-Image"
 OFFICIAL_REPO = "OpenMOSS-Team/MOSS-Image-Base"
+#: 官方仓库在 ModelScope 上的 id（与 HF 的 owner 不同；Comfy-Org 两边同名）
+OFFICIAL_MS_REPO = "openmoss/MOSS-Image-Base"
 MOSS_LICENSE = "Apache-2.0"
 MOSS_LICENSE_URL = "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base"
 
@@ -89,19 +91,29 @@ VAE_SUBPATH = "vae/flux2-vae.safetensors"
 
 #: TE variant（首项 = 默认）
 MOSS_TE_VARIANTS = ("int8", "bf16")
+#: 下载日志头行的体积估算（GB）
+MOSS_TE_SIZE_GB = {"int8": 9.75, "bf16": 16.8}
+MOSS_VAE_SIZE_MB = 340
+#: 本族 loader 支持的整数量化格式（#605 的格式标签）。catalog 据此不把这类自定义
+#: 底模标成「不可用」——其余族仍按 #605 一律禁选
+SUPPORTED_QUANT_FORMATS = frozenset({"int8_tensorwise + ConvRot"})
 
 
 def te_download_files(variant: str) -> list[dict[str, str]]:
-    """一个 TE variant 的全部下载项：``{repo, subpath, filename}``（下载中心接入用）。"""
+    """一个 TE variant 的全部下载项：``{repo, ms_repo, subpath, filename}``。"""
     small = [
-        {"repo": OFFICIAL_REPO, "subpath": src, "filename": dst}
+        {"repo": OFFICIAL_REPO, "ms_repo": OFFICIAL_MS_REPO, "subpath": src, "filename": dst}
         for src, dst in _TE_SMALL_FILES
     ]
     if variant == "int8":
-        return [{"repo": COMFY_REPO, "subpath": TE_INT8_SUBPATH, "filename": TE_INT8_FILE}, *small]
+        return [{
+            "repo": COMFY_REPO, "ms_repo": COMFY_REPO,
+            "subpath": TE_INT8_SUBPATH, "filename": TE_INT8_FILE,
+        }, *small]
     if variant == "bf16":
         return [
-            {"repo": OFFICIAL_REPO, "subpath": f"text_encoder/{name}", "filename": name}
+            {"repo": OFFICIAL_REPO, "ms_repo": OFFICIAL_MS_REPO,
+             "subpath": f"text_encoder/{name}", "filename": name}
             for name in _TE_BF16_SHARDS
         ] + small
     raise ValueError(f"unknown MOSS text encoder variant {variant!r}")
@@ -217,6 +229,10 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
         text_encoders[f"moss_text_encoder_{variant}"] = {
             "id": f"moss_text_encoder_{variant}",
             "name": f"MOSS-Image · Qwen3.5-9B {variant}",
+            "description": (
+                f"Qwen3.5-9B 文本编码器 {variant}（约 {MOSS_TE_SIZE_GB[variant]} GB）"
+            ),
+            "repo": COMFY_REPO if variant == "int8" else OFFICIAL_REPO,
             "target_dir": str(d),
             "selected": te_selected,
             "files": [
@@ -229,6 +245,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
         "moss_main": {
             "id": "moss_main",
             "name": "MOSS-Image 主模型",
+            "description": "Base / SFT，各有 bf16（10.2 GB）与 int8 convrot（5.4 GB）两版",
             "repo": COMFY_REPO,
             "variants": variants,
             "custom": custom,
@@ -241,6 +258,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
         "moss_vae": {
             "id": "moss_vae",
             "name": "FLUX.2 VAE",
+            "description": f"flux2-vae（约 {MOSS_VAE_SIZE_MB} MB）",
             "repo": COMFY_REPO,
             "target_path": str(vae),
             **_file_status(vae),
@@ -292,6 +310,7 @@ class _MossAssets:
     catalog_sections = staticmethod(catalog_sections)
     path_choices = staticmethod(path_choices)
     is_distilled_path = staticmethod(is_distilled_path)
+    supported_quant_formats = SUPPORTED_QUANT_FORMATS
 
 
 ASSETS = _MossAssets()

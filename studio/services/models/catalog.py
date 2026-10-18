@@ -13,6 +13,7 @@ from .. import eval_registry
 from .downloader import get_status_snapshot, head_detector_status
 from .families import FAMILY_ASSETS
 from .families.custom_paths import arch_summary
+
 from .paths import (
     CLTAGGER_VERSIONS,
     DEFAULT_UPSCALER,
@@ -45,6 +46,18 @@ from .paths import (
 # ---------------------------------------------------------------------------
 # catalog
 # ---------------------------------------------------------------------------
+
+
+def _family_arch(family_id: str, path: Path) -> Optional[dict[str, Any]]:
+    """自定义底模的架构摘要；族声明支持的量化格式不标「不可用」（#605 的例外口径）。"""
+    arch = arch_summary(path)
+    if not arch or not arch.get("unsupported_quant"):
+        return arch
+    supported = getattr(FAMILY_ASSETS[family_id], "supported_quant_formats", ())
+    if arch["unsupported_quant"] not in supported:
+        return arch
+    rest = {k: v for k, v in arch.items() if k != "unsupported_quant"}
+    return rest or None
 
 
 # CLIP / DINO 常见模型的下载大小预估（bytes，约值）。下载前给用户一个体量参考；
@@ -590,7 +603,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                     is_current=str(target) == selected_val,
                     description=c.repo,
                     candidate=c.model_dump(),
-                    arch=arch_summary(target),
+                    arch=_family_arch(family_id, target),
                 ))
             else:
                 p = Path(c.path)
@@ -600,7 +613,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                     exists=st["exists"], size=st["size"],
                     is_current=c.path == selected_val,
                     candidate=c.model_dump(),
-                    arch=arch_summary(p),
+                    arch=_family_arch(family_id, p),
                 ))
         model_source_rows[family_id] = fam_rows
 

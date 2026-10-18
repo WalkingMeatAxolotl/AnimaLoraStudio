@@ -95,34 +95,89 @@ export function TrainingParamsSection() {
   )
 }
 
+type TeVariantKey =
+  | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
+  | 'moss_text_encoder_int8' | 'moss_text_encoder_bf16'
+
+/** 带 variant 的 TE 合并卡：每个 variant 一行 radio + 各自下载，选中写 selected_te.{family}。 */
+interface TeVariantCard {
+  titleKey: string
+  /** 删除确认里的对象名前缀（「Qwen3-VL bf16」） */
+  deleteLabel: string
+  /** [variant, catalog section id]；首项 = 默认 */
+  variants: readonly (readonly [string, TeVariantKey])[]
+}
+
+interface FamilyModelSection {
+  family: 'anima' | 'krea2' | 'moss'
+  sectionId: string
+  titleKey: string
+  mainKey: 'anima_main' | 'krea2_main' | 'moss_main'
+  fallbackSelected: string
+  /** 该族的目录型资产（文本编码器 / tokenizer 等 catalog section id），走文件列表卡 */
+  encoderIds: readonly ('qwen3' | 't5_tokenizer')[]
+  /** 该族训练用的 VAE（Anima / Krea2 共用 Qwen-Image VAE，MOSS 用 FLUX.2 VAE） */
+  vaeKey: 'anima_vae' | 'moss_vae'
+  teCard: TeVariantCard | null
+  /** 下载日志分组：该族相关的下载 key 前缀（正向声明，不再反向 startsWith 排除） */
+  downloadKeyPrefixes: readonly string[]
+}
+
 /** 每个模型族在 Settings 页的区块配置（多模型 P4-5）。
- *  加第 3 个族 = 此表加一行 + i18n 标题键；渲染完全遍历化。
- *  encoderIds 是该族的目录型资产（文本编码器 / tokenizer 等 catalog section id）。 */
-const FAMILY_MODEL_SECTIONS = [
+ *  加一个族 = 此表加一行 + i18n 键；渲染完全遍历化。 */
+const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
   {
-    family: 'anima' as const,
+    family: 'anima',
     sectionId: 'models',
     titleKey: 'settings.animaModels',
-    mainKey: 'anima_main' as const,
+    mainKey: 'anima_main',
     fallbackSelected: '1.0',
-    encoderIds: ['qwen3', 't5_tokenizer'] as const,
-    // 下载日志分组：该族相关的下载 key 前缀（正向声明，不再反向 startsWith 排除）
+    encoderIds: ['qwen3', 't5_tokenizer'],
+    vaeKey: 'anima_vae',
+    teCard: null,
     downloadKeyPrefixes: ['anima_main', 'anima_vae', 'qwen3', 't5_tokenizer'],
   },
   {
-    family: 'krea2' as const,
+    family: 'krea2',
     sectionId: 'krea2-models',
     titleKey: 'settings.krea2Models',
-    mainKey: 'krea2_main' as const,
+    mainKey: 'krea2_main',
     fallbackSelected: 'raw',
-    // krea2 的 TE 卡是 variant 合并卡（bf16/fp8 radio），单独渲染不走
-    // encoderIds 的文件列表卡机制
-    encoderIds: [] as const,
+    encoderIds: [],
+    vaeKey: 'anima_vae',
+    teCard: {
+      titleKey: 'settings.krea2TeCardTitle',
+      deleteLabel: 'Qwen3-VL',
+      variants: [['bf16', 'krea2_text_encoder'], ['fp8', 'krea2_text_encoder_fp8']],
+    },
     downloadKeyPrefixes: ['krea2_main', 'krea2_text_encoder'],
+  },
+  {
+    family: 'moss',
+    sectionId: 'moss-models',
+    titleKey: 'settings.mossModels',
+    mainKey: 'moss_main',
+    fallbackSelected: 'base_int8',
+    encoderIds: [],
+    vaeKey: 'moss_vae',
+    teCard: {
+      titleKey: 'settings.mossTeCardTitle',
+      deleteLabel: 'Qwen3.5-9B',
+      variants: [['int8', 'moss_text_encoder_int8'], ['bf16', 'moss_text_encoder_bf16']],
+    },
+    downloadKeyPrefixes: ['moss_main', 'moss_text_encoder', 'moss_vae'],
   },
 ]
 
-type FamilyId = (typeof FAMILY_MODEL_SECTIONS)[number]['family']
+type FamilyId = FamilyModelSection['family']
+
+const FALLBACK_SELECTED = Object.fromEntries(
+  FAMILY_MODEL_SECTIONS.map((s) => [s.family, s.fallbackSelected]),
+) as Record<FamilyId, string>
+
+const DEFAULT_TE_SELECTED = Object.fromEntries(
+  FAMILY_MODEL_SECTIONS.flatMap((s) => (s.teCard ? [[s.family, s.teCard.variants[0][0]]] : [])),
+) as Partial<Record<FamilyId, string>>
 
 export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalogError, t }: {
   catalog: ModelsCatalog | null
@@ -135,19 +190,21 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 }) {
   const { toast } = useToast()
   const { runSave, deleteAsset } = useSettingsData()
-  const [selected, setSelected] = useState<Record<FamilyId, string>>({
-    anima: '1.0', krea2: 'raw',
-  })
+  const [selected, setSelected] = useState<Record<FamilyId, string>>(FALLBACK_SELECTED)
 
   // 一次性拉 secrets 取各族 selected（独立 PUT，不进全局 dirty 流程）。模型
   // 根目录已挪到「系统 → 存储位置」、自动配置模型路径已挪到「训练参数」，不在此渲染。
   useEffect(() => {
     void api.getSecrets().then((sec) => {
-      setSelected((prev) => ({
-        ...prev,
-        anima: sec.models?.selected?.anima ?? sec.models?.selected_anima ?? '1.0',
-        krea2: sec.models?.selected?.krea2 ?? 'raw',
-      }))
+      setSelected((prev) => {
+        const next = { ...prev }
+        for (const s of FAMILY_MODEL_SECTIONS) {
+          next[s.family] = sec.models?.selected?.[s.family]
+            ?? (s.family === 'anima' ? sec.models?.selected_anima : undefined)
+            ?? s.fallbackSelected
+        }
+        return next
+      })
     }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
 
@@ -166,17 +223,26 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     }
   }
 
-  // krea2 TE variant 选择（bf16/fp8）：与主模型 pick 同款直写 secrets
-  const [teSelected, setTeSelected] = useState<'bf16' | 'fp8'>('bf16')
+  // 各族 TE variant 选择（krea2 bf16/fp8、moss int8/bf16）：与主模型 pick 同款直写
+  // secrets；当前值由 catalog 回填（后端在该族首个 TE section 上带 selected）
+  const [teSelected, setTeSelected] = useState<Partial<Record<FamilyId, string>>>(DEFAULT_TE_SELECTED)
   useEffect(() => {
-    const sel = (catalog?.krea2_text_encoder as { selected?: string } | undefined)?.selected
-    if (sel === 'bf16' || sel === 'fp8') setTeSelected(sel)
+    if (!catalog) return
+    setTeSelected((prev) => {
+      const next = { ...prev }
+      for (const s of FAMILY_MODEL_SECTIONS) {
+        if (!s.teCard) continue
+        const sel = catalog[s.teCard.variants[0][1]]?.selected
+        if (sel && s.teCard.variants.some(([v]) => v === sel)) next[s.family] = sel
+      }
+      return next
+    })
   }, [catalog])
-  const pickTe = async (variant: 'bf16' | 'fp8') => {
-    if (variant === teSelected) return
-    setTeSelected(variant)
+  const pickTe = async (family: FamilyId, variant: string) => {
+    if (variant === teSelected[family]) return
+    setTeSelected((prev) => ({ ...prev, [family]: variant }))
     try {
-      await runSave(() => api.updateSecrets({ models: { selected_te: { krea2: variant } } }))
+      await runSave(() => api.updateSecrets({ models: { selected_te: { [family]: variant } } }))
       toast(t('settings.teVariantSelected', { name: variant }), 'success')
       await reloadCatalog()
     } catch (e) {
@@ -187,15 +253,17 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 
   const error = catalogError
 
-  const renderSharedVae = () => {
-    if (!catalog) return null
+  const renderVae = (vaeKey: FamilyModelSection['vaeKey']) => {
+    const vae = catalog?.[vaeKey]
+    if (!catalog || !vae) return null
+    const dl = catalog.downloads[vaeKey]
     return (
-      <ModelGroupCard title={catalog.anima_vae.name}>
+      <ModelGroupCard title={vae.name}>
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'anima_vae', catalog.anima_vae.description, t)} · <code>{catalog.anima_vae.repo}</code></span>
+          <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, vaeKey, vae.description, t)} · <code>{vae.repo}</code></span>
           <span style={{ flex: 1 }} />
-          <ModelStatusBadge exists={catalog.anima_vae.exists} size={catalog.anima_vae.size} status={catalog.downloads.anima_vae?.status} />
-          <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} onDelete={() => void deleteAsset('anima_vae', undefined, catalog.anima_vae.name)} />
+          <ModelStatusBadge exists={vae.exists} size={vae.size} status={dl?.status} />
+          <DownloadButton exists={vae.exists} status={dl?.status} busy={busy.has(vaeKey)} onClick={() => void start(vaeKey)} onDelete={() => void deleteAsset(vaeKey, undefined, vae.name)} />
         </div>
       </ModelGroupCard>
     )
@@ -292,7 +360,8 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                         {t('baseModel.layers', { n: row.arch.num_blocks })}
                       </span>
                     ) : null}
-                    {/* int8 等整数量化版：两族训练 / 出图都不支持，选上也会在加载时报错 */}
+                    {/* 本族不支持的整数量化版（后端按族判定：MOSS 的 int8 convrot 不标），
+                        选上也会在加载时报错 */}
                     {row.arch?.unsupported_quant ? (
                       <span className="text-2xs px-1 py-0.5 rounded-sm bg-err-soft text-err shrink-0"
                         title={t('baseModel.unsupportedQuantHint')}>
@@ -304,44 +373,49 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 t={t}
               />
 
-              {/* 共享 Qwen-Image VAE（两族同一份文件，族无关资产） */}
-              {renderSharedVae()}
+              {/* 该族训练用的 VAE（Qwen-Image VAE 为 Anima / Krea2 共用的族无关资产） */}
+              {renderVae(section.vaeKey)}
 
-              {/* krea2 TE variant 合并卡：bf16/fp8 两行 radio + 各自下载 */}
-              {section.family === 'krea2' && catalog.krea2_text_encoder && catalog.krea2_text_encoder_fp8 && (
-                <ModelGroupCard title={t('settings.krea2TeCardTitle')}>
-                  <ul className="flex flex-col gap-1.5 text-xs">
-                    {([
-                      ['bf16', catalog.krea2_text_encoder],
-                      ['fp8', catalog.krea2_text_encoder_fp8],
-                    ] as const).map(([variant, m]) => {
-                      const allExist = m.files.length > 0 && m.files.every((f) => f.exists)
-                      const totalSize = m.files.reduce((s, f) => s + f.size, 0)
-                      const dl = catalog.downloads[m.id]
-                      return (
-                        <li key={variant} className="flex items-center gap-2">
-                          <input
-                            type="radio"
-                            name="krea2-te-variant"
-                            checked={teSelected === variant}
-                            disabled={!allExist}
-                            onChange={() => void pickTe(variant)}
-                            style={{ accentColor: 'var(--accent)' }}
-                            title={allExist ? t('settings.selectTeVariant') : t('settings.teVariantNotDownloaded')}
-                          />
-                          <code className="font-mono text-fg-primary w-16 shrink-0">{variant}</code>
-                          <span className="text-fg-tertiary truncate">
-                            {translatedCatalogText(MODEL_DESCRIPTION_KEYS, m.id, m.description, t)}
-                          </span>
-                          <span style={{ flex: 1 }} />
-                          <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
-                          <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} onDelete={() => void deleteAsset(m.id, undefined, `Qwen3-VL ${variant}`)} />
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </ModelGroupCard>
-              )}
+              {/* TE variant 合并卡：每个 variant 一行 radio + 各自下载 */}
+              {section.teCard && (() => {
+                const card = section.teCard
+                const rows = card.variants.flatMap(([variant, key]) => {
+                  const m = catalog[key]
+                  return m ? [[variant, m] as const] : []
+                })
+                if (rows.length !== card.variants.length) return null
+                return (
+                  <ModelGroupCard title={t(card.titleKey)}>
+                    <ul className="flex flex-col gap-1.5 text-xs">
+                      {rows.map(([variant, m]) => {
+                        const allExist = m.files.length > 0 && m.files.every((f) => f.exists)
+                        const totalSize = m.files.reduce((s, f) => s + f.size, 0)
+                        const dl = catalog.downloads[m.id]
+                        return (
+                          <li key={variant} className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name={`${section.family}-te-variant`}
+                              checked={teSelected[section.family] === variant}
+                              disabled={!allExist}
+                              onChange={() => void pickTe(section.family, variant)}
+                              style={{ accentColor: 'var(--accent)' }}
+                              title={allExist ? t('settings.selectTeVariant') : t('settings.teVariantNotDownloaded')}
+                            />
+                            <code className="font-mono text-fg-primary w-16 shrink-0">{variant}</code>
+                            <span className="text-fg-tertiary truncate">
+                              {translatedCatalogText(MODEL_DESCRIPTION_KEYS, m.id, m.description, t)}
+                            </span>
+                            <span style={{ flex: 1 }} />
+                            <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
+                            <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} onDelete={() => void deleteAsset(m.id, undefined, `${card.deleteLabel} ${variant}`)} />
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </ModelGroupCard>
+                )
+              })()}
 
               {/* 该族的目录型资产（文本编码器 / tokenizer；CLTagger 在「打标」tab） */}
               {section.encoderIds.map((id) => {

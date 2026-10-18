@@ -804,8 +804,9 @@ export interface FamilyMainCatalog {
   license_url?: string
 }
 
-export interface AnimaVaeCatalog extends ModelFileStatus {
-  id: 'anima_vae'
+/** 族 VAE 资产（anima_vae = Anima / Krea2 共用的 Qwen-Image VAE；moss_vae = FLUX.2 VAE）。 */
+export interface VaeCatalog extends ModelFileStatus {
+  id: 'anima_vae' | 'moss_vae'
   name: string
   description: string
   repo: string
@@ -813,12 +814,14 @@ export interface AnimaVaeCatalog extends ModelFileStatus {
 }
 
 export interface ModelDirCatalog {
-  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
+  id:
+    | 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
+    | 'moss_text_encoder_int8' | 'moss_text_encoder_bf16'
   name: string
   description: string
   repo: string
   target_dir: string
-  /** krea2_text_encoder 专属：选中的 TE variant（'bf16' | 'fp8'）。 */
+  /** 带 variant 的 TE 卡：选中的 TE variant（krea2 'bf16'|'fp8'；moss 'int8'|'bf16'）。 */
   selected?: string
   files: Array<{ name: string; exists: boolean; size: number; mtime: number }>
 }
@@ -1001,12 +1004,16 @@ export interface ModelPathChoice {
 export interface ModelsCatalog {
   models_root: string
   anima_main: FamilyMainCatalog
-  anima_vae: AnimaVaeCatalog
+  anima_vae: VaeCatalog
   qwen3: ModelDirCatalog
   t5_tokenizer: ModelDirCatalog
   krea2_main: FamilyMainCatalog
   krea2_text_encoder: ModelDirCatalog
   krea2_text_encoder_fp8: ModelDirCatalog
+  moss_main?: FamilyMainCatalog
+  moss_text_encoder_int8?: ModelDirCatalog
+  moss_text_encoder_bf16?: ModelDirCatalog
+  moss_vae?: VaeCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   eval_metrics?: EvalMetricsCatalog

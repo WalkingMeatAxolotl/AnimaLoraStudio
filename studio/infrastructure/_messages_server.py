@@ -390,6 +390,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Downloading Krea 2 text encoder Qwen3-VL fp8 "
               "(~{size} GB, source {source}) → {target}",
     },
+    "download.moss_base": {
+        "zh": "下载 MOSS-Image 主模型 {variant}（约 {size} GB）→ {target}",
+        "en": "Downloading MOSS-Image base model {variant} (~{size} GB) → {target}",
+    },
+    "download.moss_te": {
+        "zh": "下载 MOSS-Image 文本编码器 Qwen3.5-9B {variant}（约 {size} GB，来源 {source}）→ {target}",
+        "en": "Downloading MOSS-Image text encoder Qwen3.5-9B {variant} (~{size} GB, source {source}) → {target}",
+    },
+    "download.moss_vae": {
+        "zh": "下载 FLUX.2 VAE（约 {size} MB）→ {target}",
+        "en": "Downloading FLUX.2 VAE (~{size} MB) → {target}",
+    },
     "download.t5_tokenizer": {
         "zh": "下载 T5 tokenizer（{n} 个文件）→ {target}",
         "en": "Downloading the T5 tokenizer ({n} files) → {target}",

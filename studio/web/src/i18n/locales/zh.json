@@ -422,7 +422,8 @@
       },
       "modelFamily": {
         "anima": "Anima",
-        "krea2": "Krea 2"
+        "krea2": "Krea 2",
+        "moss": "MOSS-Image"
       }
     },
     "disableHints": {
@@ -1226,6 +1227,7 @@
     "repoHelp": "{{desc}}。仓库：<code>{{repo}}</code>",
     "animaModels": "Anima 模型",
     "krea2Models": "Krea2 模型",
+    "mossModels": "MOSS-Image 模型",
     "modelsRoot": "模型根目录 (models_root)",
     "savePathConfig": "保存路径配置",
     "notModified": "未修改",
@@ -1300,6 +1302,10 @@
       "krea2Main": "Raw 训练底模 / Turbo 推理底模（各约 26.3 GB）",
       "krea2TextEncoder": "自然语言文本编码器（约 8.89 GB）",
       "krea2TextEncoderFp8": "官方 fp8 量化文本编码器（约 5.24 GB）——测试出图可选，权重显存约减半",
+      "mossMain": "Base / SFT 两版，各有 bf16（10.2 GB）与 int8 convrot（5.4 GB，权重显存约减半）",
+      "mossTextEncoderInt8": "int8 convrot 文本编码器（约 9.75 GB），与 ComfyUI 社区版同一份文件",
+      "mossTextEncoderBf16": "官方 bf16 文本编码器（约 16.8 GB）",
+      "mossVae": "FLUX.2 VAE（约 340 MB）",
       "wd14": "SmilingWolf 系列 ONNX 打标模型",
       "cltagger": "cella110n CLTagger ONNX"
     },
@@ -1432,6 +1438,7 @@
       "blocksToSwapHelp": "把 DiT 靠后的若干层权重常驻内存，算到该层才搬进显存，算完立即让出。与「显存策略」分工不同：显存策略管多个模型之间谁让位，本项管单个模型内部——当单个模型自己就装不下显存时，这是唯一的办法。代价是每一步出图都要把换出的层搬一遍，步数越多累计耗时越长。需要等量的可用内存（Krea 2 每层约 0.4GB fp8 底模 / 0.8GB bf16 底模，Anima 每层约 0.13GB），且这部分内存会被锁定、其他程序无法使用。层数由底模文件决定（底模列表里标有「N 层」），超过总层数按全部换出处理（0 = 关闭）；显存不够时从 14 开始试。"
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL 文本编码器",
+    "mossTeCardTitle": "MOSS-Image · Qwen3.5-9B 文本编码器",
     "deleteAsset": "删除",
     "deleteAssetTitle": "删除已下载的文件（需要时可重新下载）",
     "confirmDeleteAsset": "确定删除 {{name}} 的已下载文件？需要时可重新下载。",

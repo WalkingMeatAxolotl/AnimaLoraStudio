@@ -14,7 +14,7 @@ export interface BaseModelOption {
 }
 
 /** 支持底模选择的模型族。catalog section 键 = `${family}_main`。 */
-export type BaseModelFamily = 'anima' | 'krea2'
+export type BaseModelFamily = 'anima' | 'krea2' | 'moss'
 
 interface FamilyMainSection {
   variants: Array<{
@@ -46,7 +46,7 @@ function mainSection(
   catalog: ModelsCatalog | null, family: BaseModelFamily,
 ): FamilyMainSection | null {
   if (!catalog) return null
-  const section = family === 'krea2' ? catalog.krea2_main : catalog.anima_main
+  const section = catalog[`${family}_main` as const]
   return (section as FamilyMainSection | undefined) ?? null
 }
 
