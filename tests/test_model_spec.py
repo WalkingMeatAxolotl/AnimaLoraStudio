@@ -105,12 +105,12 @@ def _bare_cached_dataset():
     return ds
 
 
-def _write_pair(tmp_path, name, **npz_kwargs):
+def _write_pair(tmp_path, name, channels=16, **npz_kwargs):
     """写 img + npz，并把 img mtime 拨到过去（缓存必须新于图）。"""
     img = tmp_path / f"{name}.png"
     img.write_bytes(b"fake")
     npz = tmp_path / f"{name}.npz"
-    np.savez(npz, latent=np.zeros((16, 1, 4, 4), dtype=np.float32), **npz_kwargs)
+    np.savez(npz, latent=np.zeros((channels, 1, 4, 4), dtype=np.float32), **npz_kwargs)
     past = npz.stat().st_mtime - 3600
     os.utime(img, (past, past))
     return img, npz
@@ -155,3 +155,83 @@ def test_cache_with_unknown_layout_version_is_deleted(tmp_path):
     )
     assert ds._is_cache_valid(img, npz) is False
     assert not npz.exists()
+
+
+# ── 族的 latent 空间进缓存判据（MOSS fork 自 Krea2 版本时误用 16 通道缓存的回归）──
+
+def test_cache_channel_mismatch_is_deleted_even_with_matching_fingerprint(tmp_path):
+    """曾经数据集没拿到族的 latent 规格：MOSS 编出的 32 通道缓存被盖成 Anima 指纹。"""
+    from training.dataset import LATENT_CACHE_LAYOUT_VERSION
+
+    ds = _bare_cached_dataset()
+    img, npz = _write_pair(
+        tmp_path, "mislabeled", channels=32,
+        latent_fingerprint=ANIMA_SPEC.latent.fingerprint,
+        layout_version=LATENT_CACHE_LAYOUT_VERSION,
+    )
+    assert ds._is_cache_valid(img, npz) is False
+    assert not npz.exists()
+
+
+def test_moss_spec_rejects_wan21_cache_and_accepts_flux2(tmp_path):
+    from training.dataset import LATENT_CACHE_LAYOUT_VERSION
+    from training.families.latent_spaces import FLUX2_F8C32_BN
+
+    ds = _bare_cached_dataset()
+    ds.latent_spec = FLUX2_F8C32_BN
+    img, npz = _write_pair(
+        tmp_path, "from_krea2", channels=16,
+        latent_fingerprint=ANIMA_SPEC.latent.fingerprint,
+        layout_version=LATENT_CACHE_LAYOUT_VERSION,
+    )
+    assert ds._is_cache_valid(img, npz) is False and not npz.exists()
+    img, npz = _write_pair(
+        tmp_path, "moss", channels=32,
+        latent_fingerprint=FLUX2_F8C32_BN.fingerprint,
+        layout_version=LATENT_CACHE_LAYOUT_VERSION,
+    )
+    assert ds._is_cache_valid(img, npz) is True
+
+
+def test_dataset_phase_passes_family_latent_spec(monkeypatch, tmp_path):
+    """phases/dataset 必须把 ctx.family.spec.latent 交给训练集与正则集的缓存数据集。"""
+    from types import SimpleNamespace
+
+    import torch
+
+    import training.phases.dataset as phase
+    from training.families import get_family
+
+    seen = []
+
+    class _Images:
+        samples = []
+
+        def __init__(self, *a, **k):
+            pass
+
+        def __len__(self):
+            return 0
+
+    def _cached(base, vae, device, dtype, **kwargs):
+        seen.append(kwargs.get("latent_spec"))
+        return base
+
+    monkeypatch.setattr(phase, "BucketManager", lambda *a, **k: None)
+    monkeypatch.setattr(phase, "ImageDataset", _Images)
+    monkeypatch.setattr(phase, "CachedLatentDataset", _cached)
+    monkeypatch.setattr(phase, "MergedDataset", lambda a, b, **k: a)
+    monkeypatch.setattr(phase, "BucketBatchSampler", lambda *a, **k: None)
+    monkeypatch.setattr(phase, "DataLoader", lambda *a, **k: None)
+    args = SimpleNamespace(
+        resolution=512, aspect_ratio_limit=2.0, masked_loss=False, navit_packing=False,
+        data_dir=str(tmp_path), shuffle_caption=False, keep_tokens=0, flip_augment=False,
+        tag_dropout=0.0, prefer_json=False, reg_data_dir="", cache_latents=True,
+        vae_cache_batch_size=1, batch_size=1, num_workers=0, seed=1,
+    )
+    ctx = SimpleNamespace(
+        args=args, family=get_family("moss"), vae=None, device=torch.device("cpu"),
+        dtype=torch.float32, vae_dtype=torch.float32, output_dir=tmp_path,
+    )
+    phase.run(ctx)
+    assert seen == [get_family("moss").spec.latent]

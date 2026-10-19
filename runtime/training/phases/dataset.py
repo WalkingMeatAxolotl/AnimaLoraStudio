@@ -189,6 +189,15 @@ def run(ctx: TrainingContext) -> None:
 
     # 缓存 VAE latents（在 repeat 之前）
     ctx.use_cached = getattr(args, "cache_latents", False)
+    # 缓存指纹 = 当前族的 latent 空间（Anima / Krea2 是 Wan2.1 16 通道，MOSS 是
+    # FLUX.2 32 通道）。不传时数据集退回 Anima 默认：别族的版本会把 16 通道旧缓存
+    # 当成有效（fork 自 Krea2 版本的 MOSS 版本训练时 shape 崩），自己编出的缓存也
+    # 被盖错指纹
+    if ctx.family is None:
+        from training.families import resolve_family
+
+        ctx.family = resolve_family(args)
+    latent_spec = ctx.family.spec.latent
     if ctx.use_cached:
         # 0 = 跟随训练 batch size（对齐 kohya GUI 的 VAE batch size 语义）
         cache_batch_size = int(getattr(args, "vae_cache_batch_size", 0) or 0)
@@ -201,6 +210,7 @@ def run(ctx: TrainingContext) -> None:
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
             encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
             encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
+            latent_spec=latent_spec,
             label="train.label_training_set",
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
@@ -211,6 +221,7 @@ def run(ctx: TrainingContext) -> None:
             encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
             encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
             encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
+            latent_spec=latent_spec,
             label="train.label_regularization_set",
         )
 

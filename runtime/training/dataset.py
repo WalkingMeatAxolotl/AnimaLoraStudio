@@ -43,6 +43,26 @@ LATENT_CACHE_LAYOUT_VERSION = 1
 _LEGACY_CACHE_FINGERPRINT = "wan21-f8c16"
 
 
+def _npz_leading_dim(data, key: str):
+    """只读 npz 内 ``{key}.npy`` 的头部取第 0 维（latent 的通道数），不加载数组本体；
+    读不出返回 None（不作为失效依据）。"""
+    import numpy as np
+
+    try:
+        with data.zip.open(f"{key}.npy") as handle:
+            version = np.lib.format.read_magic(handle)
+            read_header = {
+                (1, 0): np.lib.format.read_array_header_1_0,
+                (2, 0): np.lib.format.read_array_header_2_0,
+            }.get(version)
+            if read_header is None:
+                return None
+            shape, _, _ = read_header(handle)
+        return int(shape[0]) if shape else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -1000,8 +1020,8 @@ class CachedLatentDataset(Dataset):
     键，自动重 encode 修复。
     """
 
-    #: latent 规格（指纹进缓存判据 / 写入）。类级默认 = Anima；__init__ 可覆盖，
-    #: PR-2b 起由 ctx.family.spec.latent 传入。
+    #: latent 规格（指纹与通道数进缓存判据 / 指纹写入）。类级默认 = Anima；训练由
+    #: phases/dataset 传入 ctx.family.spec.latent。
     latent_spec = _ANIMA_LATENT
 
     def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1,
@@ -1140,14 +1160,19 @@ class CachedLatentDataset(Dataset):
                     if "layout_version" in data.files
                     else LATENT_CACHE_LAYOUT_VERSION
                 )
+                # 通道数兜底：曾经数据集没拿到族的 latent 规格，MOSS 编出的 32 通道
+                # 缓存被盖成 Anima 指纹（反之亦然）——只比指纹会把这类错标缓存当有效
+                cache_ch = _npz_leading_dim(data, "latent")
                 if (cache_fp != self.latent_spec.fingerprint
-                        or cache_ver != LATENT_CACHE_LAYOUT_VERSION):
+                        or cache_ver != LATENT_CACHE_LAYOUT_VERSION
+                        or (cache_ch is not None and cache_ch != self.latent_spec.channels)):
                     npz_path.unlink()
                     logger.debug(
                         "latent_cache: dropped stale entry file=%s cache_fp=%s "
-                        "cache_ver=%s want_fp=%s want_ver=%s",
-                        npz_path.name, cache_fp, cache_ver,
+                        "cache_ver=%s cache_ch=%s want_fp=%s want_ver=%s want_ch=%s",
+                        npz_path.name, cache_fp, cache_ver, cache_ch,
                         self.latent_spec.fingerprint, LATENT_CACHE_LAYOUT_VERSION,
+                        self.latent_spec.channels,
                     )
                     return False
                 if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
