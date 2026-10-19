@@ -21,6 +21,12 @@ export function useAutoGrowTextarea(
     const fit = () => {
       // offsetParent===null ⇒ 自身或祖先 display:none，scrollHeight 不可信，先不动高度
       if (el.offsetParent === null) return
+      // 测量期间钉住父元素高度：height=auto 会让长文本 textarea 瞬间塌回 rows
+      // 高度，外层滚动容器的 scrollTop 被夹小，恢复高度时又被浏览器 scroll
+      // anchoring 推到底——每次按键 / 重测都会让列表乱跳。
+      const parent = el.parentElement
+      const parentMinHeight = parent?.style.minHeight ?? ''
+      if (parent) parent.style.minHeight = `${parent.offsetHeight}px`
       el.style.height = 'auto'
       // scrollHeight 不含 border；box-sizing: border-box 下补回去，否则每次少
       // 2px 出现滚动条
@@ -28,6 +34,7 @@ export function useAutoGrowTextarea(
       // 额外加一行行高：给右下角的 token 计数角标留空间（内容贴底时不重叠）
       const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20
       el.style.height = `${el.scrollHeight + border + lineHeight}px`
+      if (parent) parent.style.minHeight = parentMinHeight
     }
     fit()
     // 监听尺寸变化：tab 切换让元素从隐藏变可见时重算，宽度变化（换行影响高度）时也重算

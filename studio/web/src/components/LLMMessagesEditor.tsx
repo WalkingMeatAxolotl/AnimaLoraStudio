@@ -43,17 +43,33 @@ const roleHintKeys: Record<string, string> = {
 export default function LLMMessagesEditor({ messages, onChange, disabled }: Props) {
   const { t } = useTranslation()
   const idRefs = useRef<WeakMap<LLMMessage, string>>(new WeakMap())
+  // 上次渲染 / 上次上抛时的 id 顺序。父组件落盘后会整组重载（全新对象，WeakMap
+  // 全部 miss），按位置沿用这里的 id，否则所有 key 变 → 全部 textarea 重挂 →
+  // 撑高前内容瞬间变矮，外层滚动容器 scrollTop 被夹回顶部。
+  const orderRef = useRef<string[]>([])
   const seq = useRef(0)
-  const idOf = (m: LLMMessage): string => {
+  const ids: string[] = []
+  messages.forEach((m, i) => {
     let id = idRefs.current.get(m)
-    if (!id) {
-      seq.current += 1
-      id = `msg-${seq.current}`
+    if (!id || ids.includes(id)) {
+      const positional = orderRef.current[i]
+      if (positional && !ids.includes(positional)) {
+        id = positional
+      } else {
+        seq.current += 1
+        id = `msg-${seq.current}`
+      }
       idRefs.current.set(m, id)
     }
-    return id
+    ids.push(id)
+  })
+  orderRef.current = ids
+
+  // 结构性改动（拖拽 / 删除 / 新增）上抛前先记下新顺序，让回流的重载结果按位置对上。
+  const emit = (next: LLMMessage[], nextIds: string[]) => {
+    orderRef.current = nextIds
+    onChange(next)
   }
-  const ids = messages.map(idOf)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -66,7 +82,7 @@ export default function LLMMessagesEditor({ messages, onChange, disabled }: Prop
     const oldIdx = ids.indexOf(active.id as string)
     const newIdx = ids.indexOf(over.id as string)
     if (oldIdx === -1 || newIdx === -1) return
-    onChange(arrayMove(messages, oldIdx, newIdx))
+    emit(arrayMove(messages, oldIdx, newIdx), arrayMove(ids, oldIdx, newIdx))
   }
 
   const updateMsg = (i: number, patch: Partial<LLMMessage>) => {
@@ -82,7 +98,7 @@ export default function LLMMessagesEditor({ messages, onChange, disabled }: Prop
   }
 
   const deleteMsg = (i: number) => {
-    onChange(messages.filter((_, idx) => idx !== i))
+    emit(messages.filter((_, idx) => idx !== i), ids.filter((_, idx) => idx !== i))
   }
 
   const addMessage = () => {
@@ -93,7 +109,11 @@ export default function LLMMessagesEditor({ messages, onChange, disabled }: Prop
         : last.role === 'user'
           ? 'assistant'
           : 'user'
-    onChange([...messages, { type: 'text', role: nextRole, content: '' }])
+    seq.current += 1
+    const id = `msg-${seq.current}`
+    const added: LLMMessage = { type: 'text', role: nextRole, content: '' }
+    idRefs.current.set(added, id)
+    emit([...messages, added], [...ids, id])
   }
 
   return (
