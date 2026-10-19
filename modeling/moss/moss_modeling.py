@@ -8,8 +8,9 @@
 #     同口径；上游 pipeline 传入的已是 σ×1000）
 #   - RoPE 频率每次前向现算，不做 buffer（上游的 `rope.bands` 是派生常量，加载侧丢弃）
 #   - 可选逐 block 梯度检查点
+#   - 注意力可选 flash-attn 包 / xformers（modeling.attention，按模型实例设置）
 # 见 THIRD_PARTY_NOTICES。
-"""MOSS-Image 5B 单流 DiT（结构定义层，只依赖 torch）。"""
+"""MOSS-Image 5B 单流 DiT（结构定义层，只依赖 torch 与 modeling.attention）。"""
 
 from __future__ import annotations
 
@@ -17,7 +18,8 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
+
+from modeling.attention import ATTENTION_BACKENDS, SDPA, XFORMERS, attention_bshd
 
 _PATCH = 2
 
@@ -82,18 +84,18 @@ def _rotate(x, rope):
     return x * cos + torch.cat((-b, a), -1) * sin
 
 
-def _attention(q, k, v, rope, heads):
+def _attention(q, k, v, rope, heads, backend=SDPA):
     shape = (*q.shape[:2], heads, q.shape[-1] // heads)
-    q = _rotate(q.reshape(shape), rope).transpose(1, 2)
-    k = _rotate(k.reshape(shape), rope).transpose(1, 2)
-    v = v.reshape(shape).transpose(1, 2)
-    return F.scaled_dot_product_attention(q.to(v.dtype), k.to(v.dtype), v).transpose(1, 2).flatten(2)
+    q = _rotate(q.reshape(shape), rope).to(v.dtype)
+    k = _rotate(k.reshape(shape), rope).to(v.dtype)
+    return attention_bshd(q, k, v.reshape(shape), backend, stage="moss").flatten(2)
 
 
 class _TextBlock(nn.Module):
     def __init__(self, dim, ffn_dim, heads):
         super().__init__()
         self.heads = heads
+        self.attention_backend = SDPA
         self.norm1, self.norm2 = _RMSNorm(dim), _RMSNorm(dim)
         self.q_norm, self.k_norm = _RMSNorm(dim // heads), _RMSNorm(dim // heads)
         self.qkv = nn.Linear(dim, 3 * dim)
@@ -105,7 +107,7 @@ class _TextBlock(nn.Module):
         q, k, v = self.qkv(self.norm1(x)).chunk(3, -1)
         q = self.q_norm(q.unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(k.unflatten(-1, (self.heads, -1))).flatten(2)
-        x = x + self.proj(_attention(q, k, v, rope, self.heads))
+        x = x + self.proj(_attention(q, k, v, rope, self.heads, self.attention_backend))
         y = self.norm2(x)
         return x + self.ffn_down(_situ(self.ffn_up(y), self.ffn_gate(y)))
 
@@ -127,6 +129,7 @@ class _Block(nn.Module):
     def __init__(self, dim, ffn_dim, heads):
         super().__init__()
         self.heads = heads
+        self.attention_backend = SDPA
         self.norm1, self.norm2 = _RMSNorm(dim), _RMSNorm(dim)
         self.q_norm, self.k_norm = _RMSNorm(dim // heads), _RMSNorm(dim // heads)
         self.proj = nn.ModuleDict({
@@ -143,7 +146,8 @@ class _Block(nn.Module):
         y = y.to(dtype)
         q = self.q_norm(self.proj['q'](y).unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(self.proj['k'](y).unflatten(-1, (self.heads, -1))).flatten(2)
-        x = x + self.proj['o'](_attention(q, k, self.proj['v'](y), rope, self.heads)) * gate_a[:, None]
+        out = _attention(q, k, self.proj['v'](y), rope, self.heads, self.attention_backend)
+        x = x + self.proj['o'](out) * gate_a[:, None]
         y = self.norm2(x) * (1 + scale_f[:, None]) + shift_f[:, None]
         hidden, gate = self.proj['ffn_up_gate'](y.to(dtype)).chunk(2, -1)
         return x + self.proj['ffn_down'](_situ(hidden, gate)) * gate_f[:, None]
@@ -183,6 +187,7 @@ class MossImageTransformer(nn.Module):
         self.config = config
         dim, ffn_dim, heads = config.dim, config.ffn_dim, config.num_heads
         self.gradient_checkpointing = False
+        self.attention_backend = SDPA
         self.video_embedder = nn.Linear(config.latent_channels, dim)
         self.text_embedder = _TextProjection(config.text_dim, dim, ffn_dim, heads)
         self.time_embedding = nn.Sequential(nn.Linear(config.freq_dim, dim), nn.SiLU(), nn.Linear(dim, dim))
@@ -191,6 +196,19 @@ class MossImageTransformer(nn.Module):
         self.final_norm_video = _RMSNorm(dim)
         self.final_linear_video = nn.Linear(dim, config.latent_channels, bias=False)
         self.video_head_modulation = nn.Linear(dim, 2 * dim)
+
+    def set_attention_backend(self, backend: str) -> None:
+        """设置本模型（DiT 层与文本精炼块）的注意力后端，取值见 ``modeling.attention``。"""
+        if backend not in ATTENTION_BACKENDS:
+            raise ValueError(f"未知的 attention backend: {backend!r}")
+        self.attention_backend = backend
+        for module in self.modules():
+            if isinstance(module, (_Block, _TextBlock)):
+                module.attention_backend = backend
+
+    def enable_xformers_memory_efficient_attention(self) -> None:
+        """``training.model_loading.enable_xformers`` 的钩子（diffusers 同名约定）。"""
+        self.set_attention_backend(XFORMERS)
 
     def _time(self, sigmas: Tensor, batch: int, device) -> tuple[Tensor, Tensor]:
         times = (sigmas.to(device=device, dtype=torch.float32).reshape(-1) * 1000.0).expand(batch)

@@ -198,7 +198,7 @@
 **PR-6 实施结论（作者本地 ComfyUI 0.41.0 + comfy-kitchen 0.2.38 + torch 2.7 cu128 实测）**：
 
 - ComfyUI 在 torch < cu130 时禁用 comfy-kitchen 的 cuda / triton 后端，int8 线性层、量化、RoPE、AdaLN 全部走 eager 纯 PyTorch 实现——这条路径可以逐位复刻。cuda 后端的 `int8_linear` 与 eager 约 31% 的输出不同，所以 oracle 必须是 eager。
-- **DiT 注意力**：Comfy-Org 的 MOSS 文件每层带 `{"attention": "comfy_kitchen_int8"}`，走 comfy-kitchen 自带的 INT8 SageAttention CUDA 内核（闭源二进制），不受后端禁用影响。本项目用 SDPA，并照搬 `comfy/ops.py` 的后端优先级（≥128K 元素时 FLASH → CUDNN → EFFICIENT → MATH）。
+- **DiT 注意力**：Comfy-Org 的 MOSS 文件每层带 `{"attention": "comfy_kitchen_int8"}`，走 comfy-kitchen 自带的 INT8 SageAttention CUDA 内核（闭源二进制），不受后端禁用影响。本项目 `attention_backend=none` 时用 SDPA，并照搬 `comfy/ops.py` 的后端优先级（≥128K 元素时 FLASH → CUDNN → EFFICIENT → MATH）；选 flash_attn / xformers 时走对应的包（`modeling/attention.py`，训练前向同样适用），两者都不在逐位范围内。
 - **TE 不是 W8A8**：编码时 `full_precision_mm`，每次前向把 int8 权重反量化成 compute dtype 再普通 `F.linear`。本项目 TE 改走同一条反量化路径，int8 TE 的缓存指纹改后缀 `-int8convrot-dq`（旧缓存自动重编）。剩余差异来自 Qwen3.5 实现不同（HF transformers vs Comfy 自己的实现）。
 - **LoRA**：作者环境（`--highvram`、torch < 2.8）走经典 ModelPatcher 路径而非 dynamic VRAM：fp16 反量化 → fp32 算 ΔW → fp16 相加 → fp16 旋转、逐行 amax、随机舍入；种子 = `crc32("diffusion_model.{Comfy 权重键}.weight")`，融合 qkv 按整块 merge。dynamic VRAM 路径（bf16 merge、种子取模块名）在作者环境不启用，未实现。
 - **DiT 推理前向**：上游前向与 Comfy 数学相同、舍入路径不同（调制在 fp32 vs bf16、RoPE 先转 bf16 vs fp32 里旋转、RMSNorm 写法、残差 addcmul）。出图另走 `comfy_forward.py` 逐算子复刻；训练与训练中采样仍走上游前向。

@@ -14,8 +14,9 @@ comfy-kitchen 0.2.38 eager 后端逐算子排列：
 - 线性层：调用模型自己的 Linear（int8 层已按 ``w8a8`` 挂 comfy-kitchen eager 前向）
 
 **不在逐位范围内**：DiT 注意力。ComfyUI 对 Comfy-Org 的 MOSS 文件用 comfy-kitchen
-自带的 INT8 SageAttention CUDA 内核（闭源二进制），这里用 PyTorch SDPA；文本精炼块
-在 ComfyUI 里走 xformers，这里同样用 SDPA。
+自带的 INT8 SageAttention CUDA 内核（闭源二进制），这里按模型的 ``attention_backend``
+走 flash-attn 包 / xformers，``none`` 时用 PyTorch SDPA（照搬 Comfy 的后端优先级）；
+文本精炼块在 ComfyUI 里走 xformers。
 
 派生署名见 THIRD_PARTY_NOTICES（ComfyUI GPL-3.0 + comfy_kitchen Apache-2.0）。
 """
@@ -27,6 +28,8 @@ import math
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+
+from modeling.attention import SDPA, attention_bshd
 
 _EPS = 1e-6
 _ROPE_THETA = 10000
@@ -103,11 +106,13 @@ def _timestep_embedding(t: Tensor, dim: int = 256, max_period: int = 10000) -> T
 
 
 def _attention(q: Tensor, k: Tensor, v: Tensor, q_norm_w: Tensor, k_norm_w: Tensor,
-               pe: Tensor, heads: int) -> Tensor:
-    """ComfyUI ``moss_image.attention`` 推理分支；注意力内核用 SDPA（见模块 docstring）。"""
+               pe: Tensor, heads: int, backend: str = SDPA) -> Tensor:
+    """ComfyUI ``moss_image.attention`` 推理分支；注意力内核见模块 docstring。"""
     b, n, _ = q.shape
     q = _rms_rope_split_half(q.view(b, n, heads, -1), pe, q_norm_w)
     k = _rms_rope_split_half(k.view(b, n, heads, -1), pe, k_norm_w)
+    if backend != SDPA:
+        return attention_bshd(q, k, v.view(b, n, heads, -1), backend, stage="moss_comfy").flatten(2)
     q, k = q.flatten(2), k.flatten(2)
     dim_head = q.shape[-1] // heads
     # comfy attention_pytorch：reshape 到 heads 后 transpose 成 (b, heads, n, d)
@@ -147,18 +152,19 @@ def _situ(hidden: Tensor, gate: Tensor) -> Tensor:
     return (4.0 * torch.tanh(gate / 4.0) * torch.sigmoid(gate)) * (25.0 * torch.tanh(hidden / 25.0))
 
 
-def _text_block(block, x: Tensor, pe: Tensor) -> Tensor:
+def _text_block(block, x: Tensor, pe: Tensor, backend: str) -> Tensor:
     q, k, v = block.qkv(_rms_norm(x, block.norm1.weight)).chunk(3, dim=-1)
-    x = x + block.proj(_attention(q, k, v, block.q_norm.weight, block.k_norm.weight, pe, block.heads))
+    x = x + block.proj(_attention(q, k, v, block.q_norm.weight, block.k_norm.weight, pe, block.heads,
+                                  backend))
     y = _rms_norm(x, block.norm2.weight)
     return x + block.ffn_down(_situ(block.ffn_up(y), block.ffn_gate(y)))
 
 
-def _dit_block(block, x: Tensor, mod: tuple[Tensor, ...], pe: Tensor) -> Tensor:
+def _dit_block(block, x: Tensor, mod: tuple[Tensor, ...], pe: Tensor, backend: str) -> Tensor:
     shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = mod
     y = _rms_adaln(x, block.norm1.weight, scale_a, shift_a)
     q, k, v = block.proj["q"](y), block.proj["k"](y), block.proj["v"](y)
-    out = _attention(q, k, v, block.q_norm.weight, block.k_norm.weight, pe, block.heads)
+    out = _attention(q, k, v, block.q_norm.weight, block.k_norm.weight, pe, block.heads, backend)
     x = x.addcmul_(block.proj["o"](out), gate_a)
     y = _rms_adaln(x, block.norm2.weight, scale_f, shift_f)
     hidden, gate = block.proj["ffn_up_gate"](y).chunk(2, dim=-1)
@@ -178,6 +184,7 @@ def comfy_forward(model, x: Tensor, timestep: Tensor, context: Tensor, *,
     b, _, h, w = x.shape
     dtype, device = x.dtype, x.device
     heads = model.config.num_heads
+    backend = getattr(model, "attention_backend", SDPA)
     pe = _rope(model.config.dim // heads, h, w, context.shape[1], device)
 
     vec = model.time_embedding(_timestep_embedding(timestep, model.config.freq_dim).to(dtype))
@@ -186,7 +193,7 @@ def comfy_forward(model, x: Tensor, timestep: Tensor, context: Tensor, *,
 
     txt = model.text_embedder.proj(context)
     for block in model.text_embedder.blocks:
-        txt = _text_block(block, txt, pe[:, h * w:])
+        txt = _text_block(block, txt, pe[:, h * w:], backend)
     hidden = torch.cat((model.video_embedder(x.flatten(2).transpose(1, 2)), txt), dim=1)
     del txt
 
@@ -194,7 +201,7 @@ def comfy_forward(model, x: Tensor, timestep: Tensor, context: Tensor, *,
     for index, block in enumerate(model.layers):
         if index in skip:
             continue
-        hidden = _dit_block(block, hidden, mod, pe)
+        hidden = _dit_block(block, hidden, mod, pe, backend)
 
     out = model.final_linear_video(
         _rms_adaln(hidden[:, :h * w], model.final_norm_video.weight, head_scale, head_shift)

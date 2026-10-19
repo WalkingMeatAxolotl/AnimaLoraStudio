@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Iterable
 
 import torch
@@ -17,7 +16,6 @@ from studio.domain.common import (
     FAMILY_CONFIG_DEFAULTS,
     FAMILY_SAMPLING,
 )
-from studio.infrastructure.log_messages import msg
 
 from ..latent_spaces import FLUX2_F8C32_BN
 from ..spec import ConstantShift, LoraOutputSpec, ModelSpec, SamplingDefaults, TextSpec
@@ -34,8 +32,6 @@ from .sampling import (
     sample_latents,
 )
 from .text_encoding import MOSS_MAX_TOKENS, MOSS_TEXT_FINGERPRINT, MossTextStack
-
-logger = logging.getLogger(__name__)
 
 
 MOSS_SPEC = ModelSpec(
@@ -72,9 +68,8 @@ class MossFamily:
                  purpose: str = "train", blocks_to_swap: int = 0):
         del repo_root
         from training.families.moss.loader import load_moss_model
+        from training.model_loading import apply_attention_backend
 
-        if attention_backend != "none":
-            logger.info(msg("train.moss_sdpa_only", backend=attention_backend))
         # int8 底模两条前向（M9）：训练 W8A16（数值准、可反传）；出图 / 评估 / 先验
         # 生成按 ComfyUI 实际跑的 W8A8 eager 路径逐位复刻
         generate = purpose == "generate"
@@ -84,6 +79,7 @@ class MossFamily:
         )
         # 出图走 ComfyUI 口径的推理前向（comfy_forward）；训练与训练中采样仍走上游前向
         model.moss_comfy_forward = generate
+        apply_attention_backend(model, attention_backend)
         return model
 
     def dit_blocks(self, model):

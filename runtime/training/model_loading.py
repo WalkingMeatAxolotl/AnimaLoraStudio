@@ -5,6 +5,7 @@
 
 公开（被 sister script 用）：
 - find_diffusion_pipe_root / resolve_path_best_effort / enable_xformers
+- apply_attention_backend（按模型实例选注意力后端的族用，非 sister 契约）
 - forward_with_optional_checkpoint（被 train loop 调）
 
 内部：
@@ -92,6 +93,26 @@ def enable_xformers(model):
         "attention runs on PyTorch SDPA"
     )
     return False
+
+
+def apply_attention_backend(model, backend: str) -> str:
+    """给按模型实例选后端的模型（实现 ``set_attention_backend``，见 ``modeling.attention``）
+    设置注意力后端，日志与 Anima 加载同口径。包没装时退回 SDPA。返回实际生效的后端。"""
+    from modeling.attention import FLASH_ATTN, SDPA, XFORMERS, backend_available
+
+    model.set_attention_backend(SDPA)
+    if backend == XFORMERS:
+        # enable_xformers 经模型的 enable_xformers_memory_efficient_attention 钩子切换
+        return XFORMERS if enable_xformers(model) else SDPA
+    if backend == FLASH_ATTN:
+        if backend_available(FLASH_ATTN):
+            model.set_attention_backend(FLASH_ATTN)
+            logger.info(msg("train.flash_attn_on"))
+            return FLASH_ATTN
+        logger.info(msg("train.flash_attn_off_missing"))
+        return SDPA
+    logger.info(msg("train.flash_attn_off_by_setting", backend=backend or SDPA))
+    return SDPA
 
 
 # ============================================================================
