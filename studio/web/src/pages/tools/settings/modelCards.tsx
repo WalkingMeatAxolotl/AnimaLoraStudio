@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import {
@@ -145,6 +145,9 @@ export function ModelSourceCard({
   const [fileDraft, setFileDraft] = useState('')
   const [firstLocalPath, setFirstLocalPath] = useState('')
   const [submitBusy, setSubmitBusy] = useState(false)
+  // radio 组名按卡片实例唯一：同一 domain 可在多处渲染（Qwen-Image VAE 同时出现在
+  // Anima / Krea2 区），共用 name 会被浏览器当成一组、互相取消选中
+  const radioGroup = `source_${domain}_${useId()}`
 
   const rows = catalog?.model_sources?.[domain]
   if (!catalog || !rows) {
@@ -229,7 +232,7 @@ export function ModelSourceCard({
             <li key={`${row.kind}:${row.value}`} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
               isSel ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
             }`}>
-              <input type="radio" name={`source_${domain}`} checked={isSel} disabled={!canSelect}
+              <input type="radio" name={radioGroup} checked={isSel} disabled={!canSelect}
                 aria-label={row.label}
                 onChange={() => onSelect(row.value, row)}
                 className="shrink-0"
@@ -263,7 +266,8 @@ export function ModelSourceCard({
               {row.download_id && (
                 <DownloadButton
                   exists={row.exists} status={dl?.status}
-                  busy={row.status_key ? downloadBusy.has(row.status_key) : false}
+                  // 与 startDownload 的 in-flight key 同构（download_id:variant），不用 status_key
+                  busy={downloadBusy.has(`${row.download_id}:${row.download_variant ?? row.value}`)}
                   onClick={() => void startDownload(row.download_id!, row.download_variant ?? row.value)}
                   onDelete={() => void deleteAsset(row.download_id!, row.download_variant ?? row.value, row.label)}
                 />

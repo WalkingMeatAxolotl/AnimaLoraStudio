@@ -68,8 +68,6 @@ export default function SettingsPage() {
     catalog,
     catalogError,
     reloadCatalog,
-    downloadBusy,
-    startDownload,
     setDownloadSource,
   } = useSettingsData()
   // instant-apply：不再有本地 draft，控件直接读 server（未加载时 EMPTY 占位），
@@ -690,8 +688,6 @@ export default function SettingsPage() {
 
       <ModelsSection
         catalog={catalog}
-        busy={downloadBusy}
-        start={startDownload}
         setSource={setDownloadSource}
         reloadCatalog={reloadCatalog}
         catalogError={catalogError}

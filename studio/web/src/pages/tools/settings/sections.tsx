@@ -22,7 +22,7 @@ import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
 import { DepSection, DepVariantList, DepVersionRow, type DepLevel, type DepNotice } from './DepSection'
 import { Bool, PillRadioGroup, SettingsField, SettingsInput, SettingsSection } from './fields'
-import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, SourceSelect } from './modelCards'
+import { ModelSourceCard, ModelStatusBadge, SourceSelect } from './modelCards'
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
 //
@@ -99,11 +99,12 @@ type TeVariantKey =
   | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
   | 'moss_text_encoder_int8' | 'moss_text_encoder_bf16'
 
-/** 带 variant 的 TE 合并卡：每个 variant 一行 radio + 各自下载，选中写 selected_te.{family}。 */
+/** 带 variant 的 TE 卡：走 ModelSourceCard（catalog.model_sources[domain]，每个 variant
+ *  一行 radio + 各自下载），选中写 selected_te.{family}。 */
 interface TeVariantCard {
   titleKey: string
-  /** 删除确认里的对象名前缀（「Qwen3-VL bf16」） */
-  deleteLabel: string
+  /** catalog.model_sources 的 domain */
+  domain: 'krea2_te' | 'moss_te'
   /** [variant, catalog section id]；首项 = 默认 */
   variants: readonly (readonly [string, TeVariantKey])[]
 }
@@ -151,7 +152,7 @@ const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
     vaeKey: 'anima_vae',
     teCard: {
       titleKey: 'settings.krea2TeCardTitle',
-      deleteLabel: 'Qwen3-VL',
+      domain: 'krea2_te',
       variants: [['bf16', 'krea2_text_encoder'], ['fp8', 'krea2_text_encoder_fp8']],
     },
     downloadKeyPrefixes: ['krea2_main', 'krea2_text_encoder'],
@@ -167,7 +168,7 @@ const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
     vaeKey: 'moss_vae',
     teCard: {
       titleKey: 'settings.mossTeCardTitle',
-      deleteLabel: 'Qwen3.5-9B',
+      domain: 'moss_te',
       variants: [['int8', 'moss_text_encoder_int8'], ['bf16', 'moss_text_encoder_bf16']],
     },
     downloadKeyPrefixes: ['moss_main', 'moss_text_encoder', 'moss_vae'],
@@ -181,29 +182,6 @@ const ENCODER_TITLE_KEYS: Partial<Record<FamilyModelSection['encoderIds'][number
   qwen3: 'settings.familyTeCardTitle',
 }
 
-/** 官方资产行名：单文件取落盘文件名去扩展名，目录型取上游模型名（repo 末段）——
- *  与底模卡 preset 行（variant 标识）同口径，不另起名字。 */
-function assetRowLabel(asset: { target_path?: string; repo: string }): string {
-  if (asset.target_path) {
-    const file = asset.target_path.split(/[\\/]/).pop() ?? ''
-    return file.replace(/\.[^.]+$/, '')
-  }
-  return asset.repo.split('/').pop() ?? asset.repo
-}
-
-/** 单资产卡的一行：版式与 ModelSourceCard 行一致（名字左、状态与动作右）。 */
-function AssetRow({ label, path, children }: { label: string; path: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm border border-transparent">
-      <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={path}>
-        {label}
-      </code>
-      <span className="flex-1" />
-      {children}
-    </div>
-  )
-}
-
 const FALLBACK_SELECTED = Object.fromEntries(
   FAMILY_MODEL_SECTIONS.map((s) => [s.family, s.fallbackSelected]),
 ) as Record<FamilyId, string>
@@ -212,17 +190,15 @@ const DEFAULT_TE_SELECTED = Object.fromEntries(
   FAMILY_MODEL_SECTIONS.flatMap((s) => (s.teCard ? [[s.family, s.teCard.variants[0][0]]] : [])),
 ) as Partial<Record<FamilyId, string>>
 
-export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalogError, t }: {
+export function ModelsSection({ catalog, setSource, reloadCatalog, catalogError, t }: {
   catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
   setSource: (type: string, source: string) => Promise<void>
   reloadCatalog: () => Promise<ModelsCatalog | null>
   catalogError: string | null
   t: TFunction
 }) {
   const { toast } = useToast()
-  const { runSave, deleteAsset } = useSettingsData()
+  const { runSave } = useSettingsData()
   const [selected, setSelected] = useState<Record<FamilyId, string>>(FALLBACK_SELECTED)
 
   // 一次性拉 secrets 取各族 selected（独立 PUT，不进全局 dirty 流程）。模型
@@ -293,19 +269,22 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
       components={{ code: <code /> }} />
   )
 
-  const renderVae = (section: FamilyModelSection) => {
-    const vaeKey = section.vaeKey
-    const vae = catalog?.[vaeKey]
-    if (!catalog || !vae) return null
-    const dl = catalog.downloads[vaeKey]
+  // 单资产卡（VAE / 文本编码器 / tokenizer）：与主模型同一候选卡，只有一行也是 radio
+  const renderAssetCard = (domain: 'anima_vae' | 'moss_vae' | 'qwen3' | 't5_tokenizer', title: string) => {
+    const asset = catalog?.[domain]
+    if (!catalog || !asset) return null
     return (
-      <ModelGroupCard title={t('settings.familyVaeCardTitle', { family: section.familyName })}
-        helpTooltip={<p>{assetHelp(vaeKey, vae.description, vae.repo)}</p>}>
-        <AssetRow label={assetRowLabel(vae)} path={vae.target_path}>
-          <ModelStatusBadge exists={vae.exists} size={vae.size} status={dl?.status} sizeEstimate={vae.size_estimate} />
-          <DownloadButton exists={vae.exists} status={dl?.status} busy={busy.has(vaeKey)} onClick={() => void start(vaeKey)} onDelete={() => void deleteAsset(vaeKey, undefined, vae.name)} />
-        </AssetRow>
-      </ModelGroupCard>
+      <ModelSourceCard
+        key={domain}
+        domain={domain}
+        title={title}
+        helpTooltip={<p>{assetHelp(domain, asset.description, asset.repo)}</p>}
+        catalog={catalog}
+        currentValue={domain}
+        onSelect={() => {}}
+        selectRequiresExists
+        t={t}
+      />
     )
   }
 
@@ -414,65 +393,36 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
               />
 
               {/* 该族训练用的 VAE（Qwen-Image VAE 为 Anima / Krea2 共用的族无关资产） */}
-              {renderVae(section)}
+              {renderAssetCard(section.vaeKey, t('settings.familyVaeCardTitle', { family: section.familyName }))}
 
-              {/* TE variant 合并卡：每个 variant 一行 radio + 各自下载 */}
+              {/* 带精度 variant 的 TE：每个 variant 一行 radio，选中写 selected_te.{family} */}
               {section.teCard && (() => {
                 const card = section.teCard
-                const rows = card.variants.flatMap(([variant, key]) => {
+                const secs = card.variants.flatMap(([variant, key]) => {
                   const m = catalog[key]
                   return m ? [[variant, m] as const] : []
                 })
-                if (rows.length !== card.variants.length) return null
                 return (
-                  <ModelGroupCard title={t(card.titleKey)} helpTooltip={rows.map(([variant, m]) => (
-                    <p key={variant}><code>{variant}</code> · {assetHelp(m.id, m.description, m.repo)}</p>
-                  ))}>
-                    <ul className="flex flex-col gap-1.5 text-xs">
-                      {rows.map(([variant, m]) => {
-                        const allExist = m.files.length > 0 && m.files.every((f) => f.exists)
-                        const totalSize = m.files.reduce((s, f) => s + f.size, 0)
-                        const dl = catalog.downloads[m.id]
-                        return (
-                          <li key={variant} className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name={`${section.family}-te-variant`}
-                              checked={teSelected[section.family] === variant}
-                              disabled={!allExist}
-                              onChange={() => void pickTe(section.family, variant)}
-                              style={{ accentColor: 'var(--accent)' }}
-                              title={allExist ? t('settings.selectTeVariant') : t('settings.teVariantNotDownloaded')}
-                            />
-                            <code className="font-mono text-fg-primary w-16 shrink-0">{variant}</code>
-                            <span style={{ flex: 1 }} />
-                            <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} sizeEstimate={m.size_estimate} />
-                            <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} onDelete={() => void deleteAsset(m.id, undefined, `${card.deleteLabel} ${variant}`)} />
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </ModelGroupCard>
+                  <ModelSourceCard
+                    domain={card.domain}
+                    title={t(card.titleKey)}
+                    helpTooltip={secs.map(([variant, m]) => (
+                      <p key={variant}><code>{variant}</code> · {assetHelp(m.id, m.description, m.repo)}</p>
+                    ))}
+                    catalog={catalog}
+                    currentValue={teSelected[section.family] ?? ''}
+                    onSelect={(v) => void pickTe(section.family, v)}
+                    selectRequiresExists
+                    t={t}
+                  />
                 )
               })()}
 
               {/* 该族的目录型资产（文本编码器 / tokenizer；CLTagger 在「打标」tab） */}
-              {section.encoderIds.map((id) => {
-                const m = catalog[id]
-                const dl = catalog.downloads[id]
-                const allExist = m.files.every((f) => f.exists)
-                const totalSize = m.files.reduce((s, f) => s + f.size, 0)
-                return (
-                  <ModelGroupCard key={id}
-                    title={ENCODER_TITLE_KEYS[id] ? t(ENCODER_TITLE_KEYS[id]!, { family: section.familyName }) : m.name}
-                    helpTooltip={<p>{assetHelp(id, m.description, m.repo)}</p>}>
-                    <AssetRow label={assetRowLabel(m)} path={m.target_dir}>
-                      <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} sizeEstimate={m.size_estimate} />
-                      <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} onDelete={() => void deleteAsset(id, undefined, m.name)} />
-                    </AssetRow>
-                  </ModelGroupCard>
-                )
-              })}
+              {section.encoderIds.map((id) => renderAssetCard(
+                id,
+                ENCODER_TITLE_KEYS[id] ? t(ENCODER_TITLE_KEYS[id]!, { family: section.familyName }) : catalog[id].name,
+              ))}
 
               {renderDownloadLogs(section.downloadKeyPrefixes)}
             </div>

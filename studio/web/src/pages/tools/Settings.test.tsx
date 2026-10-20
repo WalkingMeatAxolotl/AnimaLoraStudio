@@ -163,6 +163,16 @@ const initialServerState = {
   tag_dictionary: { show_translation: null, autocomplete: null },
 }
 
+/** VAE / TE / tokenizer 的候选行（后端 _asset_row 同形：单资产 value = 资产 id，TE value = variant）。 */
+function assetRow(downloadId: string, value: string, label: string, opts: { exists?: boolean; isCurrent?: boolean; sizeEstimate?: number } = {}) {
+  return {
+    kind: 'preset' as const, candidate: null, value, label, description: '',
+    download_id: downloadId, download_variant: value, status_key: downloadId,
+    exists: opts.exists ?? false, size: 0, files: null, size_estimate: opts.sizeEstimate ?? 0,
+    is_current: opts.isCurrent ?? true, removable: false, deletable: true, extra: {},
+  }
+}
+
 const emptyModelsCatalog = {
   models_root: '/tmp/anima',
   anima_main: {
@@ -355,6 +365,13 @@ const emptyModelsCatalog = {
       },
     ],
     anima: [],
+    anima_vae: [assetRow('anima_vae', 'anima_vae', 'qwen_image_vae')],
+    qwen3: [assetRow('qwen3', 'qwen3', 'Qwen3-0.6B-Base')],
+    t5_tokenizer: [assetRow('t5_tokenizer', 't5_tokenizer', 't5-v1_1-xxl')],
+    krea2_te: [
+      assetRow('krea2_text_encoder', 'bf16', 'bf16'),
+      assetRow('krea2_text_encoder_fp8', 'fp8', 'fp8', { isCurrent: false }),
+    ],
     krea2: [
       {
         kind: 'preset', candidate: null, value: 'raw', label: 'raw',
@@ -792,8 +809,18 @@ describe('SettingsPage (PP0)', () => {
     expect(customRow!.querySelector('.badge-ok')).not.toBeNull()
     expect(within(customRow!).getByTitle('从列表移除（不删除文件）')).toBeInTheDocument()
     expect(within(customRow!).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
-    // 主模型 3（raw/turbo/custom）+ TE variant 卡 2（bf16/fp8）
-    expect(screen.getAllByRole('radio')).toHaveLength(5)
+    // Krea2 区：主模型 3（raw/turbo/custom）+ VAE 1 + TE variant 2（bf16/fp8），
+    // VAE / TE 与主模型同一候选卡，单选项也是 radio
+    const krea2Section = document.getElementById('krea2-models') as HTMLElement
+    expect(within(krea2Section).getAllByRole('radio')).toHaveLength(6)
+    expect(within(krea2Section).getByText('Krea 2 VAE')).toBeInTheDocument()
+    expect(within(krea2Section).getByRole('radio', { name: 'qwen_image_vae' })).toBeChecked()
+    // Anima 区的文本编码器 / tokenizer 卡同样是一行 radio
+    const animaSection = document.getElementById('models') as HTMLElement
+    expect(within(animaSection).getByText('Anima 文本编码器')).toBeInTheDocument()
+    expect(within(animaSection).getByRole('radio', { name: 'qwen_image_vae' })).toBeChecked()
+    expect(within(animaSection).getByRole('radio', { name: 'Qwen3-0.6B-Base' })).toBeChecked()
+    expect(within(animaSection).getByRole('radio', { name: 't5-v1_1-xxl' })).toBeInTheDocument()
     expect(screen.queryByText(/推荐工作流/)).not.toBeInTheDocument()
     // purpose 徽标（C10）：krea2 variant 行标注用途（raw=训练 / turbo=推理）
     const rawRow = screen.getByText('raw').closest('li')!
@@ -833,6 +860,11 @@ describe('SettingsPage (PP0)', () => {
       },
       model_sources: {
         ...emptyModelsCatalog.model_sources,
+        moss_vae: [assetRow('moss_vae', 'moss_vae', 'flux2-vae', { sizeEstimate: 340_000_000 })],
+        moss_te: [
+          assetRow('moss_text_encoder_int8', 'int8', 'int8', { exists: true }),
+          assetRow('moss_text_encoder_bf16', 'bf16', 'bf16', { exists: true, isCurrent: false }),
+        ],
         moss: [{
           kind: 'preset', candidate: null, value: 'base_int8', label: 'base_int8',
           description: '', download_id: 'moss_main', download_variant: 'base_int8',
@@ -865,7 +897,10 @@ describe('SettingsPage (PP0)', () => {
     expect(within(section).queryByText(/test/)).not.toBeInTheDocument()
     expect(within(section).getByText('未下载 · ~324.2 MB')).toBeInTheDocument()
 
-    const teRadios = section.querySelectorAll<HTMLInputElement>('input[name="moss-te-variant"]')
+    const teRadios = [
+      within(section).getByRole('radio', { name: 'int8' }),
+      within(section).getByRole('radio', { name: 'bf16' }),
+    ] as HTMLInputElement[]
     expect(teRadios).toHaveLength(2)
     expect(teRadios[0].checked).toBe(true) // int8 = catalog 回填的选中值
     await user.click(teRadios[1])

@@ -284,3 +284,25 @@ def test_remove_custom_anima_keeps_selected_when_other(
         "anima", ModelSourceCandidateRequest(kind="local", path=b))
     assert state["s"].models.custom_anima_paths == [a]
     assert state["s"].models.selected_anima == a  # 未动当前默认
+
+
+def test_build_catalog_vae_te_share_main_model_source_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VAE / TE / tokenizer 与主模型同一候选卡：单资产也是一行 preset（radio），
+    TE 精度 variant 每个一行、value = variant、is_current 跟 selected_te。"""
+    monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path))
+    rows = model_downloader.build_catalog(tmp_path)["model_sources"]
+
+    (vae,) = rows["anima_vae"]
+    assert (vae["kind"], vae["label"], vae["value"]) == ("preset", "qwen_image_vae", "anima_vae")
+    assert vae["download_id"] == vae["status_key"] == "anima_vae"
+    assert vae["is_current"] is True and vae["removable"] is False
+    assert vae["exists"] is False and vae["size_estimate"] > 0
+    assert rows["qwen3"][0]["label"] == "Qwen3-0.6B-Base"  # 目录型取上游模型名
+    assert rows["t5_tokenizer"][0]["files"]  # 目录型带文件清单（徽标 n/m）
+    assert rows["moss_vae"][0]["label"] == "flux2-vae"
+
+    assert [r["value"] for r in rows["krea2_te"]] == ["bf16", "fp8"]
+    assert [r["download_id"] for r in rows["krea2_te"]] == ["krea2_text_encoder", "krea2_text_encoder_fp8"]
+    assert [r["value"] for r in rows["moss_te"] if r["is_current"]] == ["int8"]

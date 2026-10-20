@@ -1443,8 +1443,6 @@
     "confirmDeleteAsset": "Delete the downloaded files of {{name}}? You can re-download anytime.",
     "assetDeleted": "Deleted: {{name}}",
     "teVariantSelected": "Text encoder switched: {{name}}",
-    "selectTeVariant": "Set as default text encoder (shared by training and test generation)",
-    "teVariantNotDownloaded": "Available after download completes",
     "vaePrecision": {
       "title": "Test generation precision",
       "label": "Test generation VAE precision",
