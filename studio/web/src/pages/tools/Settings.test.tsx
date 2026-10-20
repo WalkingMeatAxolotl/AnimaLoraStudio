@@ -828,6 +828,7 @@ describe('SettingsPage (PP0)', () => {
       },
       moss_vae: {
         id: 'moss_vae', name: 'FLUX.2 VAE', description: 'test', repo: 'Comfy-Org/MOSS-Image',
+        size_estimate: 340_000_000,
         target_path: '/tmp/anima/vae/flux2-vae.safetensors', exists: false, size: 0, mtime: 0,
       },
       model_sources: {
@@ -858,6 +859,9 @@ describe('SettingsPage (PP0)', () => {
     // 本族自己的 VAE（不是 Anima / Krea2 共用的 Qwen-Image VAE）
     expect(within(section).getByText('FLUX.2 VAE')).toBeInTheDocument()
     expect(within(section).queryByText('Anima VAE')).not.toBeInTheDocument()
+    // 资产说明不再常驻成小字（进标题旁 ⓘ）；下载前的体积并进「未下载」徽标
+    expect(within(section).queryByText(/test/)).not.toBeInTheDocument()
+    expect(within(section).getByText('未下载 · ~324.2 MB')).toBeInTheDocument()
 
     const teRadios = section.querySelectorAll<HTMLInputElement>('input[name="moss-te-variant"]')
     expect(teRadios).toHaveLength(2)

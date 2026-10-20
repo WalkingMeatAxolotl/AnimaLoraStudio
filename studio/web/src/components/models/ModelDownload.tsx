@@ -24,8 +24,10 @@ export function ModelGroupCard({
   )
 }
 
-export function ModelStatusBadge({ exists, size, status, fileCount, existsCount }: {
+export function ModelStatusBadge({ exists, size, status, fileCount, existsCount, sizeEstimate }: {
   exists: boolean; size: number; status?: ModelDownloadStatus['status']; fileCount?: number; existsCount?: number
+  /** 下载前的体积估算（bytes）：未下载时并进徽标（「未下载 · ~250 MB」）。 */
+  sizeEstimate?: number
 }) {
   const { t } = useTranslation()
   if (status === 'running' || status === 'pending') {
@@ -39,7 +41,11 @@ export function ModelStatusBadge({ exists, size, status, fileCount, existsCount 
   if (fileCount !== undefined && existsCount! > 0) {
     return <Badge tone="warning">{t('settings.partialFiles', { exists: existsCount, total: fileCount })}</Badge>
   }
-  return <Badge tone="neutral">{t('settings.notDownloaded')}</Badge>
+  return (
+    <Badge tone="neutral">
+      {sizeEstimate ? t('settings.notDownloadedWithSize', { size: fmtBytes(sizeEstimate) }) : t('settings.notDownloaded')}
+    </Badge>
+  )
 }
 
 export function StatusLabel({ bg, fg, text, pulse }: { bg: string; fg: string; text: string; pulse?: boolean }) {

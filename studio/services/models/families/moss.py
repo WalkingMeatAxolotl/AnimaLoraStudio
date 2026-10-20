@@ -91,7 +91,7 @@ VAE_SUBPATH = "vae/flux2-vae.safetensors"
 
 #: TE variant（首项 = 默认）
 MOSS_TE_VARIANTS = ("int8", "bf16")
-#: 下载日志头行的体积估算（GB）
+#: 下载前的体积估算：设置页「未下载 · ~N」与下载日志头行共用
 MOSS_TE_SIZE_GB = {"int8": 9.75, "bf16": 16.8}
 MOSS_VAE_SIZE_MB = 340
 #: 本族 loader 支持的整数量化格式（#605 的格式标签）。catalog 据此不把这类自定义
@@ -233,6 +233,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
                 f"Qwen3.5-9B 文本编码器 {variant}（约 {MOSS_TE_SIZE_GB[variant]} GB）"
             ),
             "repo": COMFY_REPO if variant == "int8" else OFFICIAL_REPO,
+            "size_estimate": int(MOSS_TE_SIZE_GB[variant] * 1e9),
             "target_dir": str(d),
             "selected": te_selected,
             "files": [
@@ -260,6 +261,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
             "name": "FLUX.2 VAE",
             "description": f"flux2-vae（约 {MOSS_VAE_SIZE_MB} MB）",
             "repo": COMFY_REPO,
+            "size_estimate": MOSS_VAE_SIZE_MB * 1_000_000,
             "target_path": str(vae),
             **_file_status(vae),
         },

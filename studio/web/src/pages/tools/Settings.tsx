@@ -426,7 +426,7 @@ export default function SettingsPage() {
       <SettingsSection id="proxy" title={t('settings.proxy.sectionTitle')}>
         <SettingsField
           label={t('settings.proxy.enableLabel')}
-          helpTooltip={<p>{t('settings.proxy.enableDesc')}</p>}
+          helpTooltip={<><p>{t('settings.proxy.enableDesc')}</p><p>{t('settings.proxy.tips1')}</p></>}
         >
           <Bool
             value={draft.proxy.enabled}
@@ -436,7 +436,7 @@ export default function SettingsPage() {
 
         <SettingsField
           label={t('settings.proxy.httpLabel')}
-          helpTooltip={<p>{t('settings.proxy.httpDesc')}</p>}
+          helpTooltip={<><p>{t('settings.proxy.httpDesc')}</p><p>{t('settings.proxy.tips2')}</p></>}
         >
           <SettingsInput
             type="text"
@@ -450,7 +450,7 @@ export default function SettingsPage() {
 
         <SettingsField
           label={t('settings.proxy.httpsLabel')}
-          helpTooltip={<p>{t('settings.proxy.httpsDesc')}</p>}
+          helpTooltip={<><p>{t('settings.proxy.httpsDesc')}</p><p>{t('settings.proxy.tips3')}</p></>}
         >
           <SettingsInput
             type="text"
@@ -476,17 +476,6 @@ export default function SettingsPage() {
           />
         </SettingsField>
 
-        <div className="text-xs text-fg-tertiary border-t border-subtle pt-3 mt-1">
-          <p className="m-0">{t('settings.proxy.tipsTitle')}</p>
-          <ul className="list-disc pl-4 m-0 mt-1 space-y-0.5">
-            <li>{t('settings.proxy.tips1')}</li>
-            <li>
-              {t('settings.proxy.tips2')}
-              <code className="text-fg-primary">http://user:pass@host:port</code>
-            </li>
-            <li>{t('settings.proxy.tips3')}</li>
-          </ul>
-        </div>
       </SettingsSection>
       </>)}
 
@@ -497,6 +486,7 @@ export default function SettingsPage() {
       <SettingsSection
         id="llm-tagger"
         title="LLM Tagger"
+        helpTooltip={<p>{t('settings.llmPresetListHint')}</p>}
         headerExtras={
           <div className="ml-auto flex items-center gap-1.5">
             <button type="button" onClick={() => llmImportRef.current?.click()} className="btn btn-secondary btn-sm">
@@ -519,7 +509,6 @@ export default function SettingsPage() {
           </div>
         }
       >
-        <p className="text-xs text-fg-tertiary m-0">{t('settings.llmPresetListHint')}</p>
         <div className="rounded-sm border border-subtle bg-sunken p-2.5">
           <ul className="list-none m-0 p-0 flex flex-col gap-1">
             {draft.llm_tagger.presets.map((p) => {
@@ -711,8 +700,8 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'monitor' && (<>
-      <SettingsSection id="eval-metrics" title={t('settings.evalMetrics')}>
-        <p className="text-xs text-fg-tertiary">{t('settings.evalMetricModelsHint')}</p>
+      <SettingsSection id="eval-metrics" title={t('settings.evalMetrics')}
+        helpTooltip={<p>{t('settings.evalMetricModelsHint')}</p>}>
         <SourceSelect
           opt={catalog?.download_source_options?.eval}
           onChange={(s) => void setDownloadSource('eval', s)}
@@ -752,7 +741,16 @@ export default function SettingsPage() {
         />
         <SettingsField
           label={t('settings.evalMetricsEnabled')}
-          helpTooltip={<p>{t('settings.evalMetricsEnabledHelp')}</p>}
+          helpTooltip={
+            <>
+              <p>{t('settings.evalMetricsEnabledHelp')}</p>
+              <ul>
+                {(catalog?.eval_metric_catalog ?? []).map((m) => (
+                  <li key={m.key}><span><code>{m.label}</code> — {m.desc}{m.note ? `（${m.note}）` : ''}</span></li>
+                ))}
+              </ul>
+            </>
+          }
         >
           <div className="flex flex-col gap-1.5">
             {(catalog?.eval_metric_catalog ?? []).map((m) => {
@@ -769,11 +767,7 @@ export default function SettingsPage() {
                     }}
                     className="mt-0.5"
                   />
-                  <span className="min-w-0">
-                    <span className="font-mono text-fg-primary">{m.label}</span>
-                    <span className="text-fg-tertiary"> — {m.desc}</span>
-                    {m.note ? <span className="text-warn"> · {m.note}</span> : null}
-                  </span>
+                  <span className="font-mono text-fg-primary">{m.label}</span>
                 </label>
               )
             })}
@@ -848,7 +842,6 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'credentials' && (<>
-        <p className="text-xs text-fg-tertiary">{t('settings.credentialsIntro')}</p>
         <SettingsSection id="cred-huggingface" title="HuggingFace">
           <SettingsField label={t('settings.fieldToken')} helpTooltip={<p>{t('settings.hfTokenHelp')}</p>}>
             <SensitiveInput

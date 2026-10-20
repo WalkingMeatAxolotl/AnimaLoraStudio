@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import type { WandBConfig, WandBPreset } from '../../../api/client'
+import { InfoButton } from '../../../components/InfoButton'
 import { textInputClass } from './constants'
 import { Bool, SensitiveInput, SettingsField, SettingsInput } from './fields'
 
@@ -166,7 +167,10 @@ export default function WandBWorkspace({
         }}
       >
         <div className="flex items-center gap-3.5 min-w-0">
-          <Caption>{t('settings.wandbPreset')}</Caption>
+          <span className="flex items-center gap-related">
+            <Caption>{t('settings.wandbPreset')}</Caption>
+            <InfoButton><p>{t('settings.wandbPresetHint')}</p></InfoButton>
+          </span>
           <div
             className="flex items-center gap-2.5 cursor-pointer"
             style={{
@@ -227,7 +231,6 @@ export default function WandBWorkspace({
         data-testid="wandb-fields"
         style={{ padding: '12px 16px 14px' }}
       >
-        <p className="m-0 text-xs text-fg-tertiary">{t('settings.wandbPresetHint')}</p>
 
         <SettingsField label={t('settings.fieldApiKey')}>
           <SensitiveInput

@@ -110,6 +110,29 @@ function renderCard(overrides?: {
   )
 }
 
+describe('ModelSourceCard row captions', () => {
+  it('lists row descriptions in the title ⓘ instead of inline, and folds size into the badge', async () => {
+    const user = userEvent.setup()
+    const described = row({ description: 'ONNX tagger for tests', size_estimate: 2 * 1024 * 1024 })
+    const cat = { ...catalog, model_sources: { wd14: [described] } } as unknown as ModelsCatalog
+    render(
+      <ToastProvider>
+        <DialogProvider>
+          <SettingsDataProvider>
+            <ModelSourceCard domain="wd14" title="WD14" catalog={cat}
+              currentValue={described.value} onSelect={() => {}} t={t} />
+          </SettingsDataProvider>
+        </DialogProvider>
+      </ToastProvider>
+    )
+    const item = screen.getByRole('listitem')
+    expect(within(item).queryByText(/ONNX tagger for tests/)).toBeNull()
+    expect(within(item).getByText(i18n.t('settings.notDownloadedWithSize', { size: '2.0 MB' }))).toBeTruthy()
+    await user.click(screen.getByRole('button', { expanded: false }))
+    expect(await screen.findByText(/ONNX tagger for tests/)).toBeTruthy()
+  })
+})
+
 describe('ModelSourceCard action matrix', () => {
   it('preset rows have no remove button; user rows do', () => {
     renderCard()

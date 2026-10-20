@@ -24,9 +24,11 @@ from ...infrastructure.event_bus import bus
 from .families.anima import (
     ANIMA_REPO,
     ANIMA_VAE_PATH,
+    ANIMA_VAE_SIZE_MB,
     ANIMA_VARIANT_BY_KEY,
     ANIMA_VARIANTS,
     LATEST_ANIMA,
+    QWEN3_SIZE_GB,
     QWEN_FILES,
     QWEN_REPO,
     T5_FILES,
@@ -43,9 +45,11 @@ from .families.krea2 import (
     QWEN3_VL_FILES,
     QWEN3_VL_FP8_FILE,
     QWEN3_VL_FP8_REPO,
+    QWEN3_VL_FP8_SIZE_GB,
     QWEN3_VL_FP8_SMALL_FILES,
     QWEN3_VL_FP8_SUBPATH,
     QWEN3_VL_REPO,
+    QWEN3_VL_SIZE_GB,
     krea2_main_target,
     qwen3_vl_dir,
     qwen3_vl_fp8_dir,
@@ -102,10 +106,6 @@ logger = logging.getLogger(__name__)
 
 #: 手跑 / 无人传 on_log 时的兜底：走本模块 logger（终端 INFO 可见，不再裸 print）。
 _DEFAULT_LOG = TaskLog(logger)
-
-#: 头行里的体积估算（GB）：与 variant 元数据脱钩的硬编码在这里集中一次
-QWEN3_VL_SIZE_GB = 8.89
-QWEN3_VL_FP8_SIZE_GB = 5.24
 
 
 def _size_gb(info: Any, *, default: float) -> str:
@@ -314,7 +314,7 @@ def download_anima_main(
 def download_anima_vae(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
     # 落点是族无关共享资产（Krea2 同用）；下载渠道走 Anima repo（文件在那儿）。
     target = qwen_image_vae_target(root)
-    on_log(msg("download.anima_vae", size=250, target=target))
+    on_log(msg("download.anima_vae", size=ANIMA_VAE_SIZE_MB, target=target))
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
@@ -501,7 +501,7 @@ def download_qwen3(root: Path, *, on_log: TaskLogLike = _DEFAULT_LOG) -> bool:
                 ok = False
         return ok
 
-    on_log(msg("download.anima_te_hf", size=1.2, target=target_dir))
+    on_log(msg("download.anima_te_hf", size=QWEN3_SIZE_GB, target=target_dir))
     for f in QWEN_FILES:
         if not _sources.download_flat(QWEN_REPO, f, target_dir / f, on_log=on_log):
             ok = False

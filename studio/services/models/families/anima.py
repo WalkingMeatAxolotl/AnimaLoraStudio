@@ -30,8 +30,8 @@ class AnimaVariant:
     repo: str = ANIMA_REPO
     #: 显示名；空 → key
     label: str = ""
-    #: 下载头行展示的文件字节数估计；0 = 用默认值（28 层约 4 GB）
-    size_estimate: int = 0
+    #: 下载前的文件字节数估计（设置页「未下载 · ~N」与下载头行）；默认 28 层约 4 GB
+    size_estimate: int = 4_000_000_000
 
     @property
     def filename(self) -> str:
@@ -89,6 +89,10 @@ T5_FILES = [
     "tokenizer_config.json",
     "special_tokens_map.json",
 ]
+
+#: 下载前的体积估算：设置页「未下载 · ~N」与下载日志头行共用
+ANIMA_VAE_SIZE_MB = 250
+QWEN3_SIZE_GB = 1.2
 
 
 def anima_main_target(root: Path, variant: str) -> Path:
@@ -217,6 +221,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
             "variant": v.key,
             "label": v.label or v.key,
             "repo": v.repo,
+            "size_estimate": v.size_estimate,
             "is_latest": v.key == LATEST_ANIMA,
             "target_path": str(target),
             **_file_status(target),
@@ -251,6 +256,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
             "name": "Anima VAE",
             "description": "qwen_image_vae (~250 MB)",
             "repo": ANIMA_REPO,
+            "size_estimate": ANIMA_VAE_SIZE_MB * 1_000_000,
             "target_path": str(vae_target),
             **_file_status(vae_target),
         },
@@ -259,6 +265,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
             "name": "Qwen3-0.6B-Base",
             "description": "Text encoder (~1.2 GB)",
             "repo": QWEN_REPO,
+            "size_estimate": int(QWEN3_SIZE_GB * 1e9),
             "target_dir": str(qwen_d),
             "files": [
                 {"name": f, **_file_status(qwen_d / f)} for f in QWEN_FILES

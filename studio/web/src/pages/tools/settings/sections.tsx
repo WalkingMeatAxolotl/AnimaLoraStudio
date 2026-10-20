@@ -253,16 +253,22 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 
   const error = catalogError
 
+  // 资产说明（用途 + 仓库）进卡片标题旁 ⓘ；体积在「未下载」徽标里
+  const assetHelp = (id: string, description: string, repo: string) => (
+    <Trans i18nKey="settings.repoHelp"
+      values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, id, description, t), repo }}
+      components={{ code: <code /> }} />
+  )
+
   const renderVae = (vaeKey: FamilyModelSection['vaeKey']) => {
     const vae = catalog?.[vaeKey]
     if (!catalog || !vae) return null
     const dl = catalog.downloads[vaeKey]
     return (
-      <ModelGroupCard title={vae.name}>
+      <ModelGroupCard title={vae.name} helpTooltip={<p>{assetHelp(vaeKey, vae.description, vae.repo)}</p>}>
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, vaeKey, vae.description, t)} · <code>{vae.repo}</code></span>
           <span style={{ flex: 1 }} />
-          <ModelStatusBadge exists={vae.exists} size={vae.size} status={dl?.status} />
+          <ModelStatusBadge exists={vae.exists} size={vae.size} status={dl?.status} sizeEstimate={vae.size_estimate} />
           <DownloadButton exists={vae.exists} status={dl?.status} busy={busy.has(vaeKey)} onClick={() => void start(vaeKey)} onDelete={() => void deleteAsset(vaeKey, undefined, vae.name)} />
         </div>
       </ModelGroupCard>
@@ -322,7 +328,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 title={main.name}
                 helpTooltip={
                   <>
-                    <p><Trans i18nKey="settings.repoHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, section.mainKey, main.description, t), repo: main.repo }} components={{ code: <code /> }} /></p>
+                    <p>{assetHelp(section.mainKey, main.description, main.repo)}</p>
                     {section.family === 'anima' && (
                       <p><Trans i18nKey="settings.defaultTransformerHelp" components={{ strong: <strong /> }} /></p>
                     )}
@@ -385,7 +391,9 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 })
                 if (rows.length !== card.variants.length) return null
                 return (
-                  <ModelGroupCard title={t(card.titleKey)}>
+                  <ModelGroupCard title={t(card.titleKey)} helpTooltip={rows.map(([variant, m]) => (
+                    <p key={variant}><code>{variant}</code> · {assetHelp(m.id, m.description, m.repo)}</p>
+                  ))}>
                     <ul className="flex flex-col gap-1.5 text-xs">
                       {rows.map(([variant, m]) => {
                         const allExist = m.files.length > 0 && m.files.every((f) => f.exists)
@@ -403,11 +411,8 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                               title={allExist ? t('settings.selectTeVariant') : t('settings.teVariantNotDownloaded')}
                             />
                             <code className="font-mono text-fg-primary w-16 shrink-0">{variant}</code>
-                            <span className="text-fg-tertiary truncate">
-                              {translatedCatalogText(MODEL_DESCRIPTION_KEYS, m.id, m.description, t)}
-                            </span>
                             <span style={{ flex: 1 }} />
-                            <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
+                            <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} sizeEstimate={m.size_estimate} />
                             <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} onDelete={() => void deleteAsset(m.id, undefined, `${card.deleteLabel} ${variant}`)} />
                           </li>
                         )
@@ -424,11 +429,10 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 const allExist = m.files.every((f) => f.exists)
                 const totalSize = m.files.reduce((s, f) => s + f.size, 0)
                 return (
-                  <ModelGroupCard key={id} title={m.name}>
+                  <ModelGroupCard key={id} title={m.name} helpTooltip={<p>{assetHelp(id, m.description, m.repo)}</p>}>
                     <div className="flex items-center gap-2 text-xs">
-                      <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, id, m.description, t)} · <code>{m.repo}</code></span>
                       <span style={{ flex: 1 }} />
-                      <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
+                      <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} sizeEstimate={m.size_estimate} />
                       <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} onDelete={() => void deleteAsset(id, undefined, m.name)} />
                     </div>
                   </ModelGroupCard>
@@ -872,7 +876,16 @@ export function ONNXRuntimeSection() {
       id="onnxruntime"
       title="ONNX Runtime"
       subtitle={t('settings.sharedByWd14ClTagger')}
-      helpTooltip={<p>{t('settings.onnxHelpBrief')}</p>}
+      helpTooltip={
+        <>
+          <p>{t('settings.onnxHelpBrief')}</p>
+          <ul>
+            <li><span><code>onnxruntime-gpu</code> · {t('settings.cudaPackageHint')}</span></li>
+            <li><span><code>onnxruntime-directml</code> · {t('settings.directmlPackageHint')}</span></li>
+            <li><span><code>onnxruntime</code> · {t('settings.cpuPackageHint')}</span></li>
+          </ul>
+        </>
+      }
       level={level}
       statusText={statusText}
       forceOpen={!!hasIssue}
@@ -919,14 +932,13 @@ export function ONNXRuntimeSection() {
               {
                 key: 'gpu',
                 label: 'onnxruntime-gpu',
-                note: t('settings.cudaPackageHint'),
                 current: rt.installed === 'onnxruntime-gpu',
                 onInstall: () => void install('gpu'),
               },
               {
                 key: 'directml',
                 label: 'onnxruntime-directml',
-                note: isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint'),
+                note: isWindows ? undefined : t('settings.directmlWinOnlyHint'),
                 current: rt.installed === 'onnxruntime-directml',
                 usable: isWindows,
                 disabled: !isWindows,
@@ -935,12 +947,10 @@ export function ONNXRuntimeSection() {
               {
                 key: 'cpu',
                 label: 'onnxruntime',
-                note: t('settings.cpuPackageHint'),
                 current: rt.installed === 'onnxruntime',
                 onInstall: () => void install('cpu'),
               },
             ]}
-            footer={<span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>}
           />
         ),
       } : undefined}
@@ -1094,7 +1104,6 @@ export function PyTorchSection() {
         onToggle: () => setAdvancedOpen(!advancedOpen),
         children: (
           <DepVariantList
-            hint={t('settings.manualCudaHint')}
             busy={busy}
             variants={(['cu128', 'cu126', 'cu124', 'cu118', 'cpu'] as const).map((tag) => ({
               key: tag,

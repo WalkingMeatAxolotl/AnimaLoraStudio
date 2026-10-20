@@ -10,7 +10,7 @@ import {
 import PathPicker from '../../../components/PathPicker'
 import { useToast } from '../../../components/Toast'
 import { useSettingsData } from '../../../lib/SettingsData'
-import { fmtBytes, textInputClass } from './constants'
+import { textInputClass } from './constants'
 import { SettingsField, SettingsInput } from './fields'
 import { ModelGroupCard, ModelStatusBadge, DownloadButton } from '../../../components/models/ModelDownload'
 
@@ -133,7 +133,8 @@ export function ModelSourceCard({
   rowUnusableReason?: (row: ModelSourceRow) => string | null
   /** 行副内容逃生舱（label 旁 chip，如主模型 purpose 徽标）。 */
   renderRowMeta?: (row: ModelSourceRow) => React.ReactNode
-  /** 行描述文本覆盖（如放大器 preset 描述的 i18n 翻译）；默认 row.description。 */
+  /** 行描述文本覆盖（如放大器 preset 描述的 i18n 翻译）；默认 row.description。
+   *  描述不在行内常驻，统一列进卡片标题旁 ⓘ。 */
   describeRow?: (row: ModelSourceRow) => string
   t: TFunction
 }) {
@@ -149,6 +150,21 @@ export function ModelSourceCard({
   if (!catalog || !rows) {
     return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
   }
+
+  const rowNotes = rows.flatMap((row) => {
+    const desc = describeRow ? describeRow(row) : row.description
+    return desc ? [{ key: `${row.kind}:${row.value}`, label: row.label, desc }] : []
+  })
+  const cardHelp = helpTooltip || rowNotes.length > 0 ? (
+    <>
+      {helpTooltip}
+      {rowNotes.length > 0 && (
+        <ul>
+          {rowNotes.map((n) => <li key={n.key}><span><code>{n.label}</code> · {n.desc}</span></li>)}
+        </ul>
+      )}
+    </>
+  ) : undefined
 
   const submitCandidate = async (cand: ModelSourceCandidate) => {
     setSubmitBusy(true)
@@ -200,7 +216,7 @@ export function ModelSourceCard({
   }
 
   return (
-    <ModelGroupCard title={title} helpTooltip={helpTooltip}>
+    <ModelGroupCard title={title} helpTooltip={cardHelp}>
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {rows.map((row) => {
           const dl = row.status_key ? catalog.downloads[row.status_key] : undefined
@@ -220,30 +236,20 @@ export function ModelSourceCard({
                 style={{ accentColor: 'var(--accent)' }}
                 title={canSelect ? t('settings.selectSourceCandidate') : (unusable ?? t('settings.downloadRequiredFirst'))}
               />
-              <div className="flex flex-col flex-1 min-w-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={row.value}>
-                    {row.label}
-                  </code>
-                  {row.kind === 'local' && (
-                    <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">
-                      {t('settings.localBadge')}
-                    </span>
-                  )}
-                  {(row.kind === 'download' || row.kind === 'scanned') && (
-                    <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">custom</span>
-                  )}
-                  {renderRowMeta?.(row)}
-                </div>
-                {(describeRow ? describeRow(row) : row.description) && (
-                  <span className="text-fg-tertiary text-[11px] truncate">
-                    {describeRow ? describeRow(row) : row.description}
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={row.value}>
+                  {row.label}
+                </code>
+                {row.kind === 'local' && (
+                  <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                    {t('settings.localBadge')}
                   </span>
                 )}
+                {(row.kind === 'download' || row.kind === 'scanned') && (
+                  <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">custom</span>
+                )}
+                {renderRowMeta?.(row)}
               </div>
-              {!row.exists && row.size_estimate ? (
-                <span className="text-fg-tertiary shrink-0">~{fmtBytes(row.size_estimate)}</span>
-              ) : null}
               {row.kind === 'local' && !row.exists ? (
                 <span className="text-err text-2xs shrink-0">{t('settings.localModelMissing')}</span>
               ) : (
@@ -251,6 +257,7 @@ export function ModelSourceCard({
                   exists={row.exists} size={row.size} status={dl?.status}
                   fileCount={row.files?.length}
                   existsCount={row.files ? row.files.filter((f) => f.exists).length : undefined}
+                  sizeEstimate={row.size_estimate}
                 />
               )}
               {row.download_id && (

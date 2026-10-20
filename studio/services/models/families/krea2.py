@@ -87,6 +87,10 @@ QWEN3_VL_FILES = [
 QWEN3_VL_FP8_REPO = "Comfy-Org/Krea-2"
 QWEN3_VL_FP8_SUBPATH = "text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
 QWEN3_VL_FP8_FILE = "qwen3vl_4b_fp8_scaled.safetensors"
+#: 下载前的体积估算（GB）：设置页「未下载 · ~N」与下载日志头行共用
+QWEN3_VL_SIZE_GB = 8.89
+QWEN3_VL_FP8_SIZE_GB = 5.24
+
 QWEN3_VL_FP8_SMALL_FILES = [
     name for name in QWEN3_VL_FILES
     if not name.startswith("model-") and name != "model.safetensors.index.json"
@@ -284,6 +288,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
             "name": "Krea 2 · Qwen3-VL-4B-Instruct",
             "description": "自然语言文本编码器（约 8.89 GB）",
             "repo": QWEN3_VL_REPO,
+            "size_estimate": int(QWEN3_VL_SIZE_GB * 1e9),
             "target_dir": str(text_dir),
             # 选中的 TE variant（bf16/fp8）——前端 TE 卡 radio 与测试页
             # TE 下拉的默认值都读这里
@@ -298,6 +303,7 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
             "name": "Krea 2 · Qwen3-VL fp8",
             "description": "官方 fp8 量化文本编码器（约 5.24 GB，测试出图可选）",
             "repo": QWEN3_VL_FP8_REPO,
+            "size_estimate": int(QWEN3_VL_FP8_SIZE_GB * 1e9),
             "target_dir": str(fp8_dir),
             "files": [
                 {"name": filename, **_file_status(fp8_dir / filename)}

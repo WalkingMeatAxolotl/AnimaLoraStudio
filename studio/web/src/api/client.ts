@@ -810,6 +810,8 @@ export interface VaeCatalog extends ModelFileStatus {
   name: string
   description: string
   repo: string
+  /** 下载前的体积估算（bytes），显示在「未下载」徽标里。 */
+  size_estimate?: number
   target_path: string
 }
 
@@ -820,6 +822,8 @@ export interface ModelDirCatalog {
   name: string
   description: string
   repo: string
+  /** 下载前的体积估算（bytes）；0 / 缺省 = 不显示。 */
+  size_estimate?: number
   target_dir: string
   /** 带 variant 的 TE 卡：选中的 TE variant（krea2 'bf16'|'fp8'；moss 'int8'|'bf16'）。 */
   selected?: string

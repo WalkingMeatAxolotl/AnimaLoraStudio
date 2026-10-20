@@ -710,7 +710,6 @@ export function VersionSection() {
         >
           <span className="pill-radio-dot" />{t('settings.devBuild')}
         </button>
-        <span className="vs-channel-hint">{t('settings.channelUiOnly')}</span>
       </div>
 
       <div className="vs-sec-card">
@@ -1066,9 +1065,6 @@ export function MasterCard(p: MasterCardProps) {
           <div className="vs-ver-meta">
             {releasedAt && <span>{t('settings.releasedAt')} <b>{releasedAt}</b></span>}
           </div>
-          {!p.hasUpdate && p.solo && (
-            <div className="vs-ver-tagline">{t('settings.topbarMasterOnly')}</div>
-          )}
         </div>
 
         {p.solo && <div className="vs-v-rule" />}

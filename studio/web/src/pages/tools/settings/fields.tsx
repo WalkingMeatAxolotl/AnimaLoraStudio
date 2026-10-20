@@ -7,19 +7,22 @@ import { MASK } from './constants'
 // ── Section / Field ────────────────────────────────────────────────────────
 
 export function SettingsSection({
-  id, title, headerExtras, children,
+  id, title, helpTooltip, headerExtras, children,
 }: {
   id?: string
   title: string
-  headerExtras?: React.ReactNode  // 可选 slot：渲染在 h2 右侧（紧贴），给 ⓘ tooltip 之类用
+  /** section 级说明：标题旁 ⓘ（不在 section 里放常驻说明段落）。 */
+  helpTooltip?: React.ReactNode
+  headerExtras?: React.ReactNode  // 可选 slot：渲染在 h2 右侧（紧贴），给按钮之类用
   children: React.ReactNode
 }) {
   const titleEl = <h2 className="type-panel-title">{title}</h2>
   return (
     <section id={id} className="rounded-md border border-subtle bg-surface p-section flex flex-col gap-field scroll-mt-24">
-      {headerExtras ? (
+      {headerExtras || helpTooltip ? (
         <div className="flex items-center gap-related mb-0.5">
           {titleEl}
+          {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
           {headerExtras}
         </div>
       ) : (

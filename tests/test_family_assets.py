@@ -126,6 +126,21 @@ def test_catalog_sections_shape(tmp_path):
     assert sections["anima_main"]["variants"][0]["is_latest"] is True
 
 
+@pytest.mark.parametrize("family,keys", [
+    ("anima", ("anima_vae", "qwen3")),
+    ("krea2", ("krea2_text_encoder", "krea2_text_encoder_fp8")),
+    ("moss", ("moss_text_encoder_int8", "moss_text_encoder_bf16", "moss_vae")),
+])
+def test_catalog_vae_te_carry_size_estimate(tmp_path, family, keys):
+    """设置页「未下载 · ~N」徽标读 size_estimate（下载前文件不在盘上，没有 size）。"""
+    sections = get_assets(family).catalog_sections(tmp_path, ModelsConfig())
+    for key in keys:
+        assert sections[key]["size_estimate"] > 0, key
+    # 主模型官方 variant 同样带估算（候选行的「未下载」徽标读它）
+    for v in sections[f"{family}_main"]["variants"]:
+        assert v["size_estimate"] > 0, v["variant"]
+
+
 def test_krea2_catalog_sections_report_raw_turbo_and_text_encoder(tmp_path):
     custom = tmp_path / "custom-krea2.safetensors"
     custom.write_bytes(b"weights")

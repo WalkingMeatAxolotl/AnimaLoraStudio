@@ -587,6 +587,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                 label=str(v.get("label") or v["variant"]),
                 download_id=f"{family_id}_main",
                 exists=bool(v.get("exists")), size=int(v.get("size") or 0),
+                size_estimate=int(v.get("size_estimate") or 0),
                 is_current=v["variant"] == selected_val,
                 extra={"purpose": str(v.get("purpose") or "")},
                 arch=v.get("arch"),
