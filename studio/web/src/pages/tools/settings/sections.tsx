@@ -110,6 +110,8 @@ interface TeVariantCard {
 
 interface FamilyModelSection {
   family: 'anima' | 'krea2' | 'moss'
+  /** 族的品牌显示名（不翻译），拼进 VAE / 文本编码器卡标题 */
+  familyName: string
   sectionId: string
   titleKey: string
   mainKey: 'anima_main' | 'krea2_main' | 'moss_main'
@@ -128,6 +130,7 @@ interface FamilyModelSection {
 const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
   {
     family: 'anima',
+    familyName: 'Anima',
     sectionId: 'models',
     titleKey: 'settings.animaModels',
     mainKey: 'anima_main',
@@ -139,6 +142,7 @@ const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
   },
   {
     family: 'krea2',
+    familyName: 'Krea 2',
     sectionId: 'krea2-models',
     titleKey: 'settings.krea2Models',
     mainKey: 'krea2_main',
@@ -154,6 +158,7 @@ const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
   },
   {
     family: 'moss',
+    familyName: 'MOSS-Image',
     sectionId: 'moss-models',
     titleKey: 'settings.mossModels',
     mainKey: 'moss_main',
@@ -170,6 +175,34 @@ const FAMILY_MODEL_SECTIONS: readonly FamilyModelSection[] = [
 ]
 
 type FamilyId = FamilyModelSection['family']
+
+/** 目录型资产卡的标题：文本编码器按「族 + 类别」（与「Anima 主模型」同构）；其余沿用 catalog name。 */
+const ENCODER_TITLE_KEYS: Partial<Record<FamilyModelSection['encoderIds'][number], string>> = {
+  qwen3: 'settings.familyTeCardTitle',
+}
+
+/** 官方资产行名：单文件取落盘文件名去扩展名，目录型取上游模型名（repo 末段）——
+ *  与底模卡 preset 行（variant 标识）同口径，不另起名字。 */
+function assetRowLabel(asset: { target_path?: string; repo: string }): string {
+  if (asset.target_path) {
+    const file = asset.target_path.split(/[\\/]/).pop() ?? ''
+    return file.replace(/\.[^.]+$/, '')
+  }
+  return asset.repo.split('/').pop() ?? asset.repo
+}
+
+/** 单资产卡的一行：版式与 ModelSourceCard 行一致（名字左、状态与动作右）。 */
+function AssetRow({ label, path, children }: { label: string; path: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm border border-transparent">
+      <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={path}>
+        {label}
+      </code>
+      <span className="flex-1" />
+      {children}
+    </div>
+  )
+}
 
 const FALLBACK_SELECTED = Object.fromEntries(
   FAMILY_MODEL_SECTIONS.map((s) => [s.family, s.fallbackSelected]),
@@ -260,17 +293,18 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
       components={{ code: <code /> }} />
   )
 
-  const renderVae = (vaeKey: FamilyModelSection['vaeKey']) => {
+  const renderVae = (section: FamilyModelSection) => {
+    const vaeKey = section.vaeKey
     const vae = catalog?.[vaeKey]
     if (!catalog || !vae) return null
     const dl = catalog.downloads[vaeKey]
     return (
-      <ModelGroupCard title={vae.name} helpTooltip={<p>{assetHelp(vaeKey, vae.description, vae.repo)}</p>}>
-        <div className="flex items-center gap-2 text-xs">
-          <span style={{ flex: 1 }} />
+      <ModelGroupCard title={t('settings.familyVaeCardTitle', { family: section.familyName })}
+        helpTooltip={<p>{assetHelp(vaeKey, vae.description, vae.repo)}</p>}>
+        <AssetRow label={assetRowLabel(vae)} path={vae.target_path}>
           <ModelStatusBadge exists={vae.exists} size={vae.size} status={dl?.status} sizeEstimate={vae.size_estimate} />
           <DownloadButton exists={vae.exists} status={dl?.status} busy={busy.has(vaeKey)} onClick={() => void start(vaeKey)} onDelete={() => void deleteAsset(vaeKey, undefined, vae.name)} />
-        </div>
+        </AssetRow>
       </ModelGroupCard>
     )
   }
@@ -380,7 +414,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
               />
 
               {/* 该族训练用的 VAE（Qwen-Image VAE 为 Anima / Krea2 共用的族无关资产） */}
-              {renderVae(section.vaeKey)}
+              {renderVae(section)}
 
               {/* TE variant 合并卡：每个 variant 一行 radio + 各自下载 */}
               {section.teCard && (() => {
@@ -429,12 +463,13 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                 const allExist = m.files.every((f) => f.exists)
                 const totalSize = m.files.reduce((s, f) => s + f.size, 0)
                 return (
-                  <ModelGroupCard key={id} title={m.name} helpTooltip={<p>{assetHelp(id, m.description, m.repo)}</p>}>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span style={{ flex: 1 }} />
+                  <ModelGroupCard key={id}
+                    title={ENCODER_TITLE_KEYS[id] ? t(ENCODER_TITLE_KEYS[id]!, { family: section.familyName }) : m.name}
+                    helpTooltip={<p>{assetHelp(id, m.description, m.repo)}</p>}>
+                    <AssetRow label={assetRowLabel(m)} path={m.target_dir}>
                       <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} sizeEstimate={m.size_estimate} />
                       <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} onDelete={() => void deleteAsset(id, undefined, m.name)} />
-                    </div>
+                    </AssetRow>
                   </ModelGroupCard>
                 )
               })}

@@ -856,9 +856,11 @@ describe('SettingsPage (PP0)', () => {
     const section = document.getElementById('moss-models') as HTMLElement
     expect(await within(section).findByText('MOSS-Image 主模型')).toBeInTheDocument()
     expect(within(section).getByText('MOSS-Image · Qwen3.5-9B 文本编码器')).toBeInTheDocument()
-    // 本族自己的 VAE（不是 Anima / Krea2 共用的 Qwen-Image VAE）
-    expect(within(section).getByText('FLUX.2 VAE')).toBeInTheDocument()
-    expect(within(section).queryByText('Anima VAE')).not.toBeInTheDocument()
+    // 本族自己的 VAE（不是 Anima / Krea2 共用的 Qwen-Image VAE）：标题「族 + 类别」，
+    // 行名取落盘文件名（去扩展名），与底模卡 preset 行同口径
+    expect(within(section).getByText('MOSS-Image VAE')).toBeInTheDocument()
+    expect(within(section).getByText('flux2-vae')).toBeInTheDocument()
+    expect(within(section).queryByText('qwen_image_vae')).not.toBeInTheDocument()
     // 资产说明不再常驻成小字（进标题旁 ⓘ）；下载前的体积并进「未下载」徽标
     expect(within(section).queryByText(/test/)).not.toBeInTheDocument()
     expect(within(section).getByText('未下载 · ~324.2 MB')).toBeInTheDocument()
