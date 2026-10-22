@@ -2,7 +2,8 @@
 
 - adapter 一次反向得到 ∇Z1 = G·B_R、∇B = Gᵀ·A_L（gradient trick），且 Z1 分支不改输出
 - 低秩 ProjectLR 等于稠密切空间投影
-- 两步 optimizer（含动量搬运）与稠密参考（显式投影 + SVD 正交化 + 截断 SVD 回缩）一致
+- 两步 optimizer（含动量搬运）与稠密参考（显式投影 + 稠密 Newton-Schulz + 截断 SVD 回缩）一致
+- CholeskyQR2 与 Householder QR 等价；秩亏时回退
 - 训练中 A_L 保持列正交、ΔW 秩 ≤ r，能拟合低秩目标
 - 导出标准 LoRA 后 up·down·(alpha/r) 精确等于 ΔW；从标准 LoRA 读回精确还原
 - adapter + optimizer state_dict 往返后续训逐位一致
@@ -41,10 +42,16 @@ def _dense_proj(a_l, b_r, z):
     return pa @ z + (torch.eye(a_l.shape[0], dtype=z.dtype) - pa) @ z @ b_r @ b_r.mT
 
 
-def _dense_ortho(z, tol=1e-6):
-    u, s, vh = torch.linalg.svd(z, full_matrices=False)
-    keep = (s > s.max() * tol).to(z.dtype)
-    return (u * keep) @ vh
+def _dense_ortho(z):
+    """稠密 Newton-Schulz（与实现同系数）：奇异值上的同一个奇多项式。"""
+    from utils.riemannion_optimizer import NS_COEFFICIENTS, NS_STEPS
+
+    a, b, c = NS_COEFFICIENTS
+    x = z / z.norm()
+    for _ in range(NS_STEPS):
+        gram = x @ x.mT
+        x = a * x + (b * gram + c * (gram @ gram)) @ x
+    return x
 
 
 def _trunc(y, r):
@@ -194,3 +201,26 @@ def test_riemann_and_riemannion_require_each_other() -> None:
     with pytest.raises(ValueError, match="block swap"):
         validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=4))
     validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=0))
+
+
+def test_cholesky_qr2_matches_householder_and_falls_back() -> None:
+    from utils.riemannion_optimizer import _qr
+
+    torch.manual_seed(0)
+    x = torch.randn(3, 200, 16)
+    q, r = _qr(x)
+    torch.testing.assert_close(q @ r, x, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(q.mT @ q, torch.eye(16).expand(3, 16, 16), atol=1e-5, rtol=0)
+    x[:, :, 3] = 0  # 秩亏 → Cholesky 失败 → Householder 回退，Q 仍正交
+    q, r = _qr(x)
+    torch.testing.assert_close(q @ r, x, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(q.mT @ q, torch.eye(16).expand(3, 16, 16), atol=1e-5, rtol=0)
+
+
+def test_zero_gradient_layer_is_skipped() -> None:
+    layer = _layer()
+    opt = RiemannionWithAuxAdam([layer.lora_b, layer.lora_z1], lr=0.1)
+    before = (layer.a_l.clone(), layer.lora_b.clone())
+    _set_grads_from_dense(layer, torch.zeros(M, N))
+    opt.step()
+    assert torch.equal(layer.a_l, before[0]) and torch.equal(layer.lora_b, before[1])

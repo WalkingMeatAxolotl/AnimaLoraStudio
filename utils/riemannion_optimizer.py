@@ -19,8 +19,18 @@ Parametrization-independent Low-Rank Adapters", arxiv 2507.12142（Algorithm 1/2
 
 每步（全部按形状分桶 batch 计算，fp32）：
     1. 新梯度投影；旧动量 ProjectLR 搬到当前切空间；heavy-ball 累加
-    2. OrthoLR：ξ 的非零奇异值全部置 1（QR×2 + 2r×2r SVD），再投影回切空间
-    3. RetractionLR：X(1−ηγ) − η·ξ 的秩 r 截断 SVD → 新 A_L / B / B_R
+    2. 基底：Ḃ = B_R·Ḃ_R + Ḃ⊥，对 Ȧ、Ḃ⊥ 各做一次 QR（Q_a ⊥ A_L，Q_b ⊥ B_R），
+       则 ξ = [A_L, Q_a]·K·[B_R, Q_b]ᵀ，K = [[Ḃ_Rᵀ, R_bᵀ], [R_a, 0]]（2r×2r）
+    3. OrthoLR：K 上做 Newton-Schulz（= ξ 的奇异值推到 ~1）；切空间投影 = 置零右下块
+    4. RetractionLR：X(1−ηγ) − η·ξ = 同一基底下的 2r×2r 核，SVD 取前 r → 新 A_L / B / B_R
+
+数学与论文 Algorithm 1/2/4 等价（基底写法见 Vandereycken 2013 的低秩流形回缩），
+差别只在数值路径。性能取舍（Anima 280 层实测，朴素写法每步 ~1.1s）：
+- 每步只有 2 次 m×r / n×r 的窄 QR，且两侧都不会出现「B 与 B_R 共线」这种病态拼接；
+  QR 用 CholeskyQR2（fp64 Gram，Cholesky 失败回退 torch.linalg.qr）
+- OrthoLR 用 Newton-Schulz（Muon 同款系数，fp32）求极分解因子，而非 SVD 置 1：
+  零奇异值天然保持为 0；论文 §4 亦称近似正交化对收敛几乎无影响
+- 回缩的 2r×2r SVD 在 CUDA 上用 gesvda 驱动（对步长部分相对误差 ~1e-4）
 
 参数里非 Riemannion 的部分（SRA projection 等）走同一 optimizer 内的辅助 AdamW。
 """
@@ -34,15 +44,54 @@ from torch import Tensor
 from torch.optim import Optimizer
 
 __all__ = [
-    "RiemannionWithAuxAdam", "project_lr", "ortho_lr", "retract_lr", "riemannian_grad",
+    "RiemannionWithAuxAdam", "project_lr", "riemannian_grad", "riemannion_update",
 ]
 
-# 奇异值相对阈值：低于 S.max·tol 的视为 0，不在 OrthoLR 里被抬到 1
-_ORTHO_REL_TOL = 1e-6
+NS_COEFFICIENTS = (3.4445, -4.7750, 2.0315)  # 与 Muon 相同（Keller Jordan, 2024）
+NS_STEPS = 5
+
+
+def _cholesky_qr(x: Tensor) -> tuple[Tensor, Tensor] | None:
+    gram = (x.mT @ x).double()
+    chol, info = torch.linalg.cholesky_ex(gram)
+    if bool((info != 0).any()):
+        return None
+    r = chol.mT.to(x.dtype)
+    q = torch.linalg.solve_triangular(r, x, upper=True, left=False)
+    return q, r
 
 
 def _qr(x: Tensor) -> tuple[Tensor, Tensor]:
+    """瘦高矩阵（[..., m, k]，k≪m）的 reduced QR：CholeskyQR2，失败回退 Householder。"""
+    first = _cholesky_qr(x)
+    if first is not None:
+        second = _cholesky_qr(first[0])
+        if second is not None:
+            return second[0], second[1] @ first[1]
     return torch.linalg.qr(x, mode="reduced")
+
+
+def _qr_perp(x: Tensor, basis: Tensor) -> tuple[Tensor, Tensor]:
+    """x 已（解析上）⊥ basis；QR 后再投影一次去掉数值泄漏，保证 [basis, Q] 列正交。"""
+    q, r = _qr(x - basis @ (basis.mT @ x))
+    q2, r2 = _qr(q - basis @ (basis.mT @ q))
+    return q2, r2 @ r
+
+
+def _polar_newton_schulz(core: Tensor) -> Tensor:
+    """方阵 batch 的极分解因子近似（奇异值推到 ~1，零奇异值保持 0），fp32。"""
+    a, b, c = NS_COEFFICIENTS
+    x = core / core.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-12)
+    for _ in range(NS_STEPS):
+        gram = x @ x.mT
+        x = a * x + (b * gram + c * (gram @ gram)) @ x
+    return x
+
+
+def _svd(core: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    if core.is_cuda:
+        return torch.linalg.svd(core, driver="gesvda")
+    return torch.linalg.svd(core)
 
 
 def riemannian_grad(a_l: Tensor, grad_z1: Tensor, grad_b: Tensor) -> tuple[Tensor, Tensor]:
@@ -62,38 +111,32 @@ def project_lr(a: Tensor, b: Tensor, a_l: Tensor, b_r: Tensor) -> tuple[Tensor, 
     return a_dot, b_dot
 
 
-def ortho_lr(
-    a_l: Tensor, b_r: Tensor, a_dot: Tensor, b_dot: Tensor,
-) -> tuple[Tensor, Tensor]:
-    """OrthoLR（Algorithm 1）：ξ = [A_L, Ȧ]·[Ḃ, B_R]ᵀ 的非零奇异值置 1。
-
-    返回低秩因子 (Ao, Bo)，Ao·Boᵀ = U·Vᵀ（秩 ≤ 2r）。数值上为 0 的奇异方向
-    （如首步 B=0 时）保持为 0，不被抬成 1。
-    """
-    q1, r1 = _qr(torch.cat([a_l, a_dot], dim=-1))
-    q2, r2 = _qr(torch.cat([b_dot, b_r], dim=-1))
-    u, s, vh = torch.linalg.svd(r1 @ r2.mT)
-    keep = (s > s.amax(dim=-1, keepdim=True) * _ORTHO_REL_TOL).to(u.dtype)
-    return q1 @ (u * keep.unsqueeze(-2)), q2 @ vh.mT
-
-
-def retract_lr(
+def riemannion_update(
     a_l: Tensor, b: Tensor, b_r: Tensor, a_dot: Tensor, b_dot: Tensor,
-    lr: float, weight_decay: float, rank: int,
+    lr: float, weight_decay: float,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    """RetractionLR：X(1−ηγ) − η·ξ 截断到秩 r。
+    """OrthoLR → 切空间投影 → RetractionLR，返回新的 (A_L, B, B_R)。
 
-    X(1−ηγ) − η(Ȧ B_Rᵀ + A_L Ḃᵀ) = [A_L, Ȧ] · [(1−ηγ)B − ηḂ, −η B_R]ᵀ，
-    两侧 QR 后对 2r×2r 核做 SVD。返回新的 (A_L, B, B_R)。
+    输入切向量 ξ = Ȧ·B_Rᵀ + A_L·Ḃᵀ（Ȧ ⊥ A_L）。全部运算落在
+    [A_L, Q_a] × [B_R, Q_b] 基底下的 2r×2r 核上（见模块 docstring）。
     """
-    q1, r1 = _qr(torch.cat([a_l, a_dot], dim=-1))
-    right = torch.cat([(1.0 - lr * weight_decay) * b - lr * b_dot, -lr * b_r], dim=-1)
-    q2, r2 = _qr(right)
-    u, s, vh = torch.linalg.svd(r1 @ r2.mT)
-    new_a_l = q1 @ u[..., :rank]
-    new_b_r = q2 @ vh[..., :rank, :].mT
-    new_b = new_b_r * s[..., None, :rank]
-    return new_a_l, new_b, new_b_r
+    rank = a_l.shape[-1]
+    b_dot_r = b_r.mT @ b_dot                       # r×r
+    q_a, r_a = _qr_perp(a_dot, a_l)                # Ȧ = Q_a R_a
+    q_b, r_b = _qr_perp(b_dot - b_r @ b_dot_r, b_r)  # Ḃ⊥ = Q_b R_b
+    zeros = torch.zeros_like(r_a)
+    core = torch.cat([
+        torch.cat([b_dot_r.mT, r_b.mT], dim=-1),
+        torch.cat([r_a, zeros], dim=-1),
+    ], dim=-2)
+    step = _polar_newton_schulz(core)
+    step[..., rank:, rank:] = 0                    # 投影回切空间：去掉 (I−P_A)·O·(I−P_B)
+    x_core = torch.zeros_like(core)
+    x_core[..., :rank, :rank] = (1.0 - lr * weight_decay) * (b_r.mT @ b).mT  # X = A_L·Cᵀ·B_Rᵀ
+    u, s, vh = _svd(x_core - lr * step)
+    new_a_l = torch.cat([a_l, q_a], dim=-1) @ u[..., :rank]
+    new_b_r = torch.cat([b_r, q_b], dim=-1) @ vh[..., :rank, :].mT
+    return new_a_l, new_b_r * s[..., None, :rank], new_b_r
 
 
 class RiemannionWithAuxAdam(Optimizer):
@@ -164,6 +207,8 @@ class RiemannionWithAuxAdam(Optimizer):
             z1 = layer.lora_z1
             if p.grad is None or z1.grad is None:
                 continue
+            if not (p.grad.any() or z1.grad.any()):
+                continue  # 全零梯度（层未参与本步）：切空间退化，跳过
             buckets[(tuple(layer.a_l.shape), tuple(p.shape), p.device)].append(layer)
 
         for layers in buckets.values():
@@ -172,7 +217,6 @@ class RiemannionWithAuxAdam(Optimizer):
             b = torch.stack([ly.lora_b for ly in layers]).float()
             g_z1 = torch.stack([ly.lora_z1.grad for ly in layers]).float()
             g_b = torch.stack([ly.lora_b.grad for ly in layers]).float()
-            rank = a_l.shape[-1]
 
             a_dot, b_dot = riemannian_grad(a_l, g_z1, g_b)
             states = [self.state[ly.lora_b] for ly in layers]
@@ -186,9 +230,7 @@ class RiemannionWithAuxAdam(Optimizer):
             a_hb_new = torch.cat([a_dot, a_l], dim=-1)
             b_hb_new = torch.cat([b_r, b_dot], dim=-1)
 
-            ao, bo = ortho_lr(a_l, b_r, a_dot, b_dot)
-            a_dot, b_dot = project_lr(ao, bo, a_l, b_r)
-            new_a_l, new_b, new_b_r = retract_lr(a_l, b, b_r, a_dot, b_dot, lr, wd, rank)
+            new_a_l, new_b, new_b_r = riemannion_update(a_l, b, b_r, a_dot, b_dot, lr, wd)
 
             for i, ly in enumerate(layers):
                 ly.a_l.copy_(new_a_l[i])
