@@ -17,6 +17,7 @@ NaViT / Patch-n-Pack 块对角打包（Phase 2 数据层）：
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 import random
@@ -930,6 +931,7 @@ class BucketBatchSampler:
         self.shuffle = bool(shuffle)
         self.seed = int(seed)
         self.epoch = 0
+        self._skip = 0
         self._cached_dataset = self._get_cached_dataset(dataset)
         self._base_len = len(self._cached_dataset) if self._cached_dataset else 0
 
@@ -942,6 +944,15 @@ class BucketBatchSampler:
 
     def set_epoch(self, epoch):
         self.epoch = int(epoch)
+
+    def skip_batches(self, n):
+        """下一次迭代跳过本 epoch 前 n 个 batch（只生效一次）。
+
+        epoch 中途的 step 恢复点续训用：顺序由 seed+epoch 决定，跳过发生在索引层，
+        被跳过的样本不经过 ``__getitem__``，不消耗增广（flip / caption shuffle）的
+        随机数，恢复后的数据流与不中断时逐 batch 一致。``__len__`` 仍是整 epoch。
+        """
+        self._skip = max(0, int(n))
 
     def __len__(self):
         # ARB 下实际 batch 数 = Σ_bucket f(n_b, bs)；用全局 n 会偏（每桶各自有零头）。
@@ -967,6 +978,10 @@ class BucketBatchSampler:
         return total
 
     def __iter__(self):
+        skip, self._skip = self._skip, 0
+        return itertools.islice(self._iter_batches(), skip, None)
+
+    def _iter_batches(self):
         rng = random.Random(self.seed + self.epoch)
         if self._cached_dataset is None:
             indices = list(range(len(self.dataset)))
@@ -1699,6 +1714,7 @@ class NavitPackBatchSampler:
             )
         self.ffd_window = int(ffd_window or 0)
         self.epoch = 0
+        self._skip = 0
         self.token_counts = dataset_token_counts(dataset)
         self._cached_packs = None
         # Fail-fast：全 0 token 数意味着无法解析每图尺寸（token_count_for_index 与
@@ -1737,6 +1753,10 @@ class NavitPackBatchSampler:
         self.epoch = int(epoch)
         self._cached_packs = None
 
+    def skip_batches(self, n):
+        """下一次迭代跳过本 epoch 前 n 个包（只生效一次），语义同 BucketBatchSampler.skip_batches。"""
+        self._skip = max(0, int(n))
+
     def _build_packs(self):
         order = list(range(len(self.token_counts)))
         if self.shuffle:
@@ -1759,8 +1779,8 @@ class NavitPackBatchSampler:
     def __iter__(self):
         packs = self._build_packs()
         self._cached_packs = packs
-        for pack in packs:
-            yield pack
+        skip, self._skip = self._skip, 0
+        return iter(packs[skip:])
 
     def __len__(self):
         if self._cached_packs is None:

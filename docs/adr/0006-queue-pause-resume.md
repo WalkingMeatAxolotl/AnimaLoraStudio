@@ -1,6 +1,6 @@
 # 0006 — Queue 任务暂停 / 恢复 + 队列挂起 / 恢复调度
 
-**状态**：Accepted（PR-1 #97 / PR-2 #98 / PR-3 #99 / PR-4 #100 全部合入 dev；PR-5 删 feature flag 默认开启）+ Addendum 1 2026-05-19（dev 训练栈 audit + 暂停语义翻盘，见末尾「增量更新」）
+**状态**：Accepted（PR-1 #97 / PR-2 #98 / PR-3 #99 / PR-4 #100 全部合入 dev；PR-5 删 feature flag 默认开启）+ Addendum 1 2026-05-19（dev 训练栈 audit + 暂停语义翻盘，见末尾「增量更新」）+ Addendum 3 2026-10-23（step 恢复点 epoch 内跳过已训 batch）
 **日期**：2026-05-18（初版） / 2026-05-19（Addendum 1）
 **决策者**：@WalkingMeatAxolotl
 
@@ -727,3 +727,42 @@ state」一条实质已被 Addendum 1 推翻，本 Addendum 把它的产品面�
 - auto backup 不进 ResumeFieldPicker（维持现状）：picker 语义是"选用户产物
   fork 新 task"，系统恢复点的消费入口是 resume 按钮。要 fork 最新 epoch，
   开 `save_state_every_epochs=1` 即可。
+
+### 2026-10-23 — Addendum 3: step 恢复点续训改为 epoch 内跳过已训 batch
+
+**影响范围**：修订 Addendum 1「`save_state_every_steps` 行为完全不动」与
+「遗留 follow-ups / DataLoader skip-K mid-epoch resume（永远不做）」两条；
+pause / auto_epoch_state.pt 路径不受影响。
+
+**起因**：Muon / Riemannion 真机验证时发现，从 `training_state_step{N}.pt`
+恢复后逐步 loss 与不中断训练对不上（AdamW 同样，最大差 ≈0.049）。根因两条：
+
+1. **数据错位（主因）**：step 恢复点存的是「当前 epoch 序号」，resume 走
+   `for epoch in range(start_epoch, ...)` 从该 epoch 第 0 个 batch 重新开始。
+   恢复点之前已训过的 batch 被再训一遍，恢复后第 N+1 步吃的是原轨迹第 1 步的
+   数据；设了 `max_steps` 时 epoch 尾部的 batch 则永远训不到。这正是
+   Addendum 1 bug #4 的 double-train——当时靠「pause 只从 epoch 边界恢复」
+   让 pause 路径自然避开，但用户周期 step save 一直带着它。
+2. **CPU RNG 错一位**：DataLoader 每次 `iter()` 从全局 torch CPU RNG 抽一个
+   worker base seed。恢复点的 RNG 状态是本 epoch 迭代器已建好之后的，恢复后
+   重建迭代器多抽一次，InfoNoise 等 CPU 侧随机流整体错位。
+
+**决策**：
+
+1. `save_training_state` 加 `epoch_batch_offset`（本 epoch 已消费的 batch 数），
+   step save 传 `batch_idx + 1`；epoch 末的恢复点 epoch 已推进，传 0。
+   `load_training_state` 返回值追加该字段，老恢复点没有 → 0，沿用旧行为。
+2. 恢复后首个 epoch，`BucketBatchSampler` / `NavitPackBatchSampler` 的
+   `skip_batches(n)` 在**索引层**跳过前 n 个 batch（顺序由 seed+epoch 决定，
+   可复现）：被跳过的样本不经过 `__getitem__`，不耗增广随机数；loop 的
+   `batch_idx` 从 n 起编号，梯度累积尾组判定与不中断时对齐。
+3. DataLoader 用独立 `torch.Generator`，不再碰全局 RNG。
+
+Addendum 1 否决「方案 A」的理由针对的是 pause 时在 epoch 中途存盘、并且
+sampler 进度不入盘的组合；本 Addendum 把进度入盘，跳过后数据流与不中断时
+逐 batch 一致，不存在 double-train，Prodigy `d` / cosine LR 的偏差前提不成立。
+pause 仍只从 epoch 边界恢复（offset 恒 0）。
+
+**边界**：`num_workers > 0`（仅非 Windows）时 worker 内增广随机流从
+worker seed 起算，跳过的样本不推进它，恢复后增广与原轨迹不逐位一致；数据
+顺序仍一致。wandb `train/loss_epoch` 在恢复的那个 epoch 只统计恢复后的步。

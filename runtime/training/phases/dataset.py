@@ -78,6 +78,22 @@ def _native_dataset_kwargs(args, ctx) -> dict:
     return kwargs
 
 
+def build_dataloader(dataset, batch_sampler, collate_fn, *, num_workers, seed) -> DataLoader:
+    """训练 DataLoader（三种 batch sampler 共用）。
+
+    DataLoader 每次 iter()（每 epoch 一次）要抽一个 worker base seed；不给 generator
+    就从全局 torch CPU RNG 抽。续训时恢复点的 RNG 状态是「本 epoch 迭代器已建好」
+    之后的，恢复后重建迭代器会多抽一次 → InfoNoise 等 CPU 侧随机流整体错一位。
+    独立 generator 让 dataloader 不碰全局 RNG。
+    """
+    return DataLoader(
+        dataset, batch_sampler=batch_sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+        generator=torch.Generator().manual_seed(int(seed)),
+    )
+
+
 def run(ctx: TrainingContext) -> None:
     """
     - 主数据集 / 正则数据集 + per-folder repeat
@@ -251,10 +267,9 @@ def run(ctx: TrainingContext) -> None:
             # 不用 `or 256`：0 是合法值（全局 FFD，每 epoch 包固定），会被 falsy 吞掉。
             ffd_window=int(getattr(args, "navit_pack_ffd_window", 256)),
         )
-        ctx.dataloader = DataLoader(
-            ctx.dataset, batch_sampler=batch_sampler,
-            collate_fn=collate_fn_navit_pack,
-            num_workers=args.num_workers,
+        ctx.dataloader = build_dataloader(
+            ctx.dataset, batch_sampler, collate_fn_navit_pack,
+            num_workers=args.num_workers, seed=getattr(args, "seed", 42),
         )
     elif ctx.use_cached:
         # drop_last=False：桶尾不足 batch_size 出短 batch 而非丢图。
@@ -265,10 +280,9 @@ def run(ctx: TrainingContext) -> None:
             drop_last=False, shuffle=True,
             seed=getattr(args, "seed", 42),
         )
-        ctx.dataloader = DataLoader(
-            ctx.dataset, batch_sampler=batch_sampler,
-            collate_fn=collate_fn_cached,
-            num_workers=args.num_workers,
+        ctx.dataloader = build_dataloader(
+            ctx.dataset, batch_sampler, collate_fn_cached,
+            num_workers=args.num_workers, seed=getattr(args, "seed", 42),
         )
     else:
         # 非缓存路径也必须按桶分批：collate_fn 用 torch.stack 拼 pixel_values，一个 batch
@@ -280,10 +294,9 @@ def run(ctx: TrainingContext) -> None:
             drop_last=False, shuffle=True,
             seed=getattr(args, "seed", 42),
         )
-        ctx.dataloader = DataLoader(
-            ctx.dataset, batch_sampler=batch_sampler,
-            collate_fn=collate_fn,
-            num_workers=args.num_workers,
+        ctx.dataloader = build_dataloader(
+            ctx.dataset, batch_sampler, collate_fn,
+            num_workers=args.num_workers, seed=getattr(args, "seed", 42),
         )
 
     # 训练前自检：VAE encode->decode 循环（快速排除 VAE/scale/shape 问题）

@@ -5,7 +5,8 @@
 
 公开：
 - save_training_state — 保存 LoRA / optimizer / scheduler / rng / monitor 一次性 ckpt
-- load_training_state — 反向恢复，返回 (epoch, global_step, loss_history, monitor_state)
+- load_training_state — 反向恢复，返回 (epoch, global_step, loss_history, monitor_state,
+  epoch_batch_offset)
 """
 
 from __future__ import annotations
@@ -33,8 +34,13 @@ def save_training_state(
     loss_history=None, rng_state=None, monitor_state=None,
     scheduler=None, timestep_sampler=None, sra_aligner=None,
     scaler=None, model_family=None, internal=False, base_num_blocks=None,
+    epoch_batch_offset=0,
 ):
     """保存完整训练状态，支持断点续训。
+
+    epoch_batch_offset：``epoch`` 内已消费的 dataloader batch 数。epoch 中途的
+    step 恢复点传 batch_idx+1，恢复时 sampler 跳过这些 batch 接着往下训；
+    epoch 末的恢复点 ``epoch`` 已推进到下一轮，传 0（从头开始新 epoch）。
 
     timestep_sampler（ADR 0006 Addendum 1）：自适应采样器（InfoNoise）的 EMA / CDF / FIFO buffer。
     无状态采样器（baseline）的 state_dict() 是 {}，跳过不存，避免 ckpt 文件无谓增大。
@@ -50,6 +56,7 @@ def save_training_state(
         "lora_state_dict": injector.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "epoch": epoch,
+        "epoch_batch_offset": int(epoch_batch_offset or 0),
         "global_step": global_step,
         "loss_history": loss_history or [],
         "rng_state": {
@@ -121,7 +128,10 @@ def save_training_state(
 
 
 def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None, expected_family=None, expected_num_blocks=None):
-    """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)。
+    """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state, epoch_batch_offset)。
+
+    epoch_batch_offset：恢复点所在 epoch 已消费的 batch 数（见 save_training_state）；
+    没记这个字段的老恢复点返回 0，沿用旧行为从该 epoch 开头重训。
 
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
     实现了 load_state_dict，把 EMA / CDF / FIFO 灌回去；否则保持冷启动（warning 提示）。
@@ -259,9 +269,10 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
             )
 
     epoch = state.get("epoch", 0)
+    epoch_batch_offset = int(state.get("epoch_batch_offset", 0) or 0)
     global_step = state.get("global_step", 0)
     loss_history = state.get("loss_history", [])
     monitor_state = state.get("monitor_state", None)  # 恢复监控数据
 
     logger.info(msg("train.resume_done", epoch=epoch, step=global_step))
-    return epoch, global_step, loss_history, monitor_state
+    return epoch, global_step, loss_history, monitor_state, epoch_batch_offset
