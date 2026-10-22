@@ -207,8 +207,6 @@ class RiemannionWithAuxAdam(Optimizer):
             z1 = layer.lora_z1
             if p.grad is None or z1.grad is None:
                 continue
-            if not (p.grad.any() or z1.grad.any()):
-                continue  # 全零梯度（层未参与本步）：切空间退化，跳过
             buckets[(tuple(layer.a_l.shape), tuple(p.shape), p.device)].append(layer)
 
         for layers in buckets.values():
@@ -231,6 +229,13 @@ class RiemannionWithAuxAdam(Optimizer):
             b_hb_new = torch.cat([b_r, b_dot], dim=-1)
 
             new_a_l, new_b, new_b_r = riemannion_update(a_l, b, b_r, a_dot, b_dot, lr, wd)
+            # 全零梯度的层（本步未参与）切空间退化：保持原值。用 batch 掩码而非逐层
+            # .any()，避免每层一次 GPU 同步（280 层时 optimizer.step 30ms → 100ms）
+            active = ((g_z1.abs().amax(dim=(-2, -1)) > 0) | (g_b.abs().amax(dim=(-2, -1)) > 0))
+            active = active[:, None, None]
+            new_a_l = torch.where(active, new_a_l, a_l)
+            new_b = torch.where(active, new_b, b)
+            new_b_r = torch.where(active, new_b_r, b_r)
 
             for i, ly in enumerate(layers):
                 ly.a_l.copy_(new_a_l[i])
