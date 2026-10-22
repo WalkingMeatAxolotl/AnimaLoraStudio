@@ -41,18 +41,18 @@ def AnimaLycorisAdapter(preset=ANIMA_PRESET, ):
 
 def test_adapter_builders_dict_has_lokr_loha_lora() -> None:
     from training.adapters import BUILDERS
-    assert set(BUILDERS) == {"lokr", "loha", "lora", "ortho", "tlora"}
+    assert set(BUILDERS) == {"lokr", "loha", "lora", "ortho", "riemann", "tlora"}
 
 
 def test_optimizer_builders_dict_has_8_variants() -> None:
     from training.optimizers import BUILDERS, VALIDATORS
     assert set(BUILDERS) == {
         "adamw", "automagic", "came", "lion", "prodigy",
-        "prodigy_plus_schedulefree", "soap", "soap_sf",
+        "prodigy_plus_schedulefree", "riemannion", "soap", "soap_sf",
     }
     # Automagic / PPSF / soap_sf 有专属 validator（schedule-free 要求 lr_scheduler=none）；
     # adamw / came / lion / prodigy / soap 没有
-    assert set(VALIDATORS) == {"automagic", "prodigy_plus_schedulefree", "soap_sf"}
+    assert set(VALIDATORS) == {"automagic", "prodigy_plus_schedulefree", "riemannion", "soap_sf"}
 
 
 def test_scheduler_builders_dict_excludes_none() -> None:
@@ -309,7 +309,7 @@ def test_schema_consistency_raises_when_builder_missing(monkeypatch) -> None:
     try:
         # 用 typing.Literal 重建一个含 "tlora" 的 annotation
         from typing import Literal
-        field.annotation = Literal["lora", "lokr", "loha", "ortho", "tlora"]  # type: ignore[assignment]
+        field.annotation = Literal["lora", "lokr", "loha", "ortho", "riemann", "tlora"]  # type: ignore[assignment]
         with pytest.raises(RuntimeError, match="不同步"):
             adapters.validate_schema_consistency()
     finally:

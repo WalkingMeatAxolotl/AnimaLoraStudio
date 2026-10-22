@@ -1,0 +1,196 @@
+"""Riemannion + RiemannLoRA adapter 测试 — 稠密参考实现对拍 + LoRA 导出 + registry。
+
+- adapter 一次反向得到 ∇Z1 = G·B_R、∇B = Gᵀ·A_L（gradient trick），且 Z1 分支不改输出
+- 低秩 ProjectLR 等于稠密切空间投影
+- 两步 optimizer（含动量搬运）与稠密参考（显式投影 + SVD 正交化 + 截断 SVD 回缩）一致
+- 训练中 A_L 保持列正交、ΔW 秩 ≤ r，能拟合低秩目标
+- 导出标准 LoRA 后 up·down·(alpha/r) 精确等于 ΔW；从标准 LoRA 读回精确还原
+- adapter + optimizer state_dict 往返后续训逐位一致
+- registry：riemann ↔ riemannion 互相绑定；schema 同步
+
+测试卫生：纯 CPU、float64 参考、固定随机种子。
+"""
+from __future__ import annotations
+
+import types
+
+import pytest
+import torch
+from torch import nn
+
+from utils.riemann_lora_adapter import RiemannLoRALinear
+from utils.riemannion_optimizer import RiemannionWithAuxAdam, project_lr
+
+M, N, R = 12, 10, 3
+
+
+def _layer(seed: int = 0, m: int = M, n: int = N, r: int = R) -> RiemannLoRALinear:
+    base = nn.Linear(n, m, bias=False)
+    nn.init.zeros_(base.weight)
+    return RiemannLoRALinear("lora_unet_x", base, rank=r, generator=torch.Generator().manual_seed(seed))
+
+
+def _set_grads_from_dense(layer: RiemannLoRALinear, g: torch.Tensor) -> None:
+    """等价于 autograd 结果（见 test_gradient_trick_matches_dense_gradient）。"""
+    layer.lora_z1.grad = (g @ layer.b_r).float()
+    layer.lora_b.grad = (g.mT @ layer.a_l).float()
+
+
+def _dense_proj(a_l, b_r, z):
+    pa = a_l @ a_l.mT
+    return pa @ z + (torch.eye(a_l.shape[0], dtype=z.dtype) - pa) @ z @ b_r @ b_r.mT
+
+
+def _dense_ortho(z, tol=1e-6):
+    u, s, vh = torch.linalg.svd(z, full_matrices=False)
+    keep = (s > s.max() * tol).to(z.dtype)
+    return (u * keep) @ vh
+
+
+def _trunc(y, r):
+    u, s, vh = torch.linalg.svd(y, full_matrices=False)
+    return (u[:, :r] * s[:r]) @ vh[:r]
+
+
+def test_gradient_trick_matches_dense_gradient() -> None:
+    torch.manual_seed(0)
+    layer = _layer()
+    with torch.no_grad():
+        layer.lora_b.copy_(torch.randn(N, R))
+    x = torch.randn(7, N)
+    c = torch.randn(7, M)
+    y = layer(x)
+    torch.testing.assert_close(y, x @ layer.delta_weight().mT)  # Z1 分支不改输出
+    (c * y).sum().backward()
+    g = c.mT @ x  # ∂L/∂ΔW
+    torch.testing.assert_close(layer.lora_z1.grad, g @ layer.b_r, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(layer.lora_b.grad, g.mT @ layer.a_l, rtol=1e-5, atol=1e-5)
+
+
+def test_project_lr_matches_dense_projection() -> None:
+    torch.manual_seed(0)
+    a_l, _ = torch.linalg.qr(torch.randn(M, R, dtype=torch.float64))
+    b_r, _ = torch.linalg.qr(torch.randn(N, R, dtype=torch.float64))
+    a, b = torch.randn(M, 5, dtype=torch.float64), torch.randn(N, 5, dtype=torch.float64)
+    a_dot, b_dot = project_lr(a, b, a_l, b_r)
+    torch.testing.assert_close(a_dot @ b_r.mT + a_l @ b_dot.mT, _dense_proj(a_l, b_r, a @ b.mT))
+
+
+@pytest.mark.parametrize("start_from_zero", [True, False])
+def test_two_steps_match_dense_reference(start_from_zero) -> None:
+    torch.manual_seed(1)
+    layer = _layer()
+    if not start_from_zero:
+        with torch.no_grad():
+            layer.lora_b.copy_(torch.randn(N, R))
+            q, _ = torch.linalg.qr(layer.lora_b)
+            layer.b_r.copy_(q)
+    lr, wd, beta = 0.05, 0.1, 0.9
+    opt = RiemannionWithAuxAdam([layer.lora_b, layer.lora_z1], lr=lr, weight_decay=wd, momentum=beta)
+
+    x_ref = layer.delta_weight().double()
+    a_l, b_r = layer.a_l.double(), layer.b_r.double()
+    mom = None
+    for _ in range(2):
+        g = torch.randn(M, N, dtype=torch.float64)
+        # 稠密参考
+        xi = _dense_proj(a_l, b_r, g)
+        if mom is not None:
+            xi = beta * _dense_proj(a_l, b_r, mom) + xi
+        mom = xi
+        step_dir = _dense_proj(a_l, b_r, _dense_ortho(xi))
+        x_ref = _trunc(x_ref * (1 - lr * wd) - lr * step_dir, R)
+        # 实现
+        _set_grads_from_dense(layer, g.float())
+        opt.step()
+        a_l, b_r = layer.a_l.double(), layer.b_r.double()
+        torch.testing.assert_close(layer.delta_weight().double(), x_ref, rtol=1e-4, atol=1e-5)
+
+
+def test_fits_low_rank_target_and_keeps_invariants() -> None:
+    torch.manual_seed(0)
+    m, n, r = 24, 32, 4
+    layer = _layer(m=m, n=n, r=r)
+    target = torch.randn(m, r) @ torch.randn(r, n) * 0.3
+    x = torch.randn(256, n)
+    y = x @ target.T
+    opt = RiemannionWithAuxAdam([layer.lora_b, layer.lora_z1], lr=0.05)
+    losses = []
+    for _ in range(200):
+        opt.zero_grad()
+        loss = nn.functional.mse_loss(layer(x), y)
+        loss.backward()
+        opt.step()
+        losses.append(float(loss.detach()))
+        assert torch.all(layer.lora_z1 == 0)
+    assert losses[-1] < losses[0] * 0.05, f"{losses[0]} -> {losses[-1]}"
+    eye = torch.eye(r)
+    torch.testing.assert_close(layer.a_l.mT @ layer.a_l, eye, atol=1e-4, rtol=0)
+    torch.testing.assert_close(layer.b_r.mT @ layer.b_r, eye, atol=1e-4, rtol=0)
+    assert torch.linalg.matrix_rank(layer.delta_weight()) <= r
+
+
+def test_export_plain_lora_is_exact_and_loads_back() -> None:
+    torch.manual_seed(0)
+    layer = _layer()
+    with torch.no_grad():
+        layer.lora_b.copy_(torch.randn(N, R))
+    sd = layer.distilled_lora_state(dtype=torch.float32)
+    up, down = sd["lora_unet_x.lora_up.weight"], sd["lora_unet_x.lora_down.weight"]
+    scale = float(sd["lora_unet_x.alpha"]) / R
+    torch.testing.assert_close(scale * up @ down, layer.delta_weight(), rtol=1e-5, atol=1e-5)
+
+    other = _layer(seed=5)
+    other.load_plain_lora_(down, up, scale)
+    torch.testing.assert_close(other.delta_weight(), layer.delta_weight(), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(other.a_l.mT @ other.a_l, torch.eye(R), atol=1e-5, rtol=0)
+
+
+def test_state_dict_roundtrip_resumes_identically() -> None:
+    from utils.riemann_lora_adapter import RiemannLoRAAdapter
+
+    torch.manual_seed(0)
+    x, c = torch.randn(16, N), torch.randn(16, M)
+
+    def make():
+        model = nn.Sequential(nn.Linear(N, M, bias=False))
+        model[0].weight.data.zero_()
+        adapter = RiemannLoRAAdapter(rank=R, preset={"target_name": ["0"]}, seed=0)
+        adapter.inject(model)
+        opt = RiemannionWithAuxAdam(adapter.get_param_groups(0.0), lr=0.05)
+        return model, adapter, opt
+
+    def run(model, opt, n):
+        for _ in range(n):
+            opt.zero_grad()
+            (c * model(x)).sum().backward()
+            opt.step()
+
+    model_a, adapter_a, opt_a = make()
+    run(model_a, opt_a, 3)
+    model_b, adapter_b, opt_b = make()
+    adapter_b.load_state_dict(adapter_a.state_dict())
+    opt_b.load_state_dict(opt_a.state_dict())
+    run(model_a, opt_a, 3)
+    run(model_b, opt_b, 3)
+    assert torch.equal(adapter_a.loras[0].delta_weight(), adapter_b.loras[0].delta_weight())
+
+
+def test_unmarked_params_go_to_aux_adam() -> None:
+    layer = _layer()
+    bias = nn.Parameter(torch.zeros(4))
+    opt = RiemannionWithAuxAdam([layer.lora_b, layer.lora_z1, bias], lr=1e-2)
+    assert [(g["use_riemann"], len(g["params"])) for g in opt.param_groups] == [(True, 2), (False, 1)]
+
+
+def test_riemann_and_riemannion_require_each_other() -> None:
+    from training.adapters import build_adapter
+    from training.optimizers import validate_optimizer
+
+    with pytest.raises(ValueError, match="riemannion"):
+        build_adapter(types.SimpleNamespace(lora_type="riemann", optimizer_type="adamw", lora_rank=4), preset={})
+    with pytest.raises(ValueError, match="riemann"):
+        validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="lora"))
+    with pytest.raises(ValueError, match="block swap"):
+        validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=4))
+    validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=0))

@@ -265,9 +265,9 @@ class TrainingConfig(BaseModel):
     )
 
     # ------------------------------------------------------------------- LoRA
-    lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
+    lora_type: Literal["lora", "lokr", "loha", "ortho", "riemann", "tlora"] = Field(
         "lora",
-        description="适配器算法。lora：经典低秩，通用（默认）；lokr：Kronecker 分解，参数最省；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
+        description="适配器算法。lora：经典低秩，通用（默认）；lokr：Kronecker 分解，参数最省；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；riemann：固定秩流形参数化（仅配 riemannion 优化器，保存为普通 LoRA）；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
         json_schema_extra=_meta(
             "lora",
             # option 级禁值（forbid，R2 v2）：navit 是 B=1 打包序列 + 逐图 t，
@@ -275,6 +275,7 @@ class TrainingConfig(BaseModel):
             option_disable_when={
                 "lokr": "lycoris_backend==triton",
                 "ortho": "lycoris_backend==triton",
+                "riemann": "lycoris_backend==triton",
                 "tlora": "navit_packing==true||lycoris_backend==triton",
             },
             disable_hint="Triton 实验路径首批只支持普通 LoRA / LoHa；LoKr、Ortho 与 T-LoRA 保持 Torch 路径",
@@ -458,9 +459,9 @@ class TrainingConfig(BaseModel):
         description="cosine_with_warmup 预热步数",
         json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
-    optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "riemannion", "soap", "soap_sf"] = Field(
         "adamw",
-        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；riemannion 固定秩流形上的 Muon（仅配 lora_type=riemann，lr 作用于 ΔW 本身）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
@@ -505,6 +506,11 @@ class TrainingConfig(BaseModel):
         1.0, gt=0.0,
         description="CAME update RMS 裁剪阈值（同 Adafactor 的 d）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    riemannion_momentum: float = Field(
+        0.9, ge=0.0, lt=1.0,
+        description="Riemannion heavy-ball 动量系数",
+        json_schema_extra=_meta("training", show_when="optimizer_type==riemannion", advanced=True),
     )
     lion_beta1: float = Field(
         0.9, ge=0.0, lt=1.0,
