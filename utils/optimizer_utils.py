@@ -1379,7 +1379,7 @@ def create_muon(
     adjust_lr_fn: str = "match_rms_adamw",
     **kwargs,
 ) -> Optimizer:
-    """创建 Muon + 辅助 AdamW（ndim>=2 走 Muon，其余走 AdamW）。
+    """创建 Muon + 辅助 AdamW（真矩阵走 Muon，1D / 向量形状参数走 AdamW）。
 
     adjust_lr_fn=match_rms_adamw 时 lr 与 AdamW 同量级；original 口径需另调 lr。
     """

@@ -8,7 +8,7 @@ lr 形状缩放的 match_rms_adamw 口径来自 Moonshot（Liu et al., 2025,
 
 为什么不直接用 ``torch.optim.Muon``：它构造期要求**所有**参数都是 2D，而训练里
 会混进 1D 参数（DoRA magnitude / SRA projection bias / Ortho-Hydra 标量等）。
-这里在同一个 Optimizer 内按参数维度分派：ndim>=2 走 Muon，其余走 AdamW。
+这里在同一个 Optimizer 内按参数形状分派：真矩阵走 Muon，其余走 AdamW（见 ``is_muon_param``）。
 单一 optimizer 对象让 lr_scheduler / resume / grad_clip / GradScaler 无需改动。
 
 Muon 分支的数学与 ``torch.optim.Muon``（torch 2.11）逐项对齐（动量 lerp 写法、
@@ -27,7 +27,7 @@ import torch
 from torch import Tensor
 from torch.optim import Optimizer
 
-__all__ = ["MuonWithAuxAdam", "zeropower_via_newtonschulz5", "adjust_lr_ratio"]
+__all__ = ["MuonWithAuxAdam", "zeropower_via_newtonschulz5", "adjust_lr_ratio", "is_muon_param"]
 
 NS_COEFFICIENTS = (3.4445, -4.7750, 2.0315)
 NS_EPS = 1e-7
@@ -73,13 +73,26 @@ def adjust_lr_ratio(adjust_lr_fn: str, rows: int, cols: int) -> float:
     raise ValueError(f"Unknown adjust_lr_fn={adjust_lr_fn!r}; choose from {ADJUST_LR_FNS}")
 
 
+def is_muon_param(p: Tensor) -> bool:
+    """真矩阵才走 Muon：ndim>=2 且摊平后两个维度都 >1。
+
+    形如 (1, r) / (r, 1) 的「矩阵」（Ortho-Hydra 的 lambda_layer 等）本质是向量：
+    正交化后只剩一个单位方向，等价于 sign 式更新，与 1D 参数一样交给 AdamW。
+    """
+    if p.ndim < 2:
+        return False
+    rows = p.shape[0]
+    cols = p.numel() // rows if rows else 0
+    return rows > 1 and cols > 1
+
+
 def _as_matrix(t: Tensor) -> Tensor:
     """ndim>2（卷积核）摊平成 [out, rest]；2D 原样返回。"""
     return t if t.ndim == 2 else t.reshape(t.shape[0], -1)
 
 
 class MuonWithAuxAdam(Optimizer):
-    """ndim>=2 的参数走 Muon，其余走 AdamW；两者共享 lr / weight_decay / scheduler。
+    """真矩阵参数走 Muon，其余（1D / 向量形状）走 AdamW；两者共享 lr / weight_decay / scheduler。
 
     构造时把每个传入的 param group 按维度拆成 Muon / AdamW 两组（空组丢弃），
     group 上的 ``use_muon`` 标记分派。所以 ``param_groups`` 数可能多于传入数，
@@ -128,8 +141,8 @@ class MuonWithAuxAdam(Optimizer):
         for group in groups:
             group_params = list(group["params"])
             extra = {k: v for k, v in group.items() if k != "params"}
-            muon = [p for p in group_params if p.ndim >= 2]
-            adam = [p for p in group_params if p.ndim < 2]
+            muon = [p for p in group_params if is_muon_param(p)]
+            adam = [p for p in group_params if not is_muon_param(p)]
             if muon:
                 split.append({**extra, "params": muon, "use_muon": True})
             if adam:

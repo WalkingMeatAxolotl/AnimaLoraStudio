@@ -106,6 +106,16 @@ def test_groups_split_by_ndim_and_keep_options() -> None:
     assert summary == [(True, 1, 0.1, 1e-2), (False, 1, 0.1, 1e-2), (True, 1, 0.0, 5e-3)]
 
 
+@pytest.mark.parametrize("shape,expected", [
+    ((4, 8), True), ((3, 4, 5), True),          # 线性层 / 卷积核
+    ((8,), False), ((1, 8), False), ((8, 1), False), ((1, 3, 3), False),  # 向量形状
+])
+def test_is_muon_param_treats_vector_shapes_as_adam(shape, expected) -> None:
+    from utils.muon_optimizer import is_muon_param
+
+    assert is_muon_param(torch.empty(shape)) is expected
+
+
 def test_lambda_lr_scales_every_split_group() -> None:
     w = nn.Parameter(torch.randn(4, 8))
     b = nn.Parameter(torch.randn(4))

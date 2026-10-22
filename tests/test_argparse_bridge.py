@@ -281,6 +281,20 @@ def test_training_config_cli_lion() -> None:
     assert ns.lion_beta2 == 0.98
 
 
+def test_training_config_cli_muon() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--optimizer-type", "muon",
+        "--muon-momentum", "0.9",
+        "--muon-ns-steps", "3",
+        "--muon-adjust-lr", "original",
+    ])
+    assert ns.optimizer_type == "muon"
+    assert ns.muon_momentum == 0.9
+    assert ns.muon_ns_steps == 3
+    assert ns.muon_adjust_lr == "original"
+
+
 def test_training_config_cli_came() -> None:
     parser = bridge.build_parser(TrainingConfig)
     ns = parser.parse_args([

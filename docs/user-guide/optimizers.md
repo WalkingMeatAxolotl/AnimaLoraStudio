@@ -10,6 +10,7 @@
 | **lion** | ≈ AdamW lr / 3（1e-4 → 3e-5）| AdamW wd × 3-10（0.01 → 0.03-0.1）| cosine / cosine_with_warmup | **≈ 50%**（只 exp_avg）| 显存吃紧但又想固定 lr |
 | **automagic** | **1e-6**（建议起点；UI 切换时自动改）| 0（一般不开）| **none**（内部 per-param 自适应）| ≈ 50%（factored 2nd moment + int8 lr_mask）| 不想调 lr 又不想 Prodigy |
 | **came** | ≈ AdamW 量级（1e-4 起步，可略高）| 0-0.01 | cosine / cosine_with_warmup | **≈ 50-60%**（exp_avg + 行/列分解二阶矩与 instability）| 想省 state 显存但保留 AdamW 式动量稳定性 |
+| **muon** | ≈ AdamW lr（`match_rms_adamw` 口径下，1e-4 起步）| 0-0.01 | cosine / cosine_with_warmup | **≈ 50%**（矩阵参数只存一份动量；1D / 向量参数仍是 AdamW state）| 想让 LoRA 更新分摊到更多奇异方向 |
 | **prodigy** | 1.0（固定，UI 锁定）| 0.01 | constant 或 cosine | 比 AdamW 略大（多一个 d 状态）| 通用自适应，仍需检查步长与数值稳定性 |
 | **prodigy_plus_schedulefree** | 1.0（固定）| 0.0 | **none**（Schedule-Free 内部 averaging）| 比 Prodigy 大一些（averaged weights）| averaged weights 可能缓和相邻 checkpoint 波动，不保证消除风格突变 |
 | **soap** | AdamW 量级（1e-4 ~ 3e-4）| 0.01 | cosine / cosine_with_warmup | **> AdamW**（exp_avg + exp_avg_sq + 每矩阵轴 Shampoo GG/Q）| 矩阵型 adapter（LoRA/LoKr）想更快拟合 |
@@ -56,6 +57,15 @@ CAME（Luo et al. 2023, [arxiv 2307.02047](https://arxiv.org/abs/2307.02047)，A
 
 实现派生自官方 [yangluo7/CAME](https://github.com/yangluo7/CAME)（MIT），做了 bf16 训练工程适配（state 固定 fp32 + stochastic rounding 写回 + resume fixup），算法公式与官方逐行对齐。
 
+## Muon — 正交化动量
+
+Muon（Keller Jordan 2024, [博客](https://kellerjordan.github.io/posts/muon/)）对每个权重矩阵的动量做 Newton-Schulz 正交化：把奇异值推到 ≈1、只保留方向，相当于谱范数约束下的最速下降。效果上更新会分摊到更多奇异方向，而 AdamW 的更新往往集中在少数方向。
+
+- **只作用于真矩阵**：LoRA / LoHa / LoKr 的因子矩阵走 Muon；1D 参数（DoRA magnitude、SRA projection bias）以及 (1, r) 这类向量形状参数（Ortho 的 λ）走同一优化器内的 AdamW。
+- **lr**：`muon_adjust_lr=match_rms_adamw`（默认，Moonshot [arxiv 2502.16982](https://arxiv.org/abs/2502.16982) 口径）把每个元素的更新幅度对齐到 AdamW 的典型量级，**lr 可直接沿用 AdamW**；`original` 是 Keller 原版缩放，lr 需另调。
+- **开销**：每步多一次批量 Newton-Schulz（Anima rank 32 实测 optimizer.step ≈ 29 ms vs AdamW ≈ 5 ms，整体每步慢约 2%）。
+- 文献上，逐因子 Muon 用在 Adam 预训练底模的 LoRA 上没有一致优于 AdamW 的结论（[arxiv 2605.10468](https://arxiv.org/abs/2605.10468)）；与 AdamW 做相同更新预算的对照再下判断。
+
 ## Prodigy / PPSF — lr 锁 1.0
 
 Prodigy 系列内部估计步长 `d`，**`lr` 字段必须为 1.0**（工厂会强制覆盖）。调参重点：
@@ -85,6 +95,7 @@ SOAP（Vyas et al. 2024, [arxiv 2409.11321](https://arxiv.org/abs/2409.11321)）
 
 - **没头绪，想稳的**：AdamW + cosine_with_warmup，跟着默认 preset 走（两族通用）
 - **显存吃紧 + 不想动 lr**：Lion，按上面换算把 lr 降 3×
+- **想试正交化更新、lr 不想重调**：muon，lr 直接用 AdamW 量级
 - **省 state 显存但想保住 AdamW 式稳定收敛**：came，lr 直接用 AdamW 量级
 - **不想调 lr + 不想踩 Schedule-Free 坑**：Prodigy
 - **试验平均权重是否减少波动**：prodigy_plus_schedulefree，保留对照并检查数值稳定性
