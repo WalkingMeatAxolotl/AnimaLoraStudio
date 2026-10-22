@@ -90,7 +90,13 @@ def _polar_newton_schulz(core: Tensor) -> Tensor:
 
 def _svd(core: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     if core.is_cuda:
-        return torch.linalg.svd(core, driver="gesvda")
+        try:
+            return torch.linalg.svd(core, driver="gesvda")
+        except torch.linalg.LinAlgError:
+            # 核有大量近零 / 重复奇异值时 gesvda 不收敛（如从有效秩远低于 r 的普通
+            # LoRA 热启动）；回退 CPU 标准 SVD，只在出错的这一步付出代价
+            u, s, vh = torch.linalg.svd(core.cpu())
+            return u.to(core.device), s.to(core.device), vh.to(core.device)
     return torch.linalg.svd(core)
 
 

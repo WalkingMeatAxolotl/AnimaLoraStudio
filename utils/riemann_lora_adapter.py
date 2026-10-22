@@ -52,6 +52,7 @@ class RiemannLoRALinear(nn.Module):
         rank: int,
         generator: torch.Generator,
         multiplier: float = 1.0,
+        device: torch.device | None = None,
     ) -> None:
         super().__init__()
         if not isinstance(org_module, nn.Linear):
@@ -63,7 +64,9 @@ class RiemannLoRALinear(nn.Module):
 
         out_dim, in_dim = org_module.weight.shape
         self.lora_dim = max(1, min(int(rank), int(out_dim), int(in_dim)))
-        device = org_module.weight.device
+        # block swap 下被换出块的底模权重此时在 CPU（pinned），adapter 参数与正交基
+        # 必须建在训练设备上（block swap 只搬冻结底模权重，不管它们）
+        device = device if device is not None else org_module.weight.device
         r = self.lora_dim
         self.register_buffer("a_l", _random_orthonormal(out_dim, r, generator).to(device))
         self.register_buffer("b_r", _random_orthonormal(in_dim, r, generator).to(device))
@@ -124,13 +127,18 @@ class RiemannLoRAAdapter:
 
     def inject(self, model: nn.Module) -> dict[str, nn.Module]:
         generator = torch.Generator().manual_seed(self._seed)
+        # 与 LycorisAdapter 同口径：按模型首个参数推断训练设备（block swap 换出的尾部
+        # 块在 CPU，不能逐层跟随底模权重的设备）
+        device = next(model.parameters()).device
         replacements = []
         for name, module in model.named_modules():
             if isinstance(module, nn.Linear) and _matches_preset(name, self._preset or {}):
                 parent, child_name = _split_parent(model, name)
                 replacements.append((name, parent, child_name, module))
         for name, parent, child_name, module in replacements:
-            layer = RiemannLoRALinear(_lora_name(name), module, rank=self.rank, generator=generator)
+            layer = RiemannLoRALinear(
+                _lora_name(name), module, rank=self.rank, generator=generator, device=device,
+            )
             setattr(parent, child_name, layer)
             self.loras.append(layer)
         logger.info(msg("lora.injected", algo="RIEMANN", n=len(self.loras), detail="save=baked LoRA"))

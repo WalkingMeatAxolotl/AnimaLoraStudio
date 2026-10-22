@@ -9,12 +9,15 @@ from __future__ import annotations
 
 
 def validate(args) -> None:
-    """启动期约束：必须配 riemann adapter；POC 不支持 block swap。"""
+    """启动期约束：必须配 riemann adapter（schema 已互绑，这里兜 CLI 直传）。
+
+    block swap 兼容：它只搬构造时登记的冻结底模权重，riemann 包装层的可训练参数
+    与 a_l / b_r buffer 常驻 GPU，且 swap 在 adapter 注入之后才建（权重名已含
+    org_module 路径）。
+    """
     lora_type = getattr(args, "lora_type", None)
     if lora_type != "riemann":
         raise ValueError(f"optimizer_type=riemannion 需要 lora_type=riemann（当前 {lora_type!r}）")
-    if int(getattr(args, "blocks_to_swap", 0) or 0) > 0:
-        raise ValueError("optimizer_type=riemannion 暂不支持 block swap（blocks_to_swap 须为 0）")
 
 
 def build(args, params, lr: float, weight_decay: float):

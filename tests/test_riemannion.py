@@ -198,9 +198,7 @@ def test_riemann_and_riemannion_require_each_other() -> None:
         build_adapter(types.SimpleNamespace(lora_type="riemann", optimizer_type="adamw", lora_rank=4), preset={})
     with pytest.raises(ValueError, match="riemann"):
         validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="lora"))
-    with pytest.raises(ValueError, match="block swap"):
-        validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=4))
-    validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=0))
+    validate_optimizer(types.SimpleNamespace(optimizer_type="riemannion", lora_type="riemann", blocks_to_swap=4))
 
 
 def test_cholesky_qr2_matches_householder_and_falls_back() -> None:
@@ -307,3 +305,31 @@ def test_resume_lora_from_plain_lora_and_rejects_incompatible_file(tmp_path) -> 
     save_file({"lora_unet_0.lokr_w1": torch.zeros(2, 2)}, str(lokr))
     with pytest.raises(RuntimeError, match="resume_lora"):
         make().load(lokr)
+
+
+def test_adapter_tensors_follow_training_device_not_offloaded_weight() -> None:
+    """block swap：被换出块的底模权重在别的设备上，adapter 参数仍建在训练设备。"""
+    base = nn.Linear(N, M, bias=False, device="meta")
+    layer = RiemannLoRALinear(
+        "lora_unet_x", base, rank=R, generator=torch.Generator().manual_seed(0),
+        device=torch.device("cpu"),
+    )
+    for t in (layer.a_l, layer.b_r, layer.lora_b, layer.lora_z1):
+        assert t.device.type == "cpu"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="gesvda 只在 CUDA 上")
+def test_svd_falls_back_when_gesvda_fails_to_converge() -> None:
+    """大量重复零奇异值（从低有效秩的普通 LoRA 热启动）会让 gesvda 抛错。"""
+    from utils.riemannion_optimizer import _svd
+
+    torch.manual_seed(0)
+    u, _ = torch.linalg.qr(torch.randn(64, 64, dtype=torch.float64))
+    v, _ = torch.linalg.qr(torch.randn(64, 64, dtype=torch.float64))
+    s = torch.cat([torch.rand(10, dtype=torch.float64) * 0.1, torch.zeros(54, dtype=torch.float64)])
+    core = ((u * s) @ v.T).float().cuda().expand(4, 64, 64).contiguous()
+    with pytest.raises(torch.linalg.LinAlgError):
+        torch.linalg.svd(core, driver="gesvda")
+    uu, ss, vh = _svd(core)
+    assert uu.is_cuda
+    torch.testing.assert_close((uu * ss.unsqueeze(-2)) @ vh, core, atol=1e-5, rtol=1e-4)

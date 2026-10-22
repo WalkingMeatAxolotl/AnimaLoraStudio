@@ -278,7 +278,7 @@ class TrainingConfig(BaseModel):
                 "riemann": "lycoris_backend==triton",
                 "tlora": "navit_packing==true||lycoris_backend==triton",
             },
-            disable_hint="Triton 实验路径首批只支持普通 LoRA / LoHa；LoKr、Ortho 与 T-LoRA 保持 Torch 路径",
+            disable_hint="Triton 实验路径首批只支持普通 LoRA / LoHa；LoKr、Ortho、Riemann 与 T-LoRA 保持 Torch 路径",
         ),
     )
     lycoris_backend: Literal["torch", "triton"] = Field(
