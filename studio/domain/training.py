@@ -458,9 +458,9 @@ class TrainingConfig(BaseModel):
         description="cosine_with_warmup 预热步数",
         json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
-    optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "came", "lion", "muon", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
         "adamw",
-        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；muon 动量 + Newton-Schulz 正交化（仅 2D 权重，其余参数走 AdamW；state 显存约 AdamW 一半，lr 同 AdamW 量级）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
@@ -505,6 +505,23 @@ class TrainingConfig(BaseModel):
         1.0, gt=0.0,
         description="CAME update RMS 裁剪阈值（同 Adafactor 的 d）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    # ---------------------------- Muon 专属字段 ----------------------------
+    # Muon（Keller Jordan 2024）；match_rms_adamw 口径来自 Moonshot（arxiv 2502.16982）。
+    muon_momentum: float = Field(
+        0.95, ge=0.0, lt=1.0,
+        description="Muon 动量系数（Nesterov）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==muon", advanced=True),
+    )
+    muon_ns_steps: int = Field(
+        5, ge=1, le=20,
+        description="Muon Newton-Schulz 正交化迭代次数",
+        json_schema_extra=_meta("training", show_when="optimizer_type==muon", advanced=True),
+    )
+    muon_adjust_lr: Literal["match_rms_adamw", "original"] = Field(
+        "match_rms_adamw",
+        description="Muon 按矩阵形状缩放 lr 的口径（match_rms_adamw 让更新幅度对齐 AdamW，lr 可沿用 AdamW；original 为 Keller 原版，lr 需另调）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==muon", advanced=True),
     )
     lion_beta1: float = Field(
         0.9, ge=0.0, lt=1.0,
