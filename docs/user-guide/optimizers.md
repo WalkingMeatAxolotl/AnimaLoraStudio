@@ -75,7 +75,7 @@ Riemannion（Bogachev et al. 2025, [arxiv 2507.12142](https://arxiv.org/abs/2507
 - **lr**：直接作用于 ΔW（每步谱范数步长 ≈ lr），与 AdamW 在因子上的 lr 口径不同。Anima rank 32 实测 1e-4 与 AdamW 1e-4 的 loss 相当、1e-3 明显变差。
 - **初始化**：随机正交子空间、ΔW(0)=0，第 0 步输出与底模一致（论文的 LOI 梯度引导初始化未实现）。
 - **保存**：导出为普通 LoRA（`lora_up` / `lora_down`），ComfyUI 与测试页直接加载；`resume_lora` 可从普通 LoRA 热启动。
-- **开销**：前向多一路秩 r 分支（显存比同秩 LoRA 略高，Anima rank 32 实测 +0.5 GB、MOSS rank 64 实测 +1.5 GB）；Anima 280 层实测 optimizer.step ≈ 30 ms。
+- **开销**：前向多一路秩 r 分支（显存比同秩 LoRA 略高，Anima rank 32 实测 +0.5 GB、MOSS rank 64 实测 +1.5 GB）；optimizer.step 实测 Anima ≈ 45 ms、Krea 2 ≈ 200 ms（层形状更分散，约占每步 4%）。支持 block swap。
 
 ## SOAP / SOAP-SF — 二阶预条件提拟合速度
 
