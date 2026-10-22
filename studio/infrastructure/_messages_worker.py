@@ -153,6 +153,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "LoRA 已保存（OrthoLoRA 已烘焙成普通 LoRA）: {path}",
         "en": "LoRA saved (OrthoLoRA baked into a plain LoRA): {path}",
     },
+    "lora.saved_riemann": {
+        "zh": "LoRA 已保存（Riemann LoRA 已导出为普通 LoRA）: {path}",
+        "en": "LoRA saved (Riemann LoRA exported as a plain LoRA): {path}",
+    },
     "lora.loaded": {
         "zh": "已加载 LoRA 权重: {path}",
         "en": "Loaded LoRA weights: {path}",

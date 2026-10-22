@@ -195,7 +195,7 @@ class RiemannLoRAAdapter:
             "ss_network_args": json.dumps(ss_args),
         }
         save_file(sd, str(path), metadata=meta)
-        logger.info(msg("lora.saved_baked", path=path))
+        logger.info(msg("lora.saved_riemann", path=path))
 
     def load(self, path: str | Path) -> None:
         with safe_open(str(path), framework="pt", device="cpu") as f:
