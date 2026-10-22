@@ -243,3 +243,67 @@ def test_wraps_int8_base_without_reading_weights() -> None:
     x = torch.randn(5, N)
     torch.testing.assert_close(layer(x), x @ layer.delta_weight().mT)
     assert calls == [torch.Size([5, N])]
+
+
+# ---------------------------------------------------------------------------
+# 配置联动：riemann ↔ riemannion 互绑 + 对 riemann 不生效的字段隐藏
+# ---------------------------------------------------------------------------
+
+
+def test_config_riemann_pins_riemannion_and_forbids_elsewhere() -> None:
+    from pydantic import ValidationError
+
+    from studio.domain.config_rules import apply_disable_rule_fixes
+    from studio.schema import TrainingConfig
+
+    # 缺省跟随：只选 riemann 时优化器自动落 riemannion
+    assert TrainingConfig(lora_type="riemann").optimizer_type == "riemannion"
+    TrainingConfig(lora_type="riemann", optimizer_type="riemannion")
+    with pytest.raises(ValidationError, match="optimizer_type"):
+        TrainingConfig(lora_type="riemann", optimizer_type="adamw")
+    with pytest.raises(ValidationError, match="optimizer_type"):
+        TrainingConfig(lora_type="lora", optimizer_type="riemannion")
+    # tolerant 修复：离开 riemann 后残留的 riemannion 回到 schema 默认
+    data = TrainingConfig().model_dump(mode="python")
+    data.update(lora_type="lora", optimizer_type="riemannion")
+    fixed, fields = apply_disable_rule_fixes(data, TrainingConfig)
+    assert fixed["optimizer_type"] == "adamw" and fields == ["optimizer_type"]
+
+
+def test_config_riemann_hides_fields_it_ignores() -> None:
+    from studio.domain.config_prune import prune_inactive_fields
+    from studio.schema import TrainingConfig
+
+    ignored = ("lora_alpha", "lora_dora", "lora_rs", "lora_dropout",
+               "lora_rank_dropout", "lora_module_dropout", "lora_reg_dims")
+    pruned = prune_inactive_fields(TrainingConfig(lora_type="riemann").model_dump(mode="python"))
+    assert not set(ignored) & set(pruned)
+    kept = prune_inactive_fields(TrainingConfig(lora_type="lora").model_dump(mode="python"))
+    assert "lora_alpha" in kept and "lora_dora" in kept
+
+
+def test_resume_lora_from_plain_lora_and_rejects_incompatible_file(tmp_path) -> None:
+    from safetensors.torch import save_file
+
+    from utils.riemann_lora_adapter import RiemannLoRAAdapter
+
+    def make():
+        model = nn.Sequential(nn.Linear(N, M, bias=False))
+        adapter = RiemannLoRAAdapter(rank=R, preset={"target_name": ["0"]}, seed=0)
+        adapter.inject(model)
+        return adapter
+
+    src = make()
+    with torch.no_grad():
+        src.loras[0].lora_b.copy_(torch.randn(N, R))
+    plain = tmp_path / "plain.safetensors"
+    src.save(plain)  # 导出的就是标准 LoRA
+    dst = make()
+    dst.load(plain)
+    # 导出存 bf16，按 bf16 精度比较
+    torch.testing.assert_close(dst.loras[0].delta_weight(), src.loras[0].delta_weight(), rtol=2e-2, atol=5e-3)
+
+    lokr = tmp_path / "lokr.safetensors"
+    save_file({"lora_unet_0.lokr_w1": torch.zeros(2, 2)}, str(lokr))
+    with pytest.raises(RuntimeError, match="resume_lora"):
+        make().load(lokr)

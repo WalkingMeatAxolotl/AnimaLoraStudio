@@ -237,12 +237,14 @@ class RiemannionWithAuxAdam(Optimizer):
             new_b = torch.where(active, new_b, b)
             new_b_r = torch.where(active, new_b_r, b_r)
 
-            for i, ly in enumerate(layers):
-                ly.a_l.copy_(new_a_l[i])
-                ly.b_r.copy_(new_b_r[i])
-                ly.lora_b.copy_(new_b[i])
-                states[i]["a_hb"] = a_hb_new[i]
-                states[i]["b_hb"] = b_hb_new[i]
+            # 批量写回：逐层 copy_ 是 3×层数 次 kernel launch
+            torch._foreach_copy_(
+                [ly.a_l for ly in layers] + [ly.b_r for ly in layers] + [ly.lora_b for ly in layers],
+                [*new_a_l.unbind(0), *new_b_r.unbind(0), *new_b.unbind(0)],
+            )
+            for st, a_hb, b_hb in zip(states, a_hb_new.unbind(0), b_hb_new.unbind(0)):
+                st["a_hb"] = a_hb
+                st["b_hb"] = b_hb
 
     def _adam_step(self, group: dict) -> None:
         lr, wd = group["lr"], group["weight_decay"]

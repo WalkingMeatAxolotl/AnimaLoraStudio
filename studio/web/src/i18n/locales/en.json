@@ -430,6 +430,7 @@
     },
     "disableHints": {
       "learning_rate": "Prodigy controls the learning rate",
+      "optimizer_type": "Riemann LoRA and the Riemannion optimizer can only be used together",
       "lr_scheduler": "Adaptive optimizers use a constant learning rate",
       "timestep_sampling": "InfoNoise controls timestep sampling",
       "timestep_shift": "InfoNoise controls timestep sampling",

@@ -355,3 +355,72 @@ describe('SchemaForm rule takeover confirm (R6)', () => {
     )
   })
 })
+
+// ─── 钉值 + 禁值单向互绑（lora_type=riemann ↔ optimizer_type=riemannion）────────
+
+describe('SchemaForm pin + forbid pairing', () => {
+  const pairSchema: SchemaResponse = {
+    groups: [{ key: 'training', label: '训练' }],
+    schema: {
+      properties: {
+        lora_type: {
+          type: 'string', enum: ['lora', 'riemann'], default: 'lora', group: 'training',
+        },
+        optimizer_type: {
+          type: 'string', enum: ['adamw', 'riemannion'], default: 'adamw', group: 'training',
+          disable_when: 'lora_type==riemann',
+          disable_value: 'riemannion',
+          option_disable_when: { riemannion: 'lora_type!=riemann' },
+        },
+      },
+    },
+  } as unknown as SchemaResponse
+
+  const selectWith = (value: string) =>
+    screen
+      .getAllByRole('combobox')
+      .find((el) =>
+        Array.from((el as HTMLSelectElement).options).some((o) => o.value === value),
+      ) as HTMLSelectElement
+
+  it('pins the optimizer when switching to the bound adapter', () => {
+    const onChange = vi.fn()
+    render(
+      <SchemaForm
+        schema={pairSchema}
+        values={{ lora_type: 'lora', optimizer_type: 'adamw' }}
+        onChange={onChange}
+      />,
+    )
+    fireEvent.change(selectWith('riemann'), { target: { value: 'riemann' } })
+    fireEvent.click(screen.getByText('ruleImpact.ok'))
+    expect(onChange).toHaveBeenCalledWith({ lora_type: 'riemann', optimizer_type: 'riemannion' })
+  })
+
+  it('resets a now-forbidden optimizer to its default when leaving the adapter', () => {
+    const onChange = vi.fn()
+    render(
+      <SchemaForm
+        schema={pairSchema}
+        values={{ lora_type: 'riemann', optimizer_type: 'riemannion' }}
+        onChange={onChange}
+      />,
+    )
+    fireEvent.change(selectWith('riemann'), { target: { value: 'lora' } })
+    expect(screen.getByText('ruleImpact.title')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('ruleImpact.ok'))
+    expect(onChange).toHaveBeenCalledWith({ lora_type: 'lora', optimizer_type: 'adamw' })
+  })
+
+  it('greys out the bound optimizer for other adapters', () => {
+    render(
+      <SchemaForm
+        schema={pairSchema}
+        values={{ lora_type: 'lora', optimizer_type: 'adamw' }}
+        onChange={vi.fn()}
+      />,
+    )
+    const option = Array.from(selectWith('riemannion').options).find((o) => o.value === 'riemannion')
+    expect(option?.disabled).toBe(true)
+  })
+})

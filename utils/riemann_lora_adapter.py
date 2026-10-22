@@ -198,6 +198,21 @@ class RiemannLoRAAdapter:
         logger.info(msg("lora.saved_riemann", path=path))
 
     def load(self, path: str | Path) -> None:
+        """热启动（resume_lora）：接受本 adapter 的续训键或标准 LoRA 键（lora_up/down）。
+
+        一层都没对上（如 LoKr / LoHa 文件）时报错，而不是静默从零开始训练。
+        """
         with safe_open(str(path), framework="pt", device="cpu") as f:
             sd = {k: f.get_tensor(k) for k in f.keys()}
-        self.load_state_dict(sd, strict=False)
+        result = self.load_state_dict(sd, strict=False)
+        if self.loras and len(result.missing_keys) == len(self.loras):
+            raise RuntimeError(
+                f"resume_lora 与 Riemann LoRA 不匹配：{path} 中没有任何一层的 "
+                "lora_up / lora_down 权重（Riemann LoRA 只能从普通 LoRA 或自身续训文件热启动）"
+            )
+        if result.missing_keys:
+            logger.warning(
+                "resume_lora matched %d/%d layers; unmatched layers start from zero: %s",
+                len(self.loras) - len(result.missing_keys), len(self.loras),
+                result.missing_keys[:5],
+            )

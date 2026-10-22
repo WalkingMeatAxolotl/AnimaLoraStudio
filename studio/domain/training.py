@@ -290,7 +290,7 @@ class TrainingConfig(BaseModel):
             disable_when="attention_backend==flash_attn",
             disable_value="torch",
             option_disable_when={
-                "triton": "lora_type==lokr||lora_type==ortho||lora_type==tlora||lora_dora==true",
+                "triton": "lora_type==lokr||lora_type==ortho||lora_type==riemann||lora_type==tlora||lora_dora==true",
             },
             disable_hint="Triton 实验路径仅支持非 DoRA 的 LoRA / LoHa，且当前不能与 Flash Attention 同时启用；其他组合继续使用 Torch",
         ),
@@ -303,7 +303,7 @@ class TrainingConfig(BaseModel):
     lora_alpha: float = Field(
         32.0, ge=0.0,
         description="alpha：LoRA 缩放系数，越大 LoRA 效果越强。通常等于 rank；启用 rs_lora 时常设为 √rank",
-        json_schema_extra=_meta("lora"),
+        json_schema_extra=_meta("lora", show_when="lora_type!=riemann"),
     )
     lokr_factor: int = Field(
         8, ge=2,
@@ -335,6 +335,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "lora",
             advanced=True,
+            show_when="lora_type!=riemann",
             disable_when="lycoris_backend==triton",
             disable_value=False,
             disable_hint="DoRA 必须重建权重，与 Triton bypass 路径不兼容",
@@ -343,13 +344,13 @@ class TrainingConfig(BaseModel):
     lora_rs: bool = Field(
         False,
         description="rs-LoRA：scale=α/√r 而非 α/r，高 rank（>32）训练更稳",
-        json_schema_extra=_meta("lora", advanced=True),
+        json_schema_extra=_meta("lora", advanced=True, show_when="lora_type!=riemann"),
     )
     lora_dropout: float = Field(
         0.0, ge=0.0, le=1.0,
         description="LoRA 输入特征的随机丢弃概率：越大正则化越强、收敛越慢；0 = 关闭",
         json_schema_extra=_meta(
-            "lora", advanced=True,
+            "lora", advanced=True, show_when="lora_type!=riemann",
             disable_when="lycoris_backend==triton",
             disable_value=0.0,
             disable_hint="Triton 实验路径首版固定关闭所有 adapter dropout，避免未验证的随机执行路径",
@@ -359,7 +360,7 @@ class TrainingConfig(BaseModel):
         0.0, ge=0.0, le=1.0,
         description="LoRA 内部 rank 维度的随机丢弃概率（每步随机激活部分 rank）：越大正则化越强；0 = 关闭",
         json_schema_extra=_meta(
-            "lora", advanced=True,
+            "lora", advanced=True, show_when="lora_type!=riemann",
             disable_when="lycoris_backend==triton",
             disable_value=0.0,
             disable_hint="LyCORIS 4.0.0 的 rank dropout 尚未通过 Triton 路径准入，必须显式关闭",
@@ -369,7 +370,7 @@ class TrainingConfig(BaseModel):
         0.0, ge=0.0, le=1.0,
         description="整个 LoRA 模块的随机跳过概率（stochastic depth）：每步以此概率完全不应用此模块；越大正则化越强；0 = 关闭",
         json_schema_extra=_meta(
-            "lora", advanced=True,
+            "lora", advanced=True, show_when="lora_type!=riemann",
             disable_when="lycoris_backend==triton",
             disable_value=0.0,
             disable_hint="Triton 实验路径首版固定关闭所有 adapter dropout，避免未验证的随机执行路径",
@@ -379,7 +380,7 @@ class TrainingConfig(BaseModel):
         None,
         description="分层 rank：正则表达式 → rank 的字典，按模块名正则全匹配覆盖默认 rank（如 {\"lora_unet_.*double.*\": 16}）",
         examples=[{"lora_unet_.*double.*": 16}],
-        json_schema_extra=_meta("lora", "code", advanced=True),
+        json_schema_extra=_meta("lora", "code", advanced=True, show_when="lora_type!=riemann"),
     )
 
     # ------------------------------------------------------------------ 训练
@@ -462,7 +463,15 @@ class TrainingConfig(BaseModel):
     optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "riemannion", "soap", "soap_sf"] = Field(
         "adamw",
         description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；riemannion 固定秩流形上的 Muon（仅配 lora_type=riemann，lr 作用于 ΔW 本身）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
-        json_schema_extra=_meta("training"),
+        json_schema_extra=_meta(
+            "training",
+            # Riemann LoRA 的参数只能由 Riemannion 在流形上更新（欧氏优化器会破坏
+            # A_L 列正交与 Z1≡0 不变量）：选 riemann 时钉值，其余 adapter 下禁选
+            disable_when="lora_type==riemann",
+            disable_value="riemannion",
+            option_disable_when={"riemannion": "lora_type!=riemann"},
+            disable_hint="Riemann LoRA 与 Riemannion 优化器只能搭配使用",
+        ),
     )
     prodigy_d_coef: float = Field(
         1.0, ge=0.1, le=10.0,

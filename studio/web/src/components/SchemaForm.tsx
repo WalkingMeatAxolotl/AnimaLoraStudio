@@ -68,6 +68,18 @@ export default function SchemaForm({
     !!prop.disable_when && evalShowWhen(prop.disable_when, values)
   const takeoverValueForField = (prop: typeof props[string]) =>
     prop.disable_value ?? prop.default
+  /** 当前值落进 option_disable_when 禁值时的修复目标：回 schema default，
+   * 与后端 apply_disable_rule_fixes 的 forbid 修复语义一致。用于「钉值 + 禁值」
+   * 单向互绑（如 lora_type=riemann 钉 optimizer_type=riemannion、其余 adapter 下
+   * riemannion 禁选）：离开 riemann 后残留的 riemannion 需要被改回。 */
+  const forbiddenValueTakeover = (
+    name: string, prop: typeof props[string], vals: ConfigData,
+  ): unknown => {
+    const gates = prop.option_disable_when
+    const current = String(vals[name] ?? '')
+    if (!gates || !(current in gates) || !evalShowWhen(gates[current], vals)) return undefined
+    return prop.default !== vals[name] ? prop.default : undefined
+  }
 
   /** R6 确认弹窗的待决改动（非空时渲染 RuleImpactDialog）。 */
   const [pendingImpact, setPendingImpact] = useState<{
@@ -86,11 +98,21 @@ export default function SchemaForm({
   ): RuleImpactChange[] => {
     const writes: RuleImpactChange[] = []
     for (const [name, prop] of Object.entries(props)) {
-      if (!prop.disable_when || !evalShowWhen(prop.disable_when, next)) continue
-      const target = takeoverValueForField(prop)
-      if (target !== undefined && next[name] !== target) {
+      if (prop.disable_when && evalShowWhen(prop.disable_when, next)) {
+        const target = takeoverValueForField(prop)
+        if (target !== undefined && next[name] !== target) {
+          writes.push({
+            field: name, from: next[name], to: target,
+            reason: schemaDisableHint(name, prop.disable_hint, t),
+          })
+        }
+        continue
+      }
+      if (name === triggerField) continue
+      const forbidTarget = forbiddenValueTakeover(name, prop, next)
+      if (forbidTarget !== undefined) {
         writes.push({
-          field: name, from: next[name], to: target,
+          field: name, from: next[name], to: forbidTarget,
           reason: schemaDisableHint(name, prop.disable_hint, t),
         })
       }
@@ -133,8 +155,9 @@ export default function SchemaForm({
     let nextValues = values
     let changed = false
     for (const [name, prop] of Object.entries(props)) {
-      if (!shouldDisableField(prop)) continue
-      const takeoverValue = takeoverValueForField(prop)
+      const takeoverValue = shouldDisableField(prop)
+        ? takeoverValueForField(prop)
+        : forbiddenValueTakeover(name, prop, values)
       if (takeoverValue !== undefined && values[name] !== takeoverValue) {
         nextValues = { ...nextValues, [name]: takeoverValue }
         changed = true
