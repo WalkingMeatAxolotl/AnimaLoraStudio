@@ -362,6 +362,7 @@
         "lokr": "LoKr",
         "loha": "LoHa",
         "ortho": "OrthoLoRA",
+        "riemann": "Riemann LoRA",
         "tlora": "T-LoRA"
       },
       "lrScheduler": {
@@ -376,7 +377,8 @@
         "came": "CAME",
         "lion": "Lion",
         "prodigy": "Prodigy",
-        "prodigyPlusSchedulefree": "Prodigy + Schedule-Free"
+        "prodigyPlusSchedulefree": "Prodigy + Schedule-Free",
+        "riemannion": "Riemannion"
       },
       "timestepSampling": {
         "logitNormal": "Logit Normal",
@@ -459,7 +461,7 @@
       "caption_comfy_encoding": "Encode captions the ComfyUI way (same pipeline as test generation; recommended)",
       "cache_latents": "Cache VAE latents to speed up training",
       "vae_cache_batch_size": "VAE latent cache encoding batch size; 0 = follow training batch size, set to 1 if VRAM is tight",
-      "lora_type": "Adapter algorithm. lora: classic low-rank, general purpose (default); lokr: Kronecker factorization, smallest parameter count; loha: Hadamard product, higher expressiveness but more parameters; ortho: orthogonal parameterization, very few trainable parameters, resists overfitting, suited to small-dataset character/subject training; tlora: rank shrinks as noise increases, built to prevent overfitting in single-/few-image subject personalization",
+      "lora_type": "Adapter algorithm. lora: classic low-rank, general purpose (default); lokr: Kronecker factorization, smallest parameter count; loha: Hadamard product, higher expressiveness but more parameters; ortho: orthogonal parameterization, very few trainable parameters, resists overfitting, suited to small-dataset character/subject training; riemann: fixed-rank manifold parameterization (only with the riemannion optimizer, saved as a plain LoRA); tlora: rank shrinks as noise increases, built to prevent overfitting in single-/few-image subject personalization",
       "lora_rank": "Rank: larger = more capacity but higher parameter/VRAM cost and overfit risk; smaller = leaner but underfits more easily. Common 8/16/32/64",
       "lora_alpha": "Alpha: LoRA scaling factor; larger = stronger LoRA effect. Usually equal to rank; when rs_lora is enabled, often set to √rank",
       "lokr_factor": "LoKr factorization factor: larger = stronger compression, fewer parameters; smaller = more parameters. Default 8 suits most cases",
@@ -483,7 +485,7 @@
       "lr_scheduler_t_mult": "cosine_with_restart cycle-length multiplier relative to the previous cycle (>1 = lengthening cycles)",
       "lr_scheduler_eta_min": "LR decay floor for cosine schedules; should be much smaller than the initial lr (e.g. 1e-6 for an initial lr of 1e-4)",
       "lr_scheduler_warmup_steps": "cosine_with_warmup warmup steps",
-      "optimizer_type": "Optimizer. adamw is the baseline; automagic adapts per-parameter lr (recommend lr=1e-6); came uses confidence-guided factored second moments (less state VRAM than AdamW, lr at AdamW scale); lion uses ~half the state of AdamW (recommend lr = AdamW lr / 3); prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0)",
+      "optimizer_type": "Optimizer. adamw is the baseline; automagic adapts per-parameter lr (recommend lr=1e-6); came uses confidence-guided factored second moments (less state VRAM than AdamW, lr at AdamW scale); lion uses ~half the state of AdamW (recommend lr = AdamW lr / 3); prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0); riemannion is Muon on the fixed-rank manifold (only with lora_type=riemann, lr acts on ΔW directly)",
       "prodigy_d_coef": "Overall scaling coefficient on Prodigy's estimated d; larger = larger effective lr. Raise (2.0+) when underfitting; lower (0.5) when overfitting or on small datasets",
       "prodigy_safeguard_warmup": "Prevent d from being inflated by early high gradients during Prodigy warmup; default on for stability",
       "came_beta1": "CAME β1 (update momentum EMA decay)",
@@ -492,6 +494,7 @@
       "came_eps1": "CAME eps1 (second-moment regularizer, prevents division by zero)",
       "came_eps2": "CAME eps2 (instability floor; larger values flatten per-coordinate confidence differences and shrink the overall step)",
       "came_clip_threshold": "CAME update RMS clipping threshold (same as Adafactor's d)",
+      "riemannion_momentum": "Riemannion heavy-ball momentum coefficient",
       "lion_beta1": "Lion β1 (momentum interpolation coefficient)",
       "lion_beta2": "Lion β2 (momentum accumulation coefficient)",
       "automagic_min_lr": "Automagic per-parameter learning-rate floor",

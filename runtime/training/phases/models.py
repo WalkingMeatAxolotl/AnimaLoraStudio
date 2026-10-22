@@ -35,6 +35,7 @@ _LORA_TYPE_LABELS = {
     "lokr": "LoKr",
     "loha": "LoHa",
     "ortho": "Ortho",
+    "riemann": "Riemann",
     "tlora": "T-LoRA",
 }
 
@@ -284,9 +285,10 @@ def _validate_fp8_base(ctx: TrainingContext) -> bool:
 
 
 #: int8 底模下能正确训练的适配器：LyCORIS 的 lora / lokr / loha 在量化底模上强制走
-#: bypass（增量单独算，不碰底模权重）。ortho / tlora 初始化或前向要读底模权重的原始
-#: 数值，int8 存的是旋转后的整数，直接读会静默算错。
-_INT8_BASE_LORA_TYPES = frozenset({"lora", "lokr", "loha"})
+#: bypass（增量单独算，不碰底模权重）；riemann 包装层只读底模权重的形状/设备，增量
+#: 同样单独算。ortho / tlora 初始化或前向要读底模权重的原始数值，int8 存的是旋转后的
+#: 整数，直接读会静默算错。
+_INT8_BASE_LORA_TYPES = frozenset({"lora", "lokr", "loha", "riemann"})
 
 
 def _validate_int8_base(ctx: TrainingContext) -> bool:

@@ -119,6 +119,7 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     lokr: 'schema.enums.loraType.lokr',
     loha: 'schema.enums.loraType.loha',
     ortho: 'schema.enums.loraType.ortho',
+    riemann: 'schema.enums.loraType.riemann',
     tlora: 'schema.enums.loraType.tlora',
   },
   lr_scheduler: {
@@ -134,6 +135,7 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     lion: 'schema.enums.optimizerType.lion',
     prodigy: 'schema.enums.optimizerType.prodigy',
     prodigy_plus_schedulefree: 'schema.enums.optimizerType.prodigyPlusSchedulefree',
+    riemannion: 'schema.enums.optimizerType.riemannion',
   },
   timestep_sampling: {
     logit_normal: 'schema.enums.timestepSampling.logitNormal',

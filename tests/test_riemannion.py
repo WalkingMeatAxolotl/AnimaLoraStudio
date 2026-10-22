@@ -224,3 +224,22 @@ def test_zero_gradient_layer_is_skipped() -> None:
     _set_grads_from_dense(layer, torch.zeros(M, N))
     opt.step()
     assert torch.equal(layer.a_l, before[0]) and torch.equal(layer.lora_b, before[1])
+
+
+def test_wraps_int8_base_without_reading_weights() -> None:
+    """int8 底模（MOSS W8A16）：包装层只读权重形状，原 forward（量化路径）照常调用。"""
+    base = nn.Linear(N, M, bias=False)
+    base.weight = nn.Parameter(torch.randint(-127, 127, (M, N), dtype=torch.int8), requires_grad=False)
+    calls = []
+
+    def fake_int8_forward(x):
+        calls.append(x.shape)
+        return torch.zeros(*x.shape[:-1], M, dtype=x.dtype)
+
+    base.forward = fake_int8_forward
+    layer = RiemannLoRALinear("lora_unet_x", base, rank=R, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        layer.lora_b.copy_(torch.randn(N, R))
+    x = torch.randn(5, N)
+    torch.testing.assert_close(layer(x), x @ layer.delta_weight().mT)
+    assert calls == [torch.Size([5, N])]

@@ -260,6 +260,8 @@ def test_validate_int8_base_accepts_and_rejects(tmp_path) -> None:
     for bad in ("ortho", "tlora"):
         with pytest.raises(RuntimeError, match=f"lora_type={bad}"):
             _validate_int8_base(_ctx(path, lora_type=bad))
+    # riemann 包装层只读底模权重形状，增量单独算，int8 底模可用
+    assert _validate_int8_base(_ctx(path, lora_type="riemann")) is True
     # 未声明 int8_base 的族不在这里拦（交给 loader 报「不支持的量化格式」）
     assert _validate_int8_base(_ctx(path, family="krea2", grad_checkpoint=False)) is False
     bf16 = tmp_path / "bf16.safetensors"
