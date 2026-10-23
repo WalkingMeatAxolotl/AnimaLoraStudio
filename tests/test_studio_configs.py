@@ -43,6 +43,7 @@ def test_schema_is_complete() -> None:
         "lion_beta1", "lion_beta2",
         "came_beta1", "came_beta2", "came_beta3",
         "came_eps1", "came_eps2", "came_clip_threshold",
+        "muon_momentum", "muon_ns_steps", "muon_adjust_lr",
         "automagic_min_lr", "automagic_max_lr", "automagic_lr_bump",
         "automagic_beta2", "automagic_eps", "automagic_clip_threshold",
         # ProdigyPlusScheduleFree 字段
@@ -71,6 +72,7 @@ def test_schema_is_complete() -> None:
     assert "automagic" in optimizer_options
     assert "came" in optimizer_options
     assert "lion" in optimizer_options
+    assert "muon" in optimizer_options
     assert "prodigy_plus_schedulefree" in optimizer_options
 
 
@@ -107,6 +109,8 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["lion_beta2"]["show_when"] == "optimizer_type==lion"
     assert props["came_beta3"]["show_when"] == "optimizer_type==came"
     assert props["came_clip_threshold"]["show_when"] == "optimizer_type==came"
+    for name in ("muon_momentum", "muon_ns_steps", "muon_adjust_lr"):
+        assert props[name]["show_when"] == "optimizer_type==muon"
     assert "automagic" not in props["learning_rate"]["disable_when"]
     assert props["lr_scheduler"]["disable_when"] == "optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree||optimizer_type==soap_sf"
     assert props["lr_scheduler_warmup_steps"]["show_when"] == "lr_scheduler==cosine_with_warmup"

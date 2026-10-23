@@ -19,6 +19,8 @@ Optimizer Utils Module - 优化器创建
    (Luo et al., 2023, ACL 2023, arxiv 2307.02047)。Adafactor 式分解二阶矩省显存
    + 置信度引导（instability EMA）压制分解近似带来的更新噪声。
    派生自官方实现 yangluo7/CAME（MIT，Copyright (c) 2023 Yang Luo）。
+10. Muon - 动量 + Newton-Schulz 正交化（Keller Jordan, 2024）；1D 参数走辅助 AdamW。
+    实现在 utils/muon_optimizer.py。
 """
 
 from __future__ import annotations
@@ -283,10 +285,18 @@ def _dispatch_optimizer(
             **kwargs,
         )
 
+    elif optimizer_type == "muon":
+        return create_muon(
+            params=params,
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            **kwargs,
+        )
+
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, automagic, automagic_v2, came, lion, prodigy, "
+            f"Choose from: adamw, automagic, automagic_v2, came, lion, muon, prodigy, "
             f"prodigy_plus_schedulefree, soap, soap_sf"
         )
 
@@ -1359,6 +1369,43 @@ def create_came(
     ))
     return optimizer
 
+
+def create_muon(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    weight_decay: float = 0.0,
+    momentum: float = 0.95,
+    ns_steps: int = 5,
+    adjust_lr_fn: str = "match_rms_adamw",
+    **kwargs,
+) -> Optimizer:
+    """创建 Muon + 辅助 AdamW（真矩阵走 Muon，1D / 向量形状参数走 AdamW）。
+
+    adjust_lr_fn=match_rms_adamw 时 lr 与 AdamW 同量级；original 口径需另调 lr。
+    """
+    from utils.muon_optimizer import MuonWithAuxAdam
+
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = MuonWithAuxAdam(
+        param_list,
+        lr=lr,
+        weight_decay=weight_decay,
+        momentum=momentum,
+        ns_steps=ns_steps,
+        adjust_lr_fn=adjust_lr_fn,
+        **kwargs,
+    )
+    n_muon = sum(len(g["params"]) for g in optimizer.param_groups if g["use_muon"])
+    n_adam = sum(len(g["params"]) for g in optimizer.param_groups if not g["use_muon"])
+    logger.info(msg(
+        "optim.created", name="Muon",
+        params=(
+            f"lr={lr} momentum={momentum} ns_steps={ns_steps} "
+            f"adjust_lr_fn={adjust_lr_fn} weight_decay={weight_decay} "
+            f"muon_tensors={n_muon} aux_adamw_tensors={n_adam}"
+        ),
+    ))
+    return optimizer
 
 def create_prodigy(
     params: Iterator[nn.Parameter],
