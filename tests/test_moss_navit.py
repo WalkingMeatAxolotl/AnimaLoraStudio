@@ -302,3 +302,40 @@ def test_native_kwargs_reserve_text_only_for_counting_families() -> None:
     kwargs = _native_dataset_kwargs(args, ctx)
     assert kwargs["native_token_budget"] == 4096
     assert kwargs["native_text_tokens"]("abc") == 103
+
+
+# ── 标准路径 batch>1 也走打包前向 ─────────────────────────────────────
+
+
+def test_forward_train_batch_uses_packed_forward_once_per_layer() -> None:
+    """batch>1 的 forward_train 与逐样本 forward 数值一致，且每层只调一次
+    （逐样本循环会让 block swap 的换出层每个样本搬一次）；batch=1 仍走原 forward。"""
+    from training.families.moss.forward import forward_train
+
+    model = _model().train()
+    g = torch.Generator().manual_seed(5)
+    x = torch.randn(3, 32, 1, 6, 8, generator=g, dtype=torch.float64)
+    context = torch.randn(3, 7, _CFG.text_dim, generator=g, dtype=torch.float64)
+    mask = torch.tensor([[1] * 7, [1] * 4 + [0] * 3, [1] * 2 + [0] * 5])
+    t = torch.tensor([0.1, 0.5, 0.9], dtype=torch.float64)
+    cond = MossTextCondition(context, mask)
+
+    calls = [0] * len(model.layers)
+    for i, layer in enumerate(model.layers):
+        layer.register_forward_pre_hook(lambda *_a, i=i: calls.__setitem__(i, calls[i] + 1))
+    out = forward_train(model, x, t, cond, use_checkpoint=True)
+    assert calls == [1] * len(model.layers)
+
+    ref = torch.cat([
+        model(x[i:i + 1], t[i:i + 1], context[i:i + 1], attention_mask=mask[i:i + 1])
+        for i in range(3)
+    ])
+    torch.testing.assert_close(out, ref, rtol=0, atol=1e-12)
+    # 标量 t 广播到每个样本
+    torch.testing.assert_close(
+        forward_train(model, x, torch.tensor(0.5, dtype=torch.float64), cond),
+        forward_train(model, x, torch.full((3,), 0.5, dtype=torch.float64), cond),
+    )
+
+    one = forward_train(model, x[:1], t[:1], MossTextCondition(context[:1], mask[:1]))
+    torch.testing.assert_close(one, model(x[:1], t[:1], context[:1], attention_mask=mask[:1]), rtol=0, atol=0)

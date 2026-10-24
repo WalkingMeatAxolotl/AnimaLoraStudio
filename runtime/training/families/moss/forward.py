@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
 from torch import Tensor
 
 
@@ -22,6 +23,18 @@ class MossTextCondition:
 
 def forward_train(dit, noisy: Tensor, t: Tensor, cond: MossTextCondition, *,
                   use_checkpoint: bool = False) -> Tensor:
+    batch = noisy.shape[0]
+    if batch > 1:
+        # 逐样本 forward 对每个样本把每层调一遍，开 block swap 时换出层每个样本都搬一次；
+        # 打包前向每层只调一次（块对角注意力，数学同逐样本）
+        mask = cond.attention_mask.bool()
+        contexts = [cond.context[i, mask[i]] for i in range(batch)]
+        timesteps = torch.as_tensor(t).reshape(-1).expand(batch)
+        preds = dit.forward_packed(
+            [noisy[i:i + 1] for i in range(batch)], timesteps, contexts,
+            use_checkpoint=use_checkpoint,
+        )
+        return torch.cat(preds)
     return dit(
         noisy,
         t,
