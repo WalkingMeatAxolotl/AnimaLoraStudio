@@ -54,7 +54,7 @@ def _roundtrip(tmp_path: Path, optimizer, model_factory, optimizer_factory):
 
     model2 = model_factory()
     optim2 = optimizer_factory(model2)
-    epoch, global_step, loss_history, _monitor = load_training_state(
+    epoch, global_step, loss_history, _monitor, _offset = load_training_state(
         ckpt, _StubInjector(), optim2,
     )
     assert (epoch, global_step) == (3, 42)

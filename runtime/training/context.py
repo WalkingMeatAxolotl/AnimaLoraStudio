@@ -97,6 +97,7 @@ class TrainingContext:
     # ─── resume_phase 填充 ───
     global_step: int = 0
     start_epoch: int = 0
+    resume_batch_offset: int = 0    # start_epoch 内恢复点之前已训的 batch 数（loop 首轮跳过）
     current_epoch: int = 0
     loss_history: list = field(default_factory=list)
     speed_ema: Optional[float] = None

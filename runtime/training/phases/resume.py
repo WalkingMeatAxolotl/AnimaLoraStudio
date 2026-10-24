@@ -55,10 +55,14 @@ def run(ctx: TrainingContext) -> None:
     # 训练循环初始状态
     ctx.global_step = 0
     ctx.start_epoch = 0
+    ctx.resume_batch_offset = 0
 
     # 从训练状态恢复（断点续训）
     if getattr(args, "resume_state", "") and Path(args.resume_state).exists():
-        ctx.start_epoch, ctx.global_step, ctx.loss_history, saved_monitor_state = load_training_state(
+        (
+            ctx.start_epoch, ctx.global_step, ctx.loss_history, saved_monitor_state,
+            ctx.resume_batch_offset,
+        ) = load_training_state(
             args.resume_state, ctx.injector, ctx.optimizer, ctx.scheduler,
             timestep_sampler=ctx.timestep_sampler,
             sra_aligner=ctx.sra_aligner,

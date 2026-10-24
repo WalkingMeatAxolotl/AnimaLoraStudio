@@ -286,7 +286,7 @@ def test_save_load_training_state_persists_timestep_sampler(tmp_path):
     sched2 = _new_info_sched()
     assert sched2._cdf_values is None  # 加载前是冷启动
 
-    epoch, step, _, _ = load_training_state(
+    epoch, step, _, _, _ = load_training_state(
         state_path, injector2, opt2, timestep_sampler=sched2,
     )
     assert (epoch, step) == (1, 42)
