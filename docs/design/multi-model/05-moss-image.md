@@ -27,7 +27,7 @@
 | 主干 | 5.08B 单流 DiT：42 层、dim 3072、24 头 × 128、FFN 8192（SiTU-GLU，`ffn_up_gate` 融合）、QK RMSNorm、共享 modulation（全模型一个 `shared_block_modulation`）、前置 2 层文本 refiner（`text_embedder`，带 bias） |
 | 位置编码 | 4D RoPE（r 参考图序号 / f 序列位置 / h / w），每轴 32 维。无参考图时 r≡0，前 32 维不旋转。**序列顺序 = 图像在前、文本在后**；图像 token 的 f = **该样本的文本长度**，h/w 以 0 为中心 |
 | 训练目标 | rectified flow 速度预测 v = ε − x₀；timestep = σ × 1000（正弦嵌入 cos 在前）；loss 按 token 平均，无 SNR 加权（技术报告式 3） |
-| 训练 t 采样（官方预训练） | 末段 shift 1 + 截断 logit-normal；scheduler 配置 `training_shift: 1.0` |
+| 训练 t 采样（官方预训练） | Stage-3 末段：S = 1 − sigmoid(Z)、Z ~ N(−1.09, 0.95²)，截断 a = 0.95 后拉伸回 σ∈[0,1]，混 1% 均匀，1000 格离散网格，σ 中位数 ≈ 0.78（技术报告附录 A.2 式 4、表 6）。scheduler 配置 `training_shift: 1.0` 指「在此之外不再 shift」，偏移已含在 μ 里 |
 | 推理（官方） | Euler，50 步，CFG 3，shift 5（静态），负分支跳第 22 层（0-index，每步仍两次 forward），σ 吸附到 1000 步训练网格 |
 | 文本条件 | Qwen3.5-9B（GDN 线性注意力 + 全注意力 3:1 混合），取 last_hidden_state（4096 维）；chat template `<|im_start|>user\n{caption}<|im_end|>\n<|im_start|>assistant\n<think>\n`；**每条 caption 单独编码、不 padding**（官方注释：避免 GDN 受 padding 影响）；上限 4096 token；**官方要求 TE 冻结** |
 | VAE | FLUX.2 VAE（`AutoencoderKLFlux2`）：32ch、f8；2×2 patchify 成 128ch 后，用 VAE 自带 `bn.running_mean/var` 归一化 |
@@ -56,12 +56,23 @@
 | M3 | **默认训 Base，SFT 同列可选** | 见下方「Base vs SFT」 |
 | M4 | **不承诺显存档位**；接入 Krea2 的显存编排（让位 / 三档）与 block swap，能优化到哪儿算哪儿 | — |
 | M5 | **能力集对齐 Krea2**：`masked_loss`、`text_cache`、`block_swap` | navit / sra / leap / compile_blocks 首版不开。`caption_tag_ops` 与 `cached_varlen` 被 `validate_spec` 判为互斥（缓存键 = caption hash），所以 tag shuffle / dropout 首版不可用，与 Krea2 相同 |
-| M6 | **训练 t 采样默认 logit_normal(0,1) + shift 1**（与官方 `training_shift=1.0` 一致），实测后再调 | 只是族默认 overlay（`FAMILY_CONFIG_DEFAULTS`，仅在字段缺失时填入），`timestep_sampling`（logit_normal / uniform / mode / mixed_*）、`timestep_shift`、`timestep_schedule_shift`、`timestep_shift_resolution_aware` 照常可改 |
+| M6 | **训练 t 采样默认 logit_normal(0,1) + shift 3.5**，逼近技术报告 Stage-3 末段分布（见下方「训练 t 分布」）。2026-10-24 修订：原定 shift 1 误把 `training_shift=1.0` 当成官方 shift | 只是族默认 overlay（`FAMILY_CONFIG_DEFAULTS`，仅在字段缺失时填入），`timestep_sampling`（logit_normal / uniform / mode / mixed_*）、`timestep_shift`、`timestep_schedule_shift`、`timestep_shift_resolution_aware` 照常可改。已落盘 `timestep_shift` 的存量 version 不受影响 |
 | M7 | **出图对齐 ComfyUI**（用户实际部署环境），而不是官方 diffusers 的 σ 吸附调度 | 负分支跳层对齐 Comfy `SkipLayerGuidanceDiTSimple`（只改 uncond，`single_layers`） |
 | M8 | **TE 缓存指纹包含存储形态**（bf16 / int8_convrot） | 两种 TE 产出的 embedding 有微小差异，切换 TE 时应重建缓存而不是混用。Krea2 现在的指纹不区分 fp8 / bf16，MOSS 不沿用这个做法 |
 | M9 | **int8 底模的两条前向**：训练 = W8A16（int8 常驻、逐层临时反量化、LoRA 旁路）；studio 出图 / 评估 = ComfyUI parity（LoRA merge 进 int8 → requant → W8A8） | 由 M7 推出。训练要的是梯度与数值准确，出图要的是「和用户在 ComfyUI 里看到的一样」。Krea2 fp8 已是同一分工（`lora_fp8_merge.py` 逐位复刻 Comfy merge） |
 
 **TE 显存（M1 的依据）**：TE 只在文本缓存阶段存活——按 Krea2 的模式，先缓存全部 caption、释放 TE，再加载 DiT 开始训练。所以**训练阶段的显存与 TE 格式无关**，TE 格式只影响缓存阶段的峰值：bf16 权重约 16.8GB；int8 原样常驻约 9.75GB（不加载视觉塔还会更小）。如果加载时把 int8 反量化成 bf16，缓存阶段又回到 17GB，所以 int8 必须常驻、前向逐层反量化。LoRA 训练本来就不训 TE，官方也明确要求 TE 冻结。
+
+**训练 t 分布（M6 的依据）**：报告末段 S = 1 − sigmoid(Z)、Z ~ N(μ, s²)，即 σ ≈ sigmoid(−Z)，−Z 的均值为 +1.09。本项目 `logit_normal` 的 shift 是 Möbius 变换 `t' = s·t / (1 + (s−1)·t)`，作用在 sigmoid 之后等价于 logit 上加 ln s，所以 μ = −1.09 约等于 shift e^1.09 ≈ 3。报告首区间（第 1–140k 步）的配方就是 logit-normal(0,1) + shift 3。末段的截断拉伸（σ = S / 0.95）又把分布往高噪声端推了一点，用现有旋钮逼近时 shift 3.5 最贴（σ 中位数解析值 3.5·0.5 / (1 + 2.5·0.5) = 0.778）：
+
+| 分布 | σ 中位数 | P(σ<0.2) | P(σ>0.9) | 与报告末段的总变差距离 |
+|---|---|---|---|---|
+| 报告末段（μ = −1.09，s = 0.95，a = 0.95，1% 均匀） | 0.781 | 0.6% | 21.5% | — |
+| logit_normal + shift 1（修订前默认） | 0.500 | 8.3% | 1.4% | 0.46 |
+| logit_normal + shift 3（报告首区间） | 0.750 | 0.6% | 13.6% | 0.08 |
+| **logit_normal + shift 3.5（默认）** | 0.778 | 0.4% | 17.2% | 0.058 |
+
+剩余差距来自截断拉伸与离散网格，对 LoRA 训练影响很小，不为此新增 MOSS 专用采样器。`tests/test_moss_family.py` 按式 4 算出报告末段中位数，锁定族默认与它的差距。
 
 **Base vs SFT（M3 的依据）**：用 HTTP Range 从两个官方仓库取同名权重比较，`‖W_sft − W_base‖ / ‖W_sft‖` 在第 2 / 20 层约 1.4–1.5%，第 40 层约 0.7–0.8%，和 int8 量化误差同一量级（见 §5.4 表）。也就是说，SFT 是在 Base 上做的一次轻量微调。经验上：
 - LoRA 学的是「相对于所训底模的残差」。主要在 SFT 上推理的话，在 SFT 上训更贴合（Base 上训出的 LoRA 部分是在修 Base 自身的缺陷，SFT 已经修过一部分，叠上去可能过量）。
@@ -177,7 +188,7 @@
 
 ### 5.8 训练配置默认值（`FAMILY_CONFIG_DEFAULTS["moss"]`）
 
-在 Krea2 的基础上调整：`text_encoder_cache=True`、`shuffle_caption=False`、`tag_dropout=0.0`（与缓存互斥，见 M5）、`timestep_sampling="logit_normal"` + `timestep_shift=1.0`（M6）、`timestep_shift_resolution_aware=False`，采样默认值见 §5.6。所有值都只在字段缺失时填入，显式配置不改写。
+在 Krea2 的基础上调整：`text_encoder_cache=True`、`shuffle_caption=False`、`tag_dropout=0.0`（与缓存互斥，见 M5）、`timestep_sampling="logit_normal"` + `timestep_shift=3.5`（M6）、`timestep_shift_resolution_aware=False`，采样默认值见 §5.6。所有值都只在字段缺失时填入，显式配置不改写。
 
 ### 5.9 ComfyUI 运行时对 int8 的处理（部署环境事实）
 

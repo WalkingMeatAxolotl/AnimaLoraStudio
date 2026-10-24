@@ -66,13 +66,53 @@ def test_training_config_family_defaults_overlay() -> None:
     from studio.domain.training import TrainingConfig
 
     cfg = TrainingConfig(model_family="moss")
-    assert cfg.timestep_sampling == "logit_normal" and cfg.timestep_shift == 1.0
+    assert cfg.timestep_sampling == "logit_normal" and cfg.timestep_shift == 3.5
     assert cfg.text_encoder_cache is True and cfg.shuffle_caption is False
     assert (cfg.sample_sampler_name, cfg.sample_scheduler) == ("euler", "simple")
     assert (cfg.sample_infer_steps, cfg.sample_cfg_scale) == (50, 3.0)
     # 显式值不被族默认改写
-    assert TrainingConfig(model_family="moss", timestep_shift=3.0).timestep_shift == 3.0
+    assert TrainingConfig(model_family="moss", timestep_shift=1.0).timestep_shift == 1.0
     assert TrainingConfig(model_family="moss", sample_sampler_name="er_sde").sample_sampler_name == "er_sde"
+
+
+def _report_final_sigma_median() -> float:
+    """技术报告附录 A.2 式 4（Stage-3 末段）离散分布的 σ 中位数。
+
+    S = 1 − sigmoid(Z)，Z ~ N(μ, s²)，F(x) = P(S ≤ x) = 1 − Φ((log((1−x)/x) − μ)/s)；
+    σ_j = j/T，p_j = (1−ρ)·[F(a·j/T) − F(a·(j−1)/T)] / F(a) + ρ/T。
+    """
+    mu, s, a, rho, steps = -1.09, 0.95, 0.95, 0.01, 1000
+    x = (a * torch.arange(steps + 1, dtype=torch.float64) / steps).clamp(1e-12, 1 - 1e-12)
+    cdf = 1 - torch.special.ndtr((torch.log((1 - x) / x) - mu) / s)
+    cdf[0] = 0.0
+    pmf = (1 - rho) * (cdf[1:] - cdf[:-1]) / cdf[-1] + rho / steps
+    j = int(torch.nonzero(pmf.cumsum(0) >= 0.5)[0])
+    return (j + 1) / steps
+
+
+def test_default_timestep_distribution_matches_tech_report() -> None:
+    """族默认 logit_normal + shift 的 σ 中位数逼近报告 Stage-3 末段（设计稿 M6）。
+
+    报告 μ = −1.09 已含约 shift 3 的偏移（training_shift=1.0 只是不再额外 shift），
+    误当 shift 1 会让中位数落在 0.5。
+    """
+    from studio.domain.common import FAMILY_CONFIG_DEFAULTS
+    from training.timestep_sampling import sample_t
+
+    defaults = FAMILY_CONFIG_DEFAULTS["moss"]
+    assert defaults["timestep_sampling"] == "logit_normal"
+    shift = defaults["timestep_shift"]
+
+    report_median = _report_final_sigma_median()
+    assert report_median == pytest.approx(0.781, abs=1e-3)
+
+    # sigmoid(N(0,1)) 中位数 0.5，Möbius shift 后为 s·0.5/(1+(s−1)·0.5) = s/(1+s)
+    analytic_median = shift / (1 + shift)
+    assert analytic_median == pytest.approx(report_median, abs=0.01)
+
+    torch.manual_seed(0)
+    t = sample_t(200_000, "cpu", mode="logit_normal", shift=shift)
+    assert float(t.median()) == pytest.approx(analytic_median, abs=0.005)
 
 
 # ── 采样（Comfy parity） ─────────────────────────────────────────────────
