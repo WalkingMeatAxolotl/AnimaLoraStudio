@@ -131,6 +131,36 @@ class MossFamily:
     def forward_train(self, dit, noisy, t, cond, *, use_checkpoint: bool = False):
         return forward_train(dit, noisy, t, cond, use_checkpoint=use_checkpoint)
 
+    # ── NaViT 打包（能力位 navit；族私有钩子，不进九方法冻结面，同 dit_blocks）──
+    def navit_text_token_count(self, text: MossTextStack, caption: str) -> int:
+        """单流联合注意力：文本 token 与图像 token 同在序列里，计入打包预算。"""
+        return text.token_count(caption)
+
+    def navit_encode_text(self, text, dit, captions, device, dtype, *,
+                          comfy_encoding: bool = True, kv_trim: bool = False,
+                          text_trim_padding: bool = False) -> list[torch.Tensor]:
+        """逐图有效文本 token 列表（去 padding）；三个旋钮是 Anima 私有，MOSS 恒按有效 token 打包。"""
+        del comfy_encoding, kv_trim, text_trim_padding
+        cond = self.encode_text_for_batch(text, dit, captions, device, dtype)
+        mask = cond.attention_mask.bool()
+        return [cond.context[i, mask[i]] for i in range(cond.context.shape[0])]
+
+    def navit_forward_and_loss(self, dit, navit_cond, latents_list, t, loss_fn, *,
+                               noise_offset: float = 0.0, pyramid_iters: int = 0,
+                               pyramid_discount: float = 0.35,
+                               use_checkpoint: bool = False, per_image_weights=None):
+        """一个 NaViT 训练步 → (loss, pred, info)，见 ``families/moss/navit.py``。"""
+        from .navit import navit_packed_forward_and_loss
+
+        return navit_packed_forward_and_loss(
+            dit, latents_list, t, navit_cond, loss_fn,
+            noise_offset=noise_offset,
+            pyramid_iters=pyramid_iters,
+            pyramid_discount=pyramid_discount,
+            use_checkpoint=use_checkpoint,
+            per_image_weights=per_image_weights,
+        )
+
     def sample_image(self, model, vae, text, prompt, *,
                      height: int = 1024, width: int = 1024,
                      steps: int | None = None,

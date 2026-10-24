@@ -28,7 +28,7 @@
 Studio 的 **数据与训练规模**面板已经按当前实现推导：
 
 - 文件夹有效样本 = 图片数 × repeat × 分辨率档数；正则样本也计入总量。
-- 常规训练每 epoch 的 optimizer 更新步数约为 `ceil(有效样本 ÷ (batch_size × grad_accum))`；NaViT Packing 使用真实打包模拟，界面会标 `≈`。
+- 常规训练每 epoch 的 optimizer 更新步数约为 `ceil(有效样本 ÷ (batch_size × grad_accum))`；NaViT Packing 使用真实打包模拟，界面会标 `≈`；MOSS-Image 打包时文本 token 也计入预算，预估暂不含这部分，实际步数会偏多。
 - 总更新步数约为 `每 epoch 更新步数 × epochs`，若 `max_steps` 更小则提前截断。
 - 单张训练图的计划曝光次数约为 `repeat × epochs × 分辨率档数`；它与 optimizer 更新步数不是同一个指标。
 
@@ -300,7 +300,7 @@ LoRA 参数全精度——kohya / musubi 生态的 `fp8_base` 语义）：
 | `attention_backend` | SDPA（配置值为 `none`） | Krea 2 加载器固定 SDPA |
 | `shuffle_caption` / `keep_tokens` / `tag_dropout` | 关闭 | tag 生态操作对自然语言 caption 不适用 |
 
-**能力差异**：NaViT 打包、SRA、LeapAlign、compile_blocks 为仅 Anima 功能（Krea 2 下自动隐藏）；
+**能力差异**：SRA、LeapAlign、compile_blocks 为仅 Anima 功能，NaViT 打包支持 Anima 与 MOSS-Image（Krea 2 下均自动隐藏）；
 masked loss、正则集、flip augment、各优化器 / loss / lr scheduler 跨族通用。
 
 ### caption 建议

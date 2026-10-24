@@ -235,6 +235,21 @@ def test_encode_per_caption_unpadded_and_truncated(tmp_path) -> None:
     assert tok.seen[0] == te.moss_prompt(short)
 
 
+def test_token_count_matches_encoded_length_without_loading(tmp_path) -> None:
+    """NaViT 打包预算用的文本 token 数 = 编码条件长度（含模板、按上限截断），且不加载 TE。"""
+    src = _source_model()
+    d = _hf_dir(tmp_path, src)
+    loader = _CountingLoader()
+    stack = te.MossTextStack(d, device="cpu", dtype=torch.float32, cache_enabled=False,
+                             tokenizer=_FakeTokenizer(), model_loader=loader, max_tokens=100)
+    short, long = "1girl", "x" * 200
+    assert stack.token_count(short) == len(te.moss_prompt(short).encode())
+    assert stack.token_count(long) == 100
+    assert loader.calls == 0
+    cond = stack.encode_text_for_batch([short, long], device="cpu", dtype=torch.float32)
+    assert cond.attention_mask.sum(1).tolist() == [stack.token_count(short), stack.token_count(long)]
+
+
 def test_cached_mode_writes_sidecar_and_hits_without_loading(tmp_path) -> None:
     d = _hf_dir(tmp_path, _source_model())
     loader = _CountingLoader()

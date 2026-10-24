@@ -25,7 +25,7 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
     }),
     "krea2": frozenset({"masked_loss", "text_cache", "block_swap"}),
     "moss": frozenset({
-        "masked_loss", "text_cache", "block_swap", "int8_base", "skip_layer_guidance",
+        "navit", "masked_loss", "text_cache", "block_swap", "int8_base", "skip_layer_guidance",
     }),
 }
 

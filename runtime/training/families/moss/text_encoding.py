@@ -255,6 +255,17 @@ class MossTextStack(VarlenTextStack):
         if self.max_tokens <= 0:
             raise ValueError("MOSS max_tokens 必须为正数")
 
+    def _tokenize(self, caption: str):
+        # 逐条、不 padding（官方 encode_prompt 同口径）；上限作用于套完模板的整串
+        return self.tokenizer(
+            moss_prompt(caption), return_tensors="pt",
+            truncation=True, max_length=self.max_tokens,
+        )
+
+    def token_count(self, caption: str) -> int:
+        """caption 编码后的文本 token 数（= 缓存条件的长度；只 tokenize，不加载 TE）。"""
+        return int(self._tokenize(caption)["input_ids"].shape[-1])
+
     def _encode_many(self, captions: Sequence[str]) -> list[Tensor]:
         if not captions:
             return []
@@ -262,11 +273,7 @@ class MossTextStack(VarlenTextStack):
         contexts = []
         with torch.inference_mode():
             for caption in captions:
-                # 逐条、不 padding（官方 encode_prompt 同口径）
-                inputs = self.tokenizer(
-                    moss_prompt(caption), return_tensors="pt",
-                    truncation=True, max_length=self.max_tokens,
-                )
+                inputs = self._tokenize(caption)
                 outputs = model(
                     input_ids=inputs["input_ids"].to(self.device),
                     attention_mask=inputs["attention_mask"].to(self.device),

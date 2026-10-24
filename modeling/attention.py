@@ -8,7 +8,8 @@ SDPA 自动落到 EFFICIENT 内核，单层 fwd+bwd 比 flash-attn 包 / xformer
 调模型的 ``set_attention_backend``），不做进程级全局开关：daemon 里先后加载的不同族
 模型互不影响。Anima 的 ``cosmos_predict2_modeling`` 有自己的历史状态机，不走本模块。
 
-只覆盖无 mask 的稠密注意力；带 padding mask 的调用方须先去 pad（varlen）再进来。
+``attention_bshd`` 只覆盖无 mask 的稠密注意力，带 padding mask 的调用方须先去 pad
+（varlen）再进来；NaViT 打包序列走 ``attention_block_diagonal_bshd``（每段只看自己）。
 """
 
 from __future__ import annotations
@@ -74,6 +75,40 @@ def attention_bshd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
             _warn_fallback(backend, stage, tuple(q.shape), q.dtype, exc)
     out = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2))
     return out.transpose(1, 2)
+
+
+@cache
+def _block_diagonal_mask(seqlens: tuple[int, ...]):
+    """xformers ``BlockDiagonalMask``（纯 CPU 元数据，按段长缓存，跨层 / 重算复用）。"""
+    from xformers.ops.fmha import BlockDiagonalMask
+
+    return BlockDiagonalMask.from_seqlens(list(seqlens))
+
+
+def attention_block_diagonal_bshd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                                  seqlens, backend: str = SDPA, *,
+                                  stage: str = "attention") -> torch.Tensor:
+    """块对角多头注意力：``[1, ΣS, H, D]`` 按 ``seqlens`` 切段，每段只注意自己。
+
+    xformers 走 ``BlockDiagonalMask`` 的 varlen 内核；其余后端（或 xformers 失败）
+    逐段调 ``attention_bshd``，数值等价、速度较慢。
+    """
+    seqlens = tuple(int(n) for n in seqlens)
+    if q.shape[0] != 1 or sum(seqlens) != q.shape[1]:
+        raise ValueError(f"块对角注意力要求 [1, ΣS, H, D] 且段长之和 = S，实际 {tuple(q.shape)} / {seqlens}")
+    if len(seqlens) == 1:
+        return attention_bshd(q, k, v, backend, stage=stage)
+    fn = _xformers_attention() if backend == XFORMERS else None
+    if fn is not None:
+        try:
+            return fn(q, k, v, attn_bias=_block_diagonal_mask(seqlens))
+        except Exception as exc:  # noqa: BLE001  fast path 失败一律逐段
+            _warn_fallback(backend, stage, tuple(q.shape), q.dtype, exc)
+    parts = [
+        attention_bshd(qs, ks, vs, backend, stage=stage)
+        for qs, ks, vs in zip(q.split(seqlens, 1), k.split(seqlens, 1), v.split(seqlens, 1))
+    ]
+    return torch.cat(parts, 1)
 
 
 def _warn_fallback(backend: str, stage: str, shape: tuple, dtype, exc: Exception) -> None:

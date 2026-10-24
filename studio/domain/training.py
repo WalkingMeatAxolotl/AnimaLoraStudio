@@ -194,7 +194,7 @@ class TrainingConfig(BaseModel):
     )
     navit_token_budget: int = Field(
         16384, ge=1,
-        description="单个打包序列的 token 预算上限（所有图 token 数之和 ≤ 此值）",
+        description="单个打包序列的 token 预算上限（所有图 token 数之和 ≤ 此值；MOSS 的文本 token 与图像同在序列中，一并计入）",
         json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     navit_max_images_per_pack: int = Field(
@@ -205,7 +205,8 @@ class TrainingConfig(BaseModel):
     navit_text_trim_padding: bool = Field(
         False,
         description="cross-attn 文本截断 padding（数据层标志，仅 navit_packing 时生效）",
-        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+        # MOSS 单流联合注意力恒按有效文本 token 打包，本旋钮只对 Anima 的 cross-attn 有意义
+        json_schema_extra=_meta("system", show_when="navit_packing==true&&model_family==anima", advanced=True),
     )
     navit_pack_strategy: Literal["next_fit", "ffd"] = Field(
         "next_fit",

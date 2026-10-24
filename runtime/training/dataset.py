@@ -1430,6 +1430,30 @@ class CachedLatentDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    def caption_for_index(self, idx) -> str:
+        """第 idx 个样本的 caption（与 ImageDataset / text-cache 预扫共用同一事实源）。"""
+        sample = self.samples[idx]
+        # 获取 base_dataset 的引用（处理可能的嵌套）
+        base = self.base_dataset
+        while hasattr(base, "dataset"):
+            base = base.dataset
+
+        if hasattr(base, "caption_for_sample"):
+            return base.caption_for_sample(sample)
+        # 非 ImageDataset 的第三方 wrapper：保留 Phase 2 前的 duck-type 行为
+        caption = None
+        if getattr(base, "caption_override", None) is not None:
+            caption = base.caption_override
+        elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
+            caption = base._process_caption_json(sample["json_path"])
+
+        if caption is None and sample.get("txt_path"):
+            caption = sample["txt_path"].read_text(encoding="utf-8").strip()
+            if hasattr(base, "_process_caption_txt"):
+                caption = base._process_caption_txt(caption)
+
+        return "" if caption is None else caption
+
     def __getitem__(self, idx):
         sample = self.samples[idx]
         npz_path = self._get_npz_path(
@@ -1454,32 +1478,9 @@ class CachedLatentDataset(Dataset):
             if mask_key in data.files:
                 mask = torch.from_numpy(data[mask_key])
 
-        # 获取 base_dataset 的引用（处理可能的嵌套）
-        base = self.base_dataset
-        while hasattr(base, "dataset"):
-            base = base.dataset
-        
-        # 处理 caption（与 ImageDataset / text-cache 预扫共用同一事实源）
-        if hasattr(base, "caption_for_sample"):
-            caption = base.caption_for_sample(sample)
-        else:  # 非 ImageDataset 的第三方 wrapper：保留 Phase 2 前的 duck-type 行为
-            caption = None
-            if getattr(base, "caption_override", None) is not None:
-                caption = base.caption_override
-            elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
-                caption = base._process_caption_json(sample["json_path"])
-
-            if caption is None and sample.get("txt_path"):
-                caption = sample["txt_path"].read_text(encoding="utf-8").strip()
-                if hasattr(base, "_process_caption_txt"):
-                    caption = base._process_caption_txt(caption)
-
-            if caption is None:
-                caption = ""
-        
         return {
             "latent": latent,
-            "caption": caption,
+            "caption": self.caption_for_index(idx),
             "mask": mask,
             # navit collate 需要逐图 image 路径
             "image": str(sample["image"]),
@@ -1626,6 +1627,29 @@ def _lookup_token_count_walk(d, idx):
     return 0
 
 
+def _lookup_caption_walk(d, idx):
+    """按索引解析样本 caption（遍历方式同 ``_lookup_token_count_walk``）。"""
+    main = getattr(d, "main_dataset", None)
+    reg = getattr(d, "reg_dataset", None)
+    if main is not None and reg is not None:
+        ml = getattr(d, "_main_len", len(main))
+        if idx < ml:
+            return _lookup_caption_walk(main, idx)
+        return _lookup_caption_walk(reg, idx - ml)
+    if hasattr(d, "caption_for_index"):
+        return d.caption_for_index(idx % len(d))
+    for attr in ("dataset", "base_dataset"):
+        inner = getattr(d, attr, None)
+        if inner is not None and inner is not d and not isinstance(inner, list):
+            return _lookup_caption_walk(inner, idx % len(inner))
+    return ""
+
+
+def dataset_captions(dataset) -> list[str]:
+    """NaViT 打包的逐索引 caption（文本 token 计入打包预算的族用）。"""
+    return [_lookup_caption_walk(dataset, i) for i in range(len(dataset))]
+
+
 def _walk_attr_list(dataset, attr):
     """在单链包装器（RepeatDataset/CachedLatentDataset）中查找叶数据集的
     per-index 列表属性 ``attr``，通过 ``% len`` 映射到 ``len(dataset)``。
@@ -1681,11 +1705,15 @@ class NavitPackBatchSampler:
     每个产出的列表是一个打包训练序列：其各图 token 数之和 ≤ ``token_budget``，
     整包作为一个零 padding 的块对角 forward。把"每步图片数"与单图形状解耦——
     不同 token 数和长宽比的图可以共享一个包，小数据集也能填满大 effective batch。
+
+    ``text_token_counts``：逐索引文本 token 数，加到图像 token 数上一起计预算。
+    文本与图像同在一条自注意力序列的族（MOSS 单流）传入；文本走 cross-attn 的族
+    （Anima）不传，预算只算图像 token。
     """
 
     def __init__(self, dataset, token_budget, max_images_per_pack=0,
                  shuffle=True, seed=42, drop_last=False,
-                 strategy="next_fit", ffd_window=256):
+                 strategy="next_fit", ffd_window=256, text_token_counts=None):
         self.dataset = dataset
         self.token_budget = int(token_budget)
         self.max_images_per_pack = int(max_images_per_pack or 0)
@@ -1710,20 +1738,30 @@ class NavitPackBatchSampler:
                 "bucket_for_index 都不可用/全 0）。NaViT 打包需要缓存数据集 "
                 "（cache_latents=true）以拿到每图 latent 形状。"
             )
+        if text_token_counts is not None:
+            if len(text_token_counts) != len(self.token_counts):
+                raise ValueError(
+                    f"[NavitPack] text_token_counts 长度 {len(text_token_counts)} "
+                    f"与数据集 {len(self.token_counts)} 不一致"
+                )
+            self.token_counts = [
+                int(c) + int(t) for c, t in zip(self.token_counts, text_token_counts)
+            ]
         mx = max(self.token_counts) if self.token_counts else 0
         if self.token_counts and self.token_budget < mx:
             logger.warning(
-                "[navit] token_budget=%d is below the largest single image (%d "
-                "tokens): that image is packed alone and may exceed the budget and "
+                "[navit] token_budget=%d is below the largest single sample (%d "
+                "tokens): that sample is packed alone and may exceed the budget and "
                 "OOM — raise token_budget to at least %d",
                 self.token_budget, mx, mx,
             )
         logger.debug(
             "navit_pack: dataset_len=%d token_budget=%d max_images_per_pack=%s "
-            "strategy=%s ffd_window=%s tokens_per_image=%d..%d",
+            "strategy=%s ffd_window=%s text_tokens=%s tokens_per_image=%d..%d",
             len(self.token_counts), self.token_budget,
             self.max_images_per_pack or "unlimited", self.strategy,
             (self.ffd_window or "global") if self.strategy == "ffd" else "-",
+            "counted" if text_token_counts is not None else "excluded",
             min(self.token_counts) if self.token_counts else 0, mx,
         )
         if self.strategy == "ffd" and self.ffd_window <= 0:

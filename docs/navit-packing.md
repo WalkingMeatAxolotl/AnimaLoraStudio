@@ -21,6 +21,18 @@ navit_token_budget: 16384      # 一个 pack 的 token 数之和上限（按显�
 navit_max_images_per_pack: 0   # 单 pack 最多几张图，0=不限
 ```
 
+支持的模型族：**Anima、MOSS-Image**（能力位 `navit`）。两族的差异：
+
+| | Anima | MOSS-Image |
+|---|---|---|
+| 文本怎么进模型 | cross-attn，不在自注意力序列里 | 单流联合注意力，每图 = [图像 token, 文本 token] 一段 |
+| 预算计哪些 token | 只算图像 token | 图像 + 文本 token（文本按缓存条件长度，即套模板、按 4096 截断后的长度） |
+| `navit_text_trim_padding` | 有效 | 不适用（恒按有效文本 token 打包，UI 不显示） |
+
+两族 loss 同语义：每张图先在图内对全部元素取均值，再在图间平均（每图等权，不按 token 数加权）。
+`navit_native_resolution` 下单图原生定尺寸只看图像 token；MOSS 一张图本身就接近预算时，加上文本
+可能单独成包、略超预算（日志会给警告）。训练页的包数预估目前不含 MOSS 的文本 token，会偏少。
+
 ### 提速 / 打包旋钮（均 opt-in，关时逐字节等价）
 
 ```yaml
@@ -106,8 +118,11 @@ detail_inv_t，按 per-image t 算权重）、正则集降权（`loss_weight`，
 | 打包前向 | 同上 — `MiniTrainDIT.forward_packed_navit`（块对角 self/cross + 逐图 RoPE + 逐图 AdaLN） |
 | token 预算打包 | `runtime/training/dataset.py` — `NavitPackBatchSampler` / `collate_fn_navit_pack` |
 | 分块 VAE encode | 同上 — `tiled_vae_encode` |
-| 训练步核心 | `runtime/training/navit.py` — `navit_packed_forward_and_loss`（逐图加噪 → 打包前向 → 逐图 loss） |
-| 训练循环接线 | `runtime/training/loop.py` — navit 分支（检测 `navit_latents` → pack cross → 打包前向） |
+| 训练步核心 | `runtime/training/families/anima/navit.py` — `navit_packed_forward_and_loss`（逐图加噪 → 打包前向 → 逐图 loss） |
+| MOSS 打包前向 | `modeling/moss/moss_modeling.py` — `MossImageTransformer.forward_packed`（段 = [图像, 文本]，块对角联合注意力与 text refiner，调制按段展开，每层只调用一次） |
+| MOSS 训练步 | `runtime/training/families/moss/navit.py`；块对角注意力 `modeling/attention.py` — `attention_block_diagonal_bshd` |
+| 族钩子 | 打包族提供 `navit_encode_text`（autocast 外编码文本条件）/ `navit_forward_and_loss`；文本进自注意力序列的族另提供 `navit_text_token_count`（计入预算）。能力门控、族私有，不进九方法冻结面（同 `dit_blocks`） |
+| 训练循环接线 | `runtime/training/loop.py` — navit 分支（检测 `navit_latents` → 族钩子编码文本 → 族钩子打包前向 + loss） |
 | config 键 | `studio/domain/training.py` — `navit_*` / `cache_encode_*` 字段 + 互斥校验 |
 
 ### 验证状态

@@ -8,6 +8,7 @@
 #     同口径；上游 pipeline 传入的已是 σ×1000）
 #   - RoPE 频率每次前向现算，不做 buffer（上游的 `rope.bands` 是派生常量，加载侧丢弃）
 #   - 可选逐 block 梯度检查点
+#   - NaViT 打包前向 forward_packed（多样本拼一条序列、按段块对角；数学同逐样本 forward）
 #   - 注意力可选 flash-attn 包 / xformers（modeling.attention，按模型实例设置）
 # 见 THIRD_PARTY_NOTICES。
 """MOSS-Image 5B 单流 DiT（结构定义层，只依赖 torch 与 modeling.attention）。"""
@@ -19,7 +20,13 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
-from modeling.attention import ATTENTION_BACKENDS, SDPA, XFORMERS, attention_bshd
+from modeling.attention import (
+    ATTENTION_BACKENDS,
+    SDPA,
+    XFORMERS,
+    attention_block_diagonal_bshd,
+    attention_bshd,
+)
 
 _PATCH = 2
 
@@ -84,11 +91,23 @@ def _rotate(x, rope):
     return x * cos + torch.cat((-b, a), -1) * sin
 
 
-def _attention(q, k, v, rope, heads, backend=SDPA):
+def _attention(q, k, v, rope, heads, backend=SDPA, seqlens=None):
     shape = (*q.shape[:2], heads, q.shape[-1] // heads)
     q = _rotate(q.reshape(shape), rope).to(v.dtype)
     k = _rotate(k.reshape(shape), rope).to(v.dtype)
-    return attention_bshd(q, k, v.reshape(shape), backend, stage="moss").flatten(2)
+    v = v.reshape(shape)
+    if seqlens is None:
+        return attention_bshd(q, k, v, backend, stage="moss").flatten(2)
+    # NaViT 打包序列：每个样本段只注意自己（forward_packed）
+    return attention_block_diagonal_bshd(q, k, v, seqlens, backend, stage="moss").flatten(2)
+
+
+def _per_sample(m, seqlens):
+    """调制分量 ``[B, D]`` → 可与 ``[B, S, D]`` 广播；打包序列（给了段长）按段展开到 token。"""
+    if seqlens is None:
+        return m[:, None]
+    repeats = torch.tensor(seqlens, device=m.device)
+    return m.repeat_interleave(repeats, 0, output_size=sum(seqlens)).unsqueeze(0)
 
 
 class _TextBlock(nn.Module):
@@ -103,11 +122,11 @@ class _TextBlock(nn.Module):
         self.ffn_gate, self.ffn_up = nn.Linear(dim, ffn_dim), nn.Linear(dim, ffn_dim)
         self.ffn_down = nn.Linear(ffn_dim, dim)
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, seqlens=None):
         q, k, v = self.qkv(self.norm1(x)).chunk(3, -1)
         q = self.q_norm(q.unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(k.unflatten(-1, (self.heads, -1))).flatten(2)
-        x = x + self.proj(_attention(q, k, v, rope, self.heads, self.attention_backend))
+        x = x + self.proj(_attention(q, k, v, rope, self.heads, self.attention_backend, seqlens))
         y = self.norm2(x)
         return x + self.ffn_down(_situ(self.ffn_up(y), self.ffn_gate(y)))
 
@@ -118,10 +137,10 @@ class _TextProjection(nn.Module):
         self.proj = nn.Linear(text_dim, dim)
         self.blocks = nn.ModuleList([_TextBlock(dim, ffn_dim, heads) for _ in range(2)])
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, seqlens=None):
         x = self.proj(x.to(self.proj.weight.dtype))
         for block in self.blocks:
-            x = block(x, rope)
+            x = block(x, rope, seqlens)
         return x
 
 
@@ -138,19 +157,21 @@ class _Block(nn.Module):
         self.proj['ffn_up_gate'] = nn.Linear(dim, 2 * ffn_dim, bias=False)
         self.proj['ffn_down'] = nn.Linear(ffn_dim, dim, bias=False)
 
-    def forward(self, x, rope, modulation):
-        shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = modulation.unbind(1)
-        y = self.norm1(x) * (1 + scale_a[:, None]) + shift_a[:, None]
+    def forward(self, x, rope, modulation, seqlens=None):
+        shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = (
+            _per_sample(m, seqlens) for m in modulation.unbind(1)
+        )
+        y = self.norm1(x) * (1 + scale_a) + shift_a
         # 上游取 proj['q'].weight.dtype；int8 存储时那是 int8，改取计算精度（norm 权重）
         dtype = self.norm1.weight.dtype
         y = y.to(dtype)
         q = self.q_norm(self.proj['q'](y).unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(self.proj['k'](y).unflatten(-1, (self.heads, -1))).flatten(2)
-        out = _attention(q, k, self.proj['v'](y), rope, self.heads, self.attention_backend)
-        x = x + self.proj['o'](out) * gate_a[:, None]
-        y = self.norm2(x) * (1 + scale_f[:, None]) + shift_f[:, None]
+        out = _attention(q, k, self.proj['v'](y), rope, self.heads, self.attention_backend, seqlens)
+        x = x + self.proj['o'](out) * gate_a
+        y = self.norm2(x) * (1 + scale_f) + shift_f
         hidden, gate = self.proj['ffn_up_gate'](y.to(dtype)).chunk(2, -1)
-        return x + self.proj['ffn_down'](_situ(hidden, gate)) * gate_f[:, None]
+        return x + self.proj['ffn_down'](_situ(hidden, gate)) * gate_f
 
 
 def _rope(head_dim: int, base: float, height: int, width: int, text_length: int, device) -> Tensor:
@@ -291,3 +312,84 @@ class MossImageTransformer(nn.Module):
             outputs.append(h.transpose(1, 2).reshape(1, -1, height, width))
         out = unpatchify(torch.cat(outputs))
         return out.unsqueeze(2) if temporal else out
+
+    def forward_packed(self, latents, timesteps: Tensor, contexts, *,
+                       use_checkpoint: bool = False) -> list[Tensor]:
+        """NaViT 打包前向：G 张尺寸各异的图（各带自己的文本）拼成一条序列一次算完。
+
+        每个样本段 = [图像 token, 文本 token]，RoPE 与 ``forward`` 的单样本序列相同；
+        联合注意力与 text refiner 按段块对角，调制按段展开到 token，Linear 在整条序列
+        上一次算。与逐样本 ``forward`` 数学等价，且每层只调用一次（block swap 每层每步
+        只搬一次权重）。
+
+        ``latents``: G 个 ``[32, H, W]`` / ``[1, 32, H, W]`` / ``[1, 32, 1, H, W]``，H/W 可各不相同；
+        ``timesteps``: ``[G]``，σ∈[0,1]；``contexts``: G 个 ``[L, text_dim]`` 或
+        ``[1, L, text_dim]``（只含有效 token）。返回 G 个与对应输入同形的速度预测。
+        """
+        count = len(latents)
+        if count == 0 or len(contexts) != count:
+            raise ValueError("MOSS forward_packed 需要非空且一一对应的 latents / contexts")
+        timesteps = torch.as_tensor(timesteps).reshape(-1)
+        if timesteps.numel() != count:
+            raise ValueError(f"MOSS forward_packed 需要 {count} 个 timestep，实际 {timesteps.numel()}")
+        head_dim = self.config.dim // self.config.num_heads
+        device = latents[0].device
+
+        shapes, grids, videos, texts, ropes = [], [], [], [], []
+        for latent, context in zip(latents, contexts):
+            shapes.append(latent.shape)
+            z = latent.reshape(1, *latent.shape[-3:]) if latent.ndim == 3 else latent
+            if z.ndim == 5:
+                if z.shape[2] != 1:
+                    raise ValueError("MOSS 只支持 T==1 的 5D latent")
+                z = z.squeeze(2)
+            if z.ndim != 4 or z.shape[:2] != (1, self.config.vae_channels):
+                raise ValueError(f"MOSS 打包 latent 应为单样本 [1, {self.config.vae_channels}, H, W]，实际 {tuple(latent.shape)}")
+            if z.shape[-2] % _PATCH or z.shape[-1] % _PATCH:
+                raise ValueError("MOSS latent 高宽须为 2 的倍数（像素须为 16 的倍数）")
+            context = context.reshape(1, -1, context.shape[-1])
+            if context.shape[1] == 0:
+                raise ValueError("MOSS 每个样本至少需要 1 个有效文本 token")
+            hidden = patchify(z)
+            height, width = hidden.shape[-2:]
+            grids.append((height, width))
+            videos.append(hidden.flatten(2).transpose(1, 2))
+            texts.append(context)
+            ropes.append(_rope(head_dim, self.config.rope_base, height, width, context.shape[1], device))
+
+        image_lens = [h * w for h, w in grids]
+        text_lens = [t.shape[1] for t in texts]
+        video = self.video_embedder(torch.cat(videos, 1).to(self.video_embedder.weight.dtype).contiguous())
+        rope = torch.cat(ropes, 1).to(video.dtype)
+        text_rope = torch.cat([r[:, n:] for r, n in zip(ropes, image_lens)], 1).to(video.dtype)
+        text = self.text_embedder(torch.cat(texts, 1), text_rope, text_lens)
+        h = torch.cat([
+            part
+            for pair in zip(video.split(image_lens, 1), text.split(text_lens, 1))
+            for part in pair
+        ], 1)
+        seqlens = tuple(n + t for n, t in zip(image_lens, text_lens))
+
+        mod, head = self._time(timesteps, count, device)
+        checkpoint_blocks = (
+            (use_checkpoint or self.gradient_checkpointing)
+            and self.training
+            and torch.is_grad_enabled()
+        )
+        for layer in self.layers:
+            if checkpoint_blocks:
+                from torch.utils.checkpoint import checkpoint
+
+                h = checkpoint(layer, h, rope, mod, seqlens, use_reentrant=False)
+            else:
+                h = layer(h, rope, mod, seqlens)
+
+        image = torch.cat([seg[:, :n] for seg, n in zip(h.split(seqlens, 1), image_lens)], 1)
+        image = self.final_norm_video(image.to(self.final_norm_video.weight.dtype))
+        image = image * (1 + _per_sample(head[:, 1], image_lens)) + _per_sample(head[:, 0], image_lens)
+        image = self.final_linear_video(image.to(self.final_norm_video.weight.dtype))
+        outputs = []
+        for tokens, (height, width), shape in zip(image.split(image_lens, 1), grids, shapes):
+            out = unpatchify(tokens.transpose(1, 2).reshape(1, -1, height, width))
+            outputs.append(out.reshape(shape))
+        return outputs

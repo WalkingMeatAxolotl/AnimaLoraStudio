@@ -82,7 +82,8 @@ def test_schema_literal_matches_families():
 
 
 def test_cap_gate_renders_field_comparison():
-    assert cap_gate("navit") == "model_family==anima"
+    assert cap_gate("sra") == "model_family==anima"
+    assert cap_gate("navit") == "model_family==anima||model_family==moss"
     with pytest.raises(ValueError):
         cap_gate("warp_drive")
 

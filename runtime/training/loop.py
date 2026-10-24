@@ -370,12 +370,13 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                 kv_trim=bool(getattr(args, "kv_trim", False)),
             )
             if navit_latents is not None:
-                # NaViT 打包需要逐图 attention mask 做 cross-attn padding 截断；
-                # navit 是 Anima 能力位（能力校验 fail-fast），族私有 kwarg 不进 protocol。
-                cross, t5_attn = ctx.family.encode_text_for_batch(
+                # NaViT 打包的逐图文本条件由族钩子构造（navit 能力位，族私有、不进
+                # protocol，同 dit_blocks）；对循环 opaque，原样交给 navit_forward_and_loss
+                navit_cond = ctx.family.navit_encode_text(
                     ctx.text_stack, ctx.model, captions,
                     ctx.device, ctx.dtype,
-                    return_t5_attn=True, **_enc_kwargs,
+                    text_trim_padding=bool(getattr(args, "navit_text_trim_padding", False)),
+                    **_enc_kwargs,
                 )
             else:
                 cross = ctx.family.encode_text_for_batch(
@@ -463,15 +464,6 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                     # 与逐图打包不兼容——互斥校验已 fail-fast 强制关闭。
                     # loss_weighting / 正则集 loss_weight 不在此列：navit 的逐图 t 正好对应
                     # per-sample SNR 权重语义，按 per-image 接入（见下方 per_image_weights）。
-                    from training.families.anima.navit import (  # noqa: PLC0415  能力门控（D5），惰性 import
-                        navit_packed_forward_and_loss,
-                        pack_cross_embeddings,
-                    )
-
-                    cross_packed, text_seqlens = pack_cross_embeddings(
-                        cross, t5_attn,
-                        bool(getattr(args, "navit_text_trim_padding", False)),
-                    )
                     # per-image 权重：正则集 loss_weight × timestep-dependent loss_weighting。
                     # 与标准路径对称——navit 逐图 t 对应 per-sample SNR 权重（min_snr / cosmap /
                     # detail_inv_t 按 per-image t 算权重，语义自洽；不像 leap 是多 timestep）。
@@ -482,9 +474,8 @@ def run(ctx: TrainingContext, *, observer: TrainingObserver | None = None) -> No
                     if _lw is not None:
                         _piw = _lw if _piw is None else _piw * _lw
                     _no, _pi, _pd = noise_params_from_args(args)
-                    loss, pred, _navit_info = navit_packed_forward_and_loss(
-                        ctx.model, navit_latents, t, cross_packed, text_seqlens,
-                        ctx.loss_fn,
+                    loss, pred, _navit_info = ctx.family.navit_forward_and_loss(
+                        ctx.model, navit_cond, navit_latents, t, ctx.loss_fn,
                         noise_offset=_no,
                         pyramid_iters=_pi,
                         pyramid_discount=_pd,

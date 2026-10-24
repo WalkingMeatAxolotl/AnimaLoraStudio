@@ -794,6 +794,8 @@ def compute_navit_pack_estimate(
 
     已知偏差：模型 RoPE 单边 token 上限（训练时从 pos_embedder 读）此处拿不到，
     按不设限处理——只影响单边 > 上限×16 px 的极端巨图（预算上限仍然生效）。
+    MOSS 训练时文本 token 也计入预算（需加载其 tokenizer 才能精确计数），此处只算
+    图像 token，所以 MOSS 的包数预估偏少、每包图数偏多；caption 越长偏差越大。
 
     返回 ``{packs_per_epoch, samples, avg_images_per_pack, token_min, token_max,
     token_budget, strategy, native, downscaled, sizes}``；``sizes`` 仅 native 下
