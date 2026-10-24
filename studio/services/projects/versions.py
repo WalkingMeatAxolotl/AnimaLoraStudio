@@ -813,8 +813,7 @@ def _caption_text_tokens(
     JSON caption 预检失败（训练会拒绝开训）时该目录按空文本计。
     """
     from runtime.training.dataset import ImageDataset
-
-    dataset_logger = logging.getLogger(ImageDataset.__module__)
+    from runtime.training.dataset import logger as dataset_logger
     by_caption: dict[str, int] = {}
     out: dict[str, int] = {}
     for i, data_dir in enumerate(data_dirs):
