@@ -271,7 +271,6 @@ Layout JSON 编辑器、prompt enhancer、参考图 / 编辑能力、少步蒸�
 
 - `dataset.py` 改为全部经注入的 `latent_spec` 计算（去掉 `_ANIMA_LATENT` 直连）。
 - 批量化 forward（pad + mask，替代逐样本循环）。NaViT 打包已有 `forward_packed`（段拼接、块对角、每层只调一次）；标准路径 batch>1 仍是逐样本循环，开 block swap 时每个样本都会把换出层搬一次（按代码推断，未实测），可改走 `forward_packed`。
-- NaViT 包数预估（训练页）不含 MOSS 文本 token，需在 studio 侧加载 tokenizer 才能精确计数。
 - bf16 底模出图的 parity：如果用户在 ComfyUI 里加载 bf16 文件，Comfy 的 LoRA merge 是浮点直加，我们的旁路与之只差加法顺序，暂不单做。
 - Krea2 的 TE 缓存指纹也区分存储形态（与 M8 对齐）。
 

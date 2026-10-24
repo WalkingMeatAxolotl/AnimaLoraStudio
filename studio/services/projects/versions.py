@@ -10,12 +10,13 @@ high-lr 这种语义名），同 project 内唯一，且不可改（路径锚点
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import projects
 from ...services.dataset import tagedit
@@ -760,6 +761,89 @@ class _NavitTokenStub:
         return len(self.token_count_for_index)
 
 
+#: (model_family, text_encoder_path) → caption 文本 token 计数器；只缓存成功的（TE 下载后
+#: 再请求能拿到），tokenizer 加载一次后复用
+_NAVIT_TEXT_COUNTERS: dict[tuple[str, str], Callable[[str], int]] = {}
+
+
+def navit_text_token_counter(model_family: str, text_encoder_path: str) -> Optional[Callable[[str], int]]:
+    """NaViT 打包预估用的 caption → 文本 token 数（与训练同一个族钩子）。
+
+    只有文本与图像同在一条序列的族（提供 ``navit_text_token_count``，即 MOSS）返回计数器；
+    族不需要、TE 路径未设或 tokenizer 加载失败时返回 None（预估只算图像 token，结果里
+    ``text_tokens=False``）。``load_text`` 只加载 tokenizer，文本编码器权重按需才加载。
+    """
+    key = (str(model_family or "anima"), str(text_encoder_path or ""))
+    if key in _NAVIT_TEXT_COUNTERS:
+        return _NAVIT_TEXT_COUNTERS[key]
+    from runtime.training.families import get_family
+
+    family = get_family(key[0])
+    count = getattr(family, "navit_text_token_count", None)
+    if count is None or not key[1]:
+        return None
+    try:
+        import torch
+
+        text = family.load_text(key[1], "cpu", torch.float32, cache_enabled=False)
+    except Exception as exc:  # noqa: BLE001  TE 未下载 / 版本不符：退回只算图像 token
+        logging.getLogger(__name__).warning(
+            "navit estimate: text tokenizer unavailable for %s (%s); text tokens not counted",
+            key[1], exc,
+        )
+        return None
+
+    def counter(caption: str) -> int:
+        return int(count(text, caption))
+
+    _NAVIT_TEXT_COUNTERS[key] = counter
+    return counter
+
+
+def _caption_text_tokens(
+    data_dirs: list[Path],
+    base_reso: int,
+    prefer_json: bool,
+    caption_overrides: Optional[list[Optional[str]]],
+    text_token_count: Callable[[str], int],
+) -> dict[str, int]:
+    """每张图（路径字符串）的文本 token 数；caption 经真 ``ImageDataset`` 解析。
+
+    构造时暂时压低 dataset logger：它的 INFO 摘要是给训练日志的，预估每次请求都会构造。
+    JSON caption 预检失败（训练会拒绝开训）时该目录按空文本计。
+    """
+    from runtime.training.dataset import ImageDataset
+
+    dataset_logger = logging.getLogger(ImageDataset.__module__)
+    by_caption: dict[str, int] = {}
+    out: dict[str, int] = {}
+    for i, data_dir in enumerate(data_dirs):
+        data_dir = Path(data_dir)
+        if not data_dir.exists():
+            continue
+        override = caption_overrides[i] if caption_overrides and i < len(caption_overrides) else None
+        level = dataset_logger.level
+        dataset_logger.setLevel(logging.ERROR)
+        try:
+            dataset = ImageDataset(
+                data_dir, base_reso, None,
+                prefer_json=prefer_json, caption_override=override or None,
+            )
+        except ValueError:
+            continue
+        finally:
+            dataset_logger.setLevel(level)
+        for sample in dataset.samples:
+            key = str(sample["image"])
+            if key in out:
+                continue
+            caption = dataset.caption_for_sample(sample)
+            if caption not in by_caption:
+                by_caption[caption] = int(text_token_count(caption))
+            out[key] = by_caption[caption]
+    return out
+
+
 def compute_navit_pack_estimate(
     data_dirs: list[Path],
     resolutions: list[int],
@@ -774,6 +858,8 @@ def compute_navit_pack_estimate(
     drop_last: bool = False,
     over_budget: str = "downscale",
     seed: int = 42,
+    text_token_count: Optional[Callable[[str], int]] = None,
+    caption_overrides: Optional[list[Optional[str]]] = None,
 ) -> dict[str, Any]:
     """NaViT 打包模式的 epoch 包数预估（= 优化器 steps/epoch 的分子）。
 
@@ -792,10 +878,14 @@ def compute_navit_pack_estimate(
     ``data_dirs`` 传 ``[train_dir]`` 或 ``[train_dir, reg_dir]``（reg 参与同一
     打包池，与 ``MergedDataset`` 的 main+reg 拼接顺序一致）。
 
+    ``text_token_count``（caption → 文本 token 数，见 ``navit_text_token_counter``）给出时，
+    与训练同口径把每张图的文本 token 计入：打包预算加上文本，native 定尺寸先从预算里
+    扣掉文本（``ImageDataset._native_image_budget``）。caption 经真 ``ImageDataset`` 解析
+    （与训练同一条 JSON / TXT / override 规则），``caption_overrides`` 与 ``data_dirs``
+    一一对应（正则集的 ``reg_caption``）。
+
     已知偏差：模型 RoPE 单边 token 上限（训练时从 pos_embedder 读）此处拿不到，
     按不设限处理——只影响单边 > 上限×16 px 的极端巨图（预算上限仍然生效）。
-    MOSS 训练时文本 token 也计入预算（需加载其 tokenizer 才能精确计数），此处只算
-    图像 token，所以 MOSS 的包数预估偏少、每包图数偏多；caption 越长偏差越大。
 
     返回 ``{packs_per_epoch, samples, avg_images_per_pack, token_min, token_max,
     token_budget, strategy, native, downscaled, sizes}``；``sizes`` 仅 native 下
@@ -823,6 +913,10 @@ def compute_navit_pack_estimate(
     token_counts: list[int] = []
     size_hist: dict[tuple[int, int], int] = {}
     downscaled = 0
+    text_tokens = (
+        _caption_text_tokens(data_dirs, base_resos[0], prefer_json, caption_overrides, text_token_count)
+        if text_token_count is not None else {}
+    )
 
     def add_image(img_path: Path, repeat: int, resos: list[int]) -> None:
         nonlocal downscaled
@@ -831,17 +925,19 @@ def compute_navit_pack_estimate(
                 w, h = im.size
         except Exception:
             return
+        text = text_tokens.get(str(img_path), 0)
         if native_resolution:
+            image_budget = max(1, token_budget - text) if text_token_count and token_budget > 0 else token_budget
             try:
                 plan = plan_native_fit_image(
-                    w, h, max_tokens=token_budget, max_side_tokens=0,
+                    w, h, max_tokens=image_budget, max_side_tokens=0,
                     over_budget=over_budget,
                 )
             except ValueError:
                 # over_budget="fail" 的超限图：训练会 fail-fast；预估侧跳过并
                 # 不计入（比抛 500 砸掉整个分布面板好）
                 return
-            token_counts.extend([plan.token_count] * repeat)
+            token_counts.extend([plan.token_count + text] * repeat)
             key = (plan.width, plan.height)
             size_hist[key] = size_hist.get(key, 0) + repeat
             if plan.was_downscaled:
@@ -852,7 +948,7 @@ def compute_navit_pack_estimate(
                 bw, bh = mgr_for(target_reso).get_bucket(w, h)
                 # 与 dataset_token_counts 的 latent 形状推导同口径：
                 # (px/8 latent) // patch_spatial(2) → px // 16
-                token_counts.extend([(bw // 16) * (bh // 16)] * repeat)
+                token_counts.extend([(bw // 16) * (bh // 16) + text] * repeat)
 
     for data_dir in data_dirs:
         data_dir = Path(data_dir)
@@ -875,7 +971,7 @@ def compute_navit_pack_estimate(
             "packs_per_epoch": 0, "samples": 0, "avg_images_per_pack": 0,
             "token_min": 0, "token_max": 0, "token_budget": int(token_budget),
             "strategy": str(strategy), "native": bool(native_resolution),
-            "downscaled": 0, "sizes": [],
+            "downscaled": 0, "sizes": [], "text_tokens": text_token_count is not None,
         }
 
     sampler = NavitPackBatchSampler(
@@ -900,6 +996,7 @@ def compute_navit_pack_estimate(
         "strategy": str(strategy),
         "native": bool(native_resolution),
         "downscaled": downscaled,
+        "text_tokens": text_token_count is not None,
         "sizes": [
             {"w": w, "h": h, "count": c}
             for (w, h), c in sorted(size_hist.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))

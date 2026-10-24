@@ -763,9 +763,11 @@ def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
     navit: dict[str, Any] | None = None
     if cfg.get("navit_packing"):
         dirs: list[Path] = [train_dir]
+        overrides: list[str | None] = [None]
         reg_dir = str(cfg.get("reg_data_dir") or "")
         if reg_dir and Path(reg_dir).exists():
             dirs.append(Path(reg_dir))
+            overrides.append(cfg.get("reg_caption") or None)
         navit = versions.compute_navit_pack_estimate(
             dirs, resolutions, ar_limit, prefer_json,
             native_resolution=bool(cfg.get("navit_native_resolution", False)),
@@ -776,6 +778,12 @@ def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
             drop_last=bool(cfg.get("navit_drop_last", False)),
             over_budget=str(cfg.get("navit_native_over_budget", "downscale") or "downscale"),
             seed=int(cfg.get("seed", 42) or 42),
+            # 文本与图像同在序列的族（MOSS）：与训练同口径计入文本 token
+            text_token_count=versions.navit_text_token_counter(
+                str(cfg.get("model_family") or "anima"),
+                str(cfg.get("text_encoder_path") or ""),
+            ),
+            caption_overrides=overrides,
         )
     return {
         "resolutions": resolutions, "aspect_ratio_limit": ar_limit,

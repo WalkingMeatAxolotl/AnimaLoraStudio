@@ -283,7 +283,8 @@ class ImageDataset(Dataset):
                  resolutions=None, aspect_ratio_limit=2.0,
                  native_resolution=False, native_token_budget=0,
                  native_over_budget="downscale", native_max_side_tokens=0,
-                 native_align=_ANIMA_LATENT.align_px, load_masks=False):
+                 native_align=_ANIMA_LATENT.align_px, native_text_tokens=None,
+                 load_masks=False):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
@@ -302,6 +303,10 @@ class ImageDataset(Dataset):
         self.native_over_budget = str(native_over_budget or "downscale").lower()
         self.native_max_side_tokens = int(native_max_side_tokens or 0)
         self.native_align = int(native_align or _ANIMA_LATENT.align_px)
+        # caption → 文本 token 数：文本与图像同在一条序列的族（MOSS）传入，原生定尺寸
+        # 时从预算里先扣掉这张图的文本，免得 downscale 到满预算后再加文本必然超限
+        self.native_text_tokens = native_text_tokens
+        self._native_text_reserve: dict[str, int] = {}
         if self.native_resolution and len(self.resolutions) > 1:
             logger.warning(
                 "[navit] Extra resolutions ignored: %s — native resolution mode "
@@ -407,23 +412,43 @@ class ImageDataset(Dataset):
                     except Exception:
                         dims[path] = None
                 wh = dims[path]
-                by_key[key] = self._target_size_for(*wh, target_reso=target_reso) if wh else None
+                by_key[key] = (
+                    self._target_size_for(*wh, target_reso=target_reso, image=path) if wh else None
+                )
             out.append(by_key[key])
         return out
 
-    def _target_size_for(self, img_w, img_h, target_reso=None):
+    def _native_image_budget(self, image) -> int:
+        """原生定尺寸的图像 token 上限：给了 ``native_text_tokens`` 时扣掉这张图的文本 token。
+
+        同一张图的 caption 唯一（text-cache 预扫会校验），按图片路径缓存。
+        """
+        budget = self.native_token_budget
+        if budget <= 0 or self.native_text_tokens is None or image is None:
+            return budget
+        key = str(image)
+        if key not in self._native_text_reserve:
+            by_image = {str(s["image"]): s for s in self.samples}
+            for path, sample in by_image.items():
+                if path not in self._native_text_reserve:
+                    caption = self.caption_for_sample(sample)
+                    self._native_text_reserve[path] = int(self.native_text_tokens(caption))
+            self._native_text_reserve.setdefault(key, 0)
+        return max(1, budget - self._native_text_reserve[key])
+
+    def _target_size_for(self, img_w, img_h, target_reso=None, image=None):
         """单张图的目标像素尺寸 ``(tw, th)``（16 整倍数），供定尺寸/缓存校验共用一条口径。
 
         - ``native_resolution=False``（默认）：走 ARB 桶 ``_bucket_mgr_for(target_reso).get_bucket``；
           该档不分桶（base 方桶，``bucket_mgr=None``）→ 返回 ``None``（调用方退回方桶语义）。
           与改动前逐字节等价。
         - ``native_resolution=True``：走 ``plan_native_fit_image``（原生 floor-16 + 超预算 downscale），
-          完全忽略 ``target_reso`` 与桶。
+          完全忽略 ``target_reso`` 与桶。``image``（图片路径）用于按该图文本 token 预留预算。
         """
         if self.native_resolution:
             plan = plan_native_fit_image(
                 img_w, img_h,
-                max_tokens=self.native_token_budget,
+                max_tokens=self._native_image_budget(image),
                 max_side_tokens=self.native_max_side_tokens,
                 align=self.native_align,
                 over_budget=self.native_over_budget,
@@ -809,7 +834,7 @@ class ImageDataset(Dataset):
         # 目标尺寸：ARB 桶（native 关）或原生 floor-16 定尺寸（native 开）。统一走
         # _target_size_for；返回 None（base 方桶不分桶档）时退回 target_reso 方桶。
         target_reso = sample.get("target_reso")
-        size = self._target_size_for(img.width, img.height, target_reso)
+        size = self._target_size_for(img.width, img.height, target_reso, image=sample["image"])
         if size is not None:
             tw, th = size
         else:
@@ -1094,7 +1119,7 @@ class CachedLatentDataset(Dataset):
                 # 与 ImageDataset.get_with_flip 同一条定尺寸口径（桶 or 原生），保证缓存
                 # 校验尺寸 == 实际 encode 尺寸。native 下取原生 floor-16 尺寸。
                 if hasattr(base, "_target_size_for"):
-                    size = base._target_size_for(img.width, img.height, target_reso)
+                    size = base._target_size_for(img.width, img.height, target_reso, image=img_path)
                     if size is not None:
                         return size
                 elif hasattr(base, "_bucket_mgr_for"):

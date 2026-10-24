@@ -115,6 +115,26 @@ def test_dataset_native_downscale_wiring(tmp_path):
     assert (tw // 16) * (th // 16) <= budget
 
 
+def test_dataset_native_reserves_text_tokens(tmp_path):
+    """给了 native_text_tokens（MOSS 文本进序列）：downscale 先扣掉该图文本 token，图像 + 文本 ≤ 预算。"""
+    data_dir = _make_dataset_dir(tmp_path, [(2048, 2048)])  # caption "1girl, solo"
+    budget = 4096
+    text = len("1girl, solo") * 10  # 110
+    plain = ImageDataset(data_dir, resolution=1024, bucket_mgr=None,
+                         native_resolution=True, native_token_budget=budget)
+    reserved = ImageDataset(data_dir, resolution=1024, bucket_mgr=None,
+                            native_resolution=True, native_token_budget=budget,
+                            native_text_tokens=lambda caption: len(caption) * 10)
+    image = reserved.samples[0]["image"]
+    pw, ph = plain._target_size_for(2048, 2048, image=image)
+    rw, rh = reserved._target_size_for(2048, 2048, image=image)
+    assert (pw // 16) * (ph // 16) + text > budget  # 不预留：满预算再加文本必超
+    assert (rw // 16) * (rh // 16) + text <= budget
+    assert reserved.bucket_for_index[0] == (rw, rh)  # 预扫与定尺寸同口径
+    # 不传图片路径（无从取 caption）时不预留，与旧行为一致
+    assert reserved._target_size_for(2048, 2048) == (pw, ph)
+
+
 def test_dataset_native_collapses_multi_resolution_fanout(tmp_path):
     """native + 多分辨率列表：fan-out 收拢为单份。
 

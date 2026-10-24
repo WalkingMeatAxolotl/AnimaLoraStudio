@@ -28,7 +28,7 @@
 Studio 的 **数据与训练规模**面板已经按当前实现推导：
 
 - 文件夹有效样本 = 图片数 × repeat × 分辨率档数；正则样本也计入总量。
-- 常规训练每 epoch 的 optimizer 更新步数约为 `ceil(有效样本 ÷ (batch_size × grad_accum))`；NaViT Packing 使用真实打包模拟，界面会标 `≈`；MOSS-Image 打包时文本 token 也计入预算，预估暂不含这部分，实际步数会偏多。
+- 常规训练每 epoch 的 optimizer 更新步数约为 `ceil(有效样本 ÷ (batch_size × grad_accum))`；NaViT Packing 使用真实打包模拟，界面会标 `≈`；MOSS-Image 打包时文本 token 也计入预算，预估同样按 caption 计入（需已设置文本编码器路径）。
 - 总更新步数约为 `每 epoch 更新步数 × epochs`，若 `max_steps` 更小则提前截断。
 - 单张训练图的计划曝光次数约为 `repeat × epochs × 分辨率档数`；它与 optimizer 更新步数不是同一个指标。
 

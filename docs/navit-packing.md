@@ -30,8 +30,9 @@ navit_max_images_per_pack: 0   # 单 pack 最多几张图，0=不限
 | `navit_text_trim_padding` | 有效 | 不适用（恒按有效文本 token 打包，UI 不显示） |
 
 两族 loss 同语义：每张图先在图内对全部元素取均值，再在图间平均（每图等权，不按 token 数加权）。
-`navit_native_resolution` 下单图原生定尺寸只看图像 token；MOSS 一张图本身就接近预算时，加上文本
-可能单独成包、略超预算（日志会给警告）。训练页的包数预估目前不含 MOSS 的文本 token，会偏少。
+`navit_native_resolution` 下 MOSS 的单图原生定尺寸先从预算里扣掉这张图的文本 token，超预算 downscale
+后图像 + 文本仍 ≤ 预算。训练页的包数预估与训练同口径：caption 经真 `ImageDataset` 解析，文本 token
+用 MOSS tokenizer 计数（取 config 的 `text_encoder_path`；未设或 tokenizer 不可用时只算图像 token）。
 
 ### 提速 / 打包旋钮（均 opt-in，关时逐字节等价）
 

@@ -118,3 +118,76 @@ def test_empty_dataset(tmp_path: Path) -> None:
     )
     assert out["packs_per_epoch"] == 0
     assert out["samples"] == 0
+
+
+# ── 文本 token 计入（MOSS：文本与图像同在序列）────────────────────────────
+
+
+def test_text_tokens_join_budget_with_real_captions(tmp_path: Path) -> None:
+    """caption 经真 ImageDataset 解析；每张图 token = 图像 + 文本，与训练打包同口径。"""
+    pytest.importorskip("torch")
+    from studio.services.projects.versions import compute_navit_pack_estimate
+    _img(tmp_path / "1_data", ["a", "b", "c"])  # 64×64 → 16 图像 token，caption "1girl"
+    image_only = compute_navit_pack_estimate(
+        [tmp_path], [1024], native_resolution=True, token_budget=48,
+    )
+    with_text = compute_navit_pack_estimate(
+        [tmp_path], [1024], native_resolution=True, token_budget=48,
+        text_token_count=lambda caption: len(caption),  # "1girl" → 5
+    )
+    assert image_only["text_tokens"] is False and with_text["text_tokens"] is True
+    assert with_text["downscaled"] == 0  # 预算 48 − 文本 5 ≥ 16，不触发 downscale
+    assert (image_only["token_max"], with_text["token_max"]) == (16, 21)
+    assert (image_only["packs_per_epoch"], with_text["packs_per_epoch"]) == (1, 2)
+
+
+def test_native_reserves_text_and_reg_caption_override(tmp_path: Path) -> None:
+    """native 先从预算扣掉该图文本 token（镜像 ImageDataset._native_image_budget）；
+    正则集按 caption_overrides 用 reg_caption 计数。"""
+    pytest.importorskip("torch")
+    from studio.services.projects.versions import compute_navit_pack_estimate
+    _img(tmp_path / "train" / "1_data", ["a"], size=(256, 256))  # 原生 256 token
+    _img(tmp_path / "reg" / "1_prior", ["r"], size=(256, 256))
+    seen = []
+
+    def count(caption: str) -> int:
+        seen.append(caption)
+        return 40 if caption == "reg prompt" else 10
+
+    out = compute_navit_pack_estimate(
+        [tmp_path / "train", tmp_path / "reg"], [1024],
+        native_resolution=True, token_budget=200,
+        text_token_count=count, caption_overrides=[None, "reg prompt"],
+    )
+    assert set(seen) == {"1girl", "reg prompt"}
+    assert out["token_max"] <= 200  # 图像 downscale 时已给文本留位
+    assert out["downscaled"] == 2
+
+
+def test_text_counter_only_for_families_with_hook(monkeypatch) -> None:
+    pytest.importorskip("torch")
+    from studio.services.projects import versions
+    from runtime.training.families import get_family
+
+    monkeypatch.setattr(versions, "_NAVIT_TEXT_COUNTERS", {})
+    assert versions.navit_text_token_counter("anima", "some/te") is None  # 文本走 cross-attn
+    assert versions.navit_text_token_counter("moss", "") is None  # 未设 TE 路径
+
+    moss = get_family("moss")
+    calls = []
+
+    def failing_load(*_a, **_kw):
+        calls.append("load")
+        raise OSError("tokenizer missing")
+
+    monkeypatch.setattr(type(moss), "load_text", lambda self, *a, **kw: failing_load())
+    assert versions.navit_text_token_counter("moss", "te/path") is None
+    assert versions.navit_text_token_counter("moss", "te/path") is None
+    assert calls == ["load", "load"]  # 失败不缓存（TE 下载后再请求能拿到）
+
+    fake_text = type("T", (), {"token_count": lambda self, caption: len(caption) + 1})()
+    monkeypatch.setattr(type(moss), "load_text", lambda self, *a, **kw: (calls.append("ok"), fake_text)[1])
+    counter = versions.navit_text_token_counter("moss", "te/path")
+    assert counter("abc") == 4
+    assert versions.navit_text_token_counter("moss", "te/path") is counter  # 成功后复用
+    assert calls.count("ok") == 1

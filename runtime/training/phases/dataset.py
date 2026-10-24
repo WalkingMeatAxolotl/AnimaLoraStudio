@@ -85,6 +85,10 @@ def _native_dataset_kwargs(args, ctx) -> dict:
         native_over_budget=str(getattr(args, "navit_native_over_budget", "downscale") or "downscale"),
         native_max_side_tokens=_rope_max_side_tokens(ctx),
     )
+    # 文本与图像同在序列的族：原生定尺寸给每张图的文本预留预算（与打包预算同口径）
+    count_fn = getattr(ctx.family, "navit_text_token_count", None)
+    if count_fn is not None:
+        kwargs["native_text_tokens"] = lambda caption: count_fn(ctx.text_stack, caption)
     logger.info(msg(
         "train.navit_native_enabled",
         budget=kwargs["native_token_budget"],

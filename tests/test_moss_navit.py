@@ -284,3 +284,21 @@ def test_phase_text_token_counts_only_for_counting_families() -> None:
     ctx = SimpleNamespace(family=_Family(), dataset=dataset, text_stack="stack")
     assert _navit_text_token_counts(ctx) == [2, 4, 2, 4, 2, 4]
     assert seen == ["aa", "bbbb"]  # 同一 caption 只 tokenize 一次
+
+
+def test_native_kwargs_reserve_text_only_for_counting_families() -> None:
+    from training.phases.dataset import _native_dataset_kwargs
+
+    args = SimpleNamespace(navit_packing=True, navit_native_resolution=True,
+                           navit_token_budget=4096, navit_native_over_budget="downscale")
+    plain = _native_dataset_kwargs(args, SimpleNamespace(family=object(), model=None))
+    assert "native_text_tokens" not in plain
+
+    class _Family:
+        def navit_text_token_count(self, text, caption):
+            return len(caption) + (100 if text == "stack" else 0)
+
+    ctx = SimpleNamespace(family=_Family(), model=None, text_stack="stack")
+    kwargs = _native_dataset_kwargs(args, ctx)
+    assert kwargs["native_token_budget"] == 4096
+    assert kwargs["native_text_tokens"]("abc") == 103

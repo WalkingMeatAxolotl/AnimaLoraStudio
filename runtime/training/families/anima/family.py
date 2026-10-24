@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from training.families.anima import ANIMA_SPEC
-from training.families.anima.preset import ANIMA_PRESET
+# 相对导入：studio 服务进程经 runtime.training 根取族（NaViT 预估的 get_family），
+# 没有 training 顶层包；方法内的 training.* 导入只在训练 / daemon 进程执行
+from . import ANIMA_SPEC
+from .preset import ANIMA_PRESET
 
 
 class AnimaFamily:
