@@ -2612,6 +2612,7 @@
     "empty": "Choose a match scope and start a scan; results appear in groups of similar images.",
     "noGroups": "Scanned {{total}} images and found no duplicate candidates.",
     "scanDone": "Scan complete: {{groups}} groups, {{candidates}} duplicate candidates, {{crops}} crop relations",
+    "savedScan": "Showing the last scan from {{time}}. Rescan to refresh it.",
     "selectSuggested": "Select suggested removals",
     "applyBtn": "Remove {{n}}",
     "confirmApply": "Mark {{n}} selected candidates as duplicate-removed?\nConfirm you reviewed the concrete image groups on this page. This does not move or delete download/ files; later preprocess, curation, and training steps will skip them.",

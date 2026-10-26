@@ -7,6 +7,7 @@ routes：
     GET  /api/projects/{pid}/versions/{vid}/jobs/latest                  hydrate latest job + log
     GET  /api/projects/{pid}/versions/{vid}/curation                     curation_view（train/ 内容 + download/ 剩余）
     POST /api/projects/{pid}/versions/{vid}/preprocess/duplicates/scan   train scope 去重扫描 + SSE 进度
+    GET  /api/projects/{pid}/versions/{vid}/preprocess/duplicates/last-scan  上次扫描结果（已裁掉不再可审的图）
     POST /api/projects/{pid}/versions/{vid}/preprocess/duplicates/apply  标记 manifest duplicate_removed
     POST /api/projects/{pid}/versions/{vid}/curation/copy                download → train/{folder}
     POST /api/projects/{pid}/versions/{vid}/curation/remove              train/{folder} → 删
@@ -392,6 +393,16 @@ def scan_preprocess_duplicates_train(
                 "text": str(exc),
             })
             raise
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/preprocess/duplicates/last-scan")
+def get_last_duplicate_scan_train(pid: int, vid: int) -> dict[str, Any]:
+    """上次 train scope 扫描结果（裁掉已审核 / 已不在 train/ 的图）；没扫过返回
+    `{"result": null}`。供去重页刷新 / 重启后恢复审核视图。"""
+    _resolve_pv_or_404_dup(pid, vid)
+    with db.connection_for() as conn:
+        result = duplicate_finder.load_last_train_scan(conn, pid, vid)
+    return {"result": result}
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/preprocess/duplicates/apply")

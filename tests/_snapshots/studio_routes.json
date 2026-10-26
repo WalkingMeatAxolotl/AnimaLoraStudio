@@ -1202,6 +1202,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/duplicates/last-scan",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_last_duplicate_scan_train",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/versions/{vid}/preprocess/duplicates/removed",
       "methods": [
         "GET"

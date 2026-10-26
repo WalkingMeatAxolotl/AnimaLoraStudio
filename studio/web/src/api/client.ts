@@ -1420,6 +1420,8 @@ export interface DuplicateScanResult {
     compared_pairs: number
   }
   groups: DuplicateGroup[]
+  /** Unix seconds; present on results loaded from the saved last scan. */
+  saved_at?: number
 }
 
 export interface DuplicateApplyResult {
@@ -3330,6 +3332,10 @@ export const api = {
     req<DuplicateScanResult>(
       `/api/projects/${pid}/versions/${vid}/preprocess/duplicates/scan`,
       { method: 'POST', body: JSON.stringify(body) }
+    ),
+  getLastDuplicateScanTrain: (pid: number, vid: number) =>
+    req<{ result: DuplicateScanResult | null }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/duplicates/last-scan`
     ),
   applyDuplicateActionTrain: (
     pid: number,

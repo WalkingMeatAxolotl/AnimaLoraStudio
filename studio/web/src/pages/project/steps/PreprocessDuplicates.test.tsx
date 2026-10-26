@@ -64,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.confirm.mockResolvedValue(true)
   vi.spyOn(api, 'scanDuplicatesTrain').mockResolvedValue(result)
+  vi.spyOn(api, 'getLastDuplicateScanTrain').mockResolvedValue({ result: null })
   vi.spyOn(api, 'applyDuplicateActionTrain').mockResolvedValue({
     removed: ['1_data/remove.png'], missing: [], skipped: [],
   })
@@ -121,5 +122,22 @@ describe('Preprocess duplicate review contracts', () => {
     expect(api.scanDuplicatesTrain).toHaveBeenCalledTimes(1)
 
     await act(async () => resolveApply({ removed: ['1_data/remove.png'], missing: [], skipped: [] }))
+  })
+
+  it('restores the saved scan on open and reloads the trimmed scan after apply', async () => {
+    vi.mocked(api.getLastDuplicateScanTrain)
+      .mockResolvedValueOnce({ result: { ...result, saved_at: 1_700_000_000 } })
+      .mockResolvedValueOnce({ result: { ...result, saved_at: 1_700_000_000, groups: [], group_count: 0, candidate_count: 0 } })
+    const user = userEvent.setup()
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: '去除 1_data/remove.png' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/的上次扫描结果/)).toBeInTheDocument()
+    expect(api.scanDuplicatesTrain).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: '确认去除 1' }))
+    await waitFor(() => expect(api.applyDuplicateActionTrain).toHaveBeenCalledWith(1, 2, { names: ['1_data/remove.png'] }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '去除 1_data/remove.png' })).not.toBeInTheDocument())
+    expect(api.getLastDuplicateScanTrain).toHaveBeenCalledTimes(2)
   })
 })

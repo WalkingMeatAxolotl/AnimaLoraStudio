@@ -6,6 +6,8 @@ as skipped in the preprocess manifest after confirmation.
 """
 from __future__ import annotations
 
+import json
+import logging
 import math
 import os
 import time
@@ -18,6 +20,7 @@ from typing import Any, Callable, Literal
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from ...infrastructure.atomic_files import atomic_write_text
 from ...services.projects import projects
 from ...services.dataset import curation
 from ...services.dataset.scan import IMAGE_EXTS
@@ -37,7 +40,10 @@ except Exception:  # pragma: no cover - scipy is a declared dependency; fallback
     scipy_signal = None
 
 
+logger = logging.getLogger(__name__)
+
 RESAMPLE_FILTER = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+LAST_SCAN_NAME = "duplicate_scan.json"
 
 DEFAULT_HASH_SIZE = 768
 DEFAULT_HASH_WORKERS = max(2, min(16, (os.cpu_count() or 8) // 2))
@@ -411,7 +417,7 @@ def scan_train_duplicates(
             )
     elapsed = time.monotonic() - started
 
-    return {
+    result = {
         "target": "train",
         "match_scope": options.match_scope,
         "total_images": len(sources),
@@ -426,6 +432,72 @@ def scan_train_duplicates(
             _group_to_json(index, group, pair_metrics)
             for index, group in enumerate(groups, start=1)
         ],
+    }
+    # 落盘只是方便下次恢复，写不进去不能让跑了几分钟的扫描白费。
+    try:
+        _save_last_train_scan(project_dir, _version_label(conn, version_id), result)
+    except OSError:
+        logger.warning("Failed to save the duplicate scan result", exc_info=True)
+    return result
+
+
+def last_train_scan_path(project_dir: Path, version_label: str) -> Path:
+    return project_dir / "versions" / version_label / LAST_SCAN_NAME
+
+
+def _version_label(conn, version_id: int) -> str:
+    from ..projects import versions as ver
+
+    return ver.get_version(conn, version_id)["label"]
+
+
+def _save_last_train_scan(
+    project_dir: Path, version_label: str, result: dict[str, Any],
+) -> None:
+    payload = {**result, "saved_at": time.time()}
+    atomic_write_text(
+        last_train_scan_path(project_dir, version_label),
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+
+def load_last_train_scan(
+    conn, project_id: int, version_id: int,
+) -> dict[str, Any] | None:
+    """读取该 version 上次保存的 train scope 扫描结果，裁到仍可审核的范围。
+
+    扫描之后被删除、移出 train/ 或已标 duplicate_removed 的图从分组里去掉；
+    keep 图不在了或剩不到 2 张的组整组丢弃，group_id / 计数按裁后重算。
+    没扫过或文件读不出来返回 None，前端按「还没扫描」处理。
+    """
+    _project, project_dir = curation._project_dir(conn, project_id)  # noqa: SLF001
+    sources = _resolve_train_sources(conn, project_id, version_id, project_dir)
+    path = last_train_scan_path(project_dir, _version_label(conn, version_id))
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(saved, dict) or not isinstance(saved.get("groups"), list):
+        return None
+
+    current = {name for name, _ in sources}
+    groups: list[dict[str, Any]] = []
+    for group in saved["groups"]:
+        if not isinstance(group, dict) or group.get("keep") not in current:
+            continue
+        items = [
+            item for item in group.get("items") or []
+            if isinstance(item, dict) and item.get("name") in current
+        ]
+        if len(items) < 2:
+            continue
+        groups.append({**group, "group_id": len(groups) + 1, "items": items})
+
+    return {
+        **saved,
+        "groups": groups,
+        "group_count": len(groups),
+        "candidate_count": sum(len(g["items"]) - 1 for g in groups),
     }
 
 

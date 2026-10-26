@@ -166,6 +166,85 @@ def test_apply_train_duplicate_mismatched_version_raises(env) -> None:
 
 
 # ---------------------------------------------------------------------------
+# last scan 持久化：_save_last_train_scan / load_last_train_scan
+# ---------------------------------------------------------------------------
+
+
+def _scan_result(*groups: tuple[str, list[str]]) -> dict:
+    return {
+        "target": "train",
+        "total_images": 9,
+        "group_count": len(groups),
+        "candidate_count": sum(len(rest) for _, rest in groups),
+        "groups": [
+            {
+                "group_id": i,
+                "keep": keep,
+                "items": [{"name": keep, "keep": True}]
+                + [{"name": n, "keep": False} for n in rest],
+            }
+            for i, (keep, rest) in enumerate(groups, start=1)
+        ],
+    }
+
+
+def test_load_last_train_scan_none_before_any_scan(env) -> None:
+    with db.connection_for(env["db"]) as conn:
+        assert duplicate_finder.load_last_train_scan(
+            conn, env["p"]["id"], env["v"]["id"],
+        ) is None
+
+
+def test_load_last_train_scan_round_trip(env) -> None:
+    for n in ("A", "B", "C"):
+        _png(env["sub"] / f"{n}.png")
+    duplicate_finder._save_last_train_scan(
+        env["pdir"], "v1", _scan_result(("1_data/A.png", ["1_data/B.png", "1_data/C.png"])),
+    )
+    with db.connection_for(env["db"]) as conn:
+        out = duplicate_finder.load_last_train_scan(conn, env["p"]["id"], env["v"]["id"])
+    assert out["group_count"] == 1
+    assert out["candidate_count"] == 2
+    assert [i["name"] for i in out["groups"][0]["items"]] == [
+        "1_data/A.png", "1_data/B.png", "1_data/C.png",
+    ]
+    assert out["saved_at"] > 0
+
+
+def test_load_last_train_scan_drops_reviewed_and_missing(env) -> None:
+    for n in ("A", "B", "C", "D", "E"):
+        _png(env["sub"] / f"{n}.png")
+    duplicate_finder._save_last_train_scan(
+        env["pdir"], "v1",
+        _scan_result(
+            ("1_data/A.png", ["1_data/B.png", "1_data/C.png"]),
+            ("1_data/D.png", ["1_data/E.png"]),
+        ),
+    )
+    with db.connection_for(env["db"]) as conn:
+        duplicate_finder.apply_train_duplicate_removals(
+            conn, env["p"]["id"], env["v"]["id"], names=["1_data/B.png"],
+        )
+    (env["sub"] / "D.png").unlink()
+    with db.connection_for(env["db"]) as conn:
+        out = duplicate_finder.load_last_train_scan(conn, env["p"]["id"], env["v"]["id"])
+    # B 已审核移除；D（keep）不在了 → 整组丢弃
+    assert out["group_count"] == 1
+    assert out["candidate_count"] == 1
+    assert [i["name"] for i in out["groups"][0]["items"]] == ["1_data/A.png", "1_data/C.png"]
+
+
+def test_load_last_train_scan_ignores_corrupt_file(env) -> None:
+    path = duplicate_finder.last_train_scan_path(env["pdir"], "v1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    with db.connection_for(env["db"]) as conn:
+        assert duplicate_finder.load_last_train_scan(
+            conn, env["p"]["id"], env["v"]["id"],
+        ) is None
+
+
+# ---------------------------------------------------------------------------
 # merge_crop_relations_into_groups —— crop/scale 关系并入分组（更严格的重复判断）
 # ---------------------------------------------------------------------------
 

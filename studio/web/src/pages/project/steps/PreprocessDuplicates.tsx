@@ -33,6 +33,16 @@ interface DuplicateLog {
   status?: string
 }
 
+function candidateNames(result: DuplicateScanResult | null): Set<string> {
+  return new Set(
+    result
+      ? result.groups.flatMap((group) =>
+          group.items.filter((item) => !item.keep).map((item) => item.name),
+        )
+      : [],
+  )
+}
+
 export default function PreprocessDuplicatesPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -48,6 +58,7 @@ export default function PreprocessDuplicatesPage() {
   const [scanLogVisible, setScanLogVisible] = useState(false)
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
   const lastLogAtRef = useRef(0)
+  const scanStartedRef = useRef(false)
 
   useEffect(() => {
     lastLogAtRef.current = 0
@@ -81,22 +92,46 @@ export default function PreprocessDuplicatesPage() {
     [result],
   )
 
+  const showResult = (next: DuplicateScanResult | null) => {
+    setResult(next)
+    setSelected(candidateNames(next))
+  }
+
+  const loadSavedScan = async () => {
+    try {
+      showResult((await api.getLastDuplicateScanTrain(project.id, vid)).result)
+    } catch {
+      showResult(null)
+    }
+  }
+
+  useEffect(() => {
+    if (!vid) return
+    let cancelled = false
+    scanStartedRef.current = false
+    api.getLastDuplicateScanTrain(project.id, vid)
+      .then((res) => {
+        if (cancelled || scanStartedRef.current) return
+        setResult(res.result)
+        setSelected(candidateNames(res.result))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [project.id, vid])
+
   const scan = async () => {
     if (busy) return
+    scanStartedRef.current = true
     setBusy(true)
     setScanning(true)
-    setResult(null)
-    setSelected(new Set())
+    showResult(null)
     setScanLogVisible(true)
     setLogs([{ ts: Date.now(), status: 'running', text: t('duplicates.logStarted') }])
     try {
       const next = await api.scanDuplicatesTrain(project.id, vid, options)
-      setResult(next)
-      setSelected(new Set(
-        next.groups.flatMap((group) =>
-          group.items.filter((item) => !item.keep).map((item) => item.name),
-        ),
-      ))
+      showResult(next)
       toast(
         t('duplicates.scanDone', {
           groups: next.group_count,
@@ -131,9 +166,9 @@ export default function PreprocessDuplicatesPage() {
           (res.missing.length ? t('duplicates.appliedMissing', { n: res.missing.length }) : ''),
         'success',
       )
-      setSelected(new Set())
-      setResult(null)
       setPreviewIdx(null)
+      // 后端返回的上次扫描已裁掉刚去除的图，剩下的就是还要审的组。
+      await loadSavedScan()
       void reload()
     } catch (e) {
       toast(String(e), 'error')
@@ -213,6 +248,13 @@ export default function PreprocessDuplicatesPage() {
               busy={busy}
               onOptionsChange={setOptions}
             />
+            {result?.saved_at && !scanning && (
+              <p className="text-xs text-fg-tertiary px-1 shrink-0">
+                {t('duplicates.savedScan', {
+                  time: new Date(result.saved_at * 1000).toLocaleString(),
+                })}
+              </p>
+            )}
             <DuplicateReviewPanel
               projectId={project.id}
               versionId={vid}
