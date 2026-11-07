@@ -253,6 +253,7 @@ TE 阶段与 swap 无关：出图预编码 7.51 GiB，训练文本缓存 8.23 GB
 |---|---|---|
 | `base_bf16` / `sft_bf16` | `Comfy-Org/MOSS-Image` `diffusion_models/moss_image_{base,sft}_bf16.safetensors` | 训练 / 推理 |
 | `base_int8` / `sft_int8` | 同 repo `moss_image_{base,sft}_int8_convrot.safetensors` | 训练 / 推理 |
+| `heal_bf16` / `heal_int8` | 社区微调 `KBlueLeaf/MOSS-Image-heal` `comfyui/moss_image_heal_{bf16,int8_convrot}.safetensors`（仅 HF，无 ModelScope 镜像） | 训练 / 推理 |
 | `te_bf16` | `OpenMOSS-Team/MOSS-Image-Base` 的 `text_encoder/` + `tokenizer/` | 缓存 |
 | `te_int8` | `Comfy-Org/MOSS-Image` `text_encoders/qwen3.5_9b_int8_convrot.safetensors` + tokenizer 小文件 | 缓存 |
 | `vae` | `Comfy-Org/MOSS-Image` `vae/flux2-vae.safetensors` | 全流程 |

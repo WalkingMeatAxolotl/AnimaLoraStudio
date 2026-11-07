@@ -1,7 +1,7 @@
 """MOSS-Image 族资产清单（MOSS 设计稿 §7）。
 
 主权重取 Comfy-Org 重打包的单文件（bf16 / int8_tensorwise+convrot，Base / SFT 各一，
-civitai 官方页挂的就是这一套）；文本编码器两种：
+civitai 官方页挂的就是这一套），另收社区微调 heal 的同布局单文件（仅 HF）；文本编码器两种：
 
 - int8：Comfy-Org 的 ``qwen3.5_9b_int8_convrot`` 单文件 + 官方仓库的 config / tokenizer 小文件
 - bf16：官方 ``OpenMOSS-Team/MOSS-Image-Base`` 的 ``text_encoder/`` 分片 + ``tokenizer/``
@@ -25,6 +25,8 @@ COMFY_REPO = "Comfy-Org/MOSS-Image"
 OFFICIAL_REPO = "OpenMOSS-Team/MOSS-Image-Base"
 #: 官方仓库在 ModelScope 上的 id（与 HF 的 owner 不同；Comfy-Org 两边同名）
 OFFICIAL_MS_REPO = "openmoss/MOSS-Image-Base"
+#: 社区微调 MOSS-Image-heal（KBlueLeaf，Apache-2.0，与官方同许可）
+HEAL_REPO = "KBlueLeaf/MOSS-Image-heal"
 MOSS_LICENSE = "Apache-2.0"
 MOSS_LICENSE_URL = "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base"
 
@@ -64,6 +66,23 @@ MOSS_VARIANTS: dict[str, dict[str, Any]] = {
         "filename": "moss-image-sft-bf16.safetensors",
         "purpose": "training",
         "size_estimate": 10_160_000_000,
+    },
+    # 社区全量微调（Base 起训、Danbooru 数据、压低残差流离群值），结构 / 键名与
+    # Comfy-Org 打包逐键一致。只在 HF 上发布：无 ms_repo，ModelScope 源下回落 HF。
+    # 不收 fp16 文件——本仓库 MOSS 一律 bf16 计算，fp16 转 bf16 多一次舍入
+    "heal_int8": {
+        "repo": HEAL_REPO,
+        "subpath": "comfyui/moss_image_heal_int8_convrot.safetensors",
+        "filename": "moss-image-heal-int8-convrot.safetensors",
+        "purpose": "training",
+        "size_estimate": 5_413_698_934,
+    },
+    "heal_bf16": {
+        "repo": HEAL_REPO,
+        "subpath": "comfyui/moss_image_heal_bf16.safetensors",
+        "filename": "moss-image-heal-bf16.safetensors",
+        "purpose": "training",
+        "size_estimate": 10_164_655_808,
     },
 }
 #: 默认 variant（设计稿 M3：默认训 Base；M2：int8 适配多数显卡）
@@ -246,7 +265,9 @@ def catalog_sections(root: Path, models_cfg: Any, source_cfg: Any = None) -> dic
         "moss_main": {
             "id": "moss_main",
             "name": "MOSS-Image 主模型",
-            "description": "Base / SFT，各有 bf16（10.2 GB）与 int8 convrot（5.4 GB）两版",
+            "description": (
+                "Base / SFT / heal（社区微调），各有 bf16（10.2 GB）与 int8 convrot（5.4 GB）两版"
+            ),
             "repo": COMFY_REPO,
             "variants": variants,
             "custom": custom,

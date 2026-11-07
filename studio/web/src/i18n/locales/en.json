@@ -1309,7 +1309,7 @@
       "krea2Main": "Raw training base / Turbo inference base (~26.3 GB each)",
       "krea2TextEncoder": "Natural-language text encoder",
       "krea2TextEncoderFp8": "Official fp8-quantized text encoder, optional for test generation, roughly halves weight VRAM",
-      "mossMain": "Base / SFT, each in bf16 (10.2 GB) and int8 convrot (5.4 GB, roughly halves weight VRAM)",
+      "mossMain": "Base / SFT plus the community finetune heal (KBlueLeaf/MOSS-Image-heal, HuggingFace only), each in bf16 (10.2 GB) and int8 convrot (5.4 GB, roughly halves weight VRAM)",
       "mossTextEncoderInt8": "int8 convrot text encoder, the same file the ComfyUI community uses",
       "mossTextEncoderBf16": "Official bf16 text encoder",
       "mossVae": "FLUX.2 VAE",

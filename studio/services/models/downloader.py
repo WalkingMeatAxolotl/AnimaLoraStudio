@@ -408,7 +408,8 @@ def download_qwen3_vl_fp8(
 def download_moss_main(
     root: Path, variant: str, *, on_log: TaskLogLike = _DEFAULT_LOG
 ) -> bool:
-    """从 Comfy-Org/MOSS-Image（HF / ModelScope 同名）下载 MOSS-Image 主权重单文件。"""
+    """下载 MOSS-Image 主权重单文件：官方 variant 走 Comfy-Org/MOSS-Image（HF / ModelScope
+    同名），社区 variant 只走 HF。"""
     if variant == "latest":
         variant = LATEST_MOSS
     info = MOSS_VARIANTS.get(variant)
@@ -423,7 +424,8 @@ def download_moss_main(
         "download.moss_base", variant=variant,
         size=f"{float(info.get('size_estimate', 0)) / 1e9:.1f}", target=target,
     ))
-    if _sources._source_for("training") == "modelscope":
+    # 社区 variant 没有 ModelScope 镜像（无 ms_repo），任何源设置下都走 HF
+    if info.get("ms_repo") and _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(
             str(info["ms_repo"]), str(info["ms_subpath"]), target, on_log=on_log,
         )
