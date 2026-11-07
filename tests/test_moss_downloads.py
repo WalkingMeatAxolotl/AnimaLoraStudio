@@ -44,6 +44,21 @@ def test_download_moss_main_uses_comfy_org_on_modelscope(tmp_path, monkeypatch) 
     assert not model_downloader.download_moss_main(tmp_path, "bogus", on_log=lambda _l: None)
 
 
+def test_download_moss_community_variant_falls_back_to_hf_on_modelscope(tmp_path, monkeypatch) -> None:
+    # heal 只在 HF 发布：ModelScope 源下也不能拿空 ms_repo 去请求
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    hf, fake_hf = _recorder()
+    ms, fake_ms = _recorder()
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+    assert model_downloader.download_moss_main(tmp_path, "heal_int8", on_log=lambda _l: None)
+    assert ms == []
+    assert hf == [(
+        "KBlueLeaf/MOSS-Image-heal",
+        "comfyui/moss_image_heal_int8_convrot.safetensors",
+        str(tmp_path / "diffusion_models" / "moss-image-heal-int8-convrot.safetensors"),
+    )]
+
 def test_download_moss_te_int8_modelscope_maps_official_repo_id(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
     ms, fake_ms = _recorder()

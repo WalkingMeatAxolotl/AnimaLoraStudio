@@ -1309,7 +1309,7 @@
       "krea2Main": "Raw 训练底模 / Turbo 推理底模（各约 26.3 GB）",
       "krea2TextEncoder": "自然语言文本编码器",
       "krea2TextEncoderFp8": "官方 fp8 量化文本编码器，测试出图可选，权重显存约减半",
-      "mossMain": "Base / SFT 两版，各有 bf16（10.2 GB）与 int8 convrot（5.4 GB，权重显存约减半）",
+      "mossMain": "Base / SFT 与社区微调 heal（KBlueLeaf/MOSS-Image-heal，仅 HuggingFace），各有 bf16（10.2 GB）与 int8 convrot（5.4 GB，权重显存约减半）",
       "mossTextEncoderInt8": "int8 convrot 文本编码器，与 ComfyUI 社区版同一份文件",
       "mossTextEncoderBf16": "官方 bf16 文本编码器",
       "mossVae": "FLUX.2 VAE",
