@@ -125,7 +125,7 @@ def queue_training_finished_eval(
         return None
     skip_count = checkpoint_skip_count(cfg)
 
-    all_ckpts = versions.list_lora_ckpts(vdir)
+    all_ckpts = versions.list_lora_ckpts(vdir, with_arch=False)
     selected = select_checkpoints(all_ckpts, skip_count=skip_count)
     if not selected:
         logger.info(
@@ -226,7 +226,7 @@ def resolve_checkpoint_selection(
         return []
 
     picked: list[dict[str, Any]] = []
-    for ckpt in versions.list_lora_ckpts(vdir):
+    for ckpt in versions.list_lora_ckpts(vdir, with_arch=False):
         rel = _checkpoint_relative_to_output(
             project_id, slug, version, str(ckpt.get("path") or "")
         )
@@ -250,13 +250,13 @@ def eval_scale(
     if selected_count is None:
         cfg = _version_eval_config(project, version)
         skip_count = checkpoint_skip_count(cfg)
-        all_ckpts = versions.list_lora_ckpts(vdir)
+        all_ckpts = versions.list_lora_ckpts(vdir, with_arch=False)
         count = len(select_checkpoints(all_ckpts, skip_count=skip_count))
         total = len(all_ckpts)
     else:
         skip_count = None
         count = max(0, int(selected_count))
-        total = len(versions.list_lora_ckpts(vdir))
+        total = len(versions.list_lora_ckpts(vdir, with_arch=False))
 
     summary = eval_session.resource_summary(
         project, version, vdir, selected_count=count

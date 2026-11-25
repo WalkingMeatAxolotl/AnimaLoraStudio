@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { LoraCatalogItem } from '../../../api/client'
+import type { LoraBaseArchInfo } from '../../../api/client'
 
 /** 当前出图底模的 DiT 层数（catalog arch，header 探测）；未知为 null。
  *
@@ -18,7 +18,7 @@ export type LoraCompatLevel = 'ok' | 'warn' | 'reject' | 'unknown'
  *  - 元数据确证的层数 ≠ 底模层数 → reject
  *  - 键扫描（下界）> 底模层数 → reject；< 底模层数 → warn
  *  - 一方未知 → unknown（不标） */
-export function loraCompatLevel(c: Pick<LoraCatalogItem, 'base_num_blocks' | 'base_arch_source'>, baseNumBlocks: number | null): LoraCompatLevel {
+export function loraCompatLevel(c: Partial<LoraBaseArchInfo>, baseNumBlocks: number | null): LoraCompatLevel {
   const n = c.base_num_blocks ?? null
   if (n == null || baseNumBlocks == null) return 'unknown'
   if (c.base_arch_source === 'metadata') return n === baseNumBlocks ? 'ok' : 'reject'

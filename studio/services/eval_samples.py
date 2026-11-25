@@ -111,7 +111,7 @@ def _storage_path(version_dir: Path, path: Path) -> str:
 
 
 def _resolve_checkpoint(version_dir: Path, raw_path: str | None) -> dict[str, Any]:
-    ckpts = versions.list_lora_ckpts(version_dir)
+    ckpts = versions.list_lora_ckpts(version_dir, with_arch=False)
     by_resolved: dict[str, dict[str, Any]] = {}
     for item in ckpts:
         try:

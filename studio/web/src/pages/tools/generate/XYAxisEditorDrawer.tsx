@@ -409,7 +409,7 @@ function XYAxisEditorDrawer({
     inFlightSourceRequestKeys.current.add(sourceRequestKey)
     setLoadingSources(true)
     setSourceError('')
-    void api.getLoraCatalog({ limit: 1, refresh: reloadKey > 0 })
+    void api.getLoraCatalog({ sources_only: true, refresh: reloadKey > 0 })
       .then((next) => {
         if (currentSourceRequestKey.current !== sourceRequestKey) return
         loadedSourceRequestKey.current = sourceRequestKey

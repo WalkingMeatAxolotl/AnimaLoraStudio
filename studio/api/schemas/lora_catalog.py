@@ -1,9 +1,9 @@
-"""GET /api/lora-catalog 响应模型。"""
+"""/api/lora-catalog 请求 / 响应模型。"""
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoraCatalogItem(BaseModel):
@@ -21,9 +21,7 @@ class LoraCatalogItem(BaseModel):
     version_label: str | None = None
     project_archived: bool = False
     kind: Literal["final", "step", "epoch", "other"] = "other"
-    #: 训练底模 DiT 层数（lora_compat 契约：元数据 / 键扫描下界 / 未知）
-    base_num_blocks: int | None = None
-    base_arch_source: Literal["metadata", "keys", "unknown"] = "unknown"
+    # 训练底模层数不在列表里：读 header 有 IO 成本，改由 POST /api/lora-catalog/arch 按需取。
 
 
 class LoraCatalogSource(BaseModel):
@@ -47,3 +45,18 @@ class LoraCatalogResponse(BaseModel):
     generated_at: float
     cached: bool
     cache_ttl_seconds: float
+
+
+class LoraArchRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list, max_length=500)
+
+
+class LoraArchItem(BaseModel):
+    path: str
+    #: 训练底模 DiT 层数（lora_compat 契约：元数据 / 键扫描下界 / 未知）
+    base_num_blocks: int | None = None
+    base_arch_source: Literal["metadata", "keys", "unknown"] = "unknown"
+
+
+class LoraArchResponse(BaseModel):
+    items: list[LoraArchItem]

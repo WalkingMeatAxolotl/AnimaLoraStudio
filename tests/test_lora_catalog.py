@@ -256,8 +256,77 @@ def test_archived_projects_are_opt_in(client: TestClient, catalog_env: dict) -> 
     assert item["kind"] == "step"
 
 
-def test_catalog_items_carry_lora_base_arch(client: TestClient, catalog_env: dict) -> None:
-    """lora_compat 契约：目录行带训练底模层数（元数据优先 / 键扫描下界 / 坏文件未知），
+def test_sources_only_lists_counts_without_scanning_items(
+    client: TestClient, catalog_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """打开抽屉只要来源 + 计数：不扫任何来源的条目，也不读 header。"""
+    _, _, project_path = _create_project_checkpoint(catalog_env, "hero_step10.safetensors")
+    _write(project_path.with_name("hero_final.safetensors"))
+    _write(project_path.with_name("notes.txt"))
+    _write(catalog_env["default"] / "a" / "one.safetensors")
+    _write(catalog_env["external"] / "b" / "c" / "two.safetensors")
+    _write(catalog_env["external"] / "three.SAFETENSORS")
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("sources_only must not scan items or read headers")
+
+    monkeypatch.setattr(lora_catalog, "_scan_source", _fail)
+    monkeypatch.setattr(lora_catalog, "read_lora_base_arch_cached", _fail)
+    monkeypatch.setattr(lora_catalog.versions, "read_lora_base_arch_cached", _fail)
+
+    body = client.get("/api/lora-catalog?sources_only=true&refresh=true").json()
+    assert body["items"] == []
+    counts = {source["source_type"]: source["item_count"] for source in body["sources"]}
+    assert counts == {"project": 2, "studio_models": 1, "external": 2}
+    assert body["total"] == 5
+
+
+def test_project_output_inside_external_dir_keeps_project_semantics(
+    client: TestClient, catalog_env: dict
+) -> None:
+    """外部目录覆盖了项目输出时，同一文件只算项目来源（计数与条目一致）。"""
+    _, _, project_path = _create_project_checkpoint(catalog_env)
+    stray = _write(projects.PROJECTS_DIR / "loose.safetensors")
+    cfg = secrets.load()
+    cfg.generate.lora_catalog_dirs = [str(projects.PROJECTS_DIR)]
+    secrets.save(cfg)
+
+    sources = client.get("/api/lora-catalog?sources_only=true&refresh=true").json()["sources"]
+    external = next(s for s in sources if s["source_type"] == "external")
+    assert external["item_count"] == 1
+
+    items = client.get(
+        "/api/lora-catalog", params={"source": external["source_id"], "limit": 50}
+    ).json()["items"]
+    assert [Path(item["path"]) for item in items] == [stray.resolve()]
+    all_items = client.get("/api/lora-catalog?limit=50").json()["items"]
+    assert [item["source_type"] for item in all_items if item["name"] == project_path.name] == ["project"]
+
+
+def test_catalog_items_do_not_carry_base_arch(client: TestClient, catalog_env: dict) -> None:
+    """层数读 header 有 IO 成本，不在列表关键路径上。"""
+    _write(catalog_env["default"] / "plain.safetensors")
+    item = client.get("/api/lora-catalog?refresh=true&limit=50").json()["items"][0]
+    assert "base_num_blocks" not in item
+    assert "base_arch_source" not in item
+
+
+def test_arch_endpoint_rejects_paths_outside_catalog_roots(
+    client: TestClient, catalog_env: dict, tmp_path: Path
+) -> None:
+    outside = _write(tmp_path / "elsewhere" / "x.safetensors")
+    inside_txt = _write(catalog_env["default"] / "x.txt")
+    body = client.post(
+        "/api/lora-catalog/arch",
+        json={"paths": [str(outside), str(inside_txt), str(catalog_env["default"] / "missing.safetensors")]},
+    ).json()
+    assert [(row["base_num_blocks"], row["base_arch_source"]) for row in body["items"]] == [
+        (None, "unknown"), (None, "unknown"), (None, "unknown"),
+    ]
+
+
+def test_arch_endpoint_reads_lora_base_arch(client: TestClient, catalog_env: dict) -> None:
+    """lora_compat 契约：按需读训练底模层数（元数据优先 / 键扫描下界 / 坏文件未知），
     前端据此标「N 层」并与当前底模预检。"""
     import json
 
@@ -275,8 +344,11 @@ def test_catalog_items_carry_lora_base_arch(client: TestClient, catalog_env: dic
     save_file({"lora_unet_blocks_27_self_attn_q_proj.lokr_w1": torch.zeros(1)}, str(keys28))
     _write(catalog_env["external"] / "broken.safetensors", b"not a safetensors file")
 
-    body = client.get("/api/lora-catalog?refresh=true&limit=50").json()
-    by_name = {item["name"]: item for item in body["items"]}
+    listed = client.get("/api/lora-catalog?refresh=true&limit=50").json()["items"]
+    body = client.post(
+        "/api/lora-catalog/arch", json={"paths": [item["path"] for item in listed]}
+    ).json()
+    by_name = {Path(item["path"]).name: item for item in body["items"]}
     assert (by_name["meta40.safetensors"]["base_num_blocks"],
             by_name["meta40.safetensors"]["base_arch_source"]) == (40, "metadata")
     assert (by_name["keys28.safetensors"]["base_num_blocks"],

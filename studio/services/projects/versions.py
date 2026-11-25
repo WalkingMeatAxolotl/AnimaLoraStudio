@@ -198,8 +198,11 @@ def _natural_key(s: str) -> list[Any]:
     return [int(p) if p.isdigit() else p.lower() for p in parts]
 
 
-def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
+def list_lora_ckpts(vdir: Path, *, with_arch: bool = True) -> list[dict[str, Any]]:
     """扫 versions/{label}/output/*.safetensors，列所有 LoRA ckpt 文件。
+
+    ``with_arch=False`` 跳过 safetensors header 读取（底模层数）：只要文件清单 /
+    计数 / 排序的调用方（LoRA catalog、评测选 ckpt）不该为展示字段付 IO。
 
     anima_train 输出命名约定（runtime/anima_train.py:2434, 2464）：
       - {output_name}_step{N}.safetensors    （按 step 保存）
@@ -248,15 +251,17 @@ def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
         except OSError:
             mtime = 0.0
             size = -1
-        arch = read_lora_base_arch_cached(str(f), size, mtime)
-        items.append({
+        item: dict[str, Any] = {
             "kind": kind, "value": value, "label": label,
-            "path": str(f), "mtime": mtime,
+            "path": str(f), "mtime": mtime, "size": size,
+        }
+        if with_arch:
+            arch = read_lora_base_arch_cached(str(f), size, mtime)
             # lora_compat 契约：训练底模层数（元数据 / 键扫描下界 / 未知），前端
             # 据此标记「28 层 / 40 层」并与当前底模比对
-            "base_num_blocks": arch.num_blocks,
-            "base_arch_source": arch.source,
-        })
+            item["base_num_blocks"] = arch.num_blocks
+            item["base_arch_source"] = arch.source
+        items.append(item)
 
     # 排序：final 顶部；step/epoch 按 value 降序；other 按 label 自然序升序
     kind_order = {"final": 0, "step": 1, "epoch": 2, "other": 3}
