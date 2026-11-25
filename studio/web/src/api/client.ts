@@ -1677,9 +1677,17 @@ export interface LoraCatalogItem {
   version_label: string | null
   project_archived: boolean
   kind: 'final' | 'step' | 'epoch' | 'other'
-  /** 训练底模的 DiT 层数（lora_compat 契约）：元数据 / 键扫描下界 / 未知(null)。 */
-  base_num_blocks?: number | null
-  base_arch_source?: 'metadata' | 'keys' | 'unknown'
+}
+
+/** 训练底模层数（lora_compat 契约）：元数据 / 键扫描下界 / 未知(null)。
+ *  读 header 有 IO 成本，catalog 列表不带，按需走 getLoraCatalogArch。 */
+export interface LoraBaseArchInfo {
+  base_num_blocks: number | null
+  base_arch_source: 'metadata' | 'keys' | 'unknown'
+}
+
+export interface LoraCatalogArchItem extends LoraBaseArchInfo {
+  path: string
 }
 
 export interface LoraCatalogSource {
@@ -1714,6 +1722,8 @@ export interface LoraCatalogQuery {
   limit?: number
   cursor?: number
   refresh?: boolean
+  /** 只要来源列表与计数（不扫任何来源的条目）。 */
+  sources_only?: boolean
 }
 
 /** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。
@@ -3176,9 +3186,17 @@ export const api = {
     if (query.limit != null) params.set('limit', String(query.limit))
     if (query.cursor != null) params.set('cursor', String(query.cursor))
     if (query.refresh) params.set('refresh', 'true')
+    if (query.sources_only) params.set('sources_only', 'true')
     const qs = params.toString()
     return req<LoraCatalogResponse>(`/api/lora-catalog${qs ? `?${qs}` : ''}`)
   },
+
+  /** 按需读取 catalog 内 LoRA 的训练底模层数（单次最多 500 条）。 */
+  getLoraCatalogArch: (paths: string[]) =>
+    req<{ items: LoraCatalogArchItem[] }>('/api/lora-catalog/arch', {
+      method: 'POST',
+      body: JSON.stringify({ paths }),
+    }),
 
   /** 列出 version output/ 下所有 LoRA ckpt 文件（XY ckpt 轴 + 单图模式切 ckpt）。 */
   listVersionLoraCkpts: (pid: number, vid: number) =>

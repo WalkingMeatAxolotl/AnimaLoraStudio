@@ -60,6 +60,20 @@ function response(items: LoraCatalogItem[], nextCursor: number | null = null) {
   }), { status: 200, headers: { 'content-type': 'application/json' } })
 }
 
+type ArchRow = { base_num_blocks: number | null; base_arch_source: 'metadata' | 'keys' | 'unknown' }
+
+function isArchRequest(input: string | URL | Request): boolean {
+  return String(input).includes('/api/lora-catalog/arch')
+}
+
+/** POST /api/lora-catalog/arch：按请求体里的路径回层数，未登记的路径回 unknown。 */
+function archResponse(init: RequestInit | undefined, known: Record<string, ArchRow> = {}) {
+  const { paths } = JSON.parse(String(init?.body ?? '{"paths":[]}')) as { paths: string[] }
+  return new Response(JSON.stringify({
+    items: paths.map((path) => ({ path, ...(known[path] ?? { base_num_blocks: null, base_arch_source: 'unknown' }) })),
+  }), { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
 function Harness() {
   const [open, setOpen] = useState(true)
   const [loras, setLoras] = useState<LoraEntry[]>([])
@@ -83,7 +97,8 @@ beforeEach(() => {
   window.localStorage.clear()
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
-  fetchMock.mockImplementation((input: string | URL | Request) => {
+  fetchMock.mockImplementation((input: string | URL | Request, init?: RequestInit) => {
+    if (isArchRequest(input)) return Promise.resolve(archResponse(init))
     const url = String(input)
     return Promise.resolve(response(url.includes('source=external%3A0') ? [item] : []))
   })
@@ -194,6 +209,7 @@ describe('LoraCatalogDrawer', () => {
     expect(screen.queryByText('ink')).not.toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(String(fetchMock.mock.calls[0][0])).not.toContain('source=')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('sources_only=true')
     expect(screen.queryByText(/显示归档项目/)).not.toBeInTheDocument()
 
     expect(screen.queryByText('ComfyUI')).not.toBeInTheDocument()
@@ -216,9 +232,13 @@ describe('LoraCatalogDrawer', () => {
     const itemSort = screen.getByRole('combobox', { name: '排序' })
     expect(itemSort).toHaveValue('name')
     await user.selectOptions(itemSort, 'mtime')
-    await waitFor(() => expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).toContain('sort=mtime'))
-    expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).toContain('order=desc')
-    expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).toContain('source=external%3A0')
+    const lastCatalogUrl = () => {
+      const calls = fetchMock.mock.calls.filter(([input]) => !isArchRequest(input))
+      return String(calls[calls.length - 1]?.[0])
+    }
+    await waitFor(() => expect(lastCatalogUrl()).toContain('sort=mtime'))
+    expect(lastCatalogUrl()).toContain('order=desc')
+    expect(lastCatalogUrl()).toContain('source=external%3A0')
     expect(screen.queryByText('ink.safetensors')).not.toBeInTheDocument()
     expect(screen.getByText('styles')).toBeInTheDocument()
   })
@@ -290,15 +310,21 @@ describe('LoraCatalogDrawer', () => {
   })
   it('marks each LoRA with its base layer count and the precheck against the current base', async () => {
     // 元数据 28 ≠ 40 → 拒绝；键扫描 28 < 40 → 可能不匹配；元数据 40 = 40 → ok；未知不标
-    const rows: LoraCatalogItem[] = [
-      { ...item, path: 'D:/l/meta28.safetensors', name: 'meta28.safetensors', base_num_blocks: 28, base_arch_source: 'metadata' },
-      { ...item, path: 'D:/l/keys28.safetensors', name: 'keys28.safetensors', base_num_blocks: 28, base_arch_source: 'keys' },
-      { ...item, path: 'D:/l/meta40.safetensors', name: 'meta40.safetensors', base_num_blocks: 40, base_arch_source: 'metadata' },
-      { ...item, path: 'D:/l/unknown.safetensors', name: 'unknown.safetensors', base_num_blocks: null, base_arch_source: 'unknown' },
-    ]
-    fetchMock.mockImplementation((input: string | URL | Request) => (
-      Promise.resolve(response(String(input).includes('source=external%3A0') ? rows : []))
-    ))
+    // 层数不在列表响应里：条目先渲染，再由 /arch 按需补全徽标
+    const arch: Record<string, ArchRow> = {
+      'D:/l/meta28.safetensors': { base_num_blocks: 28, base_arch_source: 'metadata' },
+      'D:/l/keys28.safetensors': { base_num_blocks: 28, base_arch_source: 'keys' },
+      'D:/l/meta40.safetensors': { base_num_blocks: 40, base_arch_source: 'metadata' },
+    }
+    const rows: LoraCatalogItem[] = ['meta28', 'keys28', 'meta40', 'unknown'].map((name) => ({
+      ...item, path: `D:/l/${name}.safetensors`, name: `${name}.safetensors`,
+    }))
+    let releaseArch!: () => void
+    const archGate = new Promise<void>((resolve) => { releaseArch = resolve })
+    fetchMock.mockImplementation((input: string | URL | Request, init?: RequestInit) => {
+      if (isArchRequest(input)) return archGate.then(() => archResponse(init, arch))
+      return Promise.resolve(response(String(input).includes('source=external%3A0') ? rows : []))
+    })
     const user = userEvent.setup()
     render(<BaseNumBlocksContext.Provider value={40}><Harness /></BaseNumBlocksContext.Provider>)
     await user.click(await screen.findByRole('button', { name: /^loras / }))
@@ -306,6 +332,14 @@ describe('LoraCatalogDrawer', () => {
 
     const badgeOf = (name: string) => screen.getByText(name).closest('[data-testid="lora-catalog-item"]')!
       .querySelector('[data-testid="lora-base-layers"]')
+    // 层数还没回来时列表已可用，只是没有徽标
+    expect(badgeOf('meta28')).toBeNull()
+    const archCalls = fetchMock.mock.calls.filter(([input]) => isArchRequest(input))
+    expect(archCalls).toHaveLength(1)
+    expect(JSON.parse(String((archCalls[0][1] as RequestInit).body)).paths).toHaveLength(4)
+
+    await act(async () => { releaseArch() })
+    await waitFor(() => expect(badgeOf('meta28')).not.toBeNull())
     expect(badgeOf('meta28')?.getAttribute('data-compat')).toBe('reject')
     expect(badgeOf('meta28')?.textContent).toBe('⚠ 28 层')
     expect(badgeOf('keys28')?.getAttribute('data-compat')).toBe('warn')

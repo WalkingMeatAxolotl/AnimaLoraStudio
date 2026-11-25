@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
+  type LoraBaseArchInfo,
   type LoraCatalogItem,
   type LoraCatalogResponse,
   type LoraCatalogSource,
@@ -22,7 +23,10 @@ type SourceFilter = 'all' | 'project' | 'non_project'
 type SourceSort = 'updated' | 'created' | 'title'
 type ItemSort = 'mtime' | 'name'
 
-const SOURCE_SORT_KEY = 'studio:generate:loraCatalog:sourceSort'
+/** 与后端 LoraArchRequest.paths 上限一致。 */
+const ARCH_BATCH_SIZE = 500
+
+const SOURCE_SORT_KEY ='studio:generate:loraCatalog:sourceSort'
 const ITEM_SORT_KEY = 'studio:generate:loraCatalog:itemSort'
 
 function displayName(name: string): string {
@@ -35,13 +39,13 @@ function relativeDirectory(item: LoraCatalogItem): string {
 }
 
 /** 训练底模层数徽标（lora_compat 契约）+ 与当前底模的预检结论。只是展示：
- *  真正的拒绝 / 告警在后端 apply 时按同一规则执行。层数未知不渲染。 */
-function LoraLayersBadge({ item }: { item: LoraCatalogItem }) {
+ *  真正的拒绝 / 告警在后端 apply 时按同一规则执行。层数未知 / 尚未取到不渲染。 */
+function LoraLayersBadge({ arch }: { arch: LoraBaseArchInfo | undefined }) {
   const { t } = useTranslation()
   const baseNumBlocks = useBaseNumBlocks()
-  const layers = item.base_num_blocks ?? null
-  if (layers == null) return null
-  const compat = loraCompatLevel(item, baseNumBlocks)
+  const layers = arch?.base_num_blocks ?? null
+  if (arch == null || layers == null) return null
+  const compat = loraCompatLevel(arch, baseNumBlocks)
   const title = compat === 'reject'
     ? t('lora.baseLayersMismatch', { lora: layers, base: baseNumBlocks })
     : compat === 'warn'
@@ -175,7 +179,7 @@ function LoraCatalogDrawer({
       refresh: forceRefresh,
     } : {
       include_archived: false,
-      limit: 1,
+      sources_only: true,
       refresh: forceRefresh,
     }).then((result) => {
       if (currentRequestKey.current !== requestKey) return
@@ -192,6 +196,46 @@ function LoraCatalogDrawer({
       if (currentRequestKey.current === requestKey) setLoading(false)
     })
   }, [open, requestKey, requestOrder, requestQuery, requestSort, requestSourceId, refreshToken])
+
+  // 层数徽标按需补全：条目先渲染，再只为当前列表里还没取过的路径读 header。
+  // 按规范化路径缓存，切来源 / 搜索 / 翻页不重复请求；手动刷新时清空。
+  const [archByPath, setArchByPath] = useState<Record<string, LoraBaseArchInfo>>({})
+  const requestedArch = useRef(new Set<string>())
+
+  useEffect(() => {
+    if (refreshToken === 0) return
+    requestedArch.current.clear()
+    setArchByPath({})
+  }, [refreshToken])
+
+  useEffect(() => {
+    if (!open) return
+    const missing: string[] = []
+    for (const item of response.items) {
+      const key = normalizeLoraPath(item.path)
+      if (requestedArch.current.has(key)) continue
+      requestedArch.current.add(key)
+      missing.push(item.path)
+    }
+    for (let start = 0; start < missing.length; start += ARCH_BATCH_SIZE) {
+      const chunk = missing.slice(start, start + ARCH_BATCH_SIZE)
+      void api.getLoraCatalogArch(chunk).then(({ items }) => {
+        setArchByPath((previous) => {
+          const next = { ...previous }
+          for (const entry of items) {
+            next[normalizeLoraPath(entry.path)] = {
+              base_num_blocks: entry.base_num_blocks,
+              base_arch_source: entry.base_arch_source,
+            }
+          }
+          return next
+        })
+      }).catch(() => {
+        // 只是展示徽标：失败就不标，允许之后重试
+        for (const path of chunk) requestedArch.current.delete(normalizeLoraPath(path))
+      })
+    }
+  }, [open, response.items])
 
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
@@ -418,7 +462,7 @@ function LoraCatalogDrawer({
                         <span className="block font-mono text-xs text-fg-primary truncate" title={displayName(item.name)}>{displayName(item.name)}</span>
                         {secondary && <span className="block text-2xs text-fg-tertiary truncate">{secondary}</span>}
                       </span>
-                      <LoraLayersBadge item={item} />
+                      <LoraLayersBadge arch={archByPath[normalizeLoraPath(item.path)]} />
                     </button>
                   )
                 })}

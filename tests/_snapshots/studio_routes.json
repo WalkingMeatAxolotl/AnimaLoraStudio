@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 246,
+  "count": 247,
   "routes": [
     {
       "path": "/",
@@ -471,6 +471,14 @@
         "GET"
       ],
       "name": "get_lora_catalog",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/lora-catalog/arch",
+      "methods": [
+        "POST"
+      ],
+      "name": "post_lora_catalog_arch",
       "type": "APIRoute"
     },
     {
